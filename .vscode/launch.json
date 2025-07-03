@@ -7,11 +7,13 @@
             "name": "Launch",
             "request": "launch",
             "preLaunchTask": "build-and-copy",
-            "program": "${config:jellyfinDir}/bin/Debug/net8.0/jellyfin.dll",
+            "program": "${config:jellyfinDir}/bin/Debug/net9.0/jellyfin.dll",
             "args": [
-               //"--nowebclient"
-               "--webdir",
-               "${config:jellyfinWebDir}/dist/"
+               "--nowebclient",
+               // "--webdir",
+               "${config:jellyfinWebDir}/dist/",
+               "--ffmpeg",
+               "/usr/lib/jellyfin-ffmpeg/ffmpeg",
             ],
             "cwd": "${config:jellyfinDir}",
         }
