@@ -319,7 +319,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                 {
                     Id = table.Column<Guid>(type: "uuid", nullable: false),
                     Path = table.Column<string>(type: "text", nullable: false),
-                    DateModified = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    DateModified = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
                     ImageType = table.Column<int>(type: "integer", nullable: false),
                     Width = table.Column<int>(type: "integer", nullable: false),
                     Height = table.Column<int>(type: "integer", nullable: false),
@@ -1004,14 +1004,14 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                 table: "Permissions",
                 columns: ["UserId", "Kind"],
                 unique: true,
-                filter: "[UserId] IS NOT NULL");
+                filter: "\"UserId\" IS NOT NULL");
 
             migrationBuilder.CreateIndex(
                 name: "IX_Preferences_UserId_Kind",
                 table: "Preferences",
                 columns: ["UserId", "Kind"],
                 unique: true,
-                filter: "[UserId] IS NOT NULL");
+                filter: "\"UserId\" IS NOT NULL");
 
             migrationBuilder.CreateIndex(
                 name: "IX_UserData_ItemId_UserId_IsFavorite",

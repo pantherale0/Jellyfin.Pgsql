@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
+using System.IO;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,14 +22,18 @@ namespace Jellyfin.Plugin.Pgsql.Database;
 [JellyfinDatabaseProviderKey("Jellyfin-PgSql")]
 public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
 {
+    private const string BackupFolderName = "PgsqlBackups";
     private readonly ILogger<PgSqlDatabaseProvider> _logger;
+    private readonly IApplicationPaths _applicationPaths;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PgSqlDatabaseProvider"/> class.
     /// </summary>
+    /// <param name="applicationPaths">Service to construct the backup paths.</param>
     /// <param name="logger">A logger.</param>
-    public PgSqlDatabaseProvider(ILogger<PgSqlDatabaseProvider> logger)
+    public PgSqlDatabaseProvider(IApplicationPaths applicationPaths, ILogger<PgSqlDatabaseProvider> logger)
     {
+        _applicationPaths = applicationPaths;
         _logger = logger;
     }
 
@@ -45,35 +51,61 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
         //     throw new InvalidOperationException("Selected PgSQL as database provider but did not provide required configuration. Please see docs.");
         // }
 
-        var connectionBuilder = new NpgsqlConnectionStringBuilder("User ID=jellyfin;Password=jellyfin;Host=db;Port=5432;Database=Jellyfin;Pooling=true;");
-        connectionBuilder.ApplicationName = $"jellyfin+{FileVersionInfo.GetVersionInfo(Assembly.GetEntryAssembly()!.Location).FileVersion}";
-        // connectionBuilder.CommandTimeout = dbSettings.PostgreSql.Timeout;
-        // connectionBuilder.Database = dbSettings.PostgreSql.DatabaseName;
-        // connectionBuilder.Username = dbSettings.PostgreSql.Username;
-        // connectionBuilder.Password = dbSettings.PostgreSql.Password;
-        // connectionBuilder.Host = dbSettings.PostgreSql.ServerName;
-        // connectionBuilder.Port = dbSettings.PostgreSql.Port;
-
+        var connectionBuilder = new NpgsqlConnectionStringBuilder
+        {
+            Host = Environment.GetEnvironmentVariable("POSTGRES_HOST") ?? "localhost",
+            Port = int.Parse(Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432", CultureInfo.InvariantCulture),
+            Database = Environment.GetEnvironmentVariable("POSTGRES_DB") ?? "jellyfin",
+            Username = Environment.GetEnvironmentVariable("POSTGRES_USER") ?? "jellyfin",
+            Password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? throw new InvalidOperationException("PostgreSQL password must be provided via POSTGRES_PASSWORD environment variable"),
+            Pooling = true,
+            ApplicationName = $"jellyfin+{FileVersionInfo.GetVersionInfo(Assembly.GetEntryAssembly()!.Location).FileVersion}"
+        };
         var connectionString = connectionBuilder.ToString();
+        _logger.LogInformation(
+            "Connecting to PostgreSQL at {Host}:{Port}, Database: {Database}, User: {User}",
+            connectionBuilder.Host,
+            connectionBuilder.Port,
+            connectionBuilder.Database,
+            connectionBuilder.Username);
 
         options
-            .UseNpgsql(connectionString, pgSqlOptions => pgSqlOptions.MigrationsAssembly(GetType().Assembly));
+            .UseNpgsql(connectionString, pgSqlOptions => pgSqlOptions.MigrationsAssembly(GetType().Assembly.FullName));
     }
 
     /// <inheritdoc/>
-    public Task RunScheduledOptimisation(CancellationToken cancellationToken)
+    public async Task RunScheduledOptimisation(CancellationToken cancellationToken)
     {
-        return Task.CompletedTask;
+        if (DbContextFactory is null)
+        {
+            return;
+        }
+
+        var context = await DbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        await using (context.ConfigureAwait(false))
+        {
+            if (context.Database.IsNpgsql())
+            {
+                await context.Database.ExecuteSqlRawAsync("VACUUM ANALYZE", cancellationToken).ConfigureAwait(false);
+                _logger.LogInformation("PostgreSQL database optimized successfully");
+            }
+        }
     }
 
     /// <inheritdoc/>
     public void OnModelCreating(ModelBuilder modelBuilder)
     {
+        // Use C collation for consistent case-sensitive behavior matching SQLite BINARY
+        modelBuilder.UseCollation("C");
     }
 
     /// <inheritdoc/>
     public Task RunShutdownTask(CancellationToken cancellationToken)
     {
+        // Clear Npgsql connection pools on shutdown
+        NpgsqlConnection.ClearAllPools();
+        _logger.LogInformation("PostgreSQL connection pools cleared on shutdown");
+
         return Task.CompletedTask;
     }
 
@@ -83,26 +115,131 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
     }
 
     /// <inheritdoc/>
-    public Task<string> MigrationBackupFast(CancellationToken cancellationToken)
+    public async Task<string> MigrationBackupFast(CancellationToken cancellationToken)
     {
-        throw new System.NotImplementedException();
+        var key = DateTime.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
+        var backupFolder = Path.Combine(_applicationPaths.DataPath, BackupFolderName);
+        Directory.CreateDirectory(backupFolder);
+
+        var connectionBuilder = GetConnectionBuilder();
+        var backupFile = Path.Combine(backupFolder, $"{key}_{connectionBuilder.Database}.sql");
+
+        var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = "pg_dump",
+                Arguments = $"--host={connectionBuilder.Host} --port={connectionBuilder.Port} --username={connectionBuilder.Username} --dbname={connectionBuilder.Database} --file=\"{backupFile}\" --no-password --verbose --clean --if-exists",
+                Environment = { ["PGPASSWORD"] = connectionBuilder.Password },
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            }
+        };
+
+        _logger.LogInformation("Starting PostgreSQL backup: {BackupFile}", backupFile);
+
+        process.Start();
+        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+
+        if (process.ExitCode != 0)
+        {
+            var error = await process.StandardError.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+            _logger.LogError("pg_dump failed with exit code {ExitCode}: {Error}", process.ExitCode, error);
+            throw new InvalidOperationException($"pg_dump failed: {error}");
+        }
+
+        _logger.LogInformation("PostgreSQL backup completed successfully: {BackupFile}", backupFile);
+        return key;
     }
 
     /// <inheritdoc/>
-    public Task RestoreBackupFast(string key, CancellationToken cancellationToken)
+    public async Task RestoreBackupFast(string key, CancellationToken cancellationToken)
     {
-        throw new System.NotImplementedException();
+        NpgsqlConnection.ClearAllPools();
+
+        var connectionBuilder = GetConnectionBuilder();
+        var backupFile = Path.Combine(_applicationPaths.DataPath, BackupFolderName, $"{key}_{connectionBuilder.Database}.sql");
+
+        if (!File.Exists(backupFile))
+        {
+            _logger.LogCritical("Tried to restore a backup that does not exist: {Key}", key);
+            return;
+        }
+
+        var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = "psql",
+                Arguments = $"--host={connectionBuilder.Host} --port={connectionBuilder.Port} --username={connectionBuilder.Username} --dbname={connectionBuilder.Database} --file=\"{backupFile}\" --no-password --quiet",
+                Environment = { ["PGPASSWORD"] = connectionBuilder.Password },
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            }
+        };
+
+        _logger.LogInformation("Starting PostgreSQL restore from: {BackupFile}", backupFile);
+
+        process.Start();
+        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+
+        if (process.ExitCode != 0)
+        {
+            var error = await process.StandardError.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+            _logger.LogError("psql restore failed with exit code {ExitCode}: {Error}", process.ExitCode, error);
+            throw new InvalidOperationException($"psql restore failed: {error}");
+        }
+
+        _logger.LogInformation("PostgreSQL restore completed successfully from: {BackupFile}", backupFile);
     }
 
     /// <inheritdoc/>
     public Task DeleteBackup(string key)
     {
-        throw new System.NotImplementedException();
+        var connectionBuilder = GetConnectionBuilder();
+        var backupFile = Path.Combine(_applicationPaths.DataPath, BackupFolderName, $"{key}_{connectionBuilder.Database}.sql");
+
+        if (!File.Exists(backupFile))
+        {
+            _logger.LogCritical("Tried to delete a backup that does not exist: {Key}", key);
+            return Task.CompletedTask;
+        }
+
+        File.Delete(backupFile);
+        _logger.LogInformation("Deleted backup file: {BackupFile}", backupFile);
+        return Task.CompletedTask;
     }
 
     /// <inheritdoc/>
-    public Task PurgeDatabase(JellyfinDbContext dbContext, IEnumerable<string>? tableNames)
+    public async Task PurgeDatabase(JellyfinDbContext dbContext, IEnumerable<string>? tableNames)
     {
-        throw new System.NotImplementedException();
+        ArgumentNullException.ThrowIfNull(tableNames);
+
+        var truncateQueries = new List<string>();
+        foreach (var tableName in tableNames)
+        {
+            truncateQueries.Add($"TRUNCATE TABLE \"{tableName}\" RESTART IDENTITY CASCADE;");
+        }
+
+        var truncateAllQuery = string.Join('\n', truncateQueries);
+
+        await dbContext.Database.ExecuteSqlRawAsync(truncateAllQuery).ConfigureAwait(false);
+        _logger.LogInformation("PostgreSQL database tables purged successfully");
+    }
+
+    private NpgsqlConnectionStringBuilder GetConnectionBuilder()
+    {
+        return new NpgsqlConnectionStringBuilder
+        {
+            Host = Environment.GetEnvironmentVariable("POSTGRES_HOST") ?? "localhost",
+            Port = int.Parse(Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432", CultureInfo.InvariantCulture),
+            Database = Environment.GetEnvironmentVariable("POSTGRES_DB") ?? "jellyfin",
+            Username = Environment.GetEnvironmentVariable("POSTGRES_USER") ?? "jellyfin",
+            Password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? throw new InvalidOperationException("PostgreSQL password must be provided via POSTGRES_PASSWORD environment variable")
+        };
     }
 }

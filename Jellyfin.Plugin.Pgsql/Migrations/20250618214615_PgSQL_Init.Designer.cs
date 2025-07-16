@@ -1027,7 +1027,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasIndex("UserId", "Kind")
                         .IsUnique()
-                        .HasFilter("[UserId] IS NOT NULL");
+                        .HasFilter("\"UserId\" IS NOT NULL");
 
                     b.ToTable("Permissions");
                 });
@@ -1062,7 +1062,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasIndex("UserId", "Kind")
                         .IsUnique()
-                        .HasFilter("[UserId] IS NOT NULL");
+                        .HasFilter("\"UserId\" IS NOT NULL");
 
                     b.ToTable("Preferences");
                 });
