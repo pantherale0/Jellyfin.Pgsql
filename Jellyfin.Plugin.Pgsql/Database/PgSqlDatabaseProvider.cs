@@ -43,25 +43,11 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
     /// <inheritdoc/>
     public void Initialise(DbContextOptionsBuilder options)
     {
-        // var dbSettings = _configurationManager.GetConfiguration<DatabaseConfigurationOptions>("database");
-        // var customProviderOptions = dbSettings.CustomProviderOptions?.ConnectionString;
-
-        // if (customProviderOptions is null)
-        // {
-        //     throw new InvalidOperationException("Selected PgSQL as database provider but did not provide required configuration. Please see docs.");
-        // }
-
-        var connectionBuilder = new NpgsqlConnectionStringBuilder
-        {
-            Host = Environment.GetEnvironmentVariable("POSTGRES_HOST") ?? "localhost",
-            Port = int.Parse(Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432", CultureInfo.InvariantCulture),
-            Database = Environment.GetEnvironmentVariable("POSTGRES_DB") ?? "jellyfin",
-            Username = Environment.GetEnvironmentVariable("POSTGRES_USER") ?? "jellyfin",
-            Password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? throw new InvalidOperationException("PostgreSQL password must be provided via POSTGRES_PASSWORD environment variable"),
-            Pooling = true,
-            ApplicationName = $"jellyfin+{FileVersionInfo.GetVersionInfo(Assembly.GetEntryAssembly()!.Location).FileVersion}"
-        };
+        var connectionBuilder = GetConnectionBuilder();
+        connectionBuilder.Pooling = true;
+        connectionBuilder.ApplicationName = $"jellyfin+{FileVersionInfo.GetVersionInfo(Assembly.GetEntryAssembly()!.Location).FileVersion}";
         var connectionString = connectionBuilder.ToString();
+
         _logger.LogInformation(
             "Connecting to PostgreSQL at {Host}:{Port}, Database: {Database}, User: {User}",
             connectionBuilder.Host,
@@ -233,13 +219,15 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
 
     private NpgsqlConnectionStringBuilder GetConnectionBuilder()
     {
-        return new NpgsqlConnectionStringBuilder
+        var connectionBuilder = new NpgsqlConnectionStringBuilder
         {
-            Host = Environment.GetEnvironmentVariable("POSTGRES_HOST") ?? "localhost",
+            Host = Environment.GetEnvironmentVariable("POSTGRES_HOST") ?? "jellyfin",
             Port = int.Parse(Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432", CultureInfo.InvariantCulture),
             Database = Environment.GetEnvironmentVariable("POSTGRES_DB") ?? "jellyfin",
             Username = Environment.GetEnvironmentVariable("POSTGRES_USER") ?? "jellyfin",
             Password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? throw new InvalidOperationException("PostgreSQL password must be provided via POSTGRES_PASSWORD environment variable")
         };
+
+        return connectionBuilder;
     }
 }

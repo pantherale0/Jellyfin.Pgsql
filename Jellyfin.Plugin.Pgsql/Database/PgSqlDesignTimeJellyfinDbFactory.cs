@@ -31,7 +31,7 @@ internal sealed class PgSqlDesignTimeJellyfinDbFactory : IDesignTimeDbContextFac
         return new JellyfinDbContext(
             optionsBuilder.Options,
             NullLogger<JellyfinDbContext>.Instance,
-            new PgSqlDatabaseProvider(NullLogger<PgSqlDatabaseProvider>.Instance),
+            new PgSqlDatabaseProvider(null!, NullLogger<PgSqlDatabaseProvider>.Instance),
             new NoLockBehavior(NullLogger<NoLockBehavior>.Instance));
     }
 }
