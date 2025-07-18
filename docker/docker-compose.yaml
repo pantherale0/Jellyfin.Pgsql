@@ -1,0 +1,40 @@
+services:
+  # no port exposed -- use a reverse proxy to jellyfin:8096/tcp or expose port 8096/tcp
+  jellyfin:
+    build: /path/to/jellyfin-postgres/build # path where Dockerfile will be stored
+    depends_on:
+      postgres:
+        condition: service_healthy
+        restart: true
+    environment:
+      JELLYFIN_CACHE_DIR: /cache
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: jellyfin
+#      POSTGRES_PASSWORD: set a secure password
+      POSTGRES_USER: jellyfin
+    restart: unless-stopped
+#    user: 'uid:gid' set a non-root user to run Jellyfin
+    volumes:
+      - /path/to/jellyfin-postgres/config:/config
+      - /path/to/jellyfin-postgres/cache:/cache
+      - /path/to/media/example:/media/example:ro
+  postgres:
+    environment:
+      PGDATA: /var/lib/postgresql/17/docker # using directory convention from Postgres 18 to facilitate future upgrades
+      POSTGRES_DB: jellyfin
+      POSTGRES_INITDB_WALDIR: /var/lib/postgresql-wal/17/docker # if you would like to put WAL on a separate filesystem
+#      POSTGRES_PASSWORD: set a secure password
+      POSTGRES_USER: jellyfin
+    image: postgres:17
+    healthcheck:
+      interval: 10s
+      retries: 5
+      start_period: 30s
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}
+      timeout: 10s
+#    user: 'uid:gid' set a different non-root user to run postgres
+    volumes:
+      - /path/to/jellyfin-postgres/postgres-data:/var/lib/postgresql
+      - /path/to/jellyfin-postgres/postgres-wal:/var/lib/postgresql-wal
