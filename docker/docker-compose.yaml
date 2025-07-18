@@ -2,6 +2,10 @@ services:
   # no port exposed -- use a reverse proxy to jellyfin:8096/tcp or expose port 8096/tcp
   jellyfin:
     build: /path/to/jellyfin-postgres/build # path where Dockerfile will be stored
+    depends_on:
+      postgres:
+        condition: service_healthy
+        restart: true
     environment:
       JELLYFIN_CACHE_DIR: /cache
       POSTGRES_HOST: postgres
@@ -22,6 +26,14 @@ services:
 #      POSTGRES_PASSWORD: set a secure password
       POSTGRES_USER: jellyfin
     image: postgres:17
+    healthcheck:
+      interval: 10s
+      retries: 5
+      start_period: 30s
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}
+      timeout: 10s
 #    user: 'uid:gid' set a different non-root user to run postgres
     volumes:
       - /path/to/jellyfin-postgres/postgres-data:/var/lib/postgresql
