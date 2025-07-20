@@ -83,6 +83,21 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
     {
         // Use C collation for consistent case-sensitive behavior matching SQLite BINARY
         modelBuilder.UseCollation("C");
+
+        // Configure all DateTime properties to ensure UTC for PostgreSQL compatibility, matching SQLite provider
+        foreach (var entityType in modelBuilder.Model.GetEntityTypes())
+        {
+            foreach (var property in entityType.GetProperties())
+            {
+                if (property.ClrType == typeof(DateTime) || property.ClrType == typeof(DateTime?))
+                {
+                    property.SetValueConverter(
+                        new Microsoft.EntityFrameworkCore.Storage.ValueConversion.ValueConverter<DateTime, DateTime>(
+                            v => v.ToUniversalTime(),
+                            v => DateTime.SpecifyKind(v, DateTimeKind.Utc)));
+                }
+            }
+        }
     }
 
     /// <inheritdoc/>
