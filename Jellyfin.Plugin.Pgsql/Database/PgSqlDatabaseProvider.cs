@@ -240,7 +240,8 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             Port = int.Parse(Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432", CultureInfo.InvariantCulture),
             Database = Environment.GetEnvironmentVariable("POSTGRES_DB") ?? "jellyfin",
             Username = Environment.GetEnvironmentVariable("POSTGRES_USER") ?? "jellyfin",
-            Password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? throw new InvalidOperationException("PostgreSQL password must be provided via POSTGRES_PASSWORD environment variable")
+            Password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? throw new InvalidOperationException("PostgreSQL password must be provided via POSTGRES_PASSWORD environment variable"),
+            IncludeErrorDetail = true
         };
 
         return connectionBuilder;
