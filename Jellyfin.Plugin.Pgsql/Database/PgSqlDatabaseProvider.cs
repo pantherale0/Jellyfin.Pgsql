@@ -44,19 +44,13 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
     public void Initialise(DbContextOptionsBuilder options)
     {
         var connectionBuilder = GetConnectionBuilder();
-        connectionBuilder.Pooling = true;
         connectionBuilder.ApplicationName = $"jellyfin+{FileVersionInfo.GetVersionInfo(Assembly.GetEntryAssembly()!.Location).FileVersion}";
-        var connectionString = connectionBuilder.ToString();
-
-        _logger.LogInformation(
-            "Connecting to PostgreSQL at {Host}:{Port}, Database: {Database}, User: {User}",
-            connectionBuilder.Host,
-            connectionBuilder.Port,
-            connectionBuilder.Database,
-            connectionBuilder.Username);
 
         options
-            .UseNpgsql(connectionString, pgSqlOptions => pgSqlOptions.MigrationsAssembly(GetType().Assembly.FullName));
+            .UseNpgsql(connectionBuilder.ToString(), pgSqlOptions =>
+            {
+                pgSqlOptions.MigrationsAssembly(GetType().Assembly.FullName);
+            });
     }
 
     /// <inheritdoc/>
@@ -240,9 +234,27 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             Port = int.Parse(Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432", CultureInfo.InvariantCulture),
             Database = Environment.GetEnvironmentVariable("POSTGRES_DB") ?? "jellyfin",
             Username = Environment.GetEnvironmentVariable("POSTGRES_USER") ?? "jellyfin",
-            Password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? throw new InvalidOperationException("PostgreSQL password must be provided via POSTGRES_PASSWORD environment variable"),
-            IncludeErrorDetail = true
+            Password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? throw new InvalidOperationException("PostgreSQL password must be provided via POSTGRES_PASSWORD environment variable")
         };
+
+        // Configure optional Npgsql parameters from environment variables
+        if (bool.TryParse(Environment.GetEnvironmentVariable("NPGSQL_INCLUDE_ERROR_DETAIL"), out bool includeErrorDetail))
+        {
+            connectionBuilder.IncludeErrorDetail = includeErrorDetail;
+        }
+
+        if (bool.TryParse(Environment.GetEnvironmentVariable("NPGSQL_LOG_PARAMETERS"), out bool logParameters))
+        {
+            connectionBuilder.LogParameters = logParameters;
+        }
+
+        // Log the full connection string without password
+        var safeConnectionString = new NpgsqlConnectionStringBuilder(connectionBuilder.ToString())
+        {
+            Password = null
+        }.ToString();
+
+        _logger.LogInformation("PostgreSQL connection string: {ConnectionString}", safeConnectionString);
 
         return connectionBuilder;
     }
