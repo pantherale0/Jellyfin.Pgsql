@@ -41,7 +41,7 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
     public IDbContextFactory<JellyfinDbContext>? DbContextFactory { get; set; }
 
     /// <inheritdoc/>
-    public void Initialise(DbContextOptionsBuilder options)
+    public void Initialise(DbContextOptionsBuilder options, DatabaseConfigurationOptions databaseConfiguration)
     {
         var connectionBuilder = GetConnectionBuilder();
         connectionBuilder.ApplicationName = $"jellyfin+{FileVersionInfo.GetVersionInfo(Assembly.GetEntryAssembly()!.Location).FileVersion}";
