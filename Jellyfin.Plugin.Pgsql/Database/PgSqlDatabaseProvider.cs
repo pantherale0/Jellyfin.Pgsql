@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -43,6 +44,24 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
     /// <inheritdoc/>
     public void Initialise(DbContextOptionsBuilder options, DatabaseConfigurationOptions databaseConfiguration)
     {
+        static T? GetOption<T>(ICollection<CustomDatabaseOption>? options, string key, Func<string, T> converter, Func<T>? defaultValue = null)
+        {
+            if (options is null)
+            {
+                return defaultValue is not null ? defaultValue() : default;
+            }
+
+            var value = options.FirstOrDefault(e => e.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+            if (value is null)
+            {
+                return defaultValue is not null ? defaultValue() : default;
+            }
+
+            return converter(value.Value);
+        }
+
+        var customOptions = databaseConfiguration.CustomProviderOptions?.Options;
+
         var connectionBuilder = GetConnectionBuilder();
         connectionBuilder.ApplicationName = $"jellyfin+{FileVersionInfo.GetVersionInfo(Assembly.GetEntryAssembly()!.Location).FileVersion}";
 
@@ -51,6 +70,13 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             {
                 pgSqlOptions.MigrationsAssembly(GetType().Assembly.FullName);
             });
+
+        var enableSensitiveDataLogging = GetOption(customOptions, "EnableSensitiveDataLogging", e => e.Equals(bool.TrueString, StringComparison.OrdinalIgnoreCase), () => false);
+        if (enableSensitiveDataLogging)
+        {
+            options.EnableSensitiveDataLogging(enableSensitiveDataLogging);
+            _logger.LogInformation("EnableSensitiveDataLogging is enabled on PostgreSQL connection");
+        }
     }
 
     /// <inheritdoc/>
