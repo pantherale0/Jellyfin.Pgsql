@@ -17,8 +17,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .UseCollation("C")
-                .HasAnnotation("ProductVersion", "9.0.7")
+                .HasAnnotation("ProductVersion", "9.0.6")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -418,7 +417,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Property<byte[]>("Blurhash")
                         .HasColumnType("bytea");
 
-                    b.Property<DateTime?>("DateModified")
+                    b.Property<DateTime>("DateModified")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<int>("Height")
@@ -960,13 +959,11 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                         .HasColumnType("text");
 
                     b.Property<string>("PersonType")
-                        .IsRequired()
                         .HasColumnType("text");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Name", "PersonType")
-                        .IsUnique();
+                    b.HasIndex("Name");
 
                     b.ToTable("Peoples");
                 });
