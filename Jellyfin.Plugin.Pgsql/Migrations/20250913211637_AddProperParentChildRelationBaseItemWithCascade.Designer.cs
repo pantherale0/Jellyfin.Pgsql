@@ -12,8 +12,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Jellyfin.Plugin.Pgsql.Migrations
 {
     [DbContext(typeof(JellyfinDbContext))]
-    [Migration("20250814000003_RemoveDuplicatePeopleStage3")]
-    partial class RemoveDuplicatePeopleStage3
+    [Migration("20250913211637_AddProperParentChildRelationBaseItemWithCascade")]
+    partial class AddProperParentChildRelationBaseItemWithCascade
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -21,7 +21,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 #pragma warning disable 612, 618
             modelBuilder
                 .UseCollation("C")
-                .HasAnnotation("ProductVersion", "9.0.7")
+                .HasAnnotation("ProductVersion", "9.0.9")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -963,13 +963,11 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                         .HasColumnType("text");
 
                     b.Property<string>("PersonType")
-                        .IsRequired()
                         .HasColumnType("text");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Name", "PersonType")
-                        .IsUnique();
+                    b.HasIndex("Name");
 
                     b.ToTable("Peoples");
                 });
@@ -1425,6 +1423,16 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Navigation("Item");
                 });
 
+            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemEntity", b =>
+                {
+                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "DirectParent")
+                        .WithMany("DirectChildren")
+                        .HasForeignKey("ParentId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.Navigation("DirectParent");
+                });
+
             modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemImageInfo", b =>
                 {
                     b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Item")
@@ -1626,6 +1634,8 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Navigation("Chapters");
 
                     b.Navigation("Children");
+
+                    b.Navigation("DirectChildren");
 
                     b.Navigation("Images");
 
