@@ -17,6 +17,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
+                .UseCollation("C")
                 .HasAnnotation("ProductVersion", "9.0.6")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
@@ -417,7 +418,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Property<byte[]>("Blurhash")
                         .HasColumnType("bytea");
 
-                    b.Property<DateTime>("DateModified")
+                    b.Property<DateTime?>("DateModified")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<int>("Height")
