@@ -1025,7 +1025,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasIndex("UserId", "Kind")
                         .IsUnique()
-                        .HasFilter("\"UserId\" IS NOT NULL");
+                        .HasFilter("[UserId] IS NOT NULL");
 
                     b.ToTable("Permissions");
                 });
@@ -1060,7 +1060,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasIndex("UserId", "Kind")
                         .IsUnique()
-                        .HasFilter("\"UserId\" IS NOT NULL");
+                        .HasFilter("[UserId] IS NOT NULL");
 
                     b.ToTable("Preferences");
                 });
@@ -1420,16 +1420,6 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Navigation("Item");
                 });
 
-            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemEntity", b =>
-                {
-                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "DirectParent")
-                        .WithMany("DirectChildren")
-                        .HasForeignKey("ParentId")
-                        .OnDelete(DeleteBehavior.Cascade);
-
-                    b.Navigation("DirectParent");
-                });
-
             modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemImageInfo", b =>
                 {
                     b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Item")
@@ -1631,8 +1621,6 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Navigation("Chapters");
 
                     b.Navigation("Children");
-
-                    b.Navigation("DirectChildren");
 
                     b.Navigation("Images");
 
