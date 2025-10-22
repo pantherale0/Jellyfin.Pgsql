@@ -27,14 +27,14 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                 table: "Preferences",
                 columns: ["UserId", "Kind"],
                 unique: true,
-                filter: "[UserId] IS NOT NULL");
+                filter: "\"UserId\" IS NOT NULL");
 
             migrationBuilder.CreateIndex(
                 name: "IX_Permissions_UserId_Kind",
                 table: "Permissions",
                 columns: ["UserId", "Kind"],
                 unique: true,
-                filter: "[UserId] IS NOT NULL");
+                filter: "\"UserId\" IS NOT NULL");
         }
 
         /// <inheritdoc />
