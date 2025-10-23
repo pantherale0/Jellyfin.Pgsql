@@ -1,4 +1,5 @@
 # Build stage
+# Context hint: project root ../
 FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 WORKDIR /src
 
@@ -27,8 +28,8 @@ RUN apt-get update && \
 
 # Copy the published plugin and config files
 COPY --from=build /app/publish/ /jellyfin-pgsql/plugin/
-COPY entrypoint.sh /entrypoint.sh
-COPY database.xml /jellyfin-pgsql/database.xml
+COPY docker/entrypoint.sh /entrypoint.sh
+COPY docker/database.xml /jellyfin-pgsql/database.xml
 
 # Make entrypoint executable
 RUN chmod +x /entrypoint.sh
