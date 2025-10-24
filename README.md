@@ -4,7 +4,7 @@ This adds postgres SQL support via an plugin to the jellyfin server. There are s
 
 # How to use it
 
-There is an docker container available for yourself to build that already sets everything up and attaches the plugin directly.
+You can use your existing jellyfin compose file and change the image accordingly to: "ghcr.io/jpvenson/jellyfin.pgsql:10.11.0-1". Dont forget to change the database.xml file after you first started to use your actual database connection info.
 
 # Build
 
