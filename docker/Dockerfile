@@ -22,7 +22,7 @@ RUN apt-get update && \
     wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] http://apt.postgresql.org/pub/repos/apt/ $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list && \
     apt-get update && \
-    apt-get install -y postgresql-client-17 && \
+    apt-get install -y postgresql-client-17 xmlstartlet && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -30,6 +30,8 @@ RUN apt-get update && \
 COPY --from=build /app/publish/ /jellyfin-pgsql/plugin/
 COPY docker/entrypoint.sh /entrypoint.sh
 COPY docker/database.xml /jellyfin-pgsql/database.xml
+COPY docker/jellyfindb.load /jellyfin-pgsql/jellyfindb.load
+COPY docker/jellyfin.PgsqlMigrator.dll /jellyfin-pgsql/jellyfin.PgsqlMigrator.dll
 
 # Make entrypoint executable
 RUN chmod +x /entrypoint.sh
