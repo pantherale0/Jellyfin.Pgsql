@@ -4,7 +4,26 @@ This adds postgres SQL support via an plugin to the jellyfin server. There are s
 
 # How to use it
 
-There is an docker container available for yourself to build that already sets everything up and attaches the plugin directly.
+You can use your existing jellyfin compose file and change the image accordingly to: `ghcr.io/jpvenson/jellyfin.pgsql:10.11.0-1`.
+
+You need to add the connection paramters as enviorment variables in your compose file:
+
+```yaml
+
+services:
+  jellyfin:
+    image: ghcr.io/jpvenson/jellyfin.pgsql:10.11.0-1
+    volumes:
+        - /path/to/config:/config
+        - /path/to/cache:/cache
+        - /path/to/media:/media
+    environment:
+        - POSTGRES_HOST=
+        - POSTGRES_PORT=
+        - POSTGRES_DB=jellyfin
+        - POSTGRES_USER=jellyfin
+        - POSTGRES_PASSWORD=jellyfin
+```
 
 # Build
 
@@ -31,3 +50,9 @@ launch your jellyfin server.
 
 # Add migration
 Run `dotnet ef migrations add {MIGRATION_NAME} --project "/workspaces/Jellyfin.Pgsql/Jellyfin.Plugin.Pgsql" -- --migration-provider Jellyfin-PgSql`
+
+# Release flow
+
+To create a new release, first sync all Jellyfin server changes then create a new migration as seen above. After that create a new efbundle:
+`dotnet ef migrations bundle -o docker/jellyfin.PgsqlMigrator.dll -r linux-x64 --self-contained --project "/workspaces/Jellyfin.Pgsql/Jellyfin.Plugin.Pgsql" --  --migration-provider Jellyfin-PgSql`
+Then build the container
