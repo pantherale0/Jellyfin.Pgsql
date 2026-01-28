@@ -18,7 +18,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 #pragma warning disable 612, 618
             modelBuilder
                 .UseCollation("C")
-                .HasAnnotation("ProductVersion", "9.0.9")
+                .HasAnnotation("ProductVersion", "9.0.10")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -977,16 +977,16 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Property<Guid>("PeopleId")
                         .HasColumnType("uuid");
 
-                    b.Property<int?>("ListOrder")
-                        .HasColumnType("integer");
-
                     b.Property<string>("Role")
                         .HasColumnType("text");
+
+                    b.Property<int?>("ListOrder")
+                        .HasColumnType("integer");
 
                     b.Property<int?>("SortOrder")
                         .HasColumnType("integer");
 
-                    b.HasKey("ItemId", "PeopleId");
+                    b.HasKey("ItemId", "PeopleId", "Role");
 
                     b.HasIndex("PeopleId");
 
@@ -1420,6 +1420,16 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Navigation("Item");
                 });
 
+            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemEntity", b =>
+                {
+                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "DirectParent")
+                        .WithMany("DirectChildren")
+                        .HasForeignKey("ParentId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.Navigation("DirectParent");
+                });
+
             modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemImageInfo", b =>
                 {
                     b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Item")
@@ -1621,6 +1631,8 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Navigation("Chapters");
 
                     b.Navigation("Children");
+
+                    b.Navigation("DirectChildren");
 
                     b.Navigation("Images");
 
