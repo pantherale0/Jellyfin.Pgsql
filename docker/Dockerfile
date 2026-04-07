@@ -9,11 +9,18 @@ WORKDIR /src
 COPY jellyfin.ruleset .
 COPY Jellyfin.Plugin.Pgsql.sln .
 COPY build.yaml .
+COPY .config/ ./.config/
 COPY Jellyfin.Plugin.Pgsql/ ./Jellyfin.Plugin.Pgsql/
 
 # Restore and publish
 RUN dotnet restore Jellyfin.Plugin.Pgsql.sln
 RUN dotnet publish Jellyfin.Plugin.Pgsql.sln -c Release --no-restore -o /app/publish
+RUN dotnet tool restore
+RUN dotnet ef migrations bundle \
+    -o /app/jellyfin.PgsqlMigrator.dll \
+    --project ./Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj \
+    --startup-project ./Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj \
+    --force
 
 # Final stage - Jellyfin with plugin
 FROM jellyfin/jellyfin:${JELLYFIN_VERSION}
@@ -30,10 +37,10 @@ RUN apt-get update && \
 
 # Copy the published plugin and config files
 COPY --from=build /app/publish/ /jellyfin-pgsql/plugin/
+COPY --from=build /app/jellyfin.PgsqlMigrator.dll /jellyfin-pgsql/jellyfin.PgsqlMigrator.dll
 COPY docker/entrypoint.sh /entrypoint.sh
 COPY docker/database.xml /jellyfin-pgsql/database.xml
 COPY docker/jellyfindb.load /jellyfin-pgsql/jellyfindb.load
-COPY docker/jellyfin.PgsqlMigrator.dll /jellyfin-pgsql/jellyfin.PgsqlMigrator.dll
 
 # Make entrypoint executable
 RUN chmod +x /entrypoint.sh
