@@ -1,5 +1,31 @@
 #!/bin/bash
 
+set -euo pipefail
+
+wait_for_config_mount() {
+    local attempts=12
+    local delay=5
+    local i
+
+    for i in $(seq 1 "$attempts"); do
+        if mkdir -p /config/log /config/plugins 2>/dev/null \
+            && touch /config/.jellyfin-pgsql-write-test 2>/dev/null \
+            && rm -f /config/.jellyfin-pgsql-write-test 2>/dev/null; then
+            return 0
+        fi
+
+        echo "[entrypoint] /config not writable/healthy (attempt $i/$attempts), waiting ${delay}s..."
+        sleep "$delay"
+    done
+
+    echo "[entrypoint] ERROR: /config mount is not healthy inside container."
+    echo "[entrypoint] /proc/self/mountinfo for /config:"
+    grep ' /config\|/mnt/glusterfs' /proc/self/mountinfo || true
+    return 1
+}
+
+wait_for_config_mount
+
 # Clean and create plugins directory, then copy plugin
 rm -rf /config/plugins/PostgreSQL
 mkdir -p /config/plugins/PostgreSQL
