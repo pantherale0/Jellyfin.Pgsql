@@ -1,13 +1,81 @@
 name: '🐋 Build & Publish Docker Image'
 
+concurrency:
+  group: docker-publish
+  cancel-in-progress: false
+
 on:
   release:
     types:
       - released
+  schedule:
+    # Check for new Jellyfin versions daily at 2 AM UTC
+    - cron: '0 2 * * *'
   workflow_dispatch:
+    inputs:
+      jellyfin_version:
+        description: 'Jellyfin version (leave empty for latest)'
+        required: false
+        default: ''
 
 jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      jellyfin_version: ${{ steps.version.outputs.jellyfin_version }}
+      should_build: ${{ steps.version.outputs.should_build }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine Jellyfin version
+        id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get the manually specified version or fetch the latest
+          if [[ -n "${{ github.event.inputs.jellyfin_version }}" ]]; then
+            JELLYFIN_VERSION="${{ github.event.inputs.jellyfin_version }}"
+            echo "Using manually specified version: $JELLYFIN_VERSION"
+          else
+            # Fetch latest Jellyfin version from GitHub releases
+            JELLYFIN_VERSION=$(gh api repos/jellyfin/jellyfin/releases/latest -q '.tag_name' | sed 's/^v//')
+            if [[ -z "$JELLYFIN_VERSION" ]]; then
+              echo "Error: Could not fetch latest Jellyfin version"
+              exit 1
+            fi
+            echo "Fetched latest version: $JELLYFIN_VERSION"
+          fi
+
+          # Normalize an optional leading 'v'
+          JELLYFIN_VERSION="${JELLYFIN_VERSION#v}"
+
+          echo "jellyfin_version=$JELLYFIN_VERSION" >> "$GITHUB_OUTPUT"
+
+          # Check if this Jellyfin-version tag already exists in GHCR
+          EXISTING_TAGS=$(gh api /users/jpvenson/packages/container/jellyfin.pgsql/versions \
+            --paginate --jq '.[].metadata.container.tags[]?' 2>/dev/null) || EXISTING_TAGS=""
+
+          if echo "$EXISTING_TAGS" | grep -qx "$JELLYFIN_VERSION"; then
+            TAG_EXISTS="true"
+          else
+            TAG_EXISTS="false"
+          fi
+
+          # Build rules:
+          # - Always build on manual dispatch and release
+          # - On schedule, only build if the version tag does not already exist
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || [[ "${{ github.event_name }}" == "release" ]] || [[ "$TAG_EXISTS" == "false" ]]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "Will build image for Jellyfin $JELLYFIN_VERSION"
+          else
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            echo "Image tag $JELLYFIN_VERSION already exists; skipping scheduled build"
+          fi
+
   build-and-push:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -17,43 +85,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Determine image version
-        id: version
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set Docker image tag
+        id: image-tag
         run: |
-          # Extract the Jellyfin base version from the Dockerfile (handles optional AS alias)
-          JELLYFIN_VERSION=$(grep -oP '(?<=FROM jellyfin/jellyfin:)[^\s]+' docker/Dockerfile | head -1)
-          echo "jellyfin_version=$JELLYFIN_VERSION" >> "$GITHUB_OUTPUT"
-
-          # Query existing package versions from GHCR via the GitHub API
-          EXISTING_TAGS=$(gh api /users/jpvenson/packages/container/jellyfin.pgsql/versions \
-            --paginate --jq '.[].metadata.container.tags[]' 2>/dev/null) \
-            || { echo "Warning: could not query GHCR tags, defaulting rolling number to 1"; EXISTING_TAGS=""; }
-
-          # Find the highest rolling number already published for this Jellyfin version.
-          # Escape dots in the version so they are treated as literals in the regex.
-          ESCAPED_VERSION=$(printf '%s' "$JELLYFIN_VERSION" | sed 's/[.]/\\./g')
-          MAX_ROLLING=$(echo "$EXISTING_TAGS" \
-            | grep -oP "^${ESCAPED_VERSION}-\K[0-9]+$" \
-            | sort -n | tail -1)
-
-          NEXT=$(( ${MAX_ROLLING:-0} + 1 ))
-          IMAGE_TAG="${JELLYFIN_VERSION}-${NEXT}"
-          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
-          echo "Computed image tag: $IMAGE_TAG"
-
-          # Build full tag list; include 'latest' on release events
-          TAGS="ghcr.io/jpvenson/jellyfin.pgsql:${IMAGE_TAG}"
-          if [[ "$GITHUB_EVENT_NAME" == "release" ]]; then
-            TAGS="${TAGS}"$'\n'"ghcr.io/jpvenson/jellyfin.pgsql:latest"
-          fi
-          # Use a multiline-safe delimiter for the output
-          {
-            echo "tags<<EOF"
-            echo "$TAGS"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          JELLYFIN_VERSION="${{ needs.check-version.outputs.jellyfin_version }}"
+          echo "tag=$JELLYFIN_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Image tag: $JELLYFIN_VERSION"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3.10.0
@@ -71,6 +108,10 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: true
-          tags: ${{ steps.version.outputs.tags }}
+          build-args: |
+            JELLYFIN_VERSION=${{ steps.image-tag.outputs.tag }}
+          tags: |
+            ghcr.io/jpvenson/jellyfin.pgsql:${{ steps.image-tag.outputs.tag }}
+            ghcr.io/jpvenson/jellyfin.pgsql:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
