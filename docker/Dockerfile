@@ -7,6 +7,7 @@ WORKDIR /src
 
 # Copy project files
 COPY jellyfin.ruleset .
+COPY Directory.Build.props .
 COPY Jellyfin.Plugin.Pgsql.sln .
 COPY build.yaml .
 COPY .config/ ./.config/

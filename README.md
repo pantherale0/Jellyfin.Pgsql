@@ -51,15 +51,46 @@ Update the database.xml file to switch to the plugin as its database provider:
 
 launch your jellyfin server.
 
-# Add migration
-Run `dotnet ef migrations add {MIGRATION_NAME} --project "/workspaces/Jellyfin.Pgsql/Jellyfin.Plugin.Pgsql" -- --migration-provider Jellyfin-PgSql`
+# Add migration (manual)
+
+Run `dotnet ef migrations add {MIGRATION_NAME} --project Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj -- --migration-provider Jellyfin-PgSql`
 
 # Release flow
 
-To create a new release, first sync all Jellyfin server changes then create a new migration as seen above. After that create a new efbundle:
-`dotnet ef migrations bundle -o docker/jellyfin.PgsqlMigrator.dll -r linux-x64 --self-contained --project "/workspaces/Jellyfin.Pgsql/Jellyfin.Plugin.Pgsql" --  --migration-provider Jellyfin-PgSql`
-Then build the container
+## Automated sync (recommended)
 
+A scheduled GitHub Actions workflow ([`.github/workflows/sync-migrations.yaml`](.github/workflows/sync-migrations.yaml)) runs daily and:
+
+1. Detects new Jellyfin releases and SQLite schema migrations via the GitHub API
+2. Bumps NuGet refs, the Docker base image version, and the `jellyfin` submodule gitlink
+3. Generates a PostgreSQL EF migration via model diff (SQLite migrations are **not** copied)
+4. Post-processes PG-specific fixes and validates against Postgres
+5. Opens a PR for human review
+
+Docker image builds are blocked until the sync PR is merged and [`.github/jellyfin-sync-state.json`](.github/jellyfin-sync-state.json) matches the target Jellyfin version.
+
+## Manual sync
+
+Initialize the submodule and run the sync script locally (requires PostgreSQL, `gh`, and `jq`):
+
+```bash
+git submodule update --init jellyfin
+./scripts/sync-jellyfin-migrations.sh --dry-run --version X.Y.Z   # check first
+./scripts/sync-jellyfin-migrations.sh --version X.Y.Z
+```
+
+Options: `--force` to re-run when state appears current, `--dry-run` to check drift and NuGet/TFM compatibility without modifying the repo.
+
+Major Jellyfin upgrades (e.g. 12.x) require `net10.0`, Microsoft 10.x, and updated Npgsql packages. These are managed in [`Directory.Build.props`](Directory.Build.props) (`PluginTargetFramework`, `MicrosoftPackageVersion`, etc.) and bumped automatically by the sync script — you do not need to edit the csproj manually.
+
+The pre-flight check validates the full package graph before making any changes.
+
+Then build the EF bundle and container:
+
+```bash
+./scripts/validate-migrations.sh
+docker build -f docker/Dockerfile --build-arg JELLYFIN_VERSION=X.Y.Z -t jellyfin.pgsql .
+```
 
 # Migration Instructions (ADVANCED, UNTESTED)
 
