@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>$(PluginTargetFramework)</TargetFramework>
     <RootNamespace>Jellyfin.Plugin.Pgsql</RootNamespace>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
@@ -11,27 +11,27 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Jellyfin.Controller" Version="10.11.6" PrivateAssets="all" />
-    <PackageReference Include="Jellyfin.Model" Version="10.11.6" PrivateAssets="all" />
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
-    <PackageReference Include="Npgsql" Version="9.0.4" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Abstractions" Version="9.0.11" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="9.0.11" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="9.0.11" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="9.0.11" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.11" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.11" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.11" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.11" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Extensions.Options" Version="9.0.11" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Extensions.Primitives" Version="9.0.11" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.11" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.11" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.11">
+    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinVersion)" PrivateAssets="all" />
+    <PackageReference Include="Jellyfin.Model" Version="$(JellyfinVersion)" PrivateAssets="all" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="$(NpgsqlEfVersion)" />
+    <PackageReference Include="Npgsql" Version="$(NpgsqlVersion)" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Abstractions" Version="$(MicrosoftPackageVersion)" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="$(MicrosoftPackageVersion)" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="$(MicrosoftPackageVersion)" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="$(MicrosoftPackageVersion)" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="$(MicrosoftPackageVersion)" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="$(MicrosoftPackageVersion)" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="$(MicrosoftPackageVersion)" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="$(MicrosoftPackageVersion)" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="$(MicrosoftPackageVersion)" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Primitives" Version="$(MicrosoftPackageVersion)" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="$(MicrosoftPackageVersion)" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="$(MicrosoftPackageVersion)" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="$(MicrosoftPackageVersion)">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="9.0.11">
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="$(MicrosoftPackageVersion)">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>

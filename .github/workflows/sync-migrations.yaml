@@ -1,0 +1,101 @@
+name: '🔄 Sync Jellyfin Migrations'
+
+concurrency:
+  group: sync-migrations
+  cancel-in-progress: false
+
+on:
+  schedule:
+    # Run before docker build (1 AM UTC)
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+    inputs:
+      jellyfin_version:
+        description: 'Jellyfin version (leave empty for latest)'
+        required: false
+        default: ''
+      force:
+        description: 'Force sync even if state appears up to date'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  POSTGRES_HOST: localhost
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: jellyfin
+  POSTGRES_USER: jellyfin
+  POSTGRES_PASSWORD: jellyfin
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: jellyfin
+          POSTGRES_PASSWORD: jellyfin
+          POSTGRES_DB: jellyfin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jellyfin -d jellyfin"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Run migration sync
+        id: sync
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ARGS=()
+          if [[ -n "${{ github.event.inputs.jellyfin_version }}" ]]; then
+            ARGS+=(--version "${{ github.event.inputs.jellyfin_version }}")
+          fi
+          if [[ "${{ github.event.inputs.force }}" == "true" ]]; then
+            ARGS+=(--force)
+          fi
+
+          ./scripts/sync-jellyfin-migrations.sh "${ARGS[@]}"
+
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No migration sync changes detected."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            VERSION=$(jq -r '.jellyfinVersion' .github/jellyfin-sync-state.json)
+            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create pull request
+        if: steps.sync.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: sync/jellyfin-${{ steps.sync.outputs.version }}
+          delete-branch: true
+          title: 'Sync PostgreSQL migrations for Jellyfin ${{ steps.sync.outputs.version }}'
+          labels: |
+            migration-sync
+            dependencies
+          body-path: .sync-report.md
+          commit-message: 'Sync PostgreSQL migrations for Jellyfin ${{ steps.sync.outputs.version }}'

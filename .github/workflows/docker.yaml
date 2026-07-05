@@ -56,6 +56,35 @@ jobs:
 
           echo "jellyfin_version=$JELLYFIN_VERSION" >> "$GITHUB_OUTPUT"
 
+          # Check migration sync state against target Jellyfin version
+          SYNC_OK="true"
+          if [[ -f .github/jellyfin-sync-state.json ]]; then
+            STATE_VERSION=$(jq -r '.jellyfinVersion' .github/jellyfin-sync-state.json)
+            STATE_CORE=$(jq -r '.lastCoreMigration' .github/jellyfin-sync-state.json)
+
+            LATEST_CORE=$(gh api "repos/jellyfin/jellyfin/contents/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations?ref=v${JELLYFIN_VERSION}" \
+              --paginate \
+              -q '.[].name' \
+              | grep -E '^[0-9]+_.*\.cs$' \
+              | grep -v '\.Designer\.cs$' \
+              | sort \
+              | tail -n1 \
+              | sed 's/\.cs$//')
+
+            if [[ "$STATE_VERSION" != "$JELLYFIN_VERSION" ]]; then
+              echo "Migration sync state version ($STATE_VERSION) does not match target ($JELLYFIN_VERSION)"
+              SYNC_OK="false"
+            elif [[ -n "$LATEST_CORE" && "$LATEST_CORE" != "$STATE_CORE" ]]; then
+              echo "Core migration ($LATEST_CORE) is ahead of sync state ($STATE_CORE)"
+              SYNC_OK="false"
+            fi
+          else
+            echo "Warning: .github/jellyfin-sync-state.json not found"
+            SYNC_OK="false"
+          fi
+
+          echo "sync_ok=$SYNC_OK" >> "$GITHUB_OUTPUT"
+
           # Check if this Jellyfin-version tag already exists in GHCR
           EXISTING_TAGS=$(gh api /users/${{ github.repository_owner }}/packages/container/${{ env.IMAGE_NAME }}/versions \
             --paginate --jq '.[].metadata.container.tags[]?' 2>/dev/null) || EXISTING_TAGS=""
@@ -67,9 +96,12 @@ jobs:
           fi
 
           # Build rules:
-          # - Always build on manual dispatch and release
+          # - Always build on manual dispatch and release (if sync OK)
           # - On schedule, only build if the version tag does not already exist
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || [[ "${{ github.event_name }}" == "release" ]] || [[ "$TAG_EXISTS" == "false" ]]; then
+          if [[ "$SYNC_OK" != "true" ]]; then
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            echo "Migration sync required — waiting for sync PR to merge"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || [[ "${{ github.event_name }}" == "release" ]] || [[ "$TAG_EXISTS" == "false" ]]; then
             echo "should_build=true" >> "$GITHUB_OUTPUT"
             echo "Will build image for Jellyfin $JELLYFIN_VERSION"
           else
@@ -88,6 +120,31 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify jellyfin submodule matches sync state
+        run: |
+          set -euo pipefail
+          JELLYFIN_VERSION="${{ needs.check-version.outputs.jellyfin_version }}"
+          STATE_VERSION=$(jq -r '.jellyfinVersion' .github/jellyfin-sync-state.json)
+          EXPECTED_COMMIT=$(jq -r '.jellyfinSubmoduleCommit' .github/jellyfin-sync-state.json)
+          ACTUAL_COMMIT=$(git -C jellyfin rev-parse HEAD)
+
+          if [[ "$STATE_VERSION" != "$JELLYFIN_VERSION" ]]; then
+            echo "ERROR: Sync state version ($STATE_VERSION) does not match build target ($JELLYFIN_VERSION)" >&2
+            exit 1
+          fi
+
+          if [[ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" ]]; then
+            echo "ERROR: jellyfin submodule commit mismatch." >&2
+            echo "  Expected: $EXPECTED_COMMIT" >&2
+            echo "  Actual:   $ACTUAL_COMMIT" >&2
+            exit 1
+          fi
+
+          echo "Submodule verified: v${JELLYFIN_VERSION} @ ${ACTUAL_COMMIT}"
 
       - name: Set Docker image tag
         id: image-tag

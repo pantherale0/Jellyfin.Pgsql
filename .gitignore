@@ -6,3 +6,6 @@ artifacts
 
 .devcontainer/pgsql/
 docker/jellyfin.PgsqlMigrator.dll
+.sync-warnings.md
+.sync-report.md
+.sync-empty-migration
