@@ -1,7 +1,7 @@
 {
-  "jellyfinVersion": "10.11.6",
-  "jellyfinSubmoduleTag": "v10.11.6",
-  "jellyfinSubmoduleCommit": "10662e75e4626be71184db950ce534ab6953be77",
-  "lastCoreMigration": "20250925203415_ExtendPeopleMapKey",
-  "lastPgMigration": "20260128200059_10.11.6-1"
+  "jellyfinVersion": "12.0-rc2",
+  "jellyfinSubmoduleTag": "v12.0-rc2",
+  "jellyfinSubmoduleCommit": "feef2403c49003761010656cfadaba55a278acd7",
+  "lastCoreMigration": "20260524120336_AddUniqueNormalizedUsernameIndex",
+  "lastPgMigration": "20260705211020_Update_12_0-rc2"
 }

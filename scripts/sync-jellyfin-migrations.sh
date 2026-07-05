@@ -19,6 +19,7 @@ RESOLVED_NPGSQL_VERSION=""
 RESOLVED_NPGSQL_EF=""
 RESOLVED_PLUGIN_TFM=""
 RESOLVED_DOTNET_SDK=""
+RESOLVED_DOTNET_EF_VERSION=""
 FORCE=false
 TARGET_VERSION=""
 DRY_RUN=false
@@ -175,12 +176,21 @@ compute_plugin_stack() {
         RESOLVED_DOTNET_SDK="10.0"
         RESOLVED_NPGSQL_VERSION="10.0.3"
         RESOLVED_NPGSQL_EF="10.0.2"
+        RESOLVED_DOTNET_EF_VERSION="${RESOLVED_MICROSOFT_VERSION}"
     else
         RESOLVED_PLUGIN_TFM="net9.0"
         RESOLVED_DOTNET_SDK="9.0"
         RESOLVED_NPGSQL_VERSION="9.0.4"
         RESOLVED_NPGSQL_EF="9.0.4"
+        RESOLVED_DOTNET_EF_VERSION="9.0.11"
     fi
+}
+
+update_dotnet_ef_tool() {
+    local tools_file="${REPO_ROOT}/.config/dotnet-tools.json"
+    sed -i "s/\"dotnet-ef\": {/\"dotnet-ef\": {/" "${tools_file}"
+    sed -i "/\"dotnet-ef\": {/,/\"commands\"/ s/\"version\": \"[^\"]*\"/\"version\": \"${RESOLVED_DOTNET_EF_VERSION}\"/" "${tools_file}"
+    echo "[sync] Using dotnet-ef ${RESOLVED_DOTNET_EF_VERSION} for ${RESOLVED_PLUGIN_TFM}"
 }
 
 update_directory_build_props() {
@@ -205,6 +215,28 @@ report_restore_failure() {
     elif echo "${restore_output}" | grep -q "NU1605"; then
         echo "[sync]        Package downgrade detected — Microsoft/Npgsql versions must match Jellyfin (Microsoft ${RESOLVED_MICROSOFT_VERSION})." >&2
     fi
+}
+
+check_dotnet_ef_runtime() {
+    local major="${RESOLVED_MICROSOFT_VERSION%%.*}"
+    if [[ "${major}" -lt 10 ]]; then
+        return 0
+    fi
+
+    local runtimes
+    runtimes="$(dotnet --list-runtimes 2>/dev/null || true)"
+    if echo "${runtimes}" | grep -qE "Microsoft\.AspNetCore\.App ${major}\."; then
+        return 0
+    fi
+
+    echo "[sync] ERROR: Microsoft.AspNetCore.App ${major}.x runtime is required for dotnet-ef on ${RESOLVED_PLUGIN_TFM}." >&2
+    echo "[sync]        dotnet-ef ${RESOLVED_DOTNET_EF_VERSION} cannot run without it (build may still succeed)." >&2
+    echo "[sync]        Arch/CachyOS: sudo pacman -S aspnet-runtime-${major}.0" >&2
+    echo "[sync]        Or install the .NET ${major} SDK (includes ASP.NET): https://dot.net/download" >&2
+    write_failure_report "pre-flight" \
+        "Microsoft.AspNetCore.App ${major}.x runtime is not installed." \
+        "${runtimes:-<dotnet --list-runtimes produced no output>}"
+    return 1
 }
 
 preflight_check() {
@@ -233,6 +265,11 @@ preflight_check() {
     fi
 
     rm -rf "${tmpdir}"
+
+    if ! check_dotnet_ef_runtime; then
+        return 1
+    fi
+
     echo "[sync] Pre-flight passed."
 }
 
@@ -242,6 +279,8 @@ begin_sync_backup() {
     cp "${REPO_ROOT}/docker/Dockerfile" "${SYNC_BACKUP_DIR}/"
     cp "${REPO_ROOT}/build.yaml" "${SYNC_BACKUP_DIR}/"
     cp "${STATE_FILE}" "${SYNC_BACKUP_DIR}/"
+    cp "${REPO_ROOT}/.config/dotnet-tools.json" "${SYNC_BACKUP_DIR}/"
+    cp -a "${MIGRATIONS_DIR}" "${SYNC_BACKUP_DIR}/Migrations"
     git -C "${REPO_ROOT}/jellyfin" rev-parse HEAD > "${SYNC_BACKUP_DIR}/submodule_commit"
     SYNC_STARTED=true
 }
@@ -256,6 +295,9 @@ rollback_sync() {
     cp "${SYNC_BACKUP_DIR}/Dockerfile" "${REPO_ROOT}/docker/"
     cp "${SYNC_BACKUP_DIR}/build.yaml" "${REPO_ROOT}/"
     cp "${SYNC_BACKUP_DIR}/jellyfin-sync-state.json" "${STATE_FILE}"
+    cp "${SYNC_BACKUP_DIR}/dotnet-tools.json" "${REPO_ROOT}/.config/"
+    rm -rf "${MIGRATIONS_DIR}"
+    cp -a "${SYNC_BACKUP_DIR}/Migrations" "${MIGRATIONS_DIR}"
 
     local previous_commit
     previous_commit="$(cat "${SYNC_BACKUP_DIR}/submodule_commit")"
@@ -282,6 +324,7 @@ write_failure_report() {
         echo "| **Current state version** | \`${STATE_VERSION:-unknown}\` |"
         echo "| **Target NuGet** | \`${RESOLVED_NUGET_VERSION:-unknown}\` |"
         echo "| **Target TFM** | \`${RESOLVED_PLUGIN_TFM:-unknown}\` |"
+        echo "| **dotnet-ef** | \`${RESOLVED_DOTNET_EF_VERSION:-unknown}\` |"
         if [[ -n "${GITHUB_SERVER_URL:-}" && -n "${GITHUB_REPOSITORY:-}" && -n "${GITHUB_RUN_ID:-}" ]]; then
             echo "| **Workflow run** | [${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) |"
         fi
@@ -337,6 +380,7 @@ bump_version_refs() {
     echo "[sync] Bumping version refs to ${tag_version} (NuGet ${RESOLVED_NUGET_VERSION}, TFM ${RESOLVED_PLUGIN_TFM})..."
 
     update_directory_build_props "${REPO_ROOT}/Directory.Build.props"
+    update_dotnet_ef_tool
 
     sed -i "s/^ARG JELLYFIN_VERSION=.*/ARG JELLYFIN_VERSION=${tag_version}/" \
         "${REPO_ROOT}/docker/Dockerfile"
@@ -527,6 +571,18 @@ fi
 SYNC_STAGE="postprocess"
 bash "${SCRIPT_DIR}/postprocess-migration.sh" "${WARNINGS_FILE}"
 remove_empty_migration
+
+SYNC_STAGE="check-model"
+pending_output=""
+if pending_output="$(dotnet ef migrations has-pending-model-changes \
+    --project "${PROJECT}" \
+    -- --migration-provider Jellyfin-PgSql 2>&1)"; then
+    :
+else
+    fail_sync "check-model" \
+        "EF model does not match the migration snapshot after post-processing." \
+        "${pending_output}"
+fi
 
 if [[ -f "${WARNINGS_FILE}" ]]; then
     echo "" >> "${SYNC_REPORT}"

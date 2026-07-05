@@ -1,10 +1,10 @@
 <Project>
   <PropertyGroup>
-    <JellyfinVersion>10.11.6</JellyfinVersion>
-    <MicrosoftPackageVersion>9.0.11</MicrosoftPackageVersion>
-    <NpgsqlVersion>9.0.4</NpgsqlVersion>
-    <NpgsqlEfVersion>9.0.4</NpgsqlEfVersion>
-    <PluginTargetFramework>net9.0</PluginTargetFramework>
-    <DotNetSdkVersion>9.0</DotNetSdkVersion>
+    <JellyfinVersion>12.0.0-rc2</JellyfinVersion>
+    <MicrosoftPackageVersion>10.0.9</MicrosoftPackageVersion>
+    <NpgsqlVersion>10.0.3</NpgsqlVersion>
+    <NpgsqlEfVersion>10.0.2</NpgsqlEfVersion>
+    <PluginTargetFramework>net10.0</PluginTargetFramework>
+    <DotNetSdkVersion>10.0</DotNetSdkVersion>
   </PropertyGroup>
 </Project>
