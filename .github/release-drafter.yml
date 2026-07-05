@@ -1,0 +1,97 @@
+# Configuration for Release Drafter: https://github.com/release-drafter/release-drafter
+name-template: 'Version $NEXT_MAJOR_VERSION'
+tag-template: 'v$NEXT_MAJOR_VERSION'
+version-template: '$MAJOR'
+category-template: '### $TITLE'
+
+categories:
+  - title: ':boom: Breaking changes'
+    labels:
+      - breaking
+  - title: ':fire: Removed'
+    labels:
+      - removed
+  - title: ':rewind: Reverted changes'
+    labels:
+      - revert
+      - reverted
+  - title: ':rocket: Major features and improvements'
+    labels:
+      - major-enhancement
+      - major-feature
+  - title: ':ambulance: Major bug fixes'
+    labels:
+      - major-bug
+  - title: ':wastebasket: Deprecated'
+    label: deprecated
+  - title: ':tada: New features and improvements'
+    labels:
+      - enhancement
+      - feature
+  - title: ':bug: Bug fixes'
+    labels:
+      - bug
+      - fix
+      - bugfix
+      - regression
+  - title: ':white_check_mark: Tests'
+    labels:
+      - test
+      - tests
+  - title: ':gear: Code or repo maintenance'
+    labels:
+      - chore
+      - cleanup
+  - title: ':memo: Documentation updates'
+    labels:
+      - documentation
+  - title: ':arrow_up: Dependency updates'
+    labels:
+      - dependencies
+      - dependency
+      - migration-sync
+  - title: ':construction_worker: CI & build changes'
+    labels:
+      - ci
+      - build
+
+exclude-labels:
+  - no-changelog
+  - skip-changelog
+  - invalid
+  - migration-sync-failure
+
+autolabeler:
+  - label: ci
+    files:
+      - '.github/workflows/**'
+    branch:
+      - '/ci\/.+/'
+  - label: documentation
+    files:
+      - '**/*.md'
+    branch:
+      - '/docs?\/.+/'
+  - label: bug
+    branch:
+      - '/fix\/.+/'
+    title:
+      - '/fix/i'
+  - label: chore
+    branch:
+      - '/chore\/.+/'
+    title:
+      - '/chore/i'
+  - label: feature
+    branch:
+      - '/feature\/.+/'
+  - label: dependency
+    branch:
+      - '/sync\/.+/'
+    title:
+      - '/sync/i'
+
+template: |
+  ## :sparkles: What's new
+
+  $CHANGES
