@@ -6,6 +6,7 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 # Copy project files
+COPY .editorconfig .
 COPY jellyfin.ruleset .
 COPY Directory.Build.props .
 COPY Jellyfin.Plugin.Pgsql.sln .
@@ -14,8 +15,8 @@ COPY .config/ ./.config/
 COPY Jellyfin.Plugin.Pgsql/ ./Jellyfin.Plugin.Pgsql/
 
 # Restore and publish
-RUN dotnet restore Jellyfin.Plugin.Pgsql.sln
-RUN dotnet publish Jellyfin.Plugin.Pgsql.sln -c Release --no-restore -o /app/publish
+RUN dotnet restore Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj
+RUN dotnet publish Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj -c Release --no-restore -o /app/publish
 RUN dotnet tool restore
 RUN dotnet ef migrations bundle \
     -o /app/jellyfin.PgsqlMigrator.dll \

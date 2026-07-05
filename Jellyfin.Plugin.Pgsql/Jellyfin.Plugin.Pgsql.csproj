@@ -11,6 +11,13 @@
     <NoWarn>$(NoWarn);CA1861</NoWarn>
   </PropertyGroup>
 
+  <!-- EF-generated migrations are excluded from analyzers (see also .editorconfig) -->
+  <ItemGroup>
+    <Compile Update="Migrations/**/*.cs">
+      <NoWarn>$(NoWarn);CA1707;SA1122</NoWarn>
+    </Compile>
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinVersion)" PrivateAssets="all" />
     <PackageReference Include="Jellyfin.Model" Version="$(JellyfinVersion)" PrivateAssets="all" />

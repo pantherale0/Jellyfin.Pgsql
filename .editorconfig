@@ -199,3 +199,7 @@ csharp_preserve_single_line_blocks = true
 [Jellyfin.Plugin.Pgsql/Migrations/**.cs]
 dotnet_analyzer_diagnostic.severity = none
 generated_code = true
+
+[**/Migrations/**.cs]
+dotnet_analyzer_diagnostic.severity = none
+generated_code = true
