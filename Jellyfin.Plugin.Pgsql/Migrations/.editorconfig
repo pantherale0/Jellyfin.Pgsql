@@ -1,0 +1,6 @@
+# EF-generated migration files — disable analyzers (StyleCop, CA, etc.)
+root = false
+
+[*.cs]
+dotnet_analyzer_diagnostic.severity = none
+generated_code = true

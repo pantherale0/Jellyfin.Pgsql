@@ -17,5 +17,5 @@ jobs:
   call:
     uses: jellyfin/jellyfin-meta-plugins/.github/workflows/scan-codeql.yaml@master
     with:
-      repository-name: jellyfin/jellyfin-plugin-template
+      repository-name: pantherale0/Jellyfin.Pgsql
       dotnet-version: "10.0.x"
