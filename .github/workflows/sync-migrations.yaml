@@ -33,6 +33,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      issues: write
 
     services:
       postgres:
@@ -59,7 +60,9 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: |
+            9.0.x
+            10.0.x
 
       - name: Run migration sync
         id: sync
@@ -87,7 +90,7 @@ jobs:
           fi
 
       - name: Create pull request
-        if: steps.sync.outputs.changed == 'true'
+        if: success() && steps.sync.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -99,3 +102,9 @@ jobs:
             dependencies
           body-path: .sync-report.md
           commit-message: 'Sync PostgreSQL migrations for Jellyfin ${{ steps.sync.outputs.version }}'
+
+      - name: Report sync failure
+        if: failure() && steps.sync.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/report-sync-failure.sh

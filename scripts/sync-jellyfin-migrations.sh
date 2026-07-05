@@ -9,6 +9,8 @@ PROJECT="${REPO_ROOT}/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj"
 MIGRATIONS_DIR="${REPO_ROOT}/Jellyfin.Plugin.Pgsql/Migrations"
 WARNINGS_FILE="${REPO_ROOT}/.sync-warnings.md"
 SYNC_REPORT="${REPO_ROOT}/.sync-report.md"
+FAILURE_REPORT="${REPO_ROOT}/.sync-failure-report.md"
+SYNC_STAGE="starting"
 SYNC_BACKUP_DIR=""
 SYNC_STARTED=false
 RESOLVED_NUGET_VERSION=""
@@ -226,6 +228,7 @@ preflight_check() {
     if ! restore_output="$(dotnet restore "${tmpdir}/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj" 2>&1)"; then
         rm -rf "${tmpdir}"
         report_restore_failure "${tag_version}" "${restore_output}"
+        write_failure_report "pre-flight" "NuGet restore failed during pre-flight." "${restore_output}"
         return 1
     fi
 
@@ -265,12 +268,65 @@ rollback_sync() {
     SYNC_STARTED=false
 }
 
+write_failure_report() {
+    local stage="$1"
+    local summary="$2"
+    local details="${3:-}"
+
+    {
+        echo "# Migration sync failed for Jellyfin ${TARGET_VERSION}"
+        echo ""
+        echo "| | |"
+        echo "|---|---|"
+        echo "| **Stage** | \`${stage}\` |"
+        echo "| **Current state version** | \`${STATE_VERSION:-unknown}\` |"
+        echo "| **Target NuGet** | \`${RESOLVED_NUGET_VERSION:-unknown}\` |"
+        echo "| **Target TFM** | \`${RESOLVED_PLUGIN_TFM:-unknown}\` |"
+        if [[ -n "${GITHUB_SERVER_URL:-}" && -n "${GITHUB_REPOSITORY:-}" && -n "${GITHUB_RUN_ID:-}" ]]; then
+            echo "| **Workflow run** | [${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) |"
+        fi
+        echo ""
+        echo "## Summary"
+        echo ""
+        echo "${summary}"
+        echo ""
+        if [[ -n "${details}" ]]; then
+            echo "## Details"
+            echo ""
+            echo '```text'
+            echo "${details}"
+            echo '```'
+        fi
+        echo ""
+        echo "## Next steps"
+        echo ""
+        echo "- Review the workflow log and reproduce locally: \`./scripts/sync-jellyfin-migrations.sh --version ${TARGET_VERSION}\`"
+        echo "- Fix the underlying issue, then re-run the sync workflow or close this issue when resolved."
+    } > "${FAILURE_REPORT}"
+}
+
+fail_sync() {
+    local stage="$1"
+    local summary="$2"
+    local details="${3:-}"
+    write_failure_report "${stage}" "${summary}" "${details}"
+    exit 1
+}
+
 on_sync_exit() {
     local exit_code=$?
-    if [[ "${exit_code}" -ne 0 ]] && [[ "${SYNC_STARTED}" == "true" ]]; then
-        rollback_sync
-    elif [[ -n "${SYNC_BACKUP_DIR}" ]]; then
-        rm -rf "${SYNC_BACKUP_DIR}"
+    if [[ "${exit_code}" -ne 0 ]]; then
+        if [[ ! -f "${FAILURE_REPORT}" ]]; then
+            write_failure_report "${SYNC_STAGE}" "Sync exited with code ${exit_code} at stage \`${SYNC_STAGE}\`." ""
+        fi
+        if [[ "${SYNC_STARTED}" == "true" ]]; then
+            rollback_sync
+        fi
+    else
+        if [[ -n "${SYNC_BACKUP_DIR}" ]]; then
+            rm -rf "${SYNC_BACKUP_DIR}"
+        fi
+        rm -f "${FAILURE_REPORT}"
     fi
     return "${exit_code}"
 }
@@ -419,6 +475,9 @@ if [[ "${DRY_RUN}" == "true" ]]; then
 fi
 
 if ! preflight_check "${TARGET_VERSION}"; then
+    if [[ ! -f "${FAILURE_REPORT}" ]]; then
+        write_failure_report "pre-flight" "Pre-flight check failed." ""
+    fi
     exit 1
 fi
 
@@ -436,21 +495,36 @@ while IFS= read -r file; do
 done <<< "${CORE_MIGRATIONS}"
 
 begin_sync_backup
+SYNC_STAGE="bump-versions"
 bump_version_refs "${TARGET_VERSION}"
+SYNC_STAGE="update-submodule"
 update_submodule "${TARGET_VERSION}"
 SUBMODULE_COMMIT="$(get_submodule_commit)"
 
+SYNC_STAGE="restore-packages"
 echo "[sync] Restoring packages..."
 dotnet tool restore
 dotnet restore "${REPO_ROOT}/Jellyfin.Plugin.Pgsql.sln"
 
 MIGRATION_NAME="Update_${TARGET_VERSION//./_}"
+SYNC_STAGE="generate-migration"
 echo "[sync] Generating migration: ${MIGRATION_NAME}..."
 
-dotnet ef migrations add "${MIGRATION_NAME}" \
+ef_output=""
+if ! ef_output="$(dotnet ef migrations add "${MIGRATION_NAME}" \
     --project "${PROJECT}" \
-    -- --migration-provider Jellyfin-PgSql
+    -- --migration-provider Jellyfin-PgSql 2>&1)"; then
+    build_output="$(dotnet build "${PROJECT}" 2>&1 || true)"
+    fail_sync "generate-migration" \
+        "EF Core failed to generate migration \`${MIGRATION_NAME}\`." \
+        "${ef_output}
 
+--- dotnet build ---
+
+${build_output}"
+fi
+
+SYNC_STAGE="postprocess"
 bash "${SCRIPT_DIR}/postprocess-migration.sh" "${WARNINGS_FILE}"
 remove_empty_migration
 
@@ -460,7 +534,10 @@ if [[ -f "${WARNINGS_FILE}" ]]; then
     cat "${WARNINGS_FILE}" >> "${SYNC_REPORT}"
 fi
 
-bash "${SCRIPT_DIR}/validate-migrations.sh"
+SYNC_STAGE="validate"
+if ! validate_output="$(bash "${SCRIPT_DIR}/validate-migrations.sh" 2>&1)"; then
+    fail_sync "validate" "Migration validation failed." "${validate_output}"
+fi
 
 PG_MIGRATION="$(get_latest_pg_migration)"
 write_state "${TARGET_VERSION}" "${LATEST_CORE}" "${PG_MIGRATION}" "${SUBMODULE_COMMIT}"

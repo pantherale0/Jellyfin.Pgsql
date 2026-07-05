@@ -69,6 +69,8 @@ A scheduled GitHub Actions workflow ([`.github/workflows/sync-migrations.yaml`](
 
 Docker image builds are blocked until the sync PR is merged and [`.github/jellyfin-sync-state.json`](.github/jellyfin-sync-state.json) matches the target Jellyfin version.
 
+When the scheduled sync workflow fails, it automatically opens (or updates) a GitHub issue labeled `migration-sync-failure` with the failure stage, logs, and workflow link.
+
 ## Manual sync
 
 Initialize the submodule and run the sync script locally (requires PostgreSQL, `gh`, and `jq`):
