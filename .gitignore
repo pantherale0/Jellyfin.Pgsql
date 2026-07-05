@@ -9,3 +9,4 @@ docker/jellyfin.PgsqlMigrator.dll
 .sync-warnings.md
 .sync-report.md
 .sync-empty-migration
+.sync-failure-report.md
