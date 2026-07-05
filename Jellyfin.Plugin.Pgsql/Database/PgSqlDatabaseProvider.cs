@@ -59,7 +59,10 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
         if (enableSensitiveDataLogging)
         {
             options.EnableSensitiveDataLogging(enableSensitiveDataLogging);
-            _logger.LogInformation("EnableSensitiveDataLogging is enabled on PostgreSQL connection");
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                _logger.LogInformation("EnableSensitiveDataLogging is enabled on PostgreSQL connection");
+            }
         }
     }
 
@@ -77,7 +80,10 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             if (context.Database.IsNpgsql())
             {
                 await context.Database.ExecuteSqlRawAsync("VACUUM ANALYZE", cancellationToken).ConfigureAwait(false);
-                _logger.LogInformation("PostgreSQL database optimized successfully");
+                if (_logger.IsEnabled(LogLevel.Information))
+                {
+                    _logger.LogInformation("PostgreSQL database optimized successfully");
+                }
             }
         }
     }
@@ -109,7 +115,10 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
     {
         // Clear Npgsql connection pools on shutdown
         NpgsqlConnection.ClearAllPools();
-        _logger.LogInformation("PostgreSQL connection pools cleared on shutdown");
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("PostgreSQL connection pools cleared on shutdown");
+        }
 
         return Task.CompletedTask;
     }
@@ -143,7 +152,10 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             }
         };
 
-        _logger.LogInformation("Starting PostgreSQL backup: {BackupFile}", backupFile);
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("Starting PostgreSQL backup: {BackupFile}", backupFile);
+        }
 
         process.Start();
         await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
@@ -151,11 +163,19 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
         if (process.ExitCode != 0)
         {
             var error = await process.StandardError.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
-            _logger.LogError("pg_dump failed with exit code {ExitCode}: {Error}", process.ExitCode, error);
+            if (_logger.IsEnabled(LogLevel.Error))
+            {
+                _logger.LogError("pg_dump failed with exit code {ExitCode}: {Error}", process.ExitCode, error);
+            }
+
             throw new InvalidOperationException($"pg_dump failed: {error}");
         }
 
-        _logger.LogInformation("PostgreSQL backup completed successfully: {BackupFile}", backupFile);
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("PostgreSQL backup completed successfully: {BackupFile}", backupFile);
+        }
+
         return key;
     }
 
@@ -169,7 +189,11 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
 
         if (!File.Exists(backupFile))
         {
-            _logger.LogCritical("Tried to restore a backup that does not exist: {Key}", key);
+            if (_logger.IsEnabled(LogLevel.Critical))
+            {
+                _logger.LogCritical("Tried to restore a backup that does not exist: {Key}", key);
+            }
+
             return;
         }
 
@@ -187,7 +211,10 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             }
         };
 
-        _logger.LogInformation("Starting PostgreSQL restore from: {BackupFile}", backupFile);
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("Starting PostgreSQL restore from: {BackupFile}", backupFile);
+        }
 
         process.Start();
         await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
@@ -195,11 +222,18 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
         if (process.ExitCode != 0)
         {
             var error = await process.StandardError.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
-            _logger.LogError("psql restore failed with exit code {ExitCode}: {Error}", process.ExitCode, error);
+            if (_logger.IsEnabled(LogLevel.Error))
+            {
+                _logger.LogError("psql restore failed with exit code {ExitCode}: {Error}", process.ExitCode, error);
+            }
+
             throw new InvalidOperationException($"psql restore failed: {error}");
         }
 
-        _logger.LogInformation("PostgreSQL restore completed successfully from: {BackupFile}", backupFile);
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("PostgreSQL restore completed successfully from: {BackupFile}", backupFile);
+        }
     }
 
     /// <inheritdoc/>
@@ -210,12 +244,20 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
 
         if (!File.Exists(backupFile))
         {
-            _logger.LogCritical("Tried to delete a backup that does not exist: {Key}", key);
+            if (_logger.IsEnabled(LogLevel.Critical))
+            {
+                _logger.LogCritical("Tried to delete a backup that does not exist: {Key}", key);
+            }
+
             return Task.CompletedTask;
         }
 
         File.Delete(backupFile);
-        _logger.LogInformation("Deleted backup file: {BackupFile}", backupFile);
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("Deleted backup file: {BackupFile}", backupFile);
+        }
+
         return Task.CompletedTask;
     }
 
@@ -233,7 +275,10 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
         var truncateAllQuery = string.Join('\n', truncateQueries);
 
         await dbContext.Database.ExecuteSqlRawAsync(truncateAllQuery).ConfigureAwait(false);
-        _logger.LogInformation("PostgreSQL database tables purged successfully");
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("PostgreSQL database tables purged successfully");
+        }
     }
 
     private T? GetCustomDatabaseOption<T>(ICollection<CustomDatabaseOption>? options, string key, Func<string, T> converter, Func<T>? defaultValue = null)
@@ -276,13 +321,15 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             connectionBuilder.LogParameters = logParameters;
         }
 
-        // Log the full connection string without password
-        var safeConnectionString = new NpgsqlConnectionStringBuilder(connectionBuilder.ToString())
+        if (_logger.IsEnabled(LogLevel.Information))
         {
-            Password = null
-        }.ToString();
+            var safeConnectionString = new NpgsqlConnectionStringBuilder(connectionBuilder.ToString())
+            {
+                Password = null
+            }.ToString();
 
-        _logger.LogInformation("PostgreSQL connection string: {ConnectionString}", safeConnectionString);
+            _logger.LogInformation("PostgreSQL connection string: {ConnectionString}", safeConnectionString);
+        }
 
         return connectionBuilder;
     }
