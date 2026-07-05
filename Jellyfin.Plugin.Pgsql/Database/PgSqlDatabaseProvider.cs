@@ -56,6 +56,8 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
                 pgSqlOptions.MigrationsAssembly(GetType().Assembly.FullName);
             });
 
+        PostgreSqlCompat.EnsureUuidAggregates(connectionBuilder.ToString(), _logger);
+
         var enableSensitiveDataLogging = GetCustomDatabaseOption(customOptions, "EnableSensitiveDataLogging", e => e.Equals(bool.TrueString, StringComparison.OrdinalIgnoreCase), () => false);
         if (enableSensitiveDataLogging)
         {
