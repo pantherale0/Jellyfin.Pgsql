@@ -21,9 +21,76 @@ fix_filter_syntax() {
         return
     fi
 
-    # SQLite-style [Column] -> PostgreSQL "Column" in filter expressions
-    sed -i 's/\.HasFilter("\[\([^]]*\)\] IS NOT NULL")/.HasFilter("\"\\1\" IS NOT NULL")/g' "${file}"
-    sed -i 's/filter: "\[\([^]]*\)\] IS NOT NULL"/filter: "\"\\1\" IS NOT NULL"/g' "${file}"
+    # Snapshot/designer filters must match the live EF model (see PgSqlDatabaseProvider.OnModelCreating).
+    if [[ "${file}" == *".Designer.cs" ]] || [[ "$(basename "${file}")" == "JellyfinDbContextModelSnapshot.cs" ]]; then
+        return
+    fi
+
+    # SQLite-style [Column] -> PostgreSQL "Column" in CreateIndex filter expressions
+    if grep -qE '\[[A-Za-z0-9_]+\] IS NOT NULL' "${file}"; then
+        sed -i 's/filter: "\[\([^]]*\)\] IS NOT NULL"/filter: "\\"\1\\" IS NOT NULL"/g' "${file}"
+    fi
+}
+
+fix_text_to_uuid_columns() {
+    local file="$1"
+    if [[ ! -f "${file}" ]] || [[ "${file}" == *".Designer.cs" ]]; then
+        return
+    fi
+
+    python3 - "${file}" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+content = open(path, encoding="utf-8").read()
+
+text_to_uuid = re.compile(
+    r'migrationBuilder\.AlterColumn<Guid>\(\s*'
+    r'name: "([^"]+)",\s*'
+    r'table: "([^"]+)",\s*'
+    r'type: "uuid",\s*'
+    r'nullable: ([^,]+),\s*'
+    r'oldClrType: typeof\(string\),\s*'
+    r'oldType: "text",\s*'
+    r'oldNullable: ([^)]+)\);',
+    re.MULTILINE,
+)
+
+uuid_to_text = re.compile(
+    r'migrationBuilder\.AlterColumn<string>\(\s*'
+    r'name: "([^"]+)",\s*'
+    r'table: "([^"]+)",\s*'
+    r'type: "text",\s*'
+    r'nullable: ([^,]+),\s*'
+    r'oldClrType: typeof\(Guid\),\s*'
+    r'oldType: "uuid",\s*'
+    r'oldNullable: ([^)]+)\);',
+    re.MULTILINE,
+)
+
+def up_repl(match: re.Match[str]) -> str:
+    column, table = match.group(1), match.group(2)
+    sql = (
+        f'ALTER TABLE "{table}" ALTER COLUMN "{column}" TYPE uuid '
+        f'USING CASE WHEN "{column}" IS NULL OR BTRIM("{column}") = \'\' '
+        f'THEN NULL ELSE "{column}"::uuid END;'
+    )
+    escaped = sql.replace('"', '""')
+    return f'migrationBuilder.Sql(\n                @"{escaped}");'
+
+def down_repl(match: re.Match[str]) -> str:
+    column, table = match.group(1), match.group(2)
+    sql = f'ALTER TABLE "{table}" ALTER COLUMN "{column}" TYPE text USING "{column}"::text;'
+    escaped = sql.replace('"', '""')
+    return f'migrationBuilder.Sql(\n                @"{escaped}");'
+
+updated = text_to_uuid.sub(up_repl, content)
+updated = uuid_to_text.sub(down_repl, updated)
+
+if updated != content:
+    open(path, "w", encoding="utf-8").write(updated)
+PY
 }
 
 scan_sqlite_only_migration() {
@@ -86,6 +153,9 @@ for file in "${MIGRATIONS_DIR}"/*.cs; do
 done
 
 if [[ -n "${latest_migration}" ]]; then
+    echo "[postprocess] Fixing text-to-uuid column conversions..."
+    fix_text_to_uuid_columns "${latest_migration}"
+
     scan_sqlite_only_migration "${latest_migration}" || true
 
     if is_empty_migration "${latest_migration}"; then

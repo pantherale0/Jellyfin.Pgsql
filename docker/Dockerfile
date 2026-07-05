@@ -1,8 +1,8 @@
 # Build stage
 # Context hint: project root ../
 # sudo docker build -t ghcr.io/jpvenson/jellyfin.pgsql:10.11.0-1 -f ./Dockerfile ../
-ARG JELLYFIN_VERSION=10.11.6
-FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+ARG JELLYFIN_VERSION=12.0-rc2
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 # Copy project files

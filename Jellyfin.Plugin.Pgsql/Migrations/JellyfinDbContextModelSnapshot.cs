@@ -18,7 +18,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 #pragma warning disable 612, 618
             modelBuilder
                 .UseCollation("C")
-                .HasAnnotation("ProductVersion", "9.0.10")
+                .HasAnnotation("ProductVersion", "10.0.9")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -209,9 +209,6 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Property<string>("ExternalServiceId")
                         .HasColumnType("text");
 
-                    b.Property<string>("ExtraIds")
-                        .HasColumnType("text");
-
                     b.Property<int?>("ExtraType")
                         .HasColumnType("integer");
 
@@ -269,14 +266,17 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Property<string>("OfficialRating")
                         .HasColumnType("text");
 
+                    b.Property<string>("OriginalLanguage")
+                        .HasColumnType("text");
+
                     b.Property<string>("OriginalTitle")
                         .HasColumnType("text");
 
                     b.Property<string>("Overview")
                         .HasColumnType("text");
 
-                    b.Property<string>("OwnerId")
-                        .HasColumnType("text");
+                    b.Property<Guid?>("OwnerId")
+                        .HasColumnType("uuid");
 
                     b.Property<Guid?>("ParentId")
                         .HasColumnType("uuid");
@@ -299,8 +299,8 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Property<string>("PresentationUniqueKey")
                         .HasColumnType("text");
 
-                    b.Property<string>("PrimaryVersionId")
-                        .HasColumnType("text");
+                    b.Property<Guid?>("PrimaryVersionId")
+                        .HasColumnType("uuid");
 
                     b.Property<string>("ProductionLocations")
                         .HasColumnType("text");
@@ -365,25 +365,50 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("Name");
+
+                    b.HasIndex("OwnerId");
+
                     b.HasIndex("ParentId");
 
                     b.HasIndex("Path");
 
                     b.HasIndex("PresentationUniqueKey");
 
+                    b.HasIndex("SeasonId");
+
+                    b.HasIndex("SeriesId");
+
+                    b.HasIndex("SeriesName");
+
+                    b.HasIndex("ExtraType", "OwnerId");
+
                     b.HasIndex("TopParentId", "Id");
+
+                    b.HasIndex("Type", "CleanName");
+
+                    b.HasIndex("TopParentId", "Type", "IsVirtualItem")
+                        .HasFilter("\"PrimaryVersionId\" IS NULL AND (\"OwnerId\" IS NULL OR \"ExtraType\" IS NOT NULL)");
 
                     b.HasIndex("Type", "TopParentId", "Id");
 
                     b.HasIndex("Type", "TopParentId", "PresentationUniqueKey");
 
-                    b.HasIndex("Type", "TopParentId", "StartDate");
+                    b.HasIndex("Type", "TopParentId", "SortName");
 
-                    b.HasIndex("Id", "Type", "IsFolder", "IsVirtualItem");
+                    b.HasIndex("Type", "TopParentId", "StartDate");
 
                     b.HasIndex("MediaType", "TopParentId", "IsVirtualItem", "PresentationUniqueKey");
 
+                    b.HasIndex("TopParentId", "IsFolder", "IsVirtualItem", "DateCreated");
+
+                    b.HasIndex("TopParentId", "MediaType", "IsVirtualItem", "DateCreated");
+
+                    b.HasIndex("TopParentId", "Type", "IsVirtualItem", "DateCreated");
+
                     b.HasIndex("Type", "SeriesPresentationUniqueKey", "IsFolder", "IsVirtualItem");
+
+                    b.HasIndex("Type", "SeriesPresentationUniqueKey", "ParentIndexNumber", "IndexNumber");
 
                     b.HasIndex("Type", "SeriesPresentationUniqueKey", "PresentationUniqueKey", "SortName");
 
@@ -404,7 +429,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                             IsRepeat = false,
                             IsSeries = false,
                             IsVirtualItem = false,
-                            Name = "This is a placeholder item for UserData that has been detacted from its original item",
+                            Name = "This is a placeholder item for UserData that has been detached from its original item",
                             Type = "PLACEHOLDER"
                         });
                 });
@@ -439,7 +464,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ItemId");
+                    b.HasIndex("ItemId", "ImageType");
 
                     b.ToTable("BaseItemImageInfos");
                 });
@@ -473,7 +498,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasKey("ItemId", "ProviderId");
 
-                    b.HasIndex("ProviderId", "ProviderValue", "ItemId");
+                    b.HasIndex("ProviderId", "ItemId", "ProviderValue");
 
                     b.ToTable("BaseItemProviders");
                 });
@@ -766,6 +791,31 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.ToTable("KeyframeData");
                 });
 
+            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.LinkedChildEntity", b =>
+                {
+                    b.Property<Guid>("ParentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ChildId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("ChildType")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("SortOrder")
+                        .HasColumnType("integer");
+
+                    b.HasKey("ParentId", "ChildId");
+
+                    b.HasIndex("ChildId", "ChildType");
+
+                    b.HasIndex("ParentId", "ChildType");
+
+                    b.HasIndex("ParentId", "SortOrder");
+
+                    b.ToTable("LinkedChildren", (string)null);
+                });
+
             modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.MediaSegment", b =>
                 {
                     b.Property<Guid>("Id")
@@ -888,6 +938,9 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Property<bool?>("IsInterlaced")
                         .HasColumnType("boolean");
 
+                    b.Property<bool>("IsOriginal")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("KeyFrames")
                         .HasColumnType("text");
 
@@ -937,14 +990,6 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                         .HasColumnType("integer");
 
                     b.HasKey("ItemId", "StreamIndex");
-
-                    b.HasIndex("StreamIndex");
-
-                    b.HasIndex("StreamType");
-
-                    b.HasIndex("StreamIndex", "StreamType");
-
-                    b.HasIndex("StreamIndex", "StreamType", "Language");
 
                     b.ToTable("MediaStreamInfos");
                 });
@@ -1025,7 +1070,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasIndex("UserId", "Kind")
                         .IsUnique()
-                        .HasFilter("\"UserId\" IS NOT NULL");
+                        .HasFilter("[UserId] IS NOT NULL");
 
                     b.ToTable("Permissions");
                 });
@@ -1060,7 +1105,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasIndex("UserId", "Kind")
                         .IsUnique()
-                        .HasFilter("\"UserId\" IS NOT NULL");
+                        .HasFilter("[UserId] IS NOT NULL");
 
                     b.ToTable("Preferences");
                 });
@@ -1144,8 +1189,6 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                         .HasColumnType("uuid");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("DeviceId");
 
                     b.HasIndex("AccessToken", "DateLastActivity");
 
@@ -1277,6 +1320,11 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Property<bool>("MustUpdatePassword")
                         .HasColumnType("boolean");
 
+                    b.Property<string>("NormalizedUsername")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
                     b.Property<string>("Password")
                         .HasMaxLength(65535)
                         .HasColumnType("character varying(65535)");
@@ -1318,6 +1366,9 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                         .HasColumnType("character varying(255)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("NormalizedUsername")
+                        .IsUnique();
 
                     b.HasIndex("Username")
                         .IsUnique();
@@ -1368,8 +1419,6 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasKey("ItemId", "UserId", "CustomDataKey");
 
-                    b.HasIndex("UserId");
-
                     b.HasIndex("ItemId", "UserId", "IsFavorite");
 
                     b.HasIndex("ItemId", "UserId", "LastPlayedDate");
@@ -1377,6 +1426,12 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.HasIndex("ItemId", "UserId", "PlaybackPositionTicks");
 
                     b.HasIndex("ItemId", "UserId", "Played");
+
+                    b.HasIndex("UserId", "IsFavorite", "ItemId");
+
+                    b.HasIndex("UserId", "ItemId", "LastPlayedDate");
+
+                    b.HasIndex("UserId", "Played", "ItemId");
 
                     b.ToTable("UserData");
                 });
@@ -1422,12 +1477,19 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
             modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemEntity", b =>
                 {
+                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Owner")
+                        .WithMany("Extras")
+                        .HasForeignKey("OwnerId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
                     b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "DirectParent")
                         .WithMany("DirectChildren")
                         .HasForeignKey("ParentId")
                         .OnDelete(DeleteBehavior.Cascade);
 
                     b.Navigation("DirectParent");
+
+                    b.Navigation("Owner");
                 });
 
             modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemImageInfo", b =>
@@ -1550,6 +1612,25 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Navigation("Item");
                 });
 
+            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.LinkedChildEntity", b =>
+                {
+                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Child")
+                        .WithMany("LinkedChildOfEntities")
+                        .HasForeignKey("ChildId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Parent")
+                        .WithMany("LinkedChildEntities")
+                        .HasForeignKey("ParentId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("Child");
+
+                    b.Navigation("Parent");
+                });
+
             modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.MediaStreamInfo", b =>
                 {
                     b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Item")
@@ -1634,9 +1715,15 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.Navigation("DirectChildren");
 
+                    b.Navigation("Extras");
+
                     b.Navigation("Images");
 
                     b.Navigation("ItemValues");
+
+                    b.Navigation("LinkedChildEntities");
+
+                    b.Navigation("LinkedChildOfEntities");
 
                     b.Navigation("LockedFields");
 

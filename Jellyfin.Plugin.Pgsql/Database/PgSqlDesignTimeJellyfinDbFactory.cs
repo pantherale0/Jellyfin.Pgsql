@@ -25,8 +25,11 @@ internal sealed class PgSqlDesignTimeJellyfinDbFactory : IDesignTimeDbContextFac
 {
     public JellyfinDbContext CreateDbContext(string[] args)
     {
+        var connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__Default")
+            ?? "Host=localhost;Port=5432;Database=jellyfin;Username=jellyfin;Password=jellyfin";
+
         var optionsBuilder = new DbContextOptionsBuilder<JellyfinDbContext>();
-        optionsBuilder.UseNpgsql(f => f.MigrationsAssembly(GetType().Assembly));
+        optionsBuilder.UseNpgsql(connectionString, f => f.MigrationsAssembly(GetType().Assembly));
 
         return new JellyfinDbContext(
             optionsBuilder.Options,

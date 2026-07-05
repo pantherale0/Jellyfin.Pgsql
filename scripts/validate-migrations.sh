@@ -34,9 +34,17 @@ for i in $(seq 1 30); do
 done
 
 echo "[validate] Applying migrations (dotnet ef database update)..."
-dotnet ef database update \
+if ! update_output="$(dotnet ef database update \
     --project "${PROJECT}" \
-    -- --migration-provider Jellyfin-PgSql
+    -- --migration-provider Jellyfin-PgSql 2>&1)"; then
+    build_output="$(dotnet build "${PROJECT}" 2>&1 || true)"
+    echo "${update_output}"
+    echo ""
+    echo "--- dotnet build ---"
+    echo "${build_output}"
+    exit 1
+fi
+echo "${update_output}"
 
 echo "[validate] Building EF migration bundle..."
 dotnet ef migrations bundle \

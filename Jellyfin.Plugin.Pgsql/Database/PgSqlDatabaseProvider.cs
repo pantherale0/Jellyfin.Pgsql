@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations;
@@ -105,6 +106,19 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
                         new Microsoft.EntityFrameworkCore.Storage.ValueConversion.ValueConverter<DateTime, DateTime>(
                             v => v.ToUniversalTime(),
                             v => DateTime.SpecifyKind(v, DateTimeKind.Utc)));
+                }
+            }
+        }
+
+        // Jellyfin entity configs use SQLite-style [Column] filter syntax; PostgreSQL needs quoted identifiers.
+        foreach (var entityType in modelBuilder.Model.GetEntityTypes())
+        {
+            foreach (var index in entityType.GetIndexes())
+            {
+                var filter = index.GetFilter();
+                if (filter is not null && filter.Contains('[', StringComparison.Ordinal))
+                {
+                    index.SetFilter(Regex.Replace(filter, @"\[(\w+)\]", "\"$1\""));
                 }
             }
         }
