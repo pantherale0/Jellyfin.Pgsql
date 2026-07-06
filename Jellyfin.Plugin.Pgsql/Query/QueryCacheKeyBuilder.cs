@@ -105,12 +105,15 @@ internal static class QueryCacheKeyBuilder
         return builder.ToString();
     }
 
-    private static char Flag(bool? value) => value switch
+    private static char Flag(bool? value)
     {
-        true => '1',
-        false => '0',
-        null => '-',
-    };
+        if (!value.HasValue)
+        {
+            return '-';
+        }
+
+        return value.Value ? '1' : '0';
+    }
 
     private static void AppendGuids(StringBuilder builder, Guid[] ids)
     {

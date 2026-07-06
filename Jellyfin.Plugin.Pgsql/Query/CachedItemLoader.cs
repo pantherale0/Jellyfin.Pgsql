@@ -45,33 +45,25 @@ internal sealed class CachedItemLoader
             return [];
         }
 
-        try
-        {
-            using var context = _dbProvider.CreateDbContext();
-            var itemsById = _queryHelpers
-                .ApplyNavigations(context.BaseItems.AsNoTracking().Where(e => ids.Contains(e.Id)), filter)
-                .AsEnumerable()
-                .Select(e => _queryHelpers.DeserializeBaseItem(e, filter.SkipDeserialization))
-                .Where(item => item is not null)
-                .ToDictionary(item => item!.Id);
+        return QueryFallback.TryDatabase(
+            () => LoadByIdsCore(ids, filter),
+            _logger,
+            "Failed to load cached items; falling back to live query");
+    }
 
-            var result = new List<BaseItem>(ids.Length);
-            foreach (var id in ids)
-            {
-                if (itemsById.TryGetValue(id, out var item))
-                {
-                    result.Add(item!);
-                }
-            }
+    private List<BaseItem> LoadByIdsCore(Guid[] ids, InternalItemsQuery filter)
+    {
+        using var context = _dbProvider.CreateDbContext();
+        var itemsById = _queryHelpers
+            .ApplyNavigations(context.BaseItems.AsNoTracking().Where(e => ids.Contains(e.Id)), filter)
+            .AsEnumerable()
+            .Select(e => _queryHelpers.DeserializeBaseItem(e, filter.SkipDeserialization))
+            .Where(item => item is not null)
+            .ToDictionary(item => item!.Id);
 
-            return result;
-        }
-#pragma warning disable CA1031 // Cache load failures must fall back to the live query.
-        catch (Exception ex)
-#pragma warning restore CA1031
-        {
-            _logger.LogWarning(ex, "Failed to load cached items; falling back to live query");
-            return null;
-        }
+        return ids
+            .Where(itemsById.ContainsKey)
+            .Select(id => itemsById[id]!)
+            .ToList();
     }
 }

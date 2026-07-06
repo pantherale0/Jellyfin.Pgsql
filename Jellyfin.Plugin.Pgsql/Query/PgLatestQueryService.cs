@@ -74,30 +74,30 @@ internal sealed class PgLatestQueryService
             return null;
         }
 
-        try
-        {
-            _stats.RecordOptimizedLatestRun();
-            _queryHelpers.PrepareFilterQuery(filter);
+        return QueryFallback.TryDatabase(
+            () => ExecuteOptimizedLatest(filter, collectionType),
+            _logger,
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"PostgreSQL-optimised {collectionType} Latest query failed; falling back to core implementation"),
+            onFailure: _stats.RecordOptimizedLatestFailure);
+    }
 
-            using var context = _dbProvider.CreateDbContext();
-            var baseQuery = _queryHelpers.PrepareItemQuery(context, filter);
-            baseQuery = _queryHelpers.TranslateQuery(baseQuery, context, filter);
+    private IReadOnlyList<BaseItem> ExecuteOptimizedLatest(InternalItemsQuery filter, CollectionType collectionType)
+    {
+        _stats.RecordOptimizedLatestRun();
+        _queryHelpers.PrepareFilterQuery(filter);
 
-            return collectionType switch
-            {
-                CollectionType.movies => _moviesQuery.GetLatest(context, baseQuery, filter),
-                CollectionType.tvshows => _tvShowsQuery.GetLatest(context, baseQuery, filter),
-                CollectionType.music => _musicQuery.GetLatest(context, baseQuery, filter),
-                _ => null,
-            };
-        }
-#pragma warning disable CA1031 // Optimiser failures must fall back to the core query.
-        catch (Exception ex)
-#pragma warning restore CA1031
+        using var context = _dbProvider.CreateDbContext();
+        var baseQuery = _queryHelpers.PrepareItemQuery(context, filter);
+        baseQuery = _queryHelpers.TranslateQuery(baseQuery, context, filter);
+
+        return collectionType switch
         {
-            _stats.RecordOptimizedLatestFailure();
-            _logger.LogWarning(ex, "PostgreSQL-optimised {CollectionType} Latest query failed; falling back to core implementation", collectionType);
-            return null;
-        }
+            CollectionType.movies => _moviesQuery.GetLatest(context, baseQuery, filter)
+                ?? throw new InvalidOperationException("Movies latest optimiser returned null."),
+            CollectionType.tvshows => _tvShowsQuery.GetLatest(context, baseQuery, filter),
+            CollectionType.music => _musicQuery.GetLatest(context, baseQuery, filter)
+                ?? throw new InvalidOperationException("Music latest optimiser returned null."),
+            _ => throw new NotSupportedException($"Collection type {collectionType} is not supported by the optimiser."),
+        };
     }
 }
