@@ -116,37 +116,23 @@ internal sealed class PgLatestTvShowsQuery
             Guid MostRecentEpisodeId)>();
 
         // Step 3: analyze each series to identify recent additions within the time window.
-        foreach (var group in allEpisodes.GroupBy(e => e.SeriesName))
+        foreach (var episodes in allEpisodes.GroupBy(e => e.SeriesName).Select(group => group.ToList()))
         {
-            var episodes = group.ToList();
             var mostRecentDate = episodes[0].DateCreated ?? DateTime.MinValue;
             var recentCutoff = mostRecentDate.AddHours(-RecentAdditionWindowHours);
 
-            var recentEpisodeCount = 0;
-            var seasonIdSet = new HashSet<Guid>();
-            Guid? firstRecentSeriesId = null;
-
-            foreach (var ep in episodes)
-            {
-                if (ep.DateCreated >= recentCutoff)
-                {
-                    recentEpisodeCount++;
-                    if (ep.SeasonId.HasValue)
-                    {
-                        seasonIdSet.Add(ep.SeasonId.Value);
-                    }
-
-                    firstRecentSeriesId ??= ep.SeriesId;
-                }
-            }
+            var recentEpisodes = episodes.Where(ep => ep.DateCreated >= recentCutoff).ToList();
+            var recentEpisodeCount = recentEpisodes.Count;
+            var seasonIdSet = recentEpisodes
+                .Where(ep => ep.SeasonId.HasValue)
+                .Select(ep => ep.SeasonId!.Value)
+                .ToHashSet();
+            Guid? firstRecentSeriesId = recentEpisodes.Count > 0 ? recentEpisodes[0].SeriesId : null;
 
             var seasonIds = seasonIdSet.ToList();
             analysisData.Add((recentEpisodeCount, seasonIds, firstRecentSeriesId, mostRecentDate, episodes[0].Id));
 
-            foreach (var sid in seasonIds)
-            {
-                allSeasonIds.Add(sid);
-            }
+            allSeasonIds.UnionWith(seasonIds);
 
             if (firstRecentSeriesId.HasValue)
             {

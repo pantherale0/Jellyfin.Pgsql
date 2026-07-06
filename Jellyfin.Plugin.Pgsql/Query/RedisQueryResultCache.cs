@@ -1,13 +1,15 @@
 using System;
+using System.IO;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.StackExchangeRedis;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using StackExchange.Redis;
 
 namespace Jellyfin.Plugin.Pgsql.Query;
 
 /// <summary>
-/// Redis-backed <see cref="IQueryResultCache"/>. All Redis failures are swallowed and treated
+/// Redis-backed <see cref="IQueryResultCache"/>. Recoverable Redis failures are swallowed and treated
 /// as cache misses so that a Redis outage never breaks queries.
 /// </summary>
 internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
@@ -45,13 +47,21 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
         {
             return QueryResultPayload.TryDeserialize(_cache.Get(key), out ids);
         }
-#pragma warning disable CA1031 // Redis failures must degrade to cache misses.
-        catch (Exception ex)
-#pragma warning restore CA1031
+        catch (RedisException ex)
         {
-            _stats.RecordRedisError("get");
-            LogThrottled(ex, "get");
-            return false;
+            return HandleCacheFailure(ex, "get");
+        }
+        catch (IOException ex)
+        {
+            return HandleCacheFailure(ex, "get");
+        }
+        catch (TimeoutException ex)
+        {
+            return HandleCacheFailure(ex, "get");
+        }
+        catch (ObjectDisposedException ex)
+        {
+            return HandleCacheFailure(ex, "get");
         }
     }
 
@@ -65,12 +75,21 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
                 AbsoluteExpirationRelativeToNow = timeToLive,
             });
         }
-#pragma warning disable CA1031 // Redis failures must degrade to cache misses.
-        catch (Exception ex)
-#pragma warning restore CA1031
+        catch (RedisException ex)
         {
-            _stats.RecordRedisError("set");
-            LogThrottled(ex, "set");
+            ReportCacheFailure(ex, "set");
+        }
+        catch (IOException ex)
+        {
+            ReportCacheFailure(ex, "set");
+        }
+        catch (TimeoutException ex)
+        {
+            ReportCacheFailure(ex, "set");
+        }
+        catch (ObjectDisposedException ex)
+        {
+            ReportCacheFailure(ex, "set");
         }
     }
 
@@ -78,6 +97,18 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
     public void Dispose()
     {
         _cache.Dispose();
+    }
+
+    private bool HandleCacheFailure(Exception ex, string operation)
+    {
+        ReportCacheFailure(ex, operation);
+        return false;
+    }
+
+    private void ReportCacheFailure(Exception ex, string operation)
+    {
+        _stats.RecordRedisError(operation);
+        LogThrottled(ex, operation);
     }
 
     private void LogThrottled(Exception ex, string operation)
