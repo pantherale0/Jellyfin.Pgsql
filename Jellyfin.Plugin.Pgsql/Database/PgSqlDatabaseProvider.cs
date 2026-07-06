@@ -322,7 +322,9 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             Port = int.Parse(Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432", CultureInfo.InvariantCulture),
             Database = Environment.GetEnvironmentVariable("POSTGRES_DB") ?? "jellyfin",
             Username = Environment.GetEnvironmentVariable("POSTGRES_USER") ?? "jellyfin",
-            Password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? throw new InvalidOperationException("PostgreSQL password must be provided via POSTGRES_PASSWORD environment variable")
+            Password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? throw new InvalidOperationException("PostgreSQL password must be provided via POSTGRES_PASSWORD environment variable"),
+            // Default of 30s is too tight for heavy library queries on large remote databases.
+            CommandTimeout = int.Parse(Environment.GetEnvironmentVariable("Pgsql_COMMAND_TIMEOUT") ?? "90", CultureInfo.InvariantCulture)
         };
 
         if (includeErrorDetail)

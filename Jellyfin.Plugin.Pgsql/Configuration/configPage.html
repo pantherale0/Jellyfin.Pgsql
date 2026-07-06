@@ -38,6 +38,41 @@
 
                 <div class="detailSection">
                     <div class="detailSectionHeader">
+                        <h3>Query Cache and Optimisation (optional, experimental)</h3>
+                    </div>
+                    <div class="detailSectionContent">
+                        <p>
+                            The plugin can cache home-screen queries (Latest, Resume) and run
+                            PostgreSQL-optimised Latest queries. These features are provided as-is;
+                            all failures fall back to the standard Jellyfin queries.
+                        </p>
+                        <ul>
+                            <li><strong>Pgsql_CACHE_ENABLED</strong> - Enable query result caching (default: true)</li>
+                            <li><strong>Pgsql_CACHE_BACKEND</strong> - Redis, Memory or Off (default: Redis; falls back to Memory when no Redis connection string is set)</li>
+                            <li><strong>REDIS_CONNECTION_STRING</strong> - StackExchange.Redis connection string, e.g. <code>redis:6379</code></li>
+                            <li><strong>Pgsql_CACHE_LATEST_TTL</strong> - Latest cache TTL in seconds (default: 120)</li>
+                            <li><strong>Pgsql_CACHE_RESUME_TTL</strong> - Resume cache TTL in seconds, 0 disables (default: 30)</li>
+                            <li><strong>Pgsql_PG_OPTIMIZE_LATEST</strong> - Enable PostgreSQL-optimised Latest queries (default: true)</li>
+                            <li><strong>Pgsql_PG_OPTIMIZE_MOVIES_LATEST / Pgsql_PG_OPTIMIZE_TV_LATEST / Pgsql_PG_OPTIMIZE_MUSIC_LATEST</strong> - Per-type overrides (default: inherit master flag)</li>
+                            <li><strong>Pgsql_COMMAND_TIMEOUT</strong> - Database command timeout in seconds (default: 90)</li>
+                        </ul>
+                        <p>Note: cached Latest lists can lag behind library changes by up to the configured TTL.</p>
+                    </div>
+                </div>
+
+                <div class="detailSection">
+                    <div class="detailSectionHeader">
+                        <h3>Runtime Stats</h3>
+                    </div>
+                    <div class="detailSectionContent">
+                        <p>Live counters from this Jellyfin process (auto-refresh every 10 seconds).</p>
+                        <div id="PgsqlStatsStatus">Loading...</div>
+                        <ul id="PgsqlStatsList"></ul>
+                    </div>
+                </div>
+
+                <div class="detailSection">
+                    <div class="detailSectionHeader">
                         <h3>Example Docker Compose</h3>
                     </div>
                     <div class="detailSectionContent">
@@ -53,5 +88,67 @@ environment:
             </div>
         </div>
     </div>
+    <script>
+        (function () {
+            const status = document.getElementById("PgsqlStatsStatus");
+            const list = document.getElementById("PgsqlStatsList");
+
+            function rate(hits, misses) {
+                const total = hits + misses;
+                if (total === 0) {
+                    return "n/a";
+                }
+
+                return ((hits / total) * 100).toFixed(1) + "%";
+            }
+
+            function render(data) {
+                status.textContent = "Last updated: " + new Date().toLocaleTimeString();
+
+                const items = [
+                    ["Process started (UTC)", data.StartedAtUtc],
+                    ["Cache active", data.CacheActive ? "Yes" : "No"],
+                    ["Cache backend", data.CacheBackend],
+                    ["Latest TTL", data.LatestTtlSeconds + "s"],
+                    ["Resume TTL", data.ResumeTtlSeconds + "s"],
+                    ["Optimize movies latest", data.OptimizeMoviesLatest ? "Yes" : "No"],
+                    ["Optimize TV latest", data.OptimizeTvLatest ? "Yes" : "No"],
+                    ["Optimize music latest", data.OptimizeMusicLatest ? "Yes" : "No"],
+                    ["Latest cache hits", String(data.LatestCacheHits)],
+                    ["Latest cache misses", String(data.LatestCacheMisses)],
+                    ["Latest cache hit-rate", rate(data.LatestCacheHits, data.LatestCacheMisses)],
+                    ["Resume cache hits", String(data.ResumeCacheHits)],
+                    ["Resume cache misses", String(data.ResumeCacheMisses)],
+                    ["Resume cache hit-rate", rate(data.ResumeCacheHits, data.ResumeCacheMisses)],
+                    ["Optimized latest runs", String(data.OptimizedLatestRuns)],
+                    ["Optimized latest failures", String(data.OptimizedLatestFailures)],
+                    ["Redis get errors", String(data.RedisGetErrors)],
+                    ["Redis set errors", String(data.RedisSetErrors)]
+                ];
+
+                list.innerHTML = items.map(function (entry) {
+                    return "<li><strong>" + entry[0] + ":</strong> " + entry[1] + "</li>";
+                }).join("");
+            }
+
+            function load() {
+                fetch(ApiClient.getUrl("Pgsql/Stats"), { credentials: "same-origin" })
+                    .then(function (response) {
+                        if (!response.ok) {
+                            throw new Error("HTTP " + response.status);
+                        }
+
+                        return response.json();
+                    })
+                    .then(render)
+                    .catch(function (error) {
+                        status.textContent = "Stats unavailable: " + error.message;
+                    });
+            }
+
+            load();
+            setInterval(load, 10000);
+        })();
+    </script>
 </body>
 </html>

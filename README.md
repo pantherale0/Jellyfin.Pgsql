@@ -39,6 +39,39 @@ services:
 
 Images are built and published automatically when a release is cut or when the scheduled sync workflow completes. See [Release flow](#release-flow) below.
 
+## Query cache and optimisation (optional, experimental)
+
+The plugin can cache the home-screen queries (Latest and Resume rows) and replace Jellyfin's
+Latest queries with PostgreSQL-optimised versions (`DISTINCT ON` instead of nested `GROUP BY`
+subqueries). Both features are enabled by default, fail open (any error falls back to the
+standard Jellyfin queries), and are provided strictly as-is.
+
+The cache stores only ordered item ID lists, keyed per user and per view, so results are never
+shared across users. With the default TTLs, newly added media can take up to two minutes to
+appear in the Latest row.
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `Pgsql_CACHE_ENABLED` | `true` | Enable query result caching |
+| `Pgsql_CACHE_BACKEND` | `Redis` | `Redis`, `Memory` or `Off`. Falls back to `Memory` when no Redis connection string is configured |
+| `REDIS_CONNECTION_STRING` | empty | StackExchange.Redis connection string, e.g. `redis.databases.svc.cluster.local:6379` |
+| `Pgsql_CACHE_LATEST_TTL` | `120` | Latest cache TTL in seconds |
+| `Pgsql_CACHE_RESUME_TTL` | `30` | Resume cache TTL in seconds; `0` disables Resume caching |
+| `Pgsql_PG_OPTIMIZE_LATEST` | `true` | Master switch for PostgreSQL-optimised Latest queries |
+| `Pgsql_PG_OPTIMIZE_MOVIES_LATEST` | inherit | Per-type override for movies |
+| `Pgsql_PG_OPTIMIZE_TV_LATEST` | inherit | Per-type override for TV shows |
+| `Pgsql_PG_OPTIMIZE_MUSIC_LATEST` | inherit | Per-type override for music |
+| `Pgsql_COMMAND_TIMEOUT` | `90` | Database command timeout in seconds (Jellyfin's default of 30 is too tight for heavy library queries on large remote databases) |
+
+Use the in-process `Memory` backend for a single Jellyfin instance; use `Redis` when running
+multiple replicas or when the cache should survive container restarts.
+
+Known trade-offs:
+
+- The TV Latest optimisation ports Jellyfin's Season/Series container-selection logic into the
+  plugin, so its behaviour must be re-checked when syncing against new Jellyfin releases.
+- Cached Latest rows can lag behind library scans by up to the configured TTL.
+
 To build the image locally instead:
 
 ```bash
@@ -124,14 +157,34 @@ The recommended approach is the automated migration script. It backs up `jellyfi
 
 ```yaml
 services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: jellyfin
+      POSTGRES_USER: jellyfin
+      POSTGRES_PASSWORD: your-password
+    volumes:
+      - /path/to/postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - /path/to/redis-data:/data
+
   jellyfin:
     image: ghcr.io/pantherale0/jellyfin.pgsql:12.0-rc2
+    depends_on:
+      - postgres
+      - redis
     environment:
       MIGRATE_FROM_SQLITE: "true"
       POSTGRES_HOST: postgres
       POSTGRES_DB: jellyfin
       POSTGRES_USER: jellyfin
       POSTGRES_PASSWORD: your-password
+      Pgsql_CACHE_BACKEND: Redis
+      REDIS_CONNECTION_STRING: redis:6379
     volumes:
       - /path/to/existing/config:/config
       - /path/to/cache:/cache
