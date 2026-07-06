@@ -73,7 +73,7 @@ internal static class PostgreSqlCompat
                 logger.LogDebug("Ensured PostgreSQL min(uuid)/max(uuid) aggregates are available");
             }
         }
-        catch (Exception ex)
+        catch (NpgsqlException ex)
         {
             if (logger.IsEnabled(LogLevel.Warning))
             {
