@@ -49,12 +49,15 @@ echo "${update_output}"
 echo "[validate] Building EF migration bundle..."
 dotnet ef migrations bundle \
     --force \
-    -o "${REPO_ROOT}/docker/jellyfin.PgsqlMigrator.dll" \
+    -o "${REPO_ROOT}/docker/jellyfin.PgsqlMigrator" \
+    -r linux-x64 \
+    --self-contained \
     --project "${PROJECT}" \
     --startup-project "${PROJECT}" \
     -- --migration-provider Jellyfin-PgSql
+chmod +x "${REPO_ROOT}/docker/jellyfin.PgsqlMigrator"
 
-if [[ ! -f "${REPO_ROOT}/docker/jellyfin.PgsqlMigrator.dll" ]]; then
+if [[ ! -f "${REPO_ROOT}/docker/jellyfin.PgsqlMigrator" ]]; then
     echo "[validate] ERROR: EF bundle was not created." >&2
     exit 1
 fi
