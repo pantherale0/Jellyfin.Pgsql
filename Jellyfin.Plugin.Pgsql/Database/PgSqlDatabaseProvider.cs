@@ -100,15 +100,13 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
         // Configure all DateTime properties to ensure UTC for PostgreSQL compatibility, matching SQLite provider
         foreach (var entityType in modelBuilder.Model.GetEntityTypes())
         {
-            foreach (var property in entityType.GetProperties())
+            foreach (var property in entityType.GetProperties().Where(p =>
+                p.ClrType == typeof(DateTime) || p.ClrType == typeof(DateTime?)))
             {
-                if (property.ClrType == typeof(DateTime) || property.ClrType == typeof(DateTime?))
-                {
-                    property.SetValueConverter(
-                        new Microsoft.EntityFrameworkCore.Storage.ValueConversion.ValueConverter<DateTime, DateTime>(
-                            v => v.ToUniversalTime(),
-                            v => DateTime.SpecifyKind(v, DateTimeKind.Utc)));
-                }
+                property.SetValueConverter(
+                    new Microsoft.EntityFrameworkCore.Storage.ValueConversion.ValueConverter<DateTime, DateTime>(
+                        v => v.ToUniversalTime(),
+                        v => DateTime.SpecifyKind(v, DateTimeKind.Utc)));
             }
         }
 
@@ -148,13 +146,13 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
     public async Task<string> MigrationBackupFast(CancellationToken cancellationToken)
     {
         var key = DateTime.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
-        var backupFolder = Path.Combine(_applicationPaths.DataPath, BackupFolderName);
+        var backupFolder = Path.Join(_applicationPaths.DataPath, BackupFolderName);
         Directory.CreateDirectory(backupFolder);
 
         var connectionBuilder = GetConnectionBuilder(null);
-        var backupFile = Path.Combine(backupFolder, $"{key}_{connectionBuilder.Database}.sql");
+        var backupFile = Path.Join(backupFolder, $"{key}_{connectionBuilder.Database}.sql");
 
-        var process = new Process
+        using var process = new Process
         {
             StartInfo = new ProcessStartInfo
             {
@@ -201,7 +199,7 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
         NpgsqlConnection.ClearAllPools();
 
         var connectionBuilder = GetConnectionBuilder(null);
-        var backupFile = Path.Combine(_applicationPaths.DataPath, BackupFolderName, $"{key}_{connectionBuilder.Database}.sql");
+        var backupFile = Path.Join(_applicationPaths.DataPath, BackupFolderName, $"{key}_{connectionBuilder.Database}.sql");
 
         if (!File.Exists(backupFile))
         {
@@ -213,7 +211,7 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             return;
         }
 
-        var process = new Process
+        using var process = new Process
         {
             StartInfo = new ProcessStartInfo
             {
@@ -256,7 +254,7 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
     public Task DeleteBackup(string key)
     {
         var connectionBuilder = GetConnectionBuilder(null);
-        var backupFile = Path.Combine(_applicationPaths.DataPath, BackupFolderName, $"{key}_{connectionBuilder.Database}.sql");
+        var backupFile = Path.Join(_applicationPaths.DataPath, BackupFolderName, $"{key}_{connectionBuilder.Database}.sql");
 
         if (!File.Exists(backupFile))
         {
