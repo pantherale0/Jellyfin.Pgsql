@@ -5,6 +5,7 @@ obj/
 artifacts
 
 .devcontainer/pgsql/
+docker/jellyfin.PgsqlMigrator
 docker/jellyfin.PgsqlMigrator.dll
 .sync-warnings.md
 .sync-report.md

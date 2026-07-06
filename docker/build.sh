@@ -1,1 +1,1 @@
-dotnet ef migrations bundle -o docker/jellyfin.PgsqlMigrator.dll -r linux-x64 --force --self-contained --project "/workspaces/Jellyfin.Pgsql/Jellyfin.Plugin.Pgsql" --  --migration-provider Jellyfin-PgSql
+dotnet ef migrations bundle -o docker/jellyfin.PgsqlMigrator -r linux-x64 --force --self-contained --project "Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj" --startup-project "Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj" -- --migration-provider Jellyfin-PgSql

@@ -1,63 +1,81 @@
-# The Unoffical Postgre SQL adapter for the jellyfin server
+# PostgreSQL adapter for Jellyfin
 
-This adds postgres SQL support via an plugin to the jellyfin server. There are several steps required to make this work and it is to be considered __HIGHLY__ experimental.
+An experimental Jellyfin database plugin that adds PostgreSQL support. This repository is maintained independently for personal use. It was originally derived from [JPVenson/Jellyfin.Pgsql](https://github.com/JPVenson/Jellyfin.Pgsql) but is no longer tied to that project’s releases, images, or workflow.
 
-# How to use it
+**Status:** highly experimental — use at your own risk.
 
-You can use your existing jellyfin compose file and change the image accordingly to: `ghcr.io/jpvenson/jellyfin.pgsql:10.11.6-1`.
+## Contributing, issues, and pull requests
 
-You need to add the connection paramters as enviorment variables in your compose file:
+Issues and pull requests on this repository are **locked to collaborators only** (primarily for automated CI/CD, such as migration sync). This is intentional: the project is not set up for open contribution via PRs or issue trackers.
+
+If you want to discuss a bug, idea, or change, please use [GitHub Discussions](https://github.com/pantherale0/Jellyfin.Pgsql/discussions) instead.
+
+## How to use it
+
+Use your existing Jellyfin Compose file and point the image at this repository’s container registry:
+
+`ghcr.io/pantherale0/jellyfin.pgsql:12.0-rc2`
+
+Add the connection parameters as environment variables in your compose file:
 
 ```yaml
-
 services:
   jellyfin:
-    image: ghcr.io/jpvenson/jellyfin.pgsql:10.11.6-1
+    image: ghcr.io/pantherale0/jellyfin.pgsql:12.0-rc2
     volumes:
-        - /path/to/config:/config
-        - /path/to/cache:/cache
-        - /path/to/media:/media
+      - /path/to/config:/config
+      - /path/to/cache:/cache
+      - /path/to/media:/media
     environment:
-        - POSTGRES_HOST=
-        - POSTGRES_PORT=
-        - POSTGRES_DB=jellyfin
-        - POSTGRES_USER=jellyfin
-        - POSTGRES_PASSWORD=jellyfin
-      # Optional settings bellow, uncomment if you want to connect using SSL
+      - POSTGRES_HOST=
+      - POSTGRES_PORT=
+      - POSTGRES_DB=jellyfin
+      - POSTGRES_USER=jellyfin
+      - POSTGRES_PASSWORD=jellyfin
+      # Optional settings below; uncomment to connect using SSL
       # - POSTGRES_SSLMODE=Require
       # - POSTGRES_TRUSTSERVERCERTIFICATE=true
 ```
 
-# Build
+Images are built and published automatically when a release is cut or when the scheduled sync workflow completes. See [Release flow](#release-flow) below.
 
-Checkout the Jellyfin submodule.
-Use dotnet build to build the plugin.
-Place the plugin in the plugin folder of the JF app.
-Update the database.xml file to switch to the plugin as its database provider:
+To build the image locally instead:
+
+```bash
+docker build -f docker/Dockerfile --build-arg JELLYFIN_VERSION=12.0-rc2 -t jellyfin.pgsql .
+```
+
+## Build (from source)
+
+1. Check out the Jellyfin submodule: `git submodule update --init jellyfin`
+2. Build the plugin: `dotnet build`
+3. Place the plugin in Jellyfin’s plugin folder.
+4. Update `database.xml` to use the plugin as the database provider:
 
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
 <DatabaseConfigurationOptions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
   <DatabaseType>PLUGIN_PROVIDER</DatabaseType>
   <CustomProviderOptions>
-    <PluginAssembly>../../../Jellyfin.Plugin.Pgsql/bin/debug/net9.0/Jellyfin.Plugin.Pgsql.dll</PluginAssembly>
+    <PluginAssembly>../../../Jellyfin.Plugin.Pgsql/bin/debug/net10.0/Jellyfin.Plugin.Pgsql.dll</PluginAssembly>
     <PluginName>PostgreSQL</PluginName>
     <ConnectionString>CONNECTION_STRING_TO_LOCAL_PGSQL_SERVER</ConnectionString>
   </CustomProviderOptions>
   <LockingBehavior>NoLock</LockingBehavior>
 </DatabaseConfigurationOptions>
-
 ```
 
-launch your jellyfin server.
+5. Start your Jellyfin server.
 
-# Add migration (manual)
+## Add migration (manual)
 
-Run `dotnet ef migrations add {MIGRATION_NAME} --project Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj -- --migration-provider Jellyfin-PgSql`
+```bash
+dotnet ef migrations add {MIGRATION_NAME} --project Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj -- --migration-provider Jellyfin-PgSql
+```
 
-# Release flow
+## Release flow
 
-## Automated sync (recommended)
+### Automated sync
 
 A scheduled GitHub Actions workflow ([`.github/workflows/sync-migrations.yaml`](.github/workflows/sync-migrations.yaml)) runs daily and:
 
@@ -65,13 +83,13 @@ A scheduled GitHub Actions workflow ([`.github/workflows/sync-migrations.yaml`](
 2. Bumps NuGet refs, the Docker base image version, and the `jellyfin` submodule gitlink
 3. Generates a PostgreSQL EF migration via model diff (SQLite migrations are **not** copied)
 4. Post-processes PG-specific fixes and validates against Postgres
-5. Opens a PR for human review
+5. Opens a collaborator-only PR for review and merge
 
 Docker image builds are blocked until the sync PR is merged and [`.github/jellyfin-sync-state.json`](.github/jellyfin-sync-state.json) matches the target Jellyfin version.
 
-When the scheduled sync workflow fails, it automatically opens (or updates) a GitHub issue labeled `migration-sync-failure` with the failure stage, logs, and workflow link.
+When the scheduled sync workflow fails, it automatically opens (or updates) a collaborator-only GitHub issue labeled `migration-sync-failure` with the failure stage, logs, and workflow link.
 
-## Manual sync
+### Manual sync
 
 Initialize the submodule and run the sync script locally (requires PostgreSQL, `gh`, and `jq`):
 
@@ -94,18 +112,74 @@ Then build the EF bundle and container:
 docker build -f docker/Dockerfile --build-arg JELLYFIN_VERSION=X.Y.Z -t jellyfin.pgsql .
 ```
 
-# Migration Instructions (ADVANCED, UNTESTED)
+## Migrating from SQLite to PostgreSQL
 
-To migrate your JF install to a custom database (not using the docker image) follow the steps IN THIS ORDER.
+The recommended approach is the automated migration script. It backs up `jellyfin.db`, applies PostgreSQL EF migrations, copies table data with pgloader (excluding `__EFMigrationsHistory`), archives the SQLite file, and writes a completion marker so it will not run twice.
 
-1. Download the Jellyfin PGSQL container and configure it to point to an existing empty database and empty config directory. DO NOT USE YOUR EXISTING DATA OR SQLITE LIBRARY CONFIGURE A FULLY CLEAR INSTANCE.
-2. Run jellyfin once with it configured to your empty database, this will seed the database and its migration history.
-3. Stop your JF instance after its been started once (no need to setup fully though the startup wizzard). If you did not get the setup wizzard you did something wrong!
-4. Install the pgloader tool `apt install pgloader` or see https://pgloader.readthedocs.io/en/latest/install.html.
-5. Download the [jellyfindb.load](/docker/jellyfindb.load) file
-6. Adapt the `jellyfindb.load` file accordingly to point towards your old jellyfin.db and your postgres instance. See https://pgloader.readthedocs.io/en/latest/ref/sqlite.html
-7. Use the load file in `jellyfindb.load` to transfer your sqlite db into the postgres db like `pgloader /jellyfin-pgsql/jellyfindb.load`.
-8. Move your old Data back to the jellyfin directories
-9. Start jellyfin
+### Docker (recommended)
 
-If you get an error regarding a missing `__EFMigrationsHistory` you did not start jellyfin with a clear state.
+1. Point your existing Jellyfin `/config` volume at the container (your `jellyfin.db` should be at `/config/data/jellyfin.db`).
+2. Ensure PostgreSQL is reachable via the usual `POSTGRES_*` environment variables.
+3. Start the container **once** with migration enabled:
+
+```yaml
+services:
+  jellyfin:
+    image: ghcr.io/pantherale0/jellyfin.pgsql:12.0-rc2
+    environment:
+      MIGRATE_FROM_SQLITE: "true"
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: jellyfin
+      POSTGRES_USER: jellyfin
+      POSTGRES_PASSWORD: your-password
+    volumes:
+      - /path/to/existing/config:/config
+      - /path/to/cache:/cache
+      - /path/to/media:/media
+```
+
+4. Watch the container logs for `[migrate]` output. On success:
+   - `jellyfin.db` is renamed to `jellyfin.db.pre-pgsql.<timestamp>`
+   - A backup is kept at `jellyfin.db.backup.<timestamp>`
+   - `.jellyfin-pgsql-migration-complete` prevents re-running
+5. Remove `MIGRATE_FROM_SQLITE` (or set it to `false`) and restart normally.
+
+To inspect the planned steps without making changes:
+
+```bash
+docker run --rm \
+  -e DRY_RUN=true \
+  -e POSTGRES_HOST=postgres -e POSTGRES_DB=jellyfin \
+  -e POSTGRES_USER=jellyfin -e POSTGRES_PASSWORD=secret \
+  -v /path/to/config:/config \
+  ghcr.io/pantherale0/jellyfin.pgsql:12.0-rc2 \
+  /jellyfin-pgsql/migrate-sqlite-to-postgres.sh --dry-run --sqlite-db /config/data/jellyfin.db
+```
+
+### Manual / bare-metal
+
+Requires `pgloader`, `pg_isready`, and an EF migration bundle (`scripts/validate-migrations.sh` builds `docker/jellyfin.PgsqlMigrator`).
+
+```bash
+export POSTGRES_HOST=localhost
+export POSTGRES_PORT=5432
+export POSTGRES_DB=jellyfin
+export POSTGRES_USER=jellyfin
+export POSTGRES_PASSWORD=your-password
+
+./scripts/validate-migrations.sh   # builds schema tooling if needed
+./scripts/migrate-sqlite-to-postgres.sh /path/to/jellyfin.db
+```
+
+Use `--dry-run` to validate configuration without modifying anything.
+
+### Notes
+
+- Stop Jellyfin before migrating so `jellyfin.db` is not locked.
+- The PostgreSQL database should be empty before migration; the script creates the schema via EF migrations.
+- If migration fails, your original database remains in the timestamped backup file.
+- A reference pgloader config lives at [`docker/jellyfindb.load`](docker/jellyfindb.load); the script generates one dynamically with safer credential handling.
+
+## Upstream
+
+This project builds on ideas and code from [JPVenson/Jellyfin.Pgsql](https://github.com/JPVenson/Jellyfin.Pgsql). That upstream repository is separate; image tags, release cadence, and support channels there do not apply to this fork.

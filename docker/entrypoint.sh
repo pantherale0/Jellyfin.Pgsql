@@ -115,17 +115,21 @@ else
     echo "[entrypoint] PostgreSQL connection string unchanged"
 fi
 
-# Migrate jellyfin.db if exists
-# if [ ! -f /config/data/jellyfin.db ]; then
-
-#     # run the EFbundle to migrate db to current state
-#     dotnet run /jellyfin-pgsql/jellyfin.PgsqlMigrator.dll --connection "${ConnectionString}"
-#     # run pgloader to move data
-#     pgloader /jellyfin-pgsql/jellyfindb.load
-#     # rename jellyfin db
-#     mv /config/data/jellyfin.db /config/data/jellyfin.db.pgsql
-# fi
-
+# Optional one-time migration from SQLite to PostgreSQL.
+if [[ "${MIGRATE_FROM_SQLITE:-false}" == "true" ]]; then
+    if [[ -f /config/data/jellyfin.db ]]; then
+        echo "[entrypoint] MIGRATE_FROM_SQLITE=true — starting SQLite to PostgreSQL migration"
+        export SQLITE_DB="/config/data/jellyfin.db"
+        export MIGRATOR_BIN="/jellyfin-pgsql/jellyfin.PgsqlMigrator"
+        export MIGRATION_MARKER="/config/data/.jellyfin-pgsql-migration-complete"
+        /jellyfin-pgsql/migrate-sqlite-to-postgres.sh
+    elif [[ -f /config/data/.jellyfin-pgsql-migration-complete ]]; then
+        echo "[entrypoint] SQLite migration already completed; skipping"
+    else
+        echo "[entrypoint] MIGRATE_FROM_SQLITE=true but /config/data/jellyfin.db was not found"
+        exit 4
+    fi
+fi
 
 # Run original Jellyfin entrypoint
 exec /jellyfin/jellyfin "$@"

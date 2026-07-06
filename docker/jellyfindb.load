@@ -1,6 +1,27 @@
-load database
-    from sqlite:///config/data/jellyfin.db
-    into pgsql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+# Reference pgloader configuration for Jellyfin SQLite -> PostgreSQL migrations.
+# Prefer the automated script instead:
+#   ./scripts/migrate-sqlite-to-postgres.sh --sqlite-db /path/to/jellyfin.db
+#
+# If using this file manually, replace connection placeholders and ensure PostgreSQL
+# schema already exists (run the EF migration bundle first).
 
-with quote identifiers, data only, truncate, drop indexes
-excluding table names like '__EFMigrationsHistory'
+LOAD DATABASE
+     FROM sqlite:///path/to/jellyfin.db
+     INTO postgresql://jellyfin@postgres:5432/jellyfin
+
+WITH quote identifiers,
+     data only,
+     truncate,
+     disable triggers,
+     reset sequences,
+     workers = 4,
+     concurrency = 1,
+
+     cast type datetime to timestamptz drop default drop not null using zero-dates-to-null,
+          type bool to boolean using tinyint-to-boolean
+
+ EXCLUDING TABLE NAMES MATCHING '~__EFMigrationsHistory',
+                             '~sqlite_sequence'
+
+ SET work_mem to '16MB',
+     maintenance_work_mem to '64MB';
