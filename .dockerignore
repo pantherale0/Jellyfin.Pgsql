@@ -1,0 +1,7 @@
+dev-env/
+**/node_modules/
+**/bin/
+**/obj/
+.git/
+jellyfin/.git/
+jellyfin-web/.git/

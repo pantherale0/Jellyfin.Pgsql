@@ -1,0 +1,674 @@
+diff --git a/Jellyfin.Api/Controllers/SSOController.cs b/Jellyfin.Api/Controllers/SSOController.cs
+new file mode 100644
+index 0000000000..3f84804656
+--- /dev/null
++++ b/Jellyfin.Api/Controllers/SSOController.cs
+@@ -0,0 +1,668 @@
++using System;
++using System.Collections.Concurrent;
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
++using System.Net.Http;
++using System.Threading.Tasks;
++using Jellyfin.Api.Constants;
++using Jellyfin.Api.Results;
++using Jellyfin.Data;
++using Jellyfin.Database.Implementations.Entities;
++using Jellyfin.Database.Implementations.Enums;
++using MediaBrowser.Common.Api;
++using MediaBrowser.Controller.Authentication;
++using MediaBrowser.Controller.Configuration;
++using MediaBrowser.Controller.Library;
++using MediaBrowser.Controller.Session;
++using Microsoft.AspNetCore.Authorization;
++using Microsoft.AspNetCore.Http;
++using Microsoft.AspNetCore.Mvc;
++using Microsoft.Extensions.Logging;
++
++namespace Jellyfin.Api.Controllers;
++
++/// <summary>
++/// API Controller for handling OAuth2/OIDC SSO with RBAC.
++/// </summary>
++[ApiController]
++[Route("[controller]")]
++public class SSOController : ControllerBase
++{
++    private static readonly HttpClient _httpClient = new HttpClient();
++    private static readonly ConcurrentDictionary<string, (string DeviceId, DateTime CreatedAt)> _stateStore = new();
++    private static readonly object _configLock = new object();
++    private static readonly System.Text.Json.JsonSerializerOptions _jsonOptions = new System.Text.Json.JsonSerializerOptions
++    {
++        WriteIndented = true
++    };
++
++    private readonly IUserManager _userManager;
++    private readonly ISessionManager _sessionManager;
++    private readonly ILogger<SSOController> _logger;
++    private readonly IServerConfigurationManager _config;
++    private readonly ILibraryManager _libraryManager;
++
++    private static string? _authorizationEndpoint;
++    private static string? _tokenEndpoint;
++    private static string? _userinfoEndpoint;
++    private static string? _cachedAuthority;
++
++    /// <summary>
++    /// Initializes a new instance of the <see cref="SSOController"/> class.
++    /// </summary>
++    /// <param name="userManager">Instance of the <see cref="IUserManager"/> interface.</param>
++    /// <param name="sessionManager">Instance of the <see cref="ISessionManager"/> interface.</param>
++    /// <param name="logger">Instance of the <see cref="ILogger{SSOController}"/> interface.</param>
++    /// <param name="config">Instance of the <see cref="IServerConfigurationManager"/> interface.</param>
++    /// <param name="libraryManager">Instance of the <see cref="ILibraryManager"/> interface.</param>
++    public SSOController(
++        IUserManager userManager,
++        ISessionManager sessionManager,
++        ILogger<SSOController> logger,
++        IServerConfigurationManager config,
++        ILibraryManager libraryManager)
++    {
++        _userManager = userManager;
++        _sessionManager = sessionManager;
++        _logger = logger;
++        _config = config;
++        _libraryManager = libraryManager;
++    }
++
++    private static string? GetEnv(string name)
++    {
++        return Environment.GetEnvironmentVariable(name);
++    }
++
++    private static string GetEnv(string name, string defaultValue)
++    {
++        return Environment.GetEnvironmentVariable(name) ?? defaultValue;
++    }
++
++    private static async Task EnsureEndpointsAsync(string authority)
++    {
++        if (_cachedAuthority == authority && _authorizationEndpoint != null)
++        {
++            return;
++        }
++
++        var configUrl = authority.TrimEnd('/') + "/.well-known/openid-configuration";
++        var response = await _httpClient.GetAsync(configUrl).ConfigureAwait(false);
++        response.EnsureSuccessStatusCode();
++        var content = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
++
++        using var doc = System.Text.Json.JsonDocument.Parse(content);
++        var root = doc.RootElement;
++
++        lock (_configLock)
++        {
++            _authorizationEndpoint = root.GetProperty("authorization_endpoint").GetString();
++            _tokenEndpoint = root.GetProperty("token_endpoint").GetString();
++            _userinfoEndpoint = root.GetProperty("userinfo_endpoint").GetString();
++            _cachedAuthority = authority;
++        }
++    }
++
++    private static void PruneStates()
++    {
++        var now = DateTime.UtcNow;
++        var expired = _stateStore.Where(kvp => now - kvp.Value.CreatedAt > TimeSpan.FromMinutes(10)).Select(kvp => kvp.Key).ToList();
++        foreach (var key in expired)
++        {
++            _stateStore.TryRemove(key, out _);
++        }
++    }
++
++    /// <summary>
++    /// Checks OIDC configuration status.
++    /// </summary>
++    /// <returns>An object indicating if SSO is enabled.</returns>
++    [HttpGet("config")]
++    [AllowAnonymous]
++    public ActionResult GetConfig()
++    {
++        var authority = GetEnv("JELLYFIN_SSO_OIDC_AUTHORITY");
++        var clientId = GetEnv("JELLYFIN_SSO_OIDC_CLIENT_ID");
++        var enabled = !string.IsNullOrEmpty(authority) && !string.IsNullOrEmpty(clientId);
++
++        return Ok(new { enabled });
++    }
++
++    /// <summary>
++    /// Redirects the user to the OIDC authorization endpoint.
++    /// </summary>
++    /// <param name="deviceId">The client device ID.</param>
++    /// <returns>A redirect action to the OIDC authorization endpoint.</returns>
++    [HttpGet("login")]
++    [AllowAnonymous]
++    public async Task<ActionResult> Login([FromQuery] string? deviceId)
++    {
++        var authority = GetEnv("JELLYFIN_SSO_OIDC_AUTHORITY");
++        var clientId = GetEnv("JELLYFIN_SSO_OIDC_CLIENT_ID");
++
++        if (string.IsNullOrEmpty(authority) || string.IsNullOrEmpty(clientId))
++        {
++            return BadRequest("SSO is not configured on this server.");
++        }
++
++        try
++        {
++            await EnsureEndpointsAsync(authority).ConfigureAwait(false);
++        }
++        catch (Exception ex)
++        {
++            _logger.LogError(ex, "Failed to discover OIDC endpoints from authority: {Authority}", authority);
++            return StatusCode(500, $"Failed to contact OIDC provider for discovery: {ex.Message}");
++        }
++
++        PruneStates();
++        var state = Guid.NewGuid().ToString("N");
++        _stateStore[state] = (deviceId ?? string.Empty, DateTime.UtcNow);
++
++        var redirectUri = GetEnv("JELLYFIN_SSO_OIDC_REDIRECT_URI");
++        if (string.IsNullOrEmpty(redirectUri))
++        {
++            redirectUri = $"{Request.Scheme}://{Request.Host}/sso/callback";
++        }
++
++        var scope = GetEnv("JELLYFIN_SSO_OIDC_SCOPE", "openid profile email");
++
++        var authUrl = $"{_authorizationEndpoint}?" +
++                      $"response_type=code" +
++                      $"&client_id={Uri.EscapeDataString(clientId)}" +
++                      $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
++                      $"&scope={Uri.EscapeDataString(scope)}" +
++                      $"&state={Uri.EscapeDataString(state)}";
++
++        return Redirect(authUrl);
++    }
++
++    /// <summary>
++    /// Handles callback redirect from OIDC provider.
++    /// </summary>
++    /// <param name="code">The authorization code.</param>
++    /// <param name="state">The state parameter for verification.</param>
++    /// <param name="error">The error parameter from the OIDC provider if present.</param>
++    /// <param name="error_description">The description of the OIDC provider error.</param>
++    /// <returns>An HTML page completing the login flow or an error response.</returns>
++    [HttpGet("callback")]
++    [AllowAnonymous]
++    public async Task<ActionResult> Callback([FromQuery] string? code, [FromQuery] string? state, [FromQuery] string? error, [FromQuery] string? error_description)
++    {
++        if (!string.IsNullOrEmpty(error))
++        {
++            return Content($"OIDC Provider Error: {error_description ?? error}", "text/html");
++        }
++
++        if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(state))
++        {
++            return BadRequest("Missing code or state.");
++        }
++
++        if (!_stateStore.TryRemove(state, out var cachedState))
++        {
++            return BadRequest("Invalid or expired state.");
++        }
++
++        var authority = GetEnv("JELLYFIN_SSO_OIDC_AUTHORITY");
++        var clientId = GetEnv("JELLYFIN_SSO_OIDC_CLIENT_ID");
++        var clientSecret = GetEnv("JELLYFIN_SSO_OIDC_CLIENT_SECRET");
++
++        if (string.IsNullOrEmpty(authority) || string.IsNullOrEmpty(clientId))
++        {
++            return BadRequest("SSO is not configured on this server.");
++        }
++
++        try
++        {
++            await EnsureEndpointsAsync(authority).ConfigureAwait(false);
++
++            // Exchange code for token
++            var redirectUri = GetEnv("JELLYFIN_SSO_OIDC_REDIRECT_URI");
++            if (string.IsNullOrEmpty(redirectUri))
++            {
++                redirectUri = $"{Request.Scheme}://{Request.Host}/sso/callback";
++            }
++
++            var tokenParams = new Dictionary<string, string>
++            {
++                { "grant_type", "authorization_code" },
++                { "code", code },
++                { "redirect_uri", redirectUri },
++                { "client_id", clientId }
++            };
++            if (!string.IsNullOrEmpty(clientSecret))
++            {
++                tokenParams.Add("client_secret", clientSecret);
++            }
++
++            var tokenRequestContent = new FormUrlEncodedContent(tokenParams);
++            var tokenResponse = await _httpClient.PostAsync(_tokenEndpoint, tokenRequestContent).ConfigureAwait(false);
++            var tokenResponseContent = await tokenResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
++            if (!tokenResponse.IsSuccessStatusCode)
++            {
++                _logger.LogError("Failed OIDC token exchange. Status: {Status}, Body: {Body}", tokenResponse.StatusCode, tokenResponseContent);
++                return Content($"Failed to exchange code: {tokenResponseContent}", "text/html");
++            }
++
++            using var tokenDoc = System.Text.Json.JsonDocument.Parse(tokenResponseContent);
++            var accessToken = tokenDoc.RootElement.GetProperty("access_token").GetString();
++            if (string.IsNullOrEmpty(accessToken))
++            {
++                return Content("Access token was not returned by OIDC provider.", "text/html");
++            }
++
++            // Fetch User Info
++            var userInfoRequest = new HttpRequestMessage(HttpMethod.Get, _userinfoEndpoint);
++            userInfoRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
++            var userInfoResponse = await _httpClient.SendAsync(userInfoRequest).ConfigureAwait(false);
++            var userInfoResponseContent = await userInfoResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
++            if (!userInfoResponse.IsSuccessStatusCode)
++            {
++                _logger.LogError("Failed OIDC userinfo fetch. Status: {Status}, Body: {Body}", userInfoResponse.StatusCode, userInfoResponseContent);
++                return Content($"Failed to retrieve user info from provider: {userInfoResponseContent}", "text/html");
++            }
++
++            using var userInfoDoc = System.Text.Json.JsonDocument.Parse(userInfoResponseContent);
++            var root = userInfoDoc.RootElement;
++
++            // Parse claims
++            var usernameClaim = GetEnv("JELLYFIN_SSO_OIDC_USERNAME_CLAIM", "preferred_username");
++            string? username = null;
++            if (root.TryGetProperty(usernameClaim, out var usernameEl))
++            {
++                username = usernameEl.GetString();
++            }
++
++            if (string.IsNullOrEmpty(username))
++            {
++                if (root.TryGetProperty("preferred_username", out var prefUsernameEl))
++                {
++                    username = prefUsernameEl.GetString();
++                }
++                else if (root.TryGetProperty("email", out var emailEl))
++                {
++                    username = emailEl.GetString();
++                }
++                else if (root.TryGetProperty("name", out var nameEl))
++                {
++                    username = nameEl.GetString();
++                }
++            }
++
++            if (string.IsNullOrEmpty(username))
++            {
++                return Content("Could not retrieve a valid username from OIDC claims.", "text/html");
++            }
++
++            username = username.Trim('"');
++
++            var rolesClaim = GetEnv("JELLYFIN_SSO_OIDC_ROLES_CLAIM", "groups");
++            var roles = new List<string>();
++            if (root.TryGetProperty(rolesClaim, out var rolesEl))
++            {
++                if (rolesEl.ValueKind == System.Text.Json.JsonValueKind.Array)
++                {
++                    foreach (var item in rolesEl.EnumerateArray())
++                    {
++                        var roleStr = item.GetString();
++                        if (!string.IsNullOrEmpty(roleStr))
++                        {
++                            roles.Add(roleStr);
++                        }
++                    }
++                }
++                else if (rolesEl.ValueKind == System.Text.Json.JsonValueKind.String)
++                {
++                    var roleStr = rolesEl.GetString();
++                    if (!string.IsNullOrEmpty(roleStr))
++                    {
++                        roles.AddRange(roleStr.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries));
++                    }
++                }
++            }
++
++            var createUsers = GetEnv("JELLYFIN_SSO_OIDC_CREATE_USERS", "true").Equals("true", StringComparison.OrdinalIgnoreCase);
++            var adminRole = GetEnv("JELLYFIN_SSO_OIDC_ADMIN_ROLE", "jellyfin_admin");
++
++            var user = _userManager.GetUserByName(username);
++            var isNew = false;
++            if (user == null)
++            {
++                if (!createUsers)
++                {
++                    return Content($"User '{username}' does not exist and auto-creation is disabled.", "text/html");
++                }
++
++                _logger.LogInformation("SSO Auto-creating new user '{Username}'", username);
++                user = await _userManager.CreateUserAsync(username).ConfigureAwait(false);
++                isNew = true;
++            }
++
++            if (user.AuthenticationProviderId != "OidcSSOProvider")
++            {
++                user.AuthenticationProviderId = "OidcSSOProvider";
++                await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
++            }
++
++            // Apply Role Mapping (RBAC)
++            bool shouldBeAdmin = roles.Contains(adminRole, StringComparer.OrdinalIgnoreCase);
++            bool currentIsAdmin = user.HasPermission(PermissionKind.IsAdministrator);
++            if (shouldBeAdmin != currentIsAdmin || isNew)
++            {
++                _logger.LogInformation("SSO Updating admin privilege for user '{Username}' to {AdminState}", username, shouldBeAdmin);
++                user.SetPermission(PermissionKind.IsAdministrator, shouldBeAdmin);
++                if (shouldBeAdmin)
++                {
++                    user.SetPermission(PermissionKind.EnableContentDeletion, true);
++                    user.SetPermission(PermissionKind.EnableRemoteControlOfOtherUsers, true);
++                }
++
++                await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
++            }
++
++            // Apply RBAC mappings configuration (Additive Merge)
++            var rbacConfigPath = Path.Combine(_config.ApplicationPaths.ConfigurationDirectoryPath, "sso_rbac.json");
++            if (System.IO.File.Exists(rbacConfigPath))
++            {
++                try
++                {
++                    var rbacContent = await System.IO.File.ReadAllTextAsync(rbacConfigPath).ConfigureAwait(false);
++                    using var rbacDoc = System.Text.Json.JsonDocument.Parse(rbacContent);
++                    if (rbacDoc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
++                    {
++                        bool mappedAny = false;
++                        bool enableAllFolders = false;
++                        var enabledFoldersList = new HashSet<Guid>();
++                        var permissionValues = new Dictionary<PermissionKind, bool>();
++
++                        foreach (var mapping in rbacDoc.RootElement.EnumerateArray())
++                        {
++                            if (mapping.TryGetProperty("oidcGroup", out var groupEl))
++                            {
++                                var groupName = groupEl.GetString();
++                                if (!string.IsNullOrEmpty(groupName) && roles.Contains(groupName, StringComparer.OrdinalIgnoreCase))
++                                {
++                                    mappedAny = true;
++
++                                    if (mapping.TryGetProperty("enableAllFolders", out var allFoldersEl) && allFoldersEl.GetBoolean())
++                                    {
++                                        enableAllFolders = true;
++                                    }
++
++                                    if (mapping.TryGetProperty("enabledFolders", out var foldersEl) && foldersEl.ValueKind == System.Text.Json.JsonValueKind.Array)
++                                    {
++                                        foreach (var fEl in foldersEl.EnumerateArray())
++                                        {
++                                            var fStr = fEl.GetString();
++                                            if (!string.IsNullOrEmpty(fStr) && Guid.TryParse(fStr, out var folderGuid))
++                                            {
++                                                enabledFoldersList.Add(folderGuid);
++                                            }
++                                        }
++                                    }
++
++                                    if (mapping.TryGetProperty("permissions", out var permsEl) && permsEl.ValueKind == System.Text.Json.JsonValueKind.Object)
++                                    {
++                                        foreach (var prop in permsEl.EnumerateObject())
++                                        {
++                                            if (Enum.TryParse<PermissionKind>(prop.Name, true, out var kind))
++                                            {
++                                                var val = prop.Value.GetBoolean();
++                                                if (permissionValues.TryGetValue(kind, out var existingVal))
++                                                {
++                                                    permissionValues[kind] = existingVal || val;
++                                                }
++                                                else
++                                                {
++                                                    permissionValues[kind] = val;
++                                                }
++                                            }
++                                        }
++                                    }
++                                }
++                            }
++                        }
++
++                        if (mappedAny)
++                        {
++                            _logger.LogInformation("SSO Applying RBAC mappings for user '{Username}'", username);
++                            user.SetPermission(PermissionKind.EnableAllFolders, enableAllFolders);
++                            user.SetPreference(PreferenceKind.EnabledFolders, enabledFoldersList.ToArray());
++
++                            foreach (var kvp in permissionValues)
++                            {
++                                user.SetPermission(kvp.Key, kvp.Value);
++                            }
++
++                            await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
++                        }
++                    }
++                }
++                catch (Exception ex)
++                {
++                    _logger.LogError(ex, "Failed to apply OIDC RBAC mappings for user '{Username}'", username);
++                }
++            }
++
++            // Log the user in
++            var deviceId = cachedState.DeviceId;
++            if (string.IsNullOrEmpty(deviceId))
++            {
++                deviceId = Guid.NewGuid().ToString("N");
++            }
++
++            var authResult = await _sessionManager.AuthenticateDirect(new AuthenticationRequest
++            {
++                App = "Jellyfin Web",
++                AppVersion = "SSO",
++                DeviceId = deviceId,
++                DeviceName = "SSO Browser",
++                RemoteEndPoint = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1",
++                Username = username
++            }).ConfigureAwait(false);
++
++            // Generate response HTML that writes details to localStorage and redirects
++            var html = $@"<!DOCTYPE html>
++<html>
++<head>
++    <title>Logging in...</title>
++</head>
++<body>
++    <p>Authentication successful! Redirecting to Jellyfin...</p>
++    <script>
++        const token = ""{authResult.AccessToken}"";
++        const userId = ""{authResult.User.Id.ToString()}"";
++        const serverId = ""{authResult.ServerId}"";
++
++        let creds = null;
++        try {{
++            creds = JSON.parse(localStorage.getItem('jellyfin_credentials'));
++        }} catch (e) {{}}
++
++        if (!creds || !creds.Servers) {{
++            creds = {{ Servers: [] }};
++        }}
++
++        const currentOrigin = window.location.origin;
++        let server = creds.Servers.find(s => s.ManualAddress === currentOrigin || s.LocalAddress === currentOrigin);
++        if (!server) {{
++            server = {{
++                Name: ""Jellyfin Server"",
++                ManualAddress: currentOrigin,
++                LocalAddress: currentOrigin,
++                LastConnectionMode: 2
++            }};
++            creds.Servers.push(server);
++        }}
++
++        server.UserId = userId;
++        server.AccessToken = token;
++        server.DateLastAccessed = Date.now();
++
++        localStorage.setItem('jellyfin_credentials', JSON.stringify(creds));
++        localStorage.setItem('api_key', token);
++        localStorage.setItem('userId', userId);
++        localStorage.setItem('serverId', serverId);
++
++        window.location.href = '/web/index.html';
++    </script>
++</body>
++</html>";
++
++            return Content(html, "text/html");
++        }
++        catch (Exception ex)
++        {
++            _logger.LogError(ex, "SSO callback error processing login for state {State}", state);
++            return StatusCode(500, $"An error occurred during SSO callback: {ex.Message}");
++        }
++    }
++
++    /// <summary>
++    /// Serves the dynamic injection login script.
++    /// </summary>
++    /// <returns>The JavaScript injection script.</returns>
++    [HttpGet("login-script.js")]
++    [AllowAnonymous]
++    public ActionResult GetLoginScript()
++    {
++        var authority = GetEnv("JELLYFIN_SSO_OIDC_AUTHORITY");
++        var clientId = GetEnv("JELLYFIN_SSO_OIDC_CLIENT_ID");
++
++        if (string.IsNullOrEmpty(authority) || string.IsNullOrEmpty(clientId))
++        {
++            return Content(string.Empty, "application/javascript");
++        }
++
++        var script = @"(function() {
++    console.log('[SSO] Injected login script loaded');
++
++    const hasLocalParam = window.location.search.includes('local=true') || window.location.hash.includes('local=true');
++    const isLoggedIn = localStorage.getItem('api_key') || localStorage.getItem('userId');
++
++    if (!hasLocalParam && !isLoggedIn) {
++        console.log('[SSO] Redirecting to SSO login...');
++        let deviceId = localStorage.getItem('deviceId') || localStorage.getItem('_deviceId2') || '';
++        if (!deviceId) {
++            deviceId = 'sso-' + Math.random().toString(36).substring(2, 15);
++            localStorage.setItem('_deviceId2', deviceId);
++        }
++        window.location.href = '/sso/login?deviceId=' + encodeURIComponent(deviceId);
++        return;
++    }
++
++    function checkAndInjectSSO() {
++        const loginPage = document.getElementById('loginPage');
++        if (!loginPage) return;
++
++        if (document.getElementById('sso-login-button')) return;
++
++        const form = loginPage.querySelector('form');
++        if (!form) return;
++
++        const ssoButton = document.createElement('button');
++        ssoButton.id = 'sso-login-button';
++        ssoButton.type = 'button';
++        ssoButton.className = 'raised button-submit block emby-button';
++        ssoButton.style.marginTop = '1.5em';
++        ssoButton.style.backgroundColor = '#00a4dc'; // Jellyfin blue!
++        ssoButton.style.color = '#ffffff';
++        ssoButton.innerHTML = '<span class=""button-text"">Login with SSO</span>';
++
++        ssoButton.addEventListener('click', function(e) {
++            e.preventDefault();
++            let deviceId = localStorage.getItem('deviceId') || localStorage.getItem('_deviceId2') || '';
++            if (!deviceId) {
++                deviceId = 'sso-' + Math.random().toString(36).substring(2, 15);
++                localStorage.setItem('_deviceId2', deviceId);
++            }
++            window.location.href = '/sso/login?deviceId=' + encodeURIComponent(deviceId);
++        });
++
++        form.appendChild(ssoButton);
++        console.log('[SSO] Injected Login with SSO button into login page');
++    }
++
++    checkAndInjectSSO();
++
++    const observer = new MutationObserver(function(mutations) {
++        checkAndInjectSSO();
++    });
++
++    observer.observe(document.body, {
++        childList: true,
++        subtree: true
++    });
++})();";
++
++        return Content(script, "application/javascript");
++    }
++
++    /// <summary>
++    /// Gets the SSO RBAC mappings configuration.
++    /// </summary>
++    /// <returns>The mapping configurations.</returns>
++    [HttpGet("rbac/config")]
++    [Authorize(Policy = Policies.RequiresElevation)]
++    public async Task<ActionResult> GetRbacConfig()
++    {
++        var configPath = Path.Combine(_config.ApplicationPaths.ConfigurationDirectoryPath, "sso_rbac.json");
++        if (!System.IO.File.Exists(configPath))
++        {
++            return Ok(Array.Empty<object>());
++        }
++
++        try
++        {
++            var content = await System.IO.File.ReadAllTextAsync(configPath).ConfigureAwait(false);
++            return Content(content, "application/json");
++        }
++        catch (Exception ex)
++        {
++            _logger.LogError(ex, "Failed to read SSO RBAC configuration file.");
++            return StatusCode(500, "Failed to read configuration file.");
++        }
++    }
++
++    /// <summary>
++    /// Saves the SSO RBAC mappings configuration.
++    /// </summary>
++    /// <param name="config">The mappings configuration to save.</param>
++    /// <returns>A no content result on success.</returns>
++    [HttpPost("rbac/config")]
++    [Authorize(Policy = Policies.RequiresElevation)]
++    public async Task<ActionResult> SaveRbacConfig([FromBody] System.Text.Json.JsonElement config)
++    {
++        var configPath = Path.Combine(_config.ApplicationPaths.ConfigurationDirectoryPath, "sso_rbac.json");
++        try
++        {
++            var content = System.Text.Json.JsonSerializer.Serialize(config, _jsonOptions);
++            await System.IO.File.WriteAllTextAsync(configPath, content).ConfigureAwait(false);
++            return NoContent();
++        }
++        catch (Exception ex)
++        {
++            _logger.LogError(ex, "Failed to write SSO RBAC configuration file.");
++            return StatusCode(500, "Failed to save configuration file.");
++        }
++    }
++
++    /// <summary>
++    /// Gets all virtual folders/libraries on the server.
++    /// </summary>
++    /// <returns>A list of libraries.</returns>
++    [HttpGet("rbac/libraries")]
++    [Authorize(Policy = Policies.RequiresElevation)]
++    public ActionResult GetRbacLibraries()
++    {
++        var folders = _libraryManager.GetVirtualFolders(true);
++        var result = folders.Select(f => new
++        {
++            name = f.Name,
++            id = f.ItemId
++        });
++        return Ok(result);
++    }
++}

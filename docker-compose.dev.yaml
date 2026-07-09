@@ -1,0 +1,73 @@
+# Docker Compose for Local Development and Testing
+#
+# IMPORTANT: To allow both your host browser and the Jellyfin server container
+# to resolve Keycloak correctly, add the following line to your host's /etc/hosts file:
+# 127.0.0.1 keycloak
+#
+# Run with:
+# docker compose -f docker-compose.dev.yaml up --build
+#
+# Test users imported into Keycloak:
+# 1. Administrator: admin_user / password (grants Jellyfin Admin role)
+# 2. Regular User: kids_user / password (maps to restricted library mappings)
+
+services:
+  jellyfin:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8096:8096"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=jellyfin
+      - POSTGRES_USER=jellyfin
+      - POSTGRES_PASSWORD=jellyfin_secure_pass
+      - JELLYFIN_CACHE_DIR=/cache
+      
+      # OIDC/SSO configuration
+      - JELLYFIN_SSO_OIDC_AUTHORITY=http://keycloak:8080/realms/jellyfin
+      - JELLYFIN_SSO_OIDC_CLIENT_ID=jellyfin-client
+      - JELLYFIN_SSO_OIDC_CLIENT_SECRET=jellyfin_secret
+      - JELLYFIN_SSO_OIDC_REDIRECT_URI=http://localhost:8096/sso/callback
+      - JELLYFIN_SSO_OIDC_SCOPE=openid profile email
+      - JELLYFIN_SSO_OIDC_USERNAME_CLAIM=preferred_username
+      - JELLYFIN_SSO_OIDC_ROLES_CLAIM=groups
+      - JELLYFIN_SSO_OIDC_ADMIN_ROLE=jellyfin_admin
+      - JELLYFIN_SSO_OIDC_CREATE_USERS=true
+    volumes:
+      - ./dev-env/config:/config
+      - ./dev-env/cache:/cache
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:18
+    environment:
+      - POSTGRES_DB=jellyfin
+      - POSTGRES_USER=jellyfin
+      - POSTGRES_PASSWORD=jellyfin_secure_pass
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "jellyfin", "-d", "jellyfin"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ./dev-env/postgres-data:/var/lib/postgresql
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.5
+    command: start-dev --import-realm
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./dev-env/keycloak-realm.json:/opt/keycloak/data/import/realm.json
+    restart: unless-stopped

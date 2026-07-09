@@ -1,7 +1,25 @@
+ARG JELLYFIN_VERSION=12.0-rc2
+
+# Web build stage
+FROM node:24-alpine AS web-build
+WORKDIR /src
+
+# Install git
+RUN apk add --no-cache git
+
+# Copy web submodule and patch
+COPY jellyfin-web/ ./jellyfin-web/
+COPY docker/jellyfin_web_rbac.patch ./docker/
+
+# Apply patch and build web client
+RUN git apply --directory=jellyfin-web docker/jellyfin_web_rbac.patch && \
+    cd jellyfin-web && \
+    npm ci && \
+    npm run build:production
+
 # Build stage
 # Context hint: project root ../
 # sudo docker build -t ghcr.io/jpvenson/jellyfin.pgsql:10.11.0-1 -f ./Dockerfile ../
-ARG JELLYFIN_VERSION=12.0-rc2
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
@@ -13,10 +31,19 @@ COPY Jellyfin.Plugin.Pgsql.sln .
 COPY build.yaml .
 COPY .config/ ./.config/
 COPY Jellyfin.Plugin.Pgsql/ ./Jellyfin.Plugin.Pgsql/
+COPY jellyfin/ ./jellyfin/
+COPY docker/jellyfin_sso.patch ./docker/
+
+# Install git and apply the patch to the jellyfin submodule
+RUN apt-get update && apt-get install -y git && \
+    git apply --directory=jellyfin docker/jellyfin_sso.patch && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Restore and publish
 RUN dotnet restore Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj
+RUN dotnet restore jellyfin/Jellyfin.Server/Jellyfin.Server.csproj -r linux-x64 -p:AllowMissingPrunePackageData=true
 RUN dotnet publish Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj -c Release --no-restore -o /app/publish
+RUN dotnet publish jellyfin/Jellyfin.Server/Jellyfin.Server.csproj -c Release --no-restore -o /app/jellyfin-server -r linux-x64 --self-contained true -p:AllowMissingPrunePackageData=true
 RUN dotnet tool restore
 RUN dotnet ef migrations bundle \
     -o /app/jellyfin.PgsqlMigrator \
@@ -39,6 +66,15 @@ RUN apt-get update && \
     apt-get install -y postgresql-client-18 xmlstarlet pgloader && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+# Copy custom compiled Jellyfin web client
+COPY --from=web-build /src/jellyfin-web/dist/ /jellyfin/jellyfin-web/
+
+# Copy custom compiled Jellyfin server
+COPY --from=build /app/jellyfin-server/ /jellyfin/
+
+# Inject SSO script into index.html
+RUN sed -i 's|</body>|<script src="/sso/login-script.js"></script></body>|g' /jellyfin/jellyfin-web/index.html
 
 # Copy the published plugin and config files
 COPY --from=build /app/publish/ /jellyfin-pgsql/plugin/
