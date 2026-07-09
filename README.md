@@ -78,6 +78,36 @@ To build the image locally instead:
 docker build -f docker/Dockerfile --build-arg JELLYFIN_VERSION=12.0-rc2 -t jellyfin.pgsql .
 ```
 
+## Single Sign-On (SSO) with RBAC via OAuth2/OIDC
+
+The custom Docker image supports built-in Single Sign-On (SSO) using OpenID Connect (OIDC) / OAuth2 with Role-Based Access Control (RBAC). 
+
+### How it works
+*   **Forced SSO Redirection**: When configured, the browser client automatically redirects users to your OIDC provider for login.
+*   **Emergency Bypass**: For emergency local administration (e.g. if the identity provider is offline), you can append `?local=true` to the URL (e.g. `http://jellyfin/web/index.html#!/login.html?local=true`) to bypass the redirect and show the local login form.
+*   **Auto-creation & RBAC**: Users successfully authenticated via OIDC are automatically created if they do not exist. If they possess the configured OIDC admin role, they are granted Administrator privileges (and administrative permissions are synced dynamically upon each login).
+*   **Client Compatibility**: Native surfaces that do not support web redirects (like smart TVs and game consoles) can pair with an active web session using Jellyfin's standard **Quick Connect** feature.
+
+### Configuration
+Configure the OIDC integration using the following environment variables in your `docker-compose.yaml`:
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `JELLYFIN_SSO_OIDC_AUTHORITY` | empty | The base URL of your OIDC provider (e.g., `https://keycloak.example.com/realms/master`) |
+| `JELLYFIN_SSO_OIDC_CLIENT_ID` | empty | The client ID registered in your OIDC provider |
+| `JELLYFIN_SSO_OIDC_CLIENT_SECRET` | empty | The client secret (optional, only if client is confidential) |
+| `JELLYFIN_SSO_OIDC_REDIRECT_URI` | dynamically built | The callback URL (optional, defaults to `{Scheme}://{Host}/sso/callback`) |
+| `JELLYFIN_SSO_OIDC_SCOPE` | `openid profile email groups` | Scopes requested from the identity provider |
+| `JELLYFIN_SSO_OIDC_USERNAME_CLAIM` | `preferred_username` | The claim containing the user's Jellyfin username |
+| `JELLYFIN_SSO_OIDC_ROLES_CLAIM` | `groups` | The claim containing user groups/roles |
+| `JELLYFIN_SSO_OIDC_ADMIN_ROLE` | `jellyfin_admin` | The role/group name that grants Administrator privileges in Jellyfin |
+| `JELLYFIN_SSO_OIDC_CREATE_USERS` | `true` | Set to `false` to disable auto-creation of new users |
+
+### How it is Built
+To maintain a clean upstream repository, changes to the `jellyfin` server are packaged as a patch:
+1. All changes to `jellyfin` are in [`docker/jellyfin_sso.patch`](docker/jellyfin_sso.patch).
+2. During `docker build`, the `Dockerfile` automatically applies this patch to the submodule, compiles the server from source, and overrides the official binaries in the final image.
+
 ## Build (from source)
 
 1. Check out the Jellyfin submodule: `git submodule update --init jellyfin`

@@ -1,0 +1,86 @@
+{
+  "id": "jellyfin",
+  "realm": "jellyfin",
+  "enabled": true,
+  "loginWithEmailAllowed": true,
+  "users": [
+    {
+      "username": "admin_user",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Admin",
+      "lastName": "User",
+      "email": "admin@example.com",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "password",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "jellyfin_admin"
+      ]
+    },
+    {
+      "username": "kids_user",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Kids",
+      "lastName": "User",
+      "email": "kids@example.com",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "password",
+          "temporary": false
+        }
+      ],
+      "groups": [
+        "jellyfin_kids"
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "name": "jellyfin_admin",
+      "path": "/jellyfin_admin"
+    },
+    {
+      "name": "jellyfin_kids",
+      "path": "/jellyfin_kids"
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "jellyfin-client",
+      "name": "Jellyfin Client",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "jellyfin_secret",
+      "redirectUris": [
+        "http://localhost:8096/sso/callback",
+        "http://127.0.0.1:8096/sso/callback"
+      ],
+      "webOrigins": [
+        "*"
+      ],
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "groups",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ]
+}

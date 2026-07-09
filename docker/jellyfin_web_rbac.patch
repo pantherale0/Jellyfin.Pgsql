@@ -1,0 +1,536 @@
+diff --git a/src/apps/dashboard/features/users/components/Profile.tsx b/src/apps/dashboard/features/users/components/Profile.tsx
+index ec3268aceb..3522432572 100644
+--- a/src/apps/dashboard/features/users/components/Profile.tsx
++++ b/src/apps/dashboard/features/users/components/Profile.tsx
+@@ -167,8 +167,14 @@ const Profile = ({ userDto }: ProfileProps) => {
+         disabledUserBanner.classList.toggle('hide', !userDto.Policy?.IsDisabled);
+ 
+         const txtUserName = page.querySelector('#txtUserName') as HTMLInputElement;
+-        txtUserName.disabled = false;
+-        txtUserName.removeAttribute('disabled');
++        const isSsoUser = userDto?.Policy?.AuthenticationProviderId === 'OidcSSOProvider';
++        if (isSsoUser) {
++            txtUserName.disabled = true;
++            txtUserName.setAttribute('disabled', 'disabled');
++        } else {
++            txtUserName.disabled = false;
++            txtUserName.removeAttribute('disabled');
++        }
+ 
+         void libraryMenu.then(menu => menu.setTitle(userDto.Name));
+ 
+diff --git a/src/apps/dashboard/features/users/components/SSOMappings.tsx b/src/apps/dashboard/features/users/components/SSOMappings.tsx
+new file mode 100644
+index 0000000000..cdc0dd86f5
+--- /dev/null
++++ b/src/apps/dashboard/features/users/components/SSOMappings.tsx
+@@ -0,0 +1,342 @@
++import React, { useEffect, useState, useCallback } from 'react';
++import { useApi } from 'hooks/useApi';
++import Box from '@mui/material/Box';
++import Button from '@mui/material/Button';
++import Checkbox from '@mui/material/Checkbox';
++import FormControlLabel from '@mui/material/FormControlLabel';
++import FormGroup from '@mui/material/FormGroup';
++import TextField from '@mui/material/TextField';
++import Typography from '@mui/material/Typography';
++import Paper from '@mui/material/Paper';
++import Divider from '@mui/material/Divider';
++import Stack from '@mui/material/Stack';
++import Grid from '@mui/material/Grid2';
++import Alert from '@mui/material/Alert';
++import CircularProgress from '@mui/material/CircularProgress';
++import Dialog from '@mui/material/Dialog';
++import DialogActions from '@mui/material/DialogActions';
++import DialogContent from '@mui/material/DialogContent';
++import DialogTitle from '@mui/material/DialogTitle';
++import IconButton from '@mui/material/IconButton';
++import EditIcon from '@mui/icons-material/Edit';
++import DeleteIcon from '@mui/icons-material/Delete';
++import AddIcon from '@mui/icons-material/Add';
++
++interface Mapping {
++    oidcGroup: string;
++    enableAllFolders: boolean;
++    enabledFolders: string[];
++    permissions: Record<string, boolean>;
++}
++
++interface LibraryFolder {
++    id: string;
++    name: string;
++}
++
++const AVAILABLE_PERMISSIONS = [
++    { key: 'IsAdministrator', label: 'Is Administrator' },
++    { key: 'EnableContentDeletion', label: 'Enable Content Deletion' },
++    { key: 'EnableSubtitleManagement', label: 'Enable Subtitle Management' },
++    { key: 'EnableLyricManagement', label: 'Enable Lyric Management' },
++    { key: 'EnableLiveTvAccess', label: 'Enable Live TV Access' },
++    { key: 'EnableLiveTvManagement', label: 'Enable Live TV Management' },
++    { key: 'EnableMediaPlayback', label: 'Enable Media Playback' },
++    { key: 'EnableAudioPlaybackTranscoding', label: 'Enable Audio Playback Transcoding' },
++    { key: 'EnableVideoPlaybackTranscoding', label: 'Enable Video Playback Transcoding' },
++    { key: 'EnableContentDownloading', label: 'Enable Content Downloading' },
++    { key: 'EnablePublicSharing', label: 'Enable Public Sharing' },
++    { key: 'EnableRemoteAccess', label: 'Enable Remote Access' }
++];
++
++const SSOMappings = () => {
++    const { __legacyApiClient__: apiClient } = useApi();
++    const [ mappings, setMappings ] = useState<Mapping[]>([]);
++    const [ libraries, setLibraries ] = useState<LibraryFolder[]>([]);
++    const [ loading, setLoading ] = useState(true);
++    const [ error, setError ] = useState<string | null>(null);
++    const [ isDialogOpen, setIsDialogOpen ] = useState(false);
++    const [ editingIndex, setEditingIndex ] = useState<number | null>(null);
++
++    // Form states
++    const [ groupName, setGroupName ] = useState('');
++    const [ enableAllFolders, setEnableAllFolders ] = useState(true);
++    const [ selectedFolders, setSelectedFolders ] = useState<string[]>([]);
++    const [ selectedPermissions, setSelectedPermissions ] = useState<Record<string, boolean>>({});
++
++    const serverUrl = apiClient ? apiClient.serverAddress() : '';
++    const token = apiClient ? apiClient.accessToken() : '';
++
++    const fetchData = useCallback(async () => {
++        if (!serverUrl || !token) return;
++        setLoading(true);
++        setError(null);
++        try {
++            const headers = {
++                'X-MediaBrowser-Token': token,
++                'Content-Type': 'application/json'
++            };
++
++            const [ configRes, libRes ] = await Promise.all([
++                fetch(`${serverUrl}/sso/rbac/config?api_key=${token}`, { headers }),
++                fetch(`${serverUrl}/sso/rbac/libraries?api_key=${token}`, { headers })
++            ]);
++
++            if (!configRes.ok || !libRes.ok) {
++                throw new Error('Failed to fetch SSO configuration or libraries.');
++            }
++
++            const configData = await configRes.json();
++            const libData = await libRes.json();
++
++            setMappings(configData || []);
++            setLibraries(libData || []);
++        } catch (err: any) {
++            setError(err.message || 'An error occurred.');
++        } finally {
++            setLoading(false);
++        }
++    }, [ serverUrl, token ]);
++
++    useEffect(() => {
++        fetchData();
++    }, [ fetchData ]);
++
++    const saveMappings = async (updatedMappings: Mapping[]) => {
++        if (!serverUrl || !token) return;
++        setError(null);
++        try {
++            const headers = {
++                'X-MediaBrowser-Token': token,
++                'Content-Type': 'application/json'
++            };
++
++            const response = await fetch(`${serverUrl}/sso/rbac/config?api_key=${token}`, {
++                method: 'POST',
++                headers,
++                body: JSON.stringify(updatedMappings)
++            });
++
++            if (!response.ok) {
++                throw new Error('Failed to save mappings.');
++            }
++
++            setMappings(updatedMappings);
++        } catch (err: any) {
++            setError(err.message || 'Failed to save mappings.');
++        }
++    };
++
++    const handleAddClick = () => {
++        setEditingIndex(null);
++        setGroupName('');
++        setEnableAllFolders(true);
++        setSelectedFolders([]);
++        setSelectedPermissions({});
++        setIsDialogOpen(true);
++    };
++
++    const handleEditClick = (index: number) => {
++        const mapping = mappings[index];
++        setEditingIndex(index);
++        setGroupName(mapping.oidcGroup);
++        setEnableAllFolders(mapping.enableAllFolders);
++        setSelectedFolders(mapping.enabledFolders || []);
++        setSelectedPermissions(mapping.permissions || {});
++        setIsDialogOpen(true);
++    };
++
++    const handleDeleteClick = (index: number) => {
++        const updated = mappings.filter((_, i) => i !== index);
++        saveMappings(updated);
++    };
++
++    const handleDialogClose = () => {
++        setIsDialogOpen(false);
++    };
++
++    const handleDialogSave = () => {
++        if (!groupName.trim()) return;
++
++        const newMapping: Mapping = {
++            oidcGroup: groupName.trim(),
++            enableAllFolders,
++            enabledFolders: enableAllFolders ? [] : selectedFolders,
++            permissions: selectedPermissions
++        };
++
++        let updated: Mapping[];
++        if (editingIndex !== null) {
++            updated = mappings.map((m, i) => i === editingIndex ? newMapping : m);
++        } else {
++            updated = [ ...mappings, newMapping ];
++        }
++
++        saveMappings(updated);
++        setIsDialogOpen(false);
++    };
++
++    const handleFolderToggle = (folderId: string) => {
++        setSelectedFolders(prev =>
++            prev.includes(folderId) ? prev.filter(id => id !== folderId) : [ ...prev, folderId ]
++        );
++    };
++
++    const handlePermissionToggle = (key: string) => {
++        setSelectedPermissions(prev => ({
++            ...prev,
++            [key]: !prev[key]
++        }));
++    };
++
++    if (loading) {
++        return (
++            <Box display='flex' justifyContent='center' alignItems='center' p={4}>
++                <CircularProgress />
++            </Box>
++        );
++    }
++
++    return (
++        <Stack spacing={3}>
++            {error && <Alert severity='error'>{error}</Alert>}
++
++            <Box display='flex' justifyContent='space-between' alignItems='center'>
++                <Typography variant='h2' sx={{ fontSize: '1.25rem', fontWeight: 600 }}>OIDC Group SSO Mappings</Typography>
++                <Button
++                    variant='contained'
++                    color='primary'
++                    startIcon={<AddIcon />}
++                    onClick={handleAddClick}
++                >
++                    Add Mapping
++                </Button>
++            </Box>
++
++            {mappings.length === 0 ? (
++                <Paper sx={{ p: 4, textAlign: 'center' }}>
++                    <Typography color='textSecondary'>No group mappings configured. OIDC users will receive default permissions.</Typography>
++                </Paper>
++            ) : (
++                <Grid container spacing={2}>
++                    {mappings.map((mapping, idx) => (
++                        <Grid size={{ xs: 12, md: 6 }} key={idx}>
++                            <Paper sx={{ p: 2, display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
++                                <Box display='flex' justifyContent='space-between' alignItems='flex-start' mb={1}>
++                                    <Typography variant='h3' sx={{ fontSize: '1.1rem', fontWeight: 600 }}>
++                                        {mapping.oidcGroup}
++                                    </Typography>
++                                    <Box>
++                                        <IconButton size='small' onClick={() => handleEditClick(idx)} color='primary'>
++                                            <EditIcon fontSize='small' />
++                                        </IconButton>
++                                        <IconButton size='small' onClick={() => handleDeleteClick(idx)} color='error'>
++                                            <DeleteIcon fontSize='small' />
++                                        </IconButton>
++                                    </Box>
++                                </Box>
++                                <Divider sx={{ my: 1 }} />
++                                <Stack spacing={1} sx={{ flexGrow: 1 }}>
++                                    <Typography variant='body2' color='textSecondary'>
++                                        <strong>Library Access:</strong>{' '}
++                                        {mapping.enableAllFolders
++                                            ? 'Access All Libraries'
++                                            : mapping.enabledFolders.map(fid => libraries.find(l => l.id === fid)?.name || fid).join(', ') || 'No Libraries Selected'}
++                                    </Typography>
++                                    <Typography variant='body2' color='textSecondary'>
++                                        <strong>Permissions Granted:</strong>{' '}
++                                        {AVAILABLE_PERMISSIONS
++                                            .filter(p => mapping.permissions[p.key])
++                                            .map(p => p.label)
++                                            .join(', ') || 'None'}
++                                    </Typography>
++                                </Stack>
++                            </Paper>
++                        </Grid>
++                    ))}
++                </Grid>
++            )}
++
++            <Dialog open={isDialogOpen} onClose={handleDialogClose} maxWidth='md' fullWidth>
++                <DialogTitle>{editingIndex !== null ? 'Edit SSO Mapping' : 'Add SSO Mapping'}</DialogTitle>
++                <DialogContent>
++                    <Stack spacing={3} sx={{ mt: 1 }}>
++                        <TextField
++                            label='OIDC Group / Role Name'
++                            variant='outlined'
++                            fullWidth
++                            value={groupName}
++                            onChange={e => setGroupName(e.target.value)}
++                        />
++
++                        <Box>
++                            <Typography variant='subtitle1' sx={{ fontWeight: 600, mb: 1 }}>Library Access</Typography>
++                            <FormControlLabel
++                                control={
++                                    <Checkbox
++                                        checked={enableAllFolders}
++                                        onChange={e => setEnableAllFolders(e.target.checked)}
++                                    />
++                                }
++                                label='Grant access to all libraries'
++                            />
++                            {!enableAllFolders && (
++                                <Box sx={{ pl: 3, mt: 1 }}>
++                                    <Typography variant='body2' sx={{ mb: 1 }} color='textSecondary'>Select libraries to allow:</Typography>
++                                    <FormGroup>
++                                        <Grid container spacing={1}>
++                                            {libraries.map(lib => (
++                                                <Grid size={{ xs: 6, sm: 4 }} key={lib.id}>
++                                                    <FormControlLabel
++                                                        control={
++                                                            <Checkbox
++                                                                checked={selectedFolders.includes(lib.id)}
++                                                                onChange={() => handleFolderToggle(lib.id)}
++                                                            />
++                                                        }
++                                                        label={lib.name}
++                                                    />
++                                                </Grid>
++                                            ))}
++                                        </Grid>
++                                    </FormGroup>
++                                </Box>
++                            )}
++                        </Box>
++
++                        <Divider />
++
++                        <Box>
++                            <Typography variant='subtitle1' sx={{ fontWeight: 600, mb: 1 }}>Functional Permissions</Typography>
++                            <FormGroup>
++                                <Grid container spacing={1}>
++                                    {AVAILABLE_PERMISSIONS.map(perm => (
++                                        <Grid size={{ xs: 12, sm: 6 }} key={perm.key}>
++                                            <FormControlLabel
++                                                control={
++                                                    <Checkbox
++                                                        checked={!!selectedPermissions[perm.key]}
++                                                        onChange={() => handlePermissionToggle(perm.key)}
++                                                    />
++                                                }
++                                                label={perm.label}
++                                            />
++                                        </Grid>
++                                    ))}
++                                </Grid>
++                            </FormGroup>
++                        </Box>
++                    </Stack>
++                </DialogContent>
++                <DialogActions>
++                    <Button onClick={handleDialogClose}>Cancel</Button>
++                    <Button onClick={handleDialogSave} variant='contained' color='primary' disabled={!groupName.trim()}>
++                        Save
++                    </Button>
++                </DialogActions>
++            </Dialog>
++        </Stack>
++    );
++};
++
++export default SSOMappings;
+diff --git a/src/apps/dashboard/routes/users/edit.tsx b/src/apps/dashboard/routes/users/edit.tsx
+index e3bd8546b0..2c69784c58 100644
+--- a/src/apps/dashboard/routes/users/edit.tsx
++++ b/src/apps/dashboard/routes/users/edit.tsx
+@@ -1,4 +1,4 @@
+-import React, { useCallback } from 'react';
++import React, { useCallback, useEffect } from 'react';
+ import { useUser } from 'hooks/api/useUser';
+ import Loading from 'components/loading/LoadingComponent';
+ import Page from 'components/Page';
+@@ -21,12 +21,38 @@ export const Component = () => {
+     const { userId, tab } = useParams();
+     const { data: user, isPending, isError } = useUser({ userId });
+ 
++    const isSsoUser = user?.Policy?.AuthenticationProviderId === 'OidcSSOProvider';
++
++    useEffect(() => {
++        if (user && tab === UserTab.Password && isSsoUser) {
++            navigate(`/dashboard/users/${userId}/${UserTab.Profile}`);
++        }
++    }, [ user, tab, userId, navigate, isSsoUser ]);
++
+     const handleTabChange = useCallback((event: React.SyntheticEvent, newValue: UserTab) => {
+         navigate(`/dashboard/users/${userId}/${newValue}`);
+-    }, [ navigate ]);
++    }, [ navigate, userId ]);
+ 
+     if (isPending) return <Loading />;
+ 
++    if (!user) {
++        return (
++            <Page
++                id='usersEditPage'
++                className='mainAnimatedPage type-interior'
++            >
++                <Box className='content-primary'>
++                    <Alert
++                        severity='error'
++                        sx={{ marginBottom: 2 }}
++                    >
++                        {globalize.translate('UsersEditPageError')}
++                    </Alert>
++                </Box>
++            </Page>
++        );
++    }
++
+     return (
+         <Page
+             id='usersEditPage'
+@@ -47,7 +73,9 @@ export const Component = () => {
+                             <Tab label={globalize.translate('Profile')} value={UserTab.Profile} />
+                             <Tab label={globalize.translate('TabAccess')} value={UserTab.Access} />
+                             <Tab label={globalize.translate('TabParentalControl')} value={UserTab.ParentalControl} />
+-                            <Tab label={globalize.translate('HeaderPassword')} value={UserTab.Password} />
++                            {!isSsoUser && (
++                                <Tab label={globalize.translate('HeaderPassword')} value={UserTab.Password} />
++                            )}
+                         </Tabs>
+ 
+                         {tab == UserTab.Profile && (
+@@ -59,7 +87,7 @@ export const Component = () => {
+                         {tab == UserTab.ParentalControl && (
+                             <ParentalControl userId={user.Id || ''} />
+                         )}
+-                        {tab == UserTab.Password && (
++                        {tab == UserTab.Password && !isSsoUser && (
+                             <Password user={user} />
+                         )}
+                     </Stack>
+diff --git a/src/apps/dashboard/routes/users/index.tsx b/src/apps/dashboard/routes/users/index.tsx
+index 094f1d81ad..6d1adff6d7 100644
+--- a/src/apps/dashboard/routes/users/index.tsx
++++ b/src/apps/dashboard/routes/users/index.tsx
+@@ -16,6 +16,10 @@ import Loading from 'components/loading/LoadingComponent';
+ import { useDeleteUser } from 'apps/dashboard/features/users/api/useDeleteUser';
+ import dom from 'utils/dom';
+ import { UserTab } from 'apps/dashboard/features/users/constants/userTab';
++import Box from '@mui/material/Box';
++import Tab from '@mui/material/Tab';
++import Tabs from '@mui/material/Tabs';
++import SSOMappings from 'apps/dashboard/features/users/components/SSOMappings';
+ 
+ type MenuEntry = {
+     name?: string;
+@@ -26,6 +30,7 @@ type MenuEntry = {
+ const UserProfiles = () => {
+     const location = useLocation();
+     const [ isSettingsSavedToastOpen, setIsSettingsSavedToastOpen ] = useState(false);
++    const [ activeTab, setActiveTab ] = useState('users');
+     const element = useRef<HTMLDivElement>(null);
+     const navigate = useNavigate();
+     const { data: users, isPending } = useUsers(undefined, { forceRefresh: true });
+@@ -142,13 +147,18 @@ const UserProfiles = () => {
+         };
+ 
+         page.addEventListener('click', onPageClick);
+-        (page.querySelector('#btnAddUser') as HTMLButtonElement).addEventListener('click', onAddUserClick);
++        const btnAddUser = page.querySelector('#btnAddUser');
++        if (btnAddUser) {
++            btnAddUser.addEventListener('click', onAddUserClick);
++        }
+ 
+         return () => {
+             page.removeEventListener('click', onPageClick);
+-            (page.querySelector('#btnAddUser') as HTMLButtonElement).removeEventListener('click', onAddUserClick);
++            if (btnAddUser) {
++                btnAddUser.removeEventListener('click', onAddUserClick);
++            }
+         };
+-    }, [navigate, deleteUser, location.state?.openSavedToast]);
++    }, [navigate, deleteUser, location.state?.openSavedToast, activeTab]);
+ 
+     if (isPending) {
+         return <Loading />;
+@@ -166,22 +176,35 @@ const UserProfiles = () => {
+                 message={globalize.translate('SettingsSaved')}
+             />
+             <div ref={element} className='content-primary'>
+-                <div className='verticalSection'>
+-                    <SectionTitleContainer
+-                        title={globalize.translate('HeaderUsers')}
+-                        isBtnVisible={true}
+-                        btnId='btnAddUser'
+-                        btnClassName='fab submit sectionTitleButton'
+-                        btnTitle='ButtonAddUser'
+-                        btnIcon='add'
+-                    />
+-                </div>
+-
+-                <div className='localUsers itemsContainer vertical-wrap'>
+-                    {users?.map(user => {
+-                        return <UserCardBox key={user.Id} user={user} />;
+-                    })}
+-                </div>
++                <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
++                    <Tabs value={activeTab} onChange={(_e, val) => setActiveTab(val)}>
++                        <Tab label={globalize.translate('HeaderUsers')} value='users' />
++                        <Tab label='SSO Mappings' value='sso' />
++                    </Tabs>
++                </Box>
++
++                {activeTab === 'users' ? (
++                    <>
++                        <div className='verticalSection'>
++                            <SectionTitleContainer
++                                title={globalize.translate('HeaderUsers')}
++                                isBtnVisible={true}
++                                btnId='btnAddUser'
++                                btnClassName='fab submit sectionTitleButton'
++                                btnTitle='ButtonAddUser'
++                                btnIcon='add'
++                            />
++                        </div>
++
++                        <div className='localUsers itemsContainer vertical-wrap'>
++                            {users?.map(user => {
++                                return <UserCardBox key={user.Id} user={user} />;
++                            })}
++                        </div>
++                    </>
++                ) : (
++                    <SSOMappings />
++                )}
+             </div>
+         </Page>
+ 
