@@ -7,12 +7,14 @@ WORKDIR /src
 # Install git
 RUN apk add --no-cache git
 
-# Copy web submodule and patch
+# Copy web submodule, patches, and apply-patches helper
 COPY jellyfin-web/ ./jellyfin-web/
-COPY docker/jellyfin_web_rbac.patch ./docker/
+COPY patches/ ./patches/
+COPY scripts/apply-patches.sh ./scripts/apply-patches.sh
 
-# Apply patch and build web client
-RUN git apply --directory=jellyfin-web docker/jellyfin_web_rbac.patch && \
+# Apply all jellyfin-web patches and build web client
+RUN chmod +x scripts/apply-patches.sh && \
+    scripts/apply-patches.sh jellyfin-web && \
     cd jellyfin-web && \
     npm ci && \
     npm run build:production
@@ -32,11 +34,13 @@ COPY build.yaml .
 COPY .config/ ./.config/
 COPY Jellyfin.Plugin.Pgsql/ ./Jellyfin.Plugin.Pgsql/
 COPY jellyfin/ ./jellyfin/
-COPY docker/jellyfin_sso.patch ./docker/
+COPY patches/ ./patches/
+COPY scripts/apply-patches.sh ./scripts/apply-patches.sh
 
-# Install git and apply the patch to the jellyfin submodule
+# Install git and apply all jellyfin server patches
 RUN apt-get update && apt-get install -y git && \
-    git apply --directory=jellyfin docker/jellyfin_sso.patch && \
+    chmod +x scripts/apply-patches.sh && \
+    scripts/apply-patches.sh jellyfin && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Restore and publish
