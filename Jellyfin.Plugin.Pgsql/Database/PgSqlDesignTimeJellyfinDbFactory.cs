@@ -1,19 +1,11 @@
 using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Reflection;
-using System.Threading;
-using System.Threading.Tasks;
 using Jellyfin.Database.Implementations;
-using Jellyfin.Database.Implementations.DbConfiguration;
 using Jellyfin.Database.Implementations.Locking;
-using Jellyfin.Server.Implementations;
-using MediaBrowser.Common.Configuration;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Npgsql;
 
 namespace Jellyfin.Plugin.Pgsql.Database;
 
@@ -29,7 +21,9 @@ internal sealed class PgSqlDesignTimeJellyfinDbFactory : IDesignTimeDbContextFac
             ?? "Host=localhost;Port=5432;Database=jellyfin;Username=jellyfin;Password=jellyfin";
 
         var optionsBuilder = new DbContextOptionsBuilder<JellyfinDbContext>();
-        optionsBuilder.UseNpgsql(connectionString, f => f.MigrationsAssembly(GetType().Assembly));
+        optionsBuilder
+            .UseNpgsql(connectionString, f => f.MigrationsAssembly(GetType().Assembly))
+            .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
 
         return new JellyfinDbContext(
             optionsBuilder.Options,

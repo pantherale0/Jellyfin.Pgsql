@@ -1,0 +1,360 @@
+diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
+index 19823dff37..b6cadca00d 100644
+--- a/Emby.Server.Implementations/Session/SessionManager.cs
++++ b/Emby.Server.Implementations/Session/SessionManager.cs
+@@ -11,6 +11,7 @@ using Jellyfin.Data;
+ using Jellyfin.Data.Enums;
+ using Jellyfin.Data.Events;
+ using Jellyfin.Data.Queries;
++using Jellyfin.Database.Implementations;
+ using Jellyfin.Database.Implementations.Entities;
+ using Jellyfin.Database.Implementations.Entities.Security;
+ using Jellyfin.Database.Implementations.Enums;
+@@ -48,6 +49,7 @@ namespace Emby.Server.Implementations.Session
+     /// </summary>
+     public sealed class SessionManager : ISessionManager, IAsyncDisposable
+     {
++        private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
+         private readonly IUserDataManager _userDataManager;
+         private readonly IServerConfigurationManager _config;
+         private readonly ILogger<SessionManager> _logger;
+@@ -89,6 +91,7 @@ namespace Emby.Server.Implementations.Session
+         /// <param name="deviceManager">Instance of <see cref="IDeviceManager"/> interface.</param>
+         /// <param name="mediaSourceManager">Instance of <see cref="IMediaSourceManager"/> interface.</param>
+         /// <param name="hostApplicationLifetime">Instance of <see cref="IHostApplicationLifetime"/> interface.</param>
++        /// <param name="dbProvider">Instance of <see cref="IDbContextFactory{JellyfinDbContext}"/> interface.</param>
+         public SessionManager(
+             ILogger<SessionManager> logger,
+             IEventManager eventManager,
+@@ -102,7 +105,8 @@ namespace Emby.Server.Implementations.Session
+             IServerApplicationHost appHost,
+             IDeviceManager deviceManager,
+             IMediaSourceManager mediaSourceManager,
+-            IHostApplicationLifetime hostApplicationLifetime)
++            IHostApplicationLifetime hostApplicationLifetime,
++            IDbContextFactory<JellyfinDbContext> dbProvider)
+         {
+             _logger = logger;
+             _eventManager = eventManager;
+@@ -119,6 +123,7 @@ namespace Emby.Server.Implementations.Session
+             _shutdownCallback = hostApplicationLifetime.ApplicationStopping.Register(OnApplicationStopping);
+ 
+             _deviceManager.DeviceOptionsUpdated += OnDeviceManagerDeviceOptionsUpdated;
++            _dbProvider = dbProvider;
+         }
+ 
+         /// <summary>
+@@ -1091,6 +1096,30 @@ namespace Emby.Server.Implementations.Session
+                 {
+                     playedToCompletion = OnPlaybackStopped(user, libraryItem, info.PositionTicks, info.Failed);
+                 }
++
++                if (info.PositionTicks.HasValue && info.PositionTicks.Value > 0)
++                {
++                    using var dbContext = await _dbProvider.CreateDbContextAsync().ConfigureAwait(false);
++
++                    foreach (var user in users)
++                    {
++                        var genre = libraryItem.Genres?.FirstOrDefault() ?? "Unknown";
++
++                        dbContext.PlaybackActivity.Add(new PlaybackActivity
++                        {
++                            Id = Guid.NewGuid(),
++                            UserId = user.Id,
++                            ItemId = info.ItemId,
++                            ItemName = libraryItem.Name ?? string.Empty,
++                            MediaType = libraryItem.GetType().Name,
++                            PlayedTicks = info.PositionTicks.Value,
++                            DatePlayed = DateTime.UtcNow,
++                            ItemSubGroup = genre
++                        });
++                    }
++
++                    await dbContext.SaveChangesAsync().ConfigureAwait(false);
++                }
+             }
+ 
+             if (!string.IsNullOrEmpty(info.LiveStreamId))
+diff --git a/Jellyfin.Api/Controllers/PlaybackActivityController.cs b/Jellyfin.Api/Controllers/PlaybackActivityController.cs
+new file mode 100644
+index 0000000000..4efd473fb2
+--- /dev/null
++++ b/Jellyfin.Api/Controllers/PlaybackActivityController.cs
+@@ -0,0 +1,86 @@
++using System;
++using System.Linq;
++using System.Threading;
++using System.Threading.Tasks;
++using Jellyfin.Database.Implementations;
++using Microsoft.AspNetCore.Http;
++using Microsoft.AspNetCore.Mvc;
++using Microsoft.EntityFrameworkCore;
++
++namespace Jellyfin.Api.Controllers;
++
++/// <summary>
++/// Playback activity controller.
++/// </summary>
++[ApiController]
++[Route("Users/{userId}/PlaybackStats")]
++public class PlaybackActivityController : BaseJellyfinApiController
++{
++    private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
++
++    /// <summary>
++    /// Initializes a new instance of the <see cref="PlaybackActivityController"/> class.
++    /// </summary>
++    /// <param name="dbProvider">The database context factory.</param>
++    public PlaybackActivityController(IDbContextFactory<JellyfinDbContext> dbProvider)
++    {
++        _dbProvider = dbProvider;
++    }
++
++    /// <summary>
++    /// Gets playback statistics for a user, grouped by media type.
++    /// </summary>
++    /// <param name="userId">The user id.</param>
++    /// <response code="200">Playback stats returned.</response>
++    /// <returns>Playback stats grouped by media type.</returns>
++    [HttpGet]
++    [ProducesResponseType(StatusCodes.Status200OK)]
++    public async Task<IActionResult> GetPlaybackStats([FromRoute] Guid userId)
++    {
++        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
++
++        var stats = await dbContext.PlaybackActivity
++            .Where(p => p.UserId.Equals(userId))
++            .GroupBy(p => p.MediaType)
++            .Select(g => new
++            {
++                MediaType = g.Key,
++                TotalTicks = g.Sum(p => p.PlayedTicks),
++                PlayCount = g.Count()
++            })
++            .ToListAsync()
++            .ConfigureAwait(false);
++
++        return new OkObjectResult(stats);
++    }
++
++    /// <summary>
++    /// Gets playback statistics for a user, filtered by media type.
++    /// </summary>
++    /// <param name="userId">The user id.</param>
++    /// <param name="mediaType">The media type to filter by.</param>
++    /// <response code="200">Playback stats returned.</response>
++    /// <returns>Playback stats filtered by media type.</returns>
++    [HttpGet("{mediaType}")]
++    [ProducesResponseType(StatusCodes.Status200OK)]
++    public async Task<IActionResult> GetPlaybackStatsByType(
++        [FromRoute] Guid userId,
++        [FromRoute] string mediaType)
++    {
++        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
++
++        var stats = await dbContext.PlaybackActivity
++            .Where(p => p.UserId.Equals(userId) && p.MediaType == mediaType)
++            .GroupBy(p => p.ItemSubGroup)
++            .Select(g => new
++            {
++                SubGroup = g.Key,
++                TotalTicks = g.Sum(p => p.PlayedTicks),
++                PlayCount = g.Count()
++            })
++            .ToListAsync(CancellationToken.None)
++            .ConfigureAwait(false);
++
++        return new OkObjectResult(stats);
++    }
++}
+diff --git a/Jellyfin.Api/Controllers/ServerPlaybackStatsController.cs b/Jellyfin.Api/Controllers/ServerPlaybackStatsController.cs
+new file mode 100644
+index 0000000000..a8f3c2d1e4
+--- /dev/null
++++ b/Jellyfin.Api/Controllers/ServerPlaybackStatsController.cs
+@@ -0,0 +1,83 @@
++using System;
++using System.Linq;
++using System.Threading;
++using System.Threading.Tasks;
++using Jellyfin.Database.Implementations;
++using MediaBrowser.Common.Api;
++using Microsoft.AspNetCore.Authorization;
++using Microsoft.AspNetCore.Http;
++using Microsoft.AspNetCore.Mvc;
++using Microsoft.EntityFrameworkCore;
++
++namespace Jellyfin.Api.Controllers;
++
++/// <summary>
++/// Server-wide playback statistics controller.
++/// </summary>
++[ApiController]
++[Route("PlaybackStats")]
++[Authorize(Policy = Policies.RequiresElevation)]
++public class ServerPlaybackStatsController : BaseJellyfinApiController
++{
++    private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
++
++    /// <summary>
++    /// Initializes a new instance of the <see cref="ServerPlaybackStatsController"/> class.
++    /// </summary>
++    /// <param name="dbProvider">The database context factory.</param>
++    public ServerPlaybackStatsController(IDbContextFactory<JellyfinDbContext> dbProvider)
++    {
++        _dbProvider = dbProvider;
++    }
++
++    /// <summary>
++    /// Gets server-wide playback statistics grouped by media type.
++    /// </summary>
++    /// <response code="200">Playback stats returned.</response>
++    /// <returns>Playback stats grouped by media type.</returns>
++    [HttpGet]
++    [ProducesResponseType(StatusCodes.Status200OK)]
++    public async Task<IActionResult> GetPlaybackStats()
++    {
++        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
++
++        var stats = await dbContext.PlaybackActivity
++            .GroupBy(p => p.MediaType)
++            .Select(g => new
++            {
++                MediaType = g.Key,
++                TotalTicks = g.Sum(p => p.PlayedTicks),
++                PlayCount = g.Count()
++            })
++            .ToListAsync()
++            .ConfigureAwait(false);
++
++        return new OkObjectResult(stats);
++    }
++
++    /// <summary>
++    /// Gets playback statistics per user, grouped by media type.
++    /// </summary>
++    /// <response code="200">Playback stats returned.</response>
++    /// <returns>Playback stats grouped by user and media type.</returns>
++    [HttpGet("Users")]
++    [ProducesResponseType(StatusCodes.Status200OK)]
++    public async Task<IActionResult> GetPlaybackStatsByUser()
++    {
++        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
++
++        var stats = await dbContext.PlaybackActivity
++            .GroupBy(p => new { p.UserId, p.MediaType })
++            .Select(g => new
++            {
++                UserId = g.Key.UserId,
++                MediaType = g.Key.MediaType,
++                TotalTicks = g.Sum(p => p.PlayedTicks),
++                PlayCount = g.Count()
++            })
++            .ToListAsync()
++            .ConfigureAwait(false);
++
++        return new OkObjectResult(stats);
++    }
++}
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivity.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivity.cs
+new file mode 100644
+index 0000000000..317ebee90d
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivity.cs
+@@ -0,0 +1,49 @@
++using System;
++
++namespace Jellyfin.Database.Implementations.Entities;
++
++/// <summary>
++/// Represents a single playback session record.
++/// </summary>
++public class PlaybackActivity
++{
++    /// <summary>
++    /// Gets or sets the unique identifier.
++    /// </summary>
++    public Guid Id { get; set; }
++
++    /// <summary>
++    /// Gets or sets the user identifier.
++    /// </summary>
++    public Guid UserId { get; set; }
++
++    /// <summary>
++    /// Gets or sets the item identifier.
++    /// </summary>
++    public Guid ItemId { get; set; }
++
++    /// <summary>
++    /// Gets or sets the name of the item.
++    /// </summary>
++    public string ItemName { get; set; } = string.Empty;
++
++    /// <summary>
++    /// Gets or sets the media type (Movie, Episode, Book, Music Video, etc).
++    /// </summary>
++    public string MediaType { get; set; } = string.Empty;
++
++    /// <summary>
++    /// Gets or sets the playback duration in ticks.
++    /// </summary>
++    public long PlayedTicks { get; set; }
++
++    /// <summary>
++    /// Gets or sets the date the playback occurred.
++    /// </summary>
++    public DateTime DatePlayed { get; set; }
++
++    /// <summary>
++    /// Gets or sets the subgroup of the item (e.g. genre).
++    /// </summary>
++    public string ItemSubGroup { get; set; } = string.Empty;
++}
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
+index b0c12bf592..f440b1cb95 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
+@@ -173,6 +173,11 @@ public class JellyfinDbContext(DbContextOptions<JellyfinDbContext> options, ILog
+     /// </summary>
+     public DbSet<KeyframeData> KeyframeData => Set<KeyframeData>();
+ 
++    /// <summary>
++    /// Gets the <see cref="DbSet{TEntity}"/> containing the playback activity.
++    /// </summary>
++    public DbSet<PlaybackActivity> PlaybackActivity => Set<PlaybackActivity>();
++
+     /*public DbSet<Artwork> Artwork => Set<Artwork>();
+ 
+     public DbSet<Book> Books => Set<Book>();
+diff --git a/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs b/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
+index a5a67046d1..3a971a163d 100644
+--- a/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
++++ b/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
+@@ -1,5 +1,6 @@
+ using System;
+ using System.Threading.Tasks;
++using Jellyfin.Database.Implementations;
+ using Jellyfin.Database.Implementations.Entities;
+ using MediaBrowser.Controller;
+ using MediaBrowser.Controller.Configuration;
+@@ -36,7 +37,8 @@ public class SessionManagerTests
+             Mock.Of<IServerApplicationHost>(),
+             Mock.Of<IDeviceManager>(),
+             Mock.Of<IMediaSourceManager>(),
+-            Mock.Of<IHostApplicationLifetime>());
++            Mock.Of<IHostApplicationLifetime>(),
++            Mock.Of<IDbContextFactory<JellyfinDbContext>>());
+ 
+         await Assert.ThrowsAsync(exceptionType, () => sessionManager.GetAuthorizationToken(
+             new User("test", "default", "default"),
+@@ -63,7 +65,8 @@ public class SessionManagerTests
+             Mock.Of<IServerApplicationHost>(),
+             Mock.Of<IDeviceManager>(),
+             Mock.Of<IMediaSourceManager>(),
+-            Mock.Of<IHostApplicationLifetime>());
++            Mock.Of<IHostApplicationLifetime>(),
++            Mock.Of<IDbContextFactory<JellyfinDbContext>>());
+ 
+         await Assert.ThrowsAsync(exceptionType, () => sessionManager.AuthenticateNewSessionInternal(authenticationRequest, false));
+     }
