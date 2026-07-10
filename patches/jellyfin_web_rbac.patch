@@ -21,10 +21,10 @@ index ec3268aceb..3522432572 100644
  
 diff --git a/src/apps/dashboard/features/users/components/SSOMappings.tsx b/src/apps/dashboard/features/users/components/SSOMappings.tsx
 new file mode 100644
-index 0000000000..cdc0dd86f5
+index 0000000000..d657161f52
 --- /dev/null
 +++ b/src/apps/dashboard/features/users/components/SSOMappings.tsx
-@@ -0,0 +1,342 @@
+@@ -0,0 +1,399 @@
 +import React, { useEffect, useState, useCallback } from 'react';
 +import { useApi } from 'hooks/useApi';
 +import Box from '@mui/material/Box';
@@ -54,6 +54,7 @@ index 0000000000..cdc0dd86f5
 +    enableAllFolders: boolean;
 +    enabledFolders: string[];
 +    permissions: Record<string, boolean>;
++    blockUnratedItems: string[];
 +}
 +
 +interface LibraryFolder {
@@ -76,6 +77,16 @@ index 0000000000..cdc0dd86f5
 +    { key: 'EnableRemoteAccess', label: 'Enable Remote Access' }
 +];
 +
++const AVAILABLE_UNRATED_ITEMS = [
++    { key: 'Book', label: 'Books' },
++    { key: 'ChannelContent', label: 'Channels' },
++    { key: 'LiveTvChannel', label: 'Live TV' },
++    { key: 'Movie', label: 'Movies' },
++    { key: 'Music', label: 'Music' },
++    { key: 'Trailer', label: 'Trailers' },
++    { key: 'Series', label: 'Shows' }
++];
++
 +const SSOMappings = () => {
 +    const { __legacyApiClient__: apiClient } = useApi();
 +    const [ mappings, setMappings ] = useState<Mapping[]>([]);
@@ -90,6 +101,7 @@ index 0000000000..cdc0dd86f5
 +    const [ enableAllFolders, setEnableAllFolders ] = useState(true);
 +    const [ selectedFolders, setSelectedFolders ] = useState<string[]>([]);
 +    const [ selectedPermissions, setSelectedPermissions ] = useState<Record<string, boolean>>({});
++    const [ selectedUnratedItems, setSelectedUnratedItems ] = useState<string[]>([]);
 +
 +    const serverUrl = apiClient ? apiClient.serverAddress() : '';
 +    const token = apiClient ? apiClient.accessToken() : '';
@@ -116,7 +128,10 @@ index 0000000000..cdc0dd86f5
 +            const configData = await configRes.json();
 +            const libData = await libRes.json();
 +
-+            setMappings(configData || []);
++            setMappings((configData || []).map((m: Mapping) => ({
++                ...m,
++                blockUnratedItems: m.blockUnratedItems || []
++            })));
 +            setLibraries(libData || []);
 +        } catch (err: any) {
 +            setError(err.message || 'An error occurred.');
@@ -160,6 +175,7 @@ index 0000000000..cdc0dd86f5
 +        setEnableAllFolders(true);
 +        setSelectedFolders([]);
 +        setSelectedPermissions({});
++        setSelectedUnratedItems([]);
 +        setIsDialogOpen(true);
 +    };
 +
@@ -170,6 +186,7 @@ index 0000000000..cdc0dd86f5
 +        setEnableAllFolders(mapping.enableAllFolders);
 +        setSelectedFolders(mapping.enabledFolders || []);
 +        setSelectedPermissions(mapping.permissions || {});
++        setSelectedUnratedItems(mapping.blockUnratedItems || []);
 +        setIsDialogOpen(true);
 +    };
 +
@@ -189,7 +206,8 @@ index 0000000000..cdc0dd86f5
 +            oidcGroup: groupName.trim(),
 +            enableAllFolders,
 +            enabledFolders: enableAllFolders ? [] : selectedFolders,
-+            permissions: selectedPermissions
++            permissions: selectedPermissions,
++            blockUnratedItems: selectedUnratedItems
 +        };
 +
 +        let updated: Mapping[];
@@ -214,6 +232,12 @@ index 0000000000..cdc0dd86f5
 +            ...prev,
 +            [key]: !prev[key]
 +        }));
++    };
++
++    const handleUnratedItemToggle = (key: string) => {
++        setSelectedUnratedItems(prev =>
++            prev.includes(key) ? prev.filter(k => k !== key) : [ ...prev, key ]
++        );
 +    };
 +
 +    if (loading) {
@@ -275,6 +299,13 @@ index 0000000000..cdc0dd86f5
 +                                        {AVAILABLE_PERMISSIONS
 +                                            .filter(p => mapping.permissions[p.key])
 +                                            .map(p => p.label)
++                                            .join(', ') || 'None'}
++                                    </Typography>
++                                    <Typography variant='body2' color='textSecondary'>
++                                        <strong>Block Unrated:</strong>{' '}
++                                        {AVAILABLE_UNRATED_ITEMS
++                                            .filter(i => (mapping.blockUnratedItems || []).includes(i.key))
++                                            .map(i => i.label)
 +                                            .join(', ') || 'None'}
 +                                    </Typography>
 +                                </Stack>
@@ -347,6 +378,32 @@ index 0000000000..cdc0dd86f5
 +                                                    />
 +                                                }
 +                                                label={perm.label}
++                                            />
++                                        </Grid>
++                                    ))}
++                                </Grid>
++                            </FormGroup>
++                        </Box>
++
++                        <Divider />
++
++                        <Box>
++                            <Typography variant='subtitle1' sx={{ fontWeight: 600, mb: 1 }}>Block Unrated Items</Typography>
++                            <Typography variant='body2' color='textSecondary' sx={{ mb: 1 }}>
++                                Hide media with no or unrecognised rating information for these types.
++                            </Typography>
++                            <FormGroup>
++                                <Grid container spacing={1}>
++                                    {AVAILABLE_UNRATED_ITEMS.map(item => (
++                                        <Grid size={{ xs: 6, sm: 4 }} key={item.key}>
++                                            <FormControlLabel
++                                                control={
++                                                    <Checkbox
++                                                        checked={selectedUnratedItems.includes(item.key)}
++                                                        onChange={() => handleUnratedItemToggle(item.key)}
++                                                    />
++                                                }
++                                                label={item.label}
 +                                            />
 +                                        </Grid>
 +                                    ))}

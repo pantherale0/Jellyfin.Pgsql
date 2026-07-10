@@ -11,6 +11,9 @@
       "firstName": "Admin",
       "lastName": "User",
       "email": "admin@example.com",
+      "attributes": {
+        "birthdate": ["1990-01-01"]
+      },
       "credentials": [
         {
           "type": "password",
@@ -29,6 +32,9 @@
       "firstName": "Kids",
       "lastName": "User",
       "email": "kids@example.com",
+      "attributes": {
+        "birthdate": ["2015-06-15"]
+      },
       "credentials": [
         {
           "type": "password",
@@ -77,6 +83,20 @@
             "id.token.claim": "true",
             "access.token.claim": "true",
             "claim.name": "groups",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "birthdate",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "birthdate",
+            "claim.name": "birthdate",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
             "userinfo.token.claim": "true"
           }
         }
