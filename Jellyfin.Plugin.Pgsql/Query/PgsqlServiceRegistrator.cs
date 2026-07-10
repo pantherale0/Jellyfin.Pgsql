@@ -1,5 +1,6 @@
 using System;
 using Jellyfin.Database.Implementations;
+using Jellyfin.Plugin.Pgsql.PlaybackReportingImport;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Controller.Plugins;
@@ -61,6 +62,9 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
             sp.GetRequiredService<PgLatestQueryService>(),
             sp.GetRequiredService<QueryRuntimeStats>(),
             sp.GetRequiredService<ILoggerFactory>().CreateLogger<CachingItemRepository>()));
+
+        serviceCollection.AddSingleton<PlaybackReportingImporter>();
+        serviceCollection.AddHostedService<PlaybackReportingMigrationService>();
     }
 
     private static IQueryResultCache CreateCache(IServiceProvider serviceProvider)

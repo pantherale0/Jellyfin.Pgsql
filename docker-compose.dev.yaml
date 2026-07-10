@@ -41,6 +41,11 @@ services:
       - JELLYFIN_SSO_OIDC_ADMIN_ROLE=jellyfin_admin
       - JELLYFIN_SSO_OIDC_BIRTHDATE_CLAIM=birthdate
       - JELLYFIN_SSO_OIDC_CREATE_USERS=true
+
+      # Optional one-time import from Playback Reporting plugin SQLite (/config/data/playback_reporting.db)
+      # - MIGRATE_PLAYBACK_REPORTING=true
+      # - PLAYBACK_REPORTING_TSV=/config/data/PlaybackReportingBackup.tsv  # alternative to SQLite
+      # Re-run with dedup: MIGRATE_PLAYBACK_REPORTING=force
     volumes:
       - ./dev-env/config:/config
       - ./dev-env/cache:/cache
