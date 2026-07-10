@@ -60,11 +60,12 @@ index 0000000000..eec7f3e103
 +export default ReportsDrawerSection;
 diff --git a/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts b/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts
 new file mode 100644
-index 0000000000..6afeb0fc43
+index 0000000000..e3230559b0
 --- /dev/null
 +++ b/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts
-@@ -0,0 +1,56 @@
-+import type { ApiClient } from 'jellyfin-apiclient';
+@@ -0,0 +1,48 @@
++import type { Api } from '@jellyfin/sdk';
++import type { AxiosRequestConfig } from 'axios';
 +
 +import type {
 +    PlaybackStatRow,
@@ -72,62 +73,54 @@ index 0000000000..6afeb0fc43
 +    PlaybackUserStatRow
 +} from '../types';
 +
-+const getAuthHeaders = (apiClient: ApiClient) => ({
-+    'X-MediaBrowser-Token': apiClient.accessToken(),
-+    'Content-Type': 'application/json'
-+});
-+
-+const fetchJson = async <T>(url: string, apiClient: ApiClient): Promise<T> => {
-+    const token = apiClient.accessToken();
-+    const response = await fetch(`${url}?api_key=${token}`, {
-+        headers: getAuthHeaders(apiClient)
-+    });
-+
-+    if (!response.ok) {
-+        throw new Error(`Request failed: ${response.status}`);
-+    }
-+
-+    return response.json();
++const fetchJson = async <T>(
++    api: Api,
++    path: string,
++    options?: AxiosRequestConfig
++): Promise<T> => {
++    const response = await api.axiosInstance.get<T>(path, options);
++    return response.data;
 +};
 +
 +export const fetchUserPlaybackStats = (
-+    apiClient: ApiClient,
-+    userId: string
++    api: Api,
++    userId: string,
++    options?: AxiosRequestConfig
 +): Promise<PlaybackStatRow[]> => fetchJson(
-+    `${apiClient.serverAddress()}/Users/${userId}/PlaybackStats`,
-+    apiClient
++    api,
++    `/Users/${userId}/PlaybackStats`,
++    options
 +);
 +
 +export const fetchUserPlaybackStatsByType = (
-+    apiClient: ApiClient,
++    api: Api,
 +    userId: string,
-+    mediaType: string
++    mediaType: string,
++    options?: AxiosRequestConfig
 +): Promise<PlaybackSubGroupStatRow[]> => fetchJson(
-+    `${apiClient.serverAddress()}/Users/${userId}/PlaybackStats/${encodeURIComponent(mediaType)}`,
-+    apiClient
++    api,
++    `/Users/${userId}/PlaybackStats/${encodeURIComponent(mediaType)}`,
++    options
 +);
 +
 +export const fetchServerPlaybackStats = (
-+    apiClient: ApiClient
-+): Promise<PlaybackStatRow[]> => fetchJson(
-+    `${apiClient.serverAddress()}/PlaybackStats`,
-+    apiClient
-+);
++    api: Api,
++    options?: AxiosRequestConfig
++): Promise<PlaybackStatRow[]> => fetchJson(api, '/PlaybackStats', options);
 +
 +export const fetchServerPlaybackStatsByUser = (
-+    apiClient: ApiClient
-+): Promise<PlaybackUserStatRow[]> => fetchJson(
-+    `${apiClient.serverAddress()}/PlaybackStats/Users`,
-+    apiClient
-+);
++    api: Api,
++    options?: AxiosRequestConfig
++): Promise<PlaybackUserStatRow[]> => fetchJson(api, '/PlaybackStats/Users', options);
 diff --git a/src/apps/dashboard/features/playbackStatistics/api/usePlaybackStats.ts b/src/apps/dashboard/features/playbackStatistics/api/usePlaybackStats.ts
 new file mode 100644
-index 0000000000..e2727eb21a
+index 0000000000..9c99c2741e
 --- /dev/null
 +++ b/src/apps/dashboard/features/playbackStatistics/api/usePlaybackStats.ts
-@@ -0,0 +1,148 @@
-+import { useCallback, useEffect, useState } from 'react';
-+import type { ApiClient } from 'jellyfin-apiclient';
+@@ -0,0 +1,57 @@
++import { useQuery } from '@tanstack/react-query';
++
++import { useApi } from 'hooks/useApi';
 +
 +import {
 +    fetchServerPlaybackStats,
@@ -135,145 +128,53 @@ index 0000000000..e2727eb21a
 +    fetchUserPlaybackStats,
 +    fetchUserPlaybackStatsByType
 +} from './playbackStatsApi';
-+import type {
-+    PlaybackStatRow,
-+    PlaybackSubGroupStatRow,
-+    PlaybackUserStatRow
-+} from '../types';
 +
-+interface FetchState<T> {
-+    data: T;
-+    isLoading: boolean;
-+    isError: boolean;
-+    error: string | null;
-+    refetch: () => void;
-+}
++export const useUserPlaybackStats = (userId: string) => {
++    const { api } = useApi();
 +
-+const usePlaybackFetch = <T>(
-+    apiClient: ApiClient | undefined,
-+    fetcher: (client: ApiClient) => Promise<T>,
-+    initialData: T
-+): FetchState<T> => {
-+    const [ data, setData ] = useState<T>(initialData);
-+    const [ isLoading, setIsLoading ] = useState(true);
-+    const [ isError, setIsError ] = useState(false);
-+    const [ error, setError ] = useState<string | null>(null);
-+    const [ fetchKey, setFetchKey ] = useState(0);
-+
-+    const refetch = useCallback(() => {
-+        setFetchKey(key => key + 1);
-+    }, []);
-+
-+    useEffect(() => {
-+        if (!apiClient) {
-+            setIsLoading(false);
-+            return;
-+        }
-+
-+        let cancelled = false;
-+
-+        const load = async () => {
-+            setIsLoading(true);
-+            setIsError(false);
-+            setError(null);
-+
-+            try {
-+                const result = await fetcher(apiClient);
-+                if (!cancelled) {
-+                    setData(result);
-+                }
-+            } catch (err) {
-+                if (!cancelled) {
-+                    setIsError(true);
-+                    setError(err instanceof Error ? err.message : 'An error occurred.');
-+                }
-+            } finally {
-+                if (!cancelled) {
-+                    setIsLoading(false);
-+                }
-+            }
-+        };
-+
-+        load();
-+
-+        return () => {
-+            cancelled = true;
-+        };
-+    }, [ apiClient, fetcher, fetchKey ]);
-+
-+    return { data, isLoading, isError, error, refetch };
++    return useQuery({
++        queryKey: [ 'PlaybackStats', 'user', userId ],
++        queryFn: ({ signal }) => fetchUserPlaybackStats(api!, userId, { signal }),
++        enabled: !!api && !!userId,
++        refetchOnMount: false
++    });
 +};
 +
-+export const useUserPlaybackStats = (
-+    apiClient: ApiClient | undefined,
-+    userId: string
-+) => usePlaybackFetch<PlaybackStatRow[]>(
-+    apiClient,
-+    client => fetchUserPlaybackStats(client, userId),
-+    []
-+);
-+
 +export const useUserPlaybackStatsByType = (
-+    apiClient: ApiClient | undefined,
 +    userId: string,
 +    mediaType: string | null
 +) => {
-+    const [ data, setData ] = useState<PlaybackSubGroupStatRow[]>([]);
-+    const [ isLoading, setIsLoading ] = useState(false);
-+    const [ isError, setIsError ] = useState(false);
-+    const [ error, setError ] = useState<string | null>(null);
++    const { api } = useApi();
 +
-+    useEffect(() => {
-+        if (!apiClient || !mediaType) {
-+            setData([]);
-+            return;
-+        }
-+
-+        let cancelled = false;
-+
-+        const load = async () => {
-+            setIsLoading(true);
-+            setIsError(false);
-+            setError(null);
-+
-+            try {
-+                const result = await fetchUserPlaybackStatsByType(apiClient, userId, mediaType);
-+                if (!cancelled) {
-+                    setData(result);
-+                }
-+            } catch (err) {
-+                if (!cancelled) {
-+                    setIsError(true);
-+                    setError(err instanceof Error ? err.message : 'An error occurred.');
-+                }
-+            } finally {
-+                if (!cancelled) {
-+                    setIsLoading(false);
-+                }
-+            }
-+        };
-+
-+        load();
-+
-+        return () => {
-+            cancelled = true;
-+        };
-+    }, [ apiClient, userId, mediaType ]);
-+
-+    return { data, isLoading, isError, error };
++    return useQuery({
++        queryKey: [ 'PlaybackStats', 'user', userId, mediaType ],
++        queryFn: ({ signal }) => fetchUserPlaybackStatsByType(api!, userId, mediaType!, { signal }),
++        enabled: !!api && !!userId && !!mediaType,
++        refetchOnMount: false
++    });
 +};
 +
-+export const useServerPlaybackStats = (apiClient: ApiClient | undefined) => usePlaybackFetch<PlaybackStatRow[]>(
-+    apiClient,
-+    fetchServerPlaybackStats,
-+    []
-+);
++export const useServerPlaybackStats = () => {
++    const { api } = useApi();
 +
-+export const useServerPlaybackStatsByUser = (apiClient: ApiClient | undefined) => usePlaybackFetch<PlaybackUserStatRow[]>(
-+    apiClient,
-+    fetchServerPlaybackStatsByUser,
-+    []
-+);
++    return useQuery({
++        queryKey: [ 'PlaybackStats', 'server' ],
++        queryFn: ({ signal }) => fetchServerPlaybackStats(api!, { signal }),
++        enabled: !!api,
++        refetchOnMount: false
++    });
++};
++
++export const useServerPlaybackStatsByUser = () => {
++    const { api } = useApi();
++
++    return useQuery({
++        queryKey: [ 'PlaybackStats', 'server', 'users' ],
++        queryFn: ({ signal }) => fetchServerPlaybackStatsByUser(api!, { signal }),
++        enabled: !!api,
++        refetchOnMount: false
++    });
++};
 diff --git a/src/apps/dashboard/features/playbackStatistics/types.ts b/src/apps/dashboard/features/playbackStatistics/types.ts
 new file mode 100644
 index 0000000000..179f4c7244
@@ -332,10 +233,10 @@ index 0000000000..fb7a7ecf13
 +};
 diff --git a/src/apps/dashboard/features/users/components/UserPlaybackStats.tsx b/src/apps/dashboard/features/users/components/UserPlaybackStats.tsx
 new file mode 100644
-index 0000000000..894e1719c5
+index 0000000000..ad6c78d039
 --- /dev/null
 +++ b/src/apps/dashboard/features/users/components/UserPlaybackStats.tsx
-@@ -0,0 +1,144 @@
+@@ -0,0 +1,142 @@
 +import React, { useCallback, useMemo, useState } from 'react';
 +import Alert from '@mui/material/Alert';
 +import Box from '@mui/material/Box';
@@ -350,7 +251,6 @@ index 0000000000..894e1719c5
 +import TableHead from '@mui/material/TableHead';
 +import TableRow from '@mui/material/TableRow';
 +import Typography from '@mui/material/Typography';
-+import { useApi } from 'hooks/useApi';
 +import globalize from 'lib/globalize';
 +
 +import { useUserPlaybackStats, useUserPlaybackStatsByType } from 'apps/dashboard/features/playbackStatistics/api/usePlaybackStats';
@@ -361,15 +261,14 @@ index 0000000000..894e1719c5
 +}
 +
 +const UserPlaybackStats = ({ userId }: UserPlaybackStatsProps) => {
-+    const { __legacyApiClient__: apiClient } = useApi();
-+    const { data: stats, isLoading, isError, error } = useUserPlaybackStats(apiClient, userId);
++    const { data: stats = [], isLoading, isError, error } = useUserPlaybackStats(userId);
 +    const [ expandedMediaType, setExpandedMediaType ] = useState<string | null>(null);
 +    const {
-+        data: subGroupStats,
++        data: subGroupStats = [],
 +        isLoading: isSubGroupLoading,
 +        isError: isSubGroupError,
 +        error: subGroupError
-+    } = useUserPlaybackStatsByType(apiClient, userId, expandedMediaType);
++    } = useUserPlaybackStatsByType(userId, expandedMediaType);
 +
 +    const totals = useMemo(() => stats.reduce((acc, row) => ({
 +        totalTicks: acc.totalTicks + row.TotalTicks,
@@ -389,7 +288,7 @@ index 0000000000..894e1719c5
 +    }
 +
 +    if (isError) {
-+        return <Alert severity='error'>{error}</Alert>;
++        return <Alert severity='error'>{error?.message}</Alert>;
 +    }
 +
 +    if (stats.length === 0) {
@@ -440,7 +339,7 @@ index 0000000000..894e1719c5
 +                                        <Collapse in={expandedMediaType === row.MediaType} timeout='auto' unmountOnExit>
 +                                            <Box py={2} pl={2}>
 +                                                {isSubGroupLoading && <CircularProgress size={24} />}
-+                                                {isSubGroupError && <Alert severity='error'>{subGroupError}</Alert>}
++                                                {isSubGroupError && <Alert severity='error'>{subGroupError?.message}</Alert>}
 +                                                {!isSubGroupLoading && !isSubGroupError && subGroupStats.length === 0 && (
 +                                                    <Typography variant='body2' color='text.secondary'>
 +                                                        {globalize.translate('PlaybackStatsEmpty')}
@@ -506,10 +405,10 @@ index e8411bdc27..425be2f9d6 100644
      { path: 'users', type: AppType.Dashboard },
 diff --git a/src/apps/dashboard/routes/reports/playback.tsx b/src/apps/dashboard/routes/reports/playback.tsx
 new file mode 100644
-index 0000000000..5c8fe0319d
+index 0000000000..377e455aa4
 --- /dev/null
 +++ b/src/apps/dashboard/routes/reports/playback.tsx
-@@ -0,0 +1,196 @@
+@@ -0,0 +1,194 @@
 +import React, { useMemo } from 'react';
 +import Alert from '@mui/material/Alert';
 +import Box from '@mui/material/Box';
@@ -520,7 +419,6 @@ index 0000000000..5c8fe0319d
 +import Typography from '@mui/material/Typography';
 +import { type MRT_ColumnDef, type MRT_TableOptions, useMaterialReactTable } from 'material-react-table';
 +import { Link as RouterLink } from 'react-router-dom';
-+import { useApi } from 'hooks/useApi';
 +import { useUsersDetails } from 'hooks/useUsers';
 +import globalize from 'lib/globalize';
 +
@@ -566,19 +464,18 @@ index 0000000000..5c8fe0319d
 +};
 +
 +export const Component = () => {
-+    const { __legacyApiClient__: apiClient } = useApi();
 +    const {
-+        data: serverStats,
++        data: serverStats = [],
 +        isLoading: isServerStatsLoading,
 +        isError: isServerStatsError,
 +        error: serverStatsError
-+    } = useServerPlaybackStats(apiClient);
++    } = useServerPlaybackStats();
 +    const {
-+        data: userStats,
++        data: userStats = [],
 +        isLoading: isUserStatsLoading,
 +        isError: isUserStatsError,
 +        error: userStatsError
-+    } = useServerPlaybackStatsByUser(apiClient);
++    } = useServerPlaybackStatsByUser();
 +    const {
 +        usersById: users,
 +        isLoading: isUsersLoading,
@@ -661,7 +558,7 @@ index 0000000000..5c8fe0319d
 +
 +    const isLoading = isServerStatsLoading || isUserStatsLoading || isUsersLoading;
 +    const isError = isServerStatsError || isUserStatsError || isUsersError;
-+    const errorMessage = serverStatsError || userStatsError || globalize.translate('PlaybackStatsLoadError');
++    const errorMessage = serverStatsError?.message || userStatsError?.message || globalize.translate('PlaybackStatsLoadError');
 +
 +    if (isLoading) {
 +        return (
