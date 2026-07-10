@@ -1,12 +1,13 @@
 diff --git a/Jellyfin.Api/Controllers/SSOController.cs b/Jellyfin.Api/Controllers/SSOController.cs
 new file mode 100644
-index 0000000000..3f84804656
+index 0000000000..adc3da50b7
 --- /dev/null
 +++ b/Jellyfin.Api/Controllers/SSOController.cs
-@@ -0,0 +1,668 @@
+@@ -0,0 +1,776 @@
 +using System;
 +using System.Collections.Concurrent;
 +using System.Collections.Generic;
++using System.Globalization;
 +using System.IO;
 +using System.Linq;
 +using System.Net.Http;
@@ -14,6 +15,7 @@ index 0000000000..3f84804656
 +using Jellyfin.Api.Constants;
 +using Jellyfin.Api.Results;
 +using Jellyfin.Data;
++using Jellyfin.Data.Enums;
 +using Jellyfin.Database.Implementations.Entities;
 +using Jellyfin.Database.Implementations.Enums;
 +using MediaBrowser.Common.Api;
@@ -352,6 +354,12 @@ index 0000000000..3f84804656
 +                await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
 +            }
 +
++            // Apply parental rating from birthdate claim (age → MaxParentalRatingScore)
++            if (TryApplyParentalRatingFromBirthdate(user, root, username))
++            {
++                await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
++            }
++
 +            // Apply Role Mapping (RBAC)
 +            bool shouldBeAdmin = roles.Contains(adminRole, StringComparer.OrdinalIgnoreCase);
 +            bool currentIsAdmin = user.HasPermission(PermissionKind.IsAdministrator);
@@ -382,6 +390,7 @@ index 0000000000..3f84804656
 +                        bool enableAllFolders = false;
 +                        var enabledFoldersList = new HashSet<Guid>();
 +                        var permissionValues = new Dictionary<PermissionKind, bool>();
++                        var blockUnratedItems = new HashSet<UnratedItem>();
 +
 +                        foreach (var mapping in rbacDoc.RootElement.EnumerateArray())
 +                        {
@@ -427,6 +436,18 @@ index 0000000000..3f84804656
 +                                            }
 +                                        }
 +                                    }
++
++                                    if (mapping.TryGetProperty("blockUnratedItems", out var unratedEl) && unratedEl.ValueKind == System.Text.Json.JsonValueKind.Array)
++                                    {
++                                        foreach (var itemEl in unratedEl.EnumerateArray())
++                                        {
++                                            var itemStr = itemEl.GetString();
++                                            if (!string.IsNullOrEmpty(itemStr) && Enum.TryParse<UnratedItem>(itemStr, true, out var unratedItem))
++                                            {
++                                                blockUnratedItems.Add(unratedItem);
++                                            }
++                                        }
++                                    }
 +                                }
 +                            }
 +                        }
@@ -436,6 +457,7 @@ index 0000000000..3f84804656
 +                            _logger.LogInformation("SSO Applying RBAC mappings for user '{Username}'", username);
 +                            user.SetPermission(PermissionKind.EnableAllFolders, enableAllFolders);
 +                            user.SetPreference(PreferenceKind.EnabledFolders, enabledFoldersList.ToArray());
++                            user.SetPreference(PreferenceKind.BlockUnratedItems, blockUnratedItems.ToArray());
 +
 +                            foreach (var kvp in permissionValues)
 +                            {
@@ -670,5 +692,91 @@ index 0000000000..3f84804656
 +            id = f.ItemId
 +        });
 +        return Ok(result);
++    }
++
++    /// <summary>
++    /// Maps an OIDC birthdate claim to the user's max parental rating score.
++    /// Ages 18+ clear the limit (unrestricted). Missing/invalid claims leave the user unchanged.
++    /// </summary>
++    /// <returns><c>true</c> if the user policy was updated.</returns>
++    private bool TryApplyParentalRatingFromBirthdate(User user, System.Text.Json.JsonElement root, string username)
++    {
++        var birthdateClaim = GetEnv("JELLYFIN_SSO_OIDC_BIRTHDATE_CLAIM", "birthdate");
++        if (!root.TryGetProperty(birthdateClaim, out var birthdateEl))
++        {
++            return false;
++        }
++
++        var birthdateStr = birthdateEl.GetString();
++        if (string.IsNullOrWhiteSpace(birthdateStr))
++        {
++            return false;
++        }
++
++        if (!TryParseBirthdate(birthdateStr, out var birthdate))
++        {
++            _logger.LogWarning(
++                "SSO Could not parse birthdate claim '{Claim}' value '{Value}' for user '{Username}'",
++                birthdateClaim,
++                birthdateStr,
++                username);
++            return false;
++        }
++
++        var age = GetAgeInYears(birthdate, DateTime.UtcNow.Date);
++        if (age < 0)
++        {
++            _logger.LogWarning(
++                "SSO Birthdate claim for user '{Username}' is in the future ({Birthdate})",
++                username,
++                birthdate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
++            return false;
++        }
++
++        // Jellyfin parental rating scores are age-aligned; 18+ means unrestricted.
++        const int adultAge = 18;
++        int? maxScore = age >= adultAge ? null : age;
++
++        if (user.MaxParentalRatingScore == maxScore && user.MaxParentalRatingSubScore is null)
++        {
++            return false;
++        }
++
++        user.MaxParentalRatingScore = maxScore;
++        user.MaxParentalRatingSubScore = null;
++        _logger.LogInformation(
++            "SSO Setting max parental rating for user '{Username}' from birthdate (age {Age}) to {MaxScore}",
++            username,
++            age,
++            maxScore?.ToString(CultureInfo.InvariantCulture) ?? "unrestricted");
++        return true;
++    }
++
++    private static bool TryParseBirthdate(string value, out DateTime birthdate)
++    {
++        value = value.Trim().Trim('"');
++
++        if (DateTime.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out birthdate))
++        {
++            return true;
++        }
++
++        if (DateTime.TryParseExact(value, "yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out birthdate))
++        {
++            return true;
++        }
++
++        return DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AllowWhiteSpaces, out birthdate);
++    }
++
++    private static int GetAgeInYears(DateTime birthdate, DateTime asOf)
++    {
++        var age = asOf.Year - birthdate.Year;
++        if (birthdate.Date > asOf.AddYears(-age))
++        {
++            age--;
++        }
++
++        return age;
 +    }
 +}

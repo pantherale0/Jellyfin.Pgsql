@@ -8,8 +8,8 @@
 # docker compose -f docker-compose.dev.yaml up --build
 #
 # Test users imported into Keycloak:
-# 1. Administrator: admin_user / password (grants Jellyfin Admin role)
-# 2. Regular User: kids_user / password (maps to restricted library mappings)
+# 1. Administrator: admin_user / password (grants Jellyfin Admin role; birthdate 1990-01-01 → unrestricted)
+# 2. Regular User: kids_user / password (maps to restricted library mappings; birthdate 2015-06-15 → age-based max rating)
 
 services:
   jellyfin:
@@ -39,10 +39,12 @@ services:
       - JELLYFIN_SSO_OIDC_USERNAME_CLAIM=preferred_username
       - JELLYFIN_SSO_OIDC_ROLES_CLAIM=groups
       - JELLYFIN_SSO_OIDC_ADMIN_ROLE=jellyfin_admin
+      - JELLYFIN_SSO_OIDC_BIRTHDATE_CLAIM=birthdate
       - JELLYFIN_SSO_OIDC_CREATE_USERS=true
     volumes:
       - ./dev-env/config:/config
       - ./dev-env/cache:/cache
+      - ./dev-env/media:/media
     restart: unless-stopped
 
   postgres:

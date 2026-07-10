@@ -86,6 +86,7 @@ The custom Docker image supports built-in Single Sign-On (SSO) using OpenID Conn
 *   **Forced SSO Redirection**: When configured, the browser client automatically redirects users to your OIDC provider for login.
 *   **Emergency Bypass**: For emergency local administration (e.g. if the identity provider is offline), you can append `?local=true` to the URL (e.g. `http://jellyfin/web/index.html#!/login.html?local=true`) to bypass the redirect and show the local login form.
 *   **Auto-creation & RBAC**: Users successfully authenticated via OIDC are automatically created if they do not exist. If they possess the configured OIDC admin role, they are granted Administrator privileges (and administrative permissions are synced dynamically upon each login).
+*   **Parental controls from claims**: When a birthdate claim is present, the user's max parental rating is set from their age (Jellyfin rating scores are age-aligned). Ages 18+ are unrestricted. Block-unrated item types can be assigned per OIDC group in **Dashboard → Users → SSO Mappings**.
 *   **Client Compatibility**: Native surfaces that do not support web redirects (like smart TVs and game consoles) can pair with an active web session using Jellyfin's standard **Quick Connect** feature.
 
 ### Configuration
@@ -101,6 +102,7 @@ Configure the OIDC integration using the following environment variables in your
 | `JELLYFIN_SSO_OIDC_USERNAME_CLAIM` | `preferred_username` | The claim containing the user's Jellyfin username |
 | `JELLYFIN_SSO_OIDC_ROLES_CLAIM` | `groups` | The claim containing user groups/roles |
 | `JELLYFIN_SSO_OIDC_ADMIN_ROLE` | `jellyfin_admin` | The role/group name that grants Administrator privileges in Jellyfin |
+| `JELLYFIN_SSO_OIDC_BIRTHDATE_CLAIM` | `birthdate` | The claim containing the user's date of birth (`YYYY-MM-DD`). Used to set max parental rating from age on each login. Missing/invalid values leave the existing rating unchanged. |
 | `JELLYFIN_SSO_OIDC_CREATE_USERS` | `true` | Set to `false` to disable auto-creation of new users |
 
 ### How it is Built
