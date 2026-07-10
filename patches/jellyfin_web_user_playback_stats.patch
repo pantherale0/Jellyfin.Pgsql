@@ -1,0 +1,807 @@
+diff --git a/src/apps/dashboard/components/drawer/AppDrawer.tsx b/src/apps/dashboard/components/drawer/AppDrawer.tsx
+index 1b03f58fe5..5c322415e6 100644
+--- a/src/apps/dashboard/components/drawer/AppDrawer.tsx
++++ b/src/apps/dashboard/components/drawer/AppDrawer.tsx
+@@ -6,6 +6,7 @@ import DrawerHeaderLink from 'apps/experimental/components/drawers/DrawerHeaderL
+ import ResponsiveDrawer, { ResponsiveDrawerProps } from 'components/ResponsiveDrawer';
+ 
+ import ServerDrawerSection from './sections/ServerDrawerSection';
++import ReportsDrawerSection from './sections/ReportsDrawerSection';
+ import DevicesDrawerSection from './sections/DevicesDrawerSection';
+ import LiveTvDrawerSection from './sections/LiveTvDrawerSection';
+ import AdvancedDrawerSection from './sections/AdvancedDrawerSection';
+@@ -27,6 +28,7 @@ const AppDrawer: FC<ResponsiveDrawerProps> = ({
+             </ListItem>
+         </List>
+         <ServerDrawerSection />
++        <ReportsDrawerSection />
+         <DevicesDrawerSection />
+         <LiveTvDrawerSection />
+         <PluginDrawerSection />
+diff --git a/src/apps/dashboard/components/drawer/sections/ReportsDrawerSection.tsx b/src/apps/dashboard/components/drawer/sections/ReportsDrawerSection.tsx
+new file mode 100644
+index 0000000000..eec7f3e103
+--- /dev/null
++++ b/src/apps/dashboard/components/drawer/sections/ReportsDrawerSection.tsx
+@@ -0,0 +1,34 @@
++import BarChart from '@mui/icons-material/BarChart';
++import List from '@mui/material/List';
++import ListItem from '@mui/material/ListItem';
++import ListItemIcon from '@mui/material/ListItemIcon';
++import ListItemText from '@mui/material/ListItemText';
++import ListSubheader from '@mui/material/ListSubheader';
++import React from 'react';
++
++import ListItemLink from 'components/ListItemLink';
++import globalize from 'lib/globalize';
++
++const ReportsDrawerSection = () => {
++    return (
++        <List
++            aria-labelledby='reports-subheader'
++            subheader={
++                <ListSubheader component='div' id='reports-subheader'>
++                    {globalize.translate('HeaderReports')}
++                </ListSubheader>
++            }
++        >
++            <ListItem disablePadding>
++                <ListItemLink to='/dashboard/reports/playback'>
++                    <ListItemIcon>
++                        <BarChart />
++                    </ListItemIcon>
++                    <ListItemText primary={globalize.translate('HeaderPlaybackStatistics')} />
++                </ListItemLink>
++            </ListItem>
++        </List>
++    );
++};
++
++export default ReportsDrawerSection;
+diff --git a/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts b/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts
+new file mode 100644
+index 0000000000..6afeb0fc43
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts
+@@ -0,0 +1,56 @@
++import type { ApiClient } from 'jellyfin-apiclient';
++
++import type {
++    PlaybackStatRow,
++    PlaybackSubGroupStatRow,
++    PlaybackUserStatRow
++} from '../types';
++
++const getAuthHeaders = (apiClient: ApiClient) => ({
++    'X-MediaBrowser-Token': apiClient.accessToken(),
++    'Content-Type': 'application/json'
++});
++
++const fetchJson = async <T>(url: string, apiClient: ApiClient): Promise<T> => {
++    const token = apiClient.accessToken();
++    const response = await fetch(`${url}?api_key=${token}`, {
++        headers: getAuthHeaders(apiClient)
++    });
++
++    if (!response.ok) {
++        throw new Error(`Request failed: ${response.status}`);
++    }
++
++    return response.json();
++};
++
++export const fetchUserPlaybackStats = (
++    apiClient: ApiClient,
++    userId: string
++): Promise<PlaybackStatRow[]> => fetchJson(
++    `${apiClient.serverAddress()}/Users/${userId}/PlaybackStats`,
++    apiClient
++);
++
++export const fetchUserPlaybackStatsByType = (
++    apiClient: ApiClient,
++    userId: string,
++    mediaType: string
++): Promise<PlaybackSubGroupStatRow[]> => fetchJson(
++    `${apiClient.serverAddress()}/Users/${userId}/PlaybackStats/${encodeURIComponent(mediaType)}`,
++    apiClient
++);
++
++export const fetchServerPlaybackStats = (
++    apiClient: ApiClient
++): Promise<PlaybackStatRow[]> => fetchJson(
++    `${apiClient.serverAddress()}/PlaybackStats`,
++    apiClient
++);
++
++export const fetchServerPlaybackStatsByUser = (
++    apiClient: ApiClient
++): Promise<PlaybackUserStatRow[]> => fetchJson(
++    `${apiClient.serverAddress()}/PlaybackStats/Users`,
++    apiClient
++);
+diff --git a/src/apps/dashboard/features/playbackStatistics/api/usePlaybackStats.ts b/src/apps/dashboard/features/playbackStatistics/api/usePlaybackStats.ts
+new file mode 100644
+index 0000000000..e2727eb21a
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/api/usePlaybackStats.ts
+@@ -0,0 +1,148 @@
++import { useCallback, useEffect, useState } from 'react';
++import type { ApiClient } from 'jellyfin-apiclient';
++
++import {
++    fetchServerPlaybackStats,
++    fetchServerPlaybackStatsByUser,
++    fetchUserPlaybackStats,
++    fetchUserPlaybackStatsByType
++} from './playbackStatsApi';
++import type {
++    PlaybackStatRow,
++    PlaybackSubGroupStatRow,
++    PlaybackUserStatRow
++} from '../types';
++
++interface FetchState<T> {
++    data: T;
++    isLoading: boolean;
++    isError: boolean;
++    error: string | null;
++    refetch: () => void;
++}
++
++const usePlaybackFetch = <T>(
++    apiClient: ApiClient | undefined,
++    fetcher: (client: ApiClient) => Promise<T>,
++    initialData: T
++): FetchState<T> => {
++    const [ data, setData ] = useState<T>(initialData);
++    const [ isLoading, setIsLoading ] = useState(true);
++    const [ isError, setIsError ] = useState(false);
++    const [ error, setError ] = useState<string | null>(null);
++    const [ fetchKey, setFetchKey ] = useState(0);
++
++    const refetch = useCallback(() => {
++        setFetchKey(key => key + 1);
++    }, []);
++
++    useEffect(() => {
++        if (!apiClient) {
++            setIsLoading(false);
++            return;
++        }
++
++        let cancelled = false;
++
++        const load = async () => {
++            setIsLoading(true);
++            setIsError(false);
++            setError(null);
++
++            try {
++                const result = await fetcher(apiClient);
++                if (!cancelled) {
++                    setData(result);
++                }
++            } catch (err) {
++                if (!cancelled) {
++                    setIsError(true);
++                    setError(err instanceof Error ? err.message : 'An error occurred.');
++                }
++            } finally {
++                if (!cancelled) {
++                    setIsLoading(false);
++                }
++            }
++        };
++
++        load();
++
++        return () => {
++            cancelled = true;
++        };
++    }, [ apiClient, fetcher, fetchKey ]);
++
++    return { data, isLoading, isError, error, refetch };
++};
++
++export const useUserPlaybackStats = (
++    apiClient: ApiClient | undefined,
++    userId: string
++) => usePlaybackFetch<PlaybackStatRow[]>(
++    apiClient,
++    client => fetchUserPlaybackStats(client, userId),
++    []
++);
++
++export const useUserPlaybackStatsByType = (
++    apiClient: ApiClient | undefined,
++    userId: string,
++    mediaType: string | null
++) => {
++    const [ data, setData ] = useState<PlaybackSubGroupStatRow[]>([]);
++    const [ isLoading, setIsLoading ] = useState(false);
++    const [ isError, setIsError ] = useState(false);
++    const [ error, setError ] = useState<string | null>(null);
++
++    useEffect(() => {
++        if (!apiClient || !mediaType) {
++            setData([]);
++            return;
++        }
++
++        let cancelled = false;
++
++        const load = async () => {
++            setIsLoading(true);
++            setIsError(false);
++            setError(null);
++
++            try {
++                const result = await fetchUserPlaybackStatsByType(apiClient, userId, mediaType);
++                if (!cancelled) {
++                    setData(result);
++                }
++            } catch (err) {
++                if (!cancelled) {
++                    setIsError(true);
++                    setError(err instanceof Error ? err.message : 'An error occurred.');
++                }
++            } finally {
++                if (!cancelled) {
++                    setIsLoading(false);
++                }
++            }
++        };
++
++        load();
++
++        return () => {
++            cancelled = true;
++        };
++    }, [ apiClient, userId, mediaType ]);
++
++    return { data, isLoading, isError, error };
++};
++
++export const useServerPlaybackStats = (apiClient: ApiClient | undefined) => usePlaybackFetch<PlaybackStatRow[]>(
++    apiClient,
++    fetchServerPlaybackStats,
++    []
++);
++
++export const useServerPlaybackStatsByUser = (apiClient: ApiClient | undefined) => usePlaybackFetch<PlaybackUserStatRow[]>(
++    apiClient,
++    fetchServerPlaybackStatsByUser,
++    []
++);
+diff --git a/src/apps/dashboard/features/playbackStatistics/types.ts b/src/apps/dashboard/features/playbackStatistics/types.ts
+new file mode 100644
+index 0000000000..179f4c7244
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/types.ts
+@@ -0,0 +1,25 @@
++export interface PlaybackStatRow {
++    MediaType: string;
++    TotalTicks: number;
++    PlayCount: number;
++}
++
++export interface PlaybackSubGroupStatRow {
++    SubGroup: string;
++    TotalTicks: number;
++    PlayCount: number;
++}
++
++export interface PlaybackUserStatRow {
++    UserId: string;
++    MediaType: string;
++    TotalTicks: number;
++    PlayCount: number;
++}
++
++export interface PlaybackUserTableRow {
++    userId: string;
++    totalTicks: number;
++    playCount: number;
++    byMediaType: Record<string, { totalTicks: number; playCount: number }>;
++}
+diff --git a/src/apps/dashboard/features/playbackStatistics/utils/formatTicks.ts b/src/apps/dashboard/features/playbackStatistics/utils/formatTicks.ts
+new file mode 100644
+index 0000000000..fb7a7ecf13
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/utils/formatTicks.ts
+@@ -0,0 +1,19 @@
++const TICKS_PER_SECOND = 10_000_000;
++
++export const ticksToSeconds = (ticks: number): number => ticks / TICKS_PER_SECOND;
++
++export const formatTicks = (ticks: number): string => {
++    const totalSeconds = Math.floor(ticksToSeconds(ticks));
++    const hours = Math.floor(totalSeconds / 3600);
++    const minutes = Math.floor((totalSeconds % 3600) / 60);
++
++    if (hours > 0) {
++        return `${hours}h ${minutes}m`;
++    }
++
++    if (minutes > 0) {
++        return `${minutes}m`;
++    }
++
++    return `${totalSeconds}s`;
++};
+diff --git a/src/apps/dashboard/features/users/components/UserPlaybackStats.tsx b/src/apps/dashboard/features/users/components/UserPlaybackStats.tsx
+new file mode 100644
+index 0000000000..894e1719c5
+--- /dev/null
++++ b/src/apps/dashboard/features/users/components/UserPlaybackStats.tsx
+@@ -0,0 +1,144 @@
++import React, { useCallback, useMemo, useState } from 'react';
++import Alert from '@mui/material/Alert';
++import Box from '@mui/material/Box';
++import CircularProgress from '@mui/material/CircularProgress';
++import Collapse from '@mui/material/Collapse';
++import Paper from '@mui/material/Paper';
++import Stack from '@mui/material/Stack';
++import Table from '@mui/material/Table';
++import TableBody from '@mui/material/TableBody';
++import TableCell from '@mui/material/TableCell';
++import TableContainer from '@mui/material/TableContainer';
++import TableHead from '@mui/material/TableHead';
++import TableRow from '@mui/material/TableRow';
++import Typography from '@mui/material/Typography';
++import { useApi } from 'hooks/useApi';
++import globalize from 'lib/globalize';
++
++import { useUserPlaybackStats, useUserPlaybackStatsByType } from 'apps/dashboard/features/playbackStatistics/api/usePlaybackStats';
++import { formatTicks } from 'apps/dashboard/features/playbackStatistics/utils/formatTicks';
++
++interface UserPlaybackStatsProps {
++    userId: string;
++}
++
++const UserPlaybackStats = ({ userId }: UserPlaybackStatsProps) => {
++    const { __legacyApiClient__: apiClient } = useApi();
++    const { data: stats, isLoading, isError, error } = useUserPlaybackStats(apiClient, userId);
++    const [ expandedMediaType, setExpandedMediaType ] = useState<string | null>(null);
++    const {
++        data: subGroupStats,
++        isLoading: isSubGroupLoading,
++        isError: isSubGroupError,
++        error: subGroupError
++    } = useUserPlaybackStatsByType(apiClient, userId, expandedMediaType);
++
++    const totals = useMemo(() => stats.reduce((acc, row) => ({
++        totalTicks: acc.totalTicks + row.TotalTicks,
++        playCount: acc.playCount + row.PlayCount
++    }), { totalTicks: 0, playCount: 0 }), [ stats ]);
++
++    const onRowClick = useCallback((mediaType: string) => {
++        setExpandedMediaType(current => current === mediaType ? null : mediaType);
++    }, []);
++
++    if (isLoading) {
++        return (
++            <Box display='flex' justifyContent='center' py={4}>
++                <CircularProgress />
++            </Box>
++        );
++    }
++
++    if (isError) {
++        return <Alert severity='error'>{error}</Alert>;
++    }
++
++    if (stats.length === 0) {
++        return <Alert severity='info'>{globalize.translate('PlaybackStatsEmpty')}</Alert>;
++    }
++
++    return (
++        <Stack spacing={2}>
++            <Stack direction='row' spacing={2}>
++                <Paper sx={{ p: 2, flex: 1 }}>
++                    <Typography variant='body2' color='text.secondary'>
++                        {globalize.translate('LabelWatchTime')}
++                    </Typography>
++                    <Typography variant='h5'>{formatTicks(totals.totalTicks)}</Typography>
++                </Paper>
++                <Paper sx={{ p: 2, flex: 1 }}>
++                    <Typography variant='body2' color='text.secondary'>
++                        {globalize.translate('LabelPlayCount')}
++                    </Typography>
++                    <Typography variant='h5'>{totals.playCount}</Typography>
++                </Paper>
++            </Stack>
++
++            <TableContainer component={Paper}>
++                <Table size='small'>
++                    <TableHead>
++                        <TableRow>
++                            <TableCell>{globalize.translate('LabelMediaType')}</TableCell>
++                            <TableCell align='right'>{globalize.translate('LabelPlayCount')}</TableCell>
++                            <TableCell align='right'>{globalize.translate('LabelWatchTime')}</TableCell>
++                        </TableRow>
++                    </TableHead>
++                    <TableBody>
++                        {stats.map(row => (
++                            <React.Fragment key={row.MediaType}>
++                                <TableRow
++                                    hover
++                                    sx={{ cursor: 'pointer' }}
++                                    onClick={() => onRowClick(row.MediaType)}
++                                    selected={expandedMediaType === row.MediaType}
++                                >
++                                    <TableCell>{row.MediaType}</TableCell>
++                                    <TableCell align='right'>{row.PlayCount}</TableCell>
++                                    <TableCell align='right'>{formatTicks(row.TotalTicks)}</TableCell>
++                                </TableRow>
++                                <TableRow>
++                                    <TableCell colSpan={3} sx={{ py: 0, borderBottom: expandedMediaType === row.MediaType ? undefined : 0 }}>
++                                        <Collapse in={expandedMediaType === row.MediaType} timeout='auto' unmountOnExit>
++                                            <Box py={2} pl={2}>
++                                                {isSubGroupLoading && <CircularProgress size={24} />}
++                                                {isSubGroupError && <Alert severity='error'>{subGroupError}</Alert>}
++                                                {!isSubGroupLoading && !isSubGroupError && subGroupStats.length === 0 && (
++                                                    <Typography variant='body2' color='text.secondary'>
++                                                        {globalize.translate('PlaybackStatsEmpty')}
++                                                    </Typography>
++                                                )}
++                                                {!isSubGroupLoading && !isSubGroupError && subGroupStats.length > 0 && (
++                                                    <Table size='small'>
++                                                        <TableHead>
++                                                            <TableRow>
++                                                                <TableCell>{globalize.translate('LabelSubGroup')}</TableCell>
++                                                                <TableCell align='right'>{globalize.translate('LabelPlayCount')}</TableCell>
++                                                                <TableCell align='right'>{globalize.translate('LabelWatchTime')}</TableCell>
++                                                            </TableRow>
++                                                        </TableHead>
++                                                        <TableBody>
++                                                            {subGroupStats.map(subRow => (
++                                                                <TableRow key={subRow.SubGroup}>
++                                                                    <TableCell>{subRow.SubGroup}</TableCell>
++                                                                    <TableCell align='right'>{subRow.PlayCount}</TableCell>
++                                                                    <TableCell align='right'>{formatTicks(subRow.TotalTicks)}</TableCell>
++                                                                </TableRow>
++                                                            ))}
++                                                        </TableBody>
++                                                    </Table>
++                                                )}
++                                            </Box>
++                                        </Collapse>
++                                    </TableCell>
++                                </TableRow>
++                            </React.Fragment>
++                        ))}
++                    </TableBody>
++                </Table>
++            </TableContainer>
++        </Stack>
++    );
++};
++
++export default UserPlaybackStats;
+diff --git a/src/apps/dashboard/features/users/constants/userTab.ts b/src/apps/dashboard/features/users/constants/userTab.ts
+index 3519c324a9..60c2de12a3 100644
+--- a/src/apps/dashboard/features/users/constants/userTab.ts
++++ b/src/apps/dashboard/features/users/constants/userTab.ts
+@@ -2,5 +2,6 @@ export enum UserTab {
+     Profile = 'profile',
+     Access = 'access',
+     ParentalControl = 'parentalcontrol',
+-    Password = 'password'
++    Password = 'password',
++    PlaybackStats = 'playbackstats'
+ }
+diff --git a/src/apps/dashboard/routes/_asyncRoutes.ts b/src/apps/dashboard/routes/_asyncRoutes.ts
+index e8411bdc27..425be2f9d6 100644
+--- a/src/apps/dashboard/routes/_asyncRoutes.ts
++++ b/src/apps/dashboard/routes/_asyncRoutes.ts
+@@ -25,6 +25,7 @@ export const ASYNC_ADMIN_ROUTES: AsyncRoute[] = [
+     { path: 'plugins', type: AppType.Dashboard },
+     { path: 'plugins/:pluginId', page: 'plugins/plugin', type: AppType.Dashboard },
+     { path: 'plugins/repositories', type: AppType.Dashboard },
++    { path: 'reports/playback', type: AppType.Dashboard },
+     { path: 'tasks', type: AppType.Dashboard },
+     { path: 'tasks/:id', page: 'tasks/task', type: AppType.Dashboard },
+     { path: 'users', type: AppType.Dashboard },
+diff --git a/src/apps/dashboard/routes/reports/playback.tsx b/src/apps/dashboard/routes/reports/playback.tsx
+new file mode 100644
+index 0000000000..26c3502904
+--- /dev/null
++++ b/src/apps/dashboard/routes/reports/playback.tsx
+@@ -0,0 +1,196 @@
++import React, { useMemo } from 'react';
++import Alert from '@mui/material/Alert';
++import Box from '@mui/material/Box';
++import CircularProgress from '@mui/material/CircularProgress';
++import Link from '@mui/material/Link';
++import Paper from '@mui/material/Paper';
++import Stack from '@mui/material/Stack';
++import Typography from '@mui/material/Typography';
++import { type MRT_ColumnDef, useMaterialReactTable } from 'material-react-table';
++import { Link as RouterLink } from 'react-router-dom';
++import { useApi } from 'hooks/useApi';
++import { useUsersDetails } from 'hooks/useUsers';
++import globalize from 'lib/globalize';
++
++import TablePage, { DEFAULT_TABLE_OPTIONS } from 'apps/dashboard/components/table/TablePage';
++import UserAvatarButton from 'apps/dashboard/components/UserAvatarButton';
++import {
++    useServerPlaybackStats,
++    useServerPlaybackStatsByUser
++} from 'apps/dashboard/features/playbackStatistics/api/usePlaybackStats';
++import type { PlaybackUserTableRow } from 'apps/dashboard/features/playbackStatistics/types';
++import { formatTicks } from 'apps/dashboard/features/playbackStatistics/utils/formatTicks';
++
++const buildUserRows = (
++    rows: Array<{ UserId: string; MediaType: string; TotalTicks: number; PlayCount: number }>
++): { userRows: PlaybackUserTableRow[]; mediaTypes: string[] } => {
++    const mediaTypeSet = new Set<string>();
++    const byUser = new Map<string, PlaybackUserTableRow>();
++
++    for (const row of rows) {
++        mediaTypeSet.add(row.MediaType);
++
++        const existing = byUser.get(row.UserId) ?? {
++            userId: row.UserId,
++            totalTicks: 0,
++            playCount: 0,
++            byMediaType: {}
++        };
++
++        existing.totalTicks += row.TotalTicks;
++        existing.playCount += row.PlayCount;
++        existing.byMediaType[row.MediaType] = {
++            totalTicks: row.TotalTicks,
++            playCount: row.PlayCount
++        };
++
++        byUser.set(row.UserId, existing);
++    }
++
++    return {
++        userRows: Array.from(byUser.values()).sort((a, b) => b.totalTicks - a.totalTicks),
++        mediaTypes: Array.from(mediaTypeSet).sort()
++    };
++};
++
++export const Component = () => {
++    const { __legacyApiClient__: apiClient } = useApi();
++    const {
++        data: serverStats,
++        isLoading: isServerStatsLoading,
++        isError: isServerStatsError,
++        error: serverStatsError
++    } = useServerPlaybackStats(apiClient);
++    const {
++        data: userStats,
++        isLoading: isUserStatsLoading,
++        isError: isUserStatsError,
++        error: userStatsError
++    } = useServerPlaybackStatsByUser(apiClient);
++    const {
++        usersById: users,
++        isLoading: isUsersLoading,
++        isError: isUsersError
++    } = useUsersDetails();
++
++    const { userRows, mediaTypes } = useMemo(
++        () => buildUserRows(userStats),
++        [ userStats ]
++    );
++
++    const serverTotals = useMemo(() => serverStats.reduce((acc, row) => ({
++        totalTicks: acc.totalTicks + row.TotalTicks,
++        playCount: acc.playCount + row.PlayCount
++    }), { totalTicks: 0, playCount: 0 }), [ serverStats ]);
++
++    const columns = useMemo<MRT_ColumnDef<PlaybackUserTableRow>[]>(() => [
++        {
++            id: 'User',
++            header: globalize.translate('LabelUser'),
++            size: 220,
++            Cell: ({ row }) => {
++                const user = users[row.original.userId];
++
++                return (
++                    <Stack direction='row' spacing={1} alignItems='center'>
++                        <UserAvatarButton user={user} />
++                        <Link
++                            component={RouterLink}
++                            to={`/dashboard/users/${row.original.userId}/playbackstats`}
++                            underline='hover'
++                        >
++                            {user?.Name || row.original.userId}
++                        </Link>
++                    </Stack>
++                );
++            }
++        },
++        ...mediaTypes.map(mediaType => ({
++            id: mediaType,
++            header: mediaType,
++            size: 120,
++            accessorFn: (row: PlaybackUserTableRow) => row.byMediaType[mediaType]?.totalTicks ?? 0,
++            Cell: ({ row }: { row: { original: PlaybackUserTableRow } }) => {
++                const stat = row.original.byMediaType[mediaType];
++                return stat ? formatTicks(stat.totalTicks) : '—';
++            }
++        })),
++        {
++            id: 'TotalWatchTime',
++            header: globalize.translate('LabelWatchTime'),
++            size: 120,
++            accessorFn: row => row.totalTicks,
++            Cell: ({ row }) => formatTicks(row.original.totalTicks)
++        },
++        {
++            id: 'PlayCount',
++            header: globalize.translate('LabelPlayCount'),
++            size: 100,
++            accessorKey: 'playCount'
++        }
++    ], [ mediaTypes, users ]);
++
++    const table = useMaterialReactTable({
++        ...DEFAULT_TABLE_OPTIONS,
++        columns,
++        data: userRows,
++        initialState: {
++            density: 'compact',
++            sorting: [{ id: 'TotalWatchTime', desc: true }]
++        },
++        state: {
++            isLoading: isUserStatsLoading || isUsersLoading
++        },
++        enableColumnFilters: false,
++        enableGlobalFilter: true,
++        enablePagination: userRows.length > 25,
++        enableBottomToolbar: userRows.length > 25
++    });
++
++    const isLoading = isServerStatsLoading || isUserStatsLoading || isUsersLoading;
++    const isError = isServerStatsError || isUserStatsError || isUsersError;
++    const errorMessage = serverStatsError || userStatsError || globalize.translate('PlaybackStatsLoadError');
++
++    if (isLoading) {
++        return (
++            <Box display='flex' justifyContent='center' py={8}>
++                <CircularProgress />
++            </Box>
++        );
++    }
++
++    return (
++        <TablePage
++            id='playbackStatisticsPage'
++            title={globalize.translate('HeaderPlaybackStatistics')}
++            className='mainAnimatedPage type-interior'
++            table={table}
++            isError={isError}
++            errorMessage={errorMessage}
++        >
++            {!isError && serverStats.length === 0 && userRows.length === 0 && (
++                <Alert severity='info' sx={{ mb: 2 }}>
++                    {globalize.translate('PlaybackStatsEmpty')}
++                </Alert>
++            )}
++            {!isError && serverStats.length > 0 && (
++                <Stack direction='row' spacing={2} sx={{ mb: 2 }}>
++                    <Paper sx={{ p: 2, flex: 1 }}>
++                        <Typography variant='body2' color='text.secondary'>
++                            {globalize.translate('LabelWatchTime')}
++                        </Typography>
++                        <Typography variant='h5'>{formatTicks(serverTotals.totalTicks)}</Typography>
++                    </Paper>
++                    <Paper sx={{ p: 2, flex: 1 }}>
++                        <Typography variant='body2' color='text.secondary'>
++                            {globalize.translate('LabelPlayCount')}
++                        </Typography>
++                        <Typography variant='h5'>{serverTotals.playCount}</Typography>
++                    </Paper>
++                </Stack>
++            )}
++        </TablePage>
++    );
++};
++
++Component.displayName = 'PlaybackStatisticsPage';
+diff --git a/src/apps/dashboard/routes/users/edit.tsx b/src/apps/dashboard/routes/users/edit.tsx
+index 2c69784c58..2180c978c8 100644
+--- a/src/apps/dashboard/routes/users/edit.tsx
++++ b/src/apps/dashboard/routes/users/edit.tsx
+@@ -14,6 +14,7 @@ import Profile from 'apps/dashboard/features/users/components/Profile';
+ import Access from 'apps/dashboard/features/users/components/Access';
+ import ParentalControl from 'apps/dashboard/features/users/components/ParentalControl';
+ import Password from 'apps/dashboard/features/users/components/Password';
++import UserPlaybackStats from 'apps/dashboard/features/users/components/UserPlaybackStats';
+ import Alert from '@mui/material/Alert';
+ 
+ export const Component = () => {
+@@ -76,6 +77,7 @@ export const Component = () => {
+                             {!isSsoUser && (
+                                 <Tab label={globalize.translate('HeaderPassword')} value={UserTab.Password} />
+                             )}
++                            <Tab label={globalize.translate('TabPlaybackStats')} value={UserTab.PlaybackStats} />
+                         </Tabs>
+ 
+                         {tab == UserTab.Profile && (
+@@ -90,6 +92,9 @@ export const Component = () => {
+                         {tab == UserTab.Password && !isSsoUser && (
+                             <Password user={user} />
+                         )}
++                        {tab == UserTab.PlaybackStats && (
++                            <UserPlaybackStats userId={user.Id || ''} />
++                        )}
+                     </Stack>
+                 )}
+             </Box>
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+index c18c3ebd40..561edfe375 100755
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -512,6 +512,7 @@
+     "HeaderPlayAll": "Play All",
+     "HeaderPlayback": "Media playback",
+     "HeaderPlaybackError": "Playback Error",
++    "HeaderPlaybackStatistics": "Playback statistics",
+     "HeaderPlayOn": "Play On",
+     "HeaderPleaseSignIn": "Please sign in",
+     "HeaderPortRanges": "Firewall and Proxy Settings",
+@@ -523,6 +524,7 @@
+     "HeaderRecordingPostProcessing": "Recording Post Processing",
+     "HeaderRemoteAccessSettings": "Remote Access Settings",
+     "HeaderRemoteControl": "Remote Control",
++    "HeaderReports": "Reports",
+     "HeaderRemoveMediaFolder": "Remove Media Folder",
+     "HeaderRemoveMediaLocation": "Remove Media Location",
+     "HeaderRevisionHistory": "Revision History",
+@@ -814,6 +816,7 @@
+     "LabelMediaDetails": "Media details",
+     "LabelMediaSegmentProviders": "Media segment providers",
+     "LabelMediaSegmentsType": "{0} Segments",
++    "LabelMediaType": "Media type",
+     "LabelLineup": "Lineup",
+     "LabelLocalCustomCss": "Custom CSS code for styling which applies to this client only. You may want to disable server custom CSS code.",
+     "LabelLocalHttpServerPortNumber": "Local HTTP port number",
+@@ -888,6 +891,7 @@
+     "LabelPlayerDimensions": "Player dimensions",
+     "LabelPlaylist": "Playlist",
+     "LabelPlayMethod": "Play method",
++    "LabelPlayCount": "Play count",
+     "LabelPleaseRestart": "Changes will take effect after manually reloading the web client.",
+     "LabelPostProcessor": "Post-processing application",
+     "LabelPostProcessorArguments": "Post-processor command line arguments",
+@@ -967,6 +971,7 @@
+     "LabelSubtitleDownloaders": "Subtitle downloaders",
+     "LabelSubtitlePlaybackMode": "Subtitle mode",
+     "LabelSubtitleStyling": "Subtitle styling",
++    "LabelSubGroup": "Genre",
+     "LabelSubtitleVerticalPosition": "Vertical position",
+     "LabelSyncPlayAccess": "SyncPlay access",
+     "LabelSyncPlayAccessCreateAndJoinGroups": "Allow user to create and join groups",
+@@ -1041,6 +1046,7 @@
+     "LabelUnstable": "Unstable",
+     "LabelUseSamePublishedServerUri": "Use same published server URI for internal and external access",
+     "LabelUser": "User",
++    "LabelWatchTime": "Watch time",
+     "LabelUserAgent": "User agent",
+     "LabelUserLoginAttemptsBeforeLockout": "Failed login tries before user is locked out",
+     "LabelUserMaxActiveSessions": "Maximum number of simultaneous user sessions",
+@@ -1416,6 +1422,8 @@
+     "PlaybackErrorNoCompatibleStream": "This client isn't compatible with the media and the server isn't sending a compatible media format.",
+     "PlaybackErrorPlaceHolder": "This is a placeholder for physical media that Jellyfin cannot play. Please insert the disc to play.",
+     "PlaybackRate": "Playback Speed",
++    "PlaybackStatsEmpty": "No playback statistics recorded yet.",
++    "PlaybackStatsLoadError": "Failed to load playback statistics",
+     "PlayCount": "Play count",
+     "Played": "Played",
+     "PlayFromBeginning": "Play from beginning",
+@@ -1651,6 +1659,7 @@
+     "TabNfoSettings": "NFO Settings",
+     "TabOther": "Other",
+     "TabParentalControl": "Parental Control",
++    "TabPlaybackStats": "Playback statistics",
+     "TabPlugins": "Plugins",
+     "TabRepositories": "Repositories",
+     "TabScheduledTasks": "Scheduled Tasks",
