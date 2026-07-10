@@ -31,9 +31,10 @@ internal static class PostgreSqlCompat
         BEGIN
             IF NOT EXISTS (
                 SELECT 1
-                FROM pg_catalog.pg_aggregate a
-                JOIN pg_catalog.pg_type t ON t.oid = a.aggtypid
-                WHERE a.aggname = 'min' AND t.typname = 'uuid') THEN
+                FROM pg_catalog.pg_proc p
+                JOIN pg_catalog.pg_aggregate a ON a.aggfnoid = p.oid
+                WHERE p.proname = 'min'
+                  AND p.proargtypes[0] = 'uuid'::regtype::oid) THEN
                 CREATE AGGREGATE min(uuid) (
                     SFUNC = uuid_smaller,
                     STYPE = uuid,
@@ -44,9 +45,10 @@ internal static class PostgreSqlCompat
 
             IF NOT EXISTS (
                 SELECT 1
-                FROM pg_catalog.pg_aggregate a
-                JOIN pg_catalog.pg_type t ON t.oid = a.aggtypid
-                WHERE a.aggname = 'max' AND t.typname = 'uuid') THEN
+                FROM pg_catalog.pg_proc p
+                JOIN pg_catalog.pg_aggregate a ON a.aggfnoid = p.oid
+                WHERE p.proname = 'max'
+                  AND p.proargtypes[0] = 'uuid'::regtype::oid) THEN
                 CREATE AGGREGATE max(uuid) (
                     SFUNC = uuid_larger,
                     STYPE = uuid,
