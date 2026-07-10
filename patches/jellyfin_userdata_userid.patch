@@ -1,0 +1,158 @@
+diff --git a/Jellyfin.Api/Controllers/ItemsController.cs b/Jellyfin.Api/Controllers/ItemsController.cs
+index c52a6cd7dc..982212e839 100644
+--- a/Jellyfin.Api/Controllers/ItemsController.cs
++++ b/Jellyfin.Api/Controllers/ItemsController.cs
+@@ -1070,7 +1070,7 @@ public class ItemsController : BaseJellyfinApiController
+         [FromQuery] Guid? userId,
+         [FromRoute, Required] Guid itemId)
+     {
+-        var requestUserId = RequestHelpers.GetUserId(User, userId);
++        var requestUserId = RequestHelpers.GetUserId(User, userId, Request);
+         var user = _userManager.GetUserById(requestUserId);
+         if (user is null)
+         {
+@@ -1127,7 +1127,7 @@ public class ItemsController : BaseJellyfinApiController
+         [FromRoute, Required] Guid itemId,
+         [FromBody, Required] UpdateUserItemDataDto userDataDto)
+     {
+-        var requestUserId = RequestHelpers.GetUserId(User, userId);
++        var requestUserId = RequestHelpers.GetUserId(User, userId, Request);
+         var user = _userManager.GetUserById(requestUserId);
+         if (user is null)
+         {
+diff --git a/Jellyfin.Api/Helpers/RequestHelpers.cs b/Jellyfin.Api/Helpers/RequestHelpers.cs
+index 5072f902da..4fc73ba74c 100644
+--- a/Jellyfin.Api/Helpers/RequestHelpers.cs
++++ b/Jellyfin.Api/Helpers/RequestHelpers.cs
+@@ -1,5 +1,6 @@
+ using System;
+ using System.Collections.Generic;
++using System.Globalization;
+ using System.Linq;
+ using System.Security.Claims;
+ using System.Threading.Tasks;
+@@ -63,10 +64,14 @@ public static class RequestHelpers
+     /// </summary>
+     /// <param name="claimsPrincipal">The <see cref="ClaimsPrincipal"/> for the current request.</param>
+     /// <param name="userId">The user id.</param>
++    /// <param name="request">Optional HTTP request used to resolve userId from query or route values.</param>
+     /// <returns>A <see cref="bool"/> whether the user can access the user.</returns>
+-    internal static Guid GetUserId(ClaimsPrincipal claimsPrincipal, Guid? userId)
++    internal static Guid GetUserId(ClaimsPrincipal claimsPrincipal, Guid? userId, HttpRequest? request = null)
+     {
++        userId = CoalesceUserId(userId, request);
+         var authenticatedUserId = claimsPrincipal.GetUserId();
++        var isAdministrator = claimsPrincipal.IsInRole(UserRoles.Administrator)
++            || claimsPrincipal.GetIsApiKey();
+ 
+         // UserId not provided, fall back to authenticated user id.
+         if (userId.IsNullOrEmpty())
+@@ -75,7 +80,6 @@ public static class RequestHelpers
+         }
+ 
+         // User must be administrator to access another user.
+-        var isAdministrator = claimsPrincipal.IsInRole(UserRoles.Administrator);
+         if (!userId.Value.Equals(authenticatedUserId) && !isAdministrator)
+         {
+             throw new SecurityException("Forbidden");
+@@ -84,6 +88,40 @@ public static class RequestHelpers
+         return userId.Value;
+     }
+ 
++    private static Guid? CoalesceUserId(Guid? userId, HttpRequest? request)
++    {
++        if (!userId.IsNullOrEmpty() || request is null)
++        {
++            return userId;
++        }
++
++        if (TryParseUserId(request.Query["userId"], out var queryUserId)
++            || TryParseUserId(request.Query["UserId"], out queryUserId))
++        {
++            return queryUserId;
++        }
++
++        if (request.RouteValues.TryGetValue("userId", out var routeValue)
++            && TryParseUserId(routeValue, out var routeUserId))
++        {
++            return routeUserId;
++        }
++
++        return userId;
++    }
++
++    private static bool TryParseUserId(object? value, out Guid userId)
++    {
++        userId = default;
++        if (value is null)
++        {
++            return false;
++        }
++
++        return Guid.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), out userId)
++            && !userId.IsEmpty();
++    }
++
+     /// <summary>
+     /// Checks if the user can update an entry.
+     /// </summary>
+diff --git a/tests/Jellyfin.Api.Tests/Helpers/RequestHelpersTests.cs b/tests/Jellyfin.Api.Tests/Helpers/RequestHelpersTests.cs
+index 2851b08e6c..02924784c1 100644
+--- a/tests/Jellyfin.Api.Tests/Helpers/RequestHelpersTests.cs
++++ b/tests/Jellyfin.Api.Tests/Helpers/RequestHelpersTests.cs
+@@ -7,6 +7,7 @@ using Jellyfin.Api.Helpers;
+ using Jellyfin.Data.Enums;
+ using Jellyfin.Database.Implementations.Enums;
+ using MediaBrowser.Controller.Net;
++using Microsoft.AspNetCore.Http;
+ using Xunit;
+ 
+ namespace Jellyfin.Api.Tests.Helpers
+@@ -77,6 +78,47 @@ namespace Jellyfin.Api.Tests.Helpers
+             Assert.Equal(Guid.Empty, userId);
+         }
+ 
++        [Fact]
++        public static void GetUserId_IsApiKey_WithValidUserId()
++        {
++            var requestUserId = Guid.NewGuid();
++
++            var claims = new[]
++            {
++                new Claim(InternalClaimTypes.IsApiKey, bool.TrueString)
++            };
++
++            var identity = new ClaimsIdentity(claims, string.Empty);
++            var principal = new ClaimsPrincipal(identity);
++
++            var userId = RequestHelpers.GetUserId(principal, requestUserId);
++
++            Assert.Equal(requestUserId, userId);
++        }
++
++        [Fact]
++        public static void GetUserId_ParsesUserIdFromQueryWhenParameterEmpty()
++        {
++            var targetUserId = Guid.NewGuid();
++            var adminUserId = Guid.NewGuid();
++            var context = new DefaultHttpContext();
++            context.Request.QueryString = new QueryString($"?userId={targetUserId:N}");
++
++            var claims = new[]
++            {
++                new Claim(InternalClaimTypes.UserId, adminUserId.ToString("N", CultureInfo.InvariantCulture)),
++                new Claim(InternalClaimTypes.IsApiKey, bool.FalseString),
++                new Claim(ClaimTypes.Role, UserRoles.Administrator)
++            };
++
++            var identity = new ClaimsIdentity(claims, string.Empty);
++            var principal = new ClaimsPrincipal(identity);
++
++            var userId = RequestHelpers.GetUserId(principal, null, context.Request);
++
++            Assert.Equal(targetUserId, userId);
++        }
++
+         [Fact]
+         public static void GetUserId_IsUser()
+         {
