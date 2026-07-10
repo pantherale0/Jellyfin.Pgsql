@@ -18,6 +18,367 @@ index 1b03f58fe5..5c322415e6 100644
          <DevicesDrawerSection />
          <LiveTvDrawerSection />
          <PluginDrawerSection />
+diff --git a/src/apps/dashboard/components/drawer/sections/ReportsDrawerSection.tsx b/src/apps/dashboard/components/drawer/sections/ReportsDrawerSection.tsx
+new file mode 100644
+index 0000000000..eec7f3e103
+--- /dev/null
++++ b/src/apps/dashboard/components/drawer/sections/ReportsDrawerSection.tsx
+@@ -0,0 +1,34 @@
++import BarChart from '@mui/icons-material/BarChart';
++import List from '@mui/material/List';
++import ListItem from '@mui/material/ListItem';
++import ListItemIcon from '@mui/material/ListItemIcon';
++import ListItemText from '@mui/material/ListItemText';
++import ListSubheader from '@mui/material/ListSubheader';
++import React from 'react';
++
++import ListItemLink from 'components/ListItemLink';
++import globalize from 'lib/globalize';
++
++const ReportsDrawerSection = () => {
++    return (
++        <List
++            aria-labelledby='reports-subheader'
++            subheader={
++                <ListSubheader component='div' id='reports-subheader'>
++                    {globalize.translate('HeaderReports')}
++                </ListSubheader>
++            }
++        >
++            <ListItem disablePadding>
++                <ListItemLink to='/dashboard/reports/playback'>
++                    <ListItemIcon>
++                        <BarChart />
++                    </ListItemIcon>
++                    <ListItemText primary={globalize.translate('HeaderPlaybackStatistics')} />
++                </ListItemLink>
++            </ListItem>
++        </List>
++    );
++};
++
++export default ReportsDrawerSection;
+diff --git a/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts b/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts
+new file mode 100644
+index 0000000000..e3230559b0
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts
+@@ -0,0 +1,48 @@
++import type { Api } from '@jellyfin/sdk';
++import type { AxiosRequestConfig } from 'axios';
++
++import type {
++    PlaybackStatRow,
++    PlaybackSubGroupStatRow,
++    PlaybackUserStatRow
++} from '../types';
++
++const fetchJson = async <T>(
++    api: Api,
++    path: string,
++    options?: AxiosRequestConfig
++): Promise<T> => {
++    const response = await api.axiosInstance.get<T>(path, options);
++    return response.data;
++};
++
++export const fetchUserPlaybackStats = (
++    api: Api,
++    userId: string,
++    options?: AxiosRequestConfig
++): Promise<PlaybackStatRow[]> => fetchJson(
++    api,
++    `/Users/${userId}/PlaybackStats`,
++    options
++);
++
++export const fetchUserPlaybackStatsByType = (
++    api: Api,
++    userId: string,
++    mediaType: string,
++    options?: AxiosRequestConfig
++): Promise<PlaybackSubGroupStatRow[]> => fetchJson(
++    api,
++    `/Users/${userId}/PlaybackStats/${encodeURIComponent(mediaType)}`,
++    options
++);
++
++export const fetchServerPlaybackStats = (
++    api: Api,
++    options?: AxiosRequestConfig
++): Promise<PlaybackStatRow[]> => fetchJson(api, '/PlaybackStats', options);
++
++export const fetchServerPlaybackStatsByUser = (
++    api: Api,
++    options?: AxiosRequestConfig
++): Promise<PlaybackUserStatRow[]> => fetchJson(api, '/PlaybackStats/Users', options);
+diff --git a/src/apps/dashboard/features/playbackStatistics/api/usePlaybackStats.ts b/src/apps/dashboard/features/playbackStatistics/api/usePlaybackStats.ts
+new file mode 100644
+index 0000000000..9c99c2741e
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/api/usePlaybackStats.ts
+@@ -0,0 +1,57 @@
++import { useQuery } from '@tanstack/react-query';
++
++import { useApi } from 'hooks/useApi';
++
++import {
++    fetchServerPlaybackStats,
++    fetchServerPlaybackStatsByUser,
++    fetchUserPlaybackStats,
++    fetchUserPlaybackStatsByType
++} from './playbackStatsApi';
++
++export const useUserPlaybackStats = (userId: string) => {
++    const { api } = useApi();
++
++    return useQuery({
++        queryKey: [ 'PlaybackStats', 'user', userId ],
++        queryFn: ({ signal }) => fetchUserPlaybackStats(api!, userId, { signal }),
++        enabled: !!api && !!userId,
++        refetchOnMount: false
++    });
++};
++
++export const useUserPlaybackStatsByType = (
++    userId: string,
++    mediaType: string | null
++) => {
++    const { api } = useApi();
++
++    return useQuery({
++        queryKey: [ 'PlaybackStats', 'user', userId, mediaType ],
++        queryFn: ({ signal }) => fetchUserPlaybackStatsByType(api!, userId, mediaType!, { signal }),
++        enabled: !!api && !!userId && !!mediaType,
++        refetchOnMount: false
++    });
++};
++
++export const useServerPlaybackStats = () => {
++    const { api } = useApi();
++
++    return useQuery({
++        queryKey: [ 'PlaybackStats', 'server' ],
++        queryFn: ({ signal }) => fetchServerPlaybackStats(api!, { signal }),
++        enabled: !!api,
++        refetchOnMount: false
++    });
++};
++
++export const useServerPlaybackStatsByUser = () => {
++    const { api } = useApi();
++
++    return useQuery({
++        queryKey: [ 'PlaybackStats', 'server', 'users' ],
++        queryFn: ({ signal }) => fetchServerPlaybackStatsByUser(api!, { signal }),
++        enabled: !!api,
++        refetchOnMount: false
++    });
++};
+diff --git a/src/apps/dashboard/features/playbackStatistics/types.ts b/src/apps/dashboard/features/playbackStatistics/types.ts
+new file mode 100644
+index 0000000000..179f4c7244
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/types.ts
+@@ -0,0 +1,25 @@
++export interface PlaybackStatRow {
++    MediaType: string;
++    TotalTicks: number;
++    PlayCount: number;
++}
++
++export interface PlaybackSubGroupStatRow {
++    SubGroup: string;
++    TotalTicks: number;
++    PlayCount: number;
++}
++
++export interface PlaybackUserStatRow {
++    UserId: string;
++    MediaType: string;
++    TotalTicks: number;
++    PlayCount: number;
++}
++
++export interface PlaybackUserTableRow {
++    userId: string;
++    totalTicks: number;
++    playCount: number;
++    byMediaType: Record<string, { totalTicks: number; playCount: number }>;
++}
+diff --git a/src/apps/dashboard/features/playbackStatistics/utils/formatTicks.ts b/src/apps/dashboard/features/playbackStatistics/utils/formatTicks.ts
+new file mode 100644
+index 0000000000..fb7a7ecf13
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/utils/formatTicks.ts
+@@ -0,0 +1,19 @@
++const TICKS_PER_SECOND = 10_000_000;
++
++export const ticksToSeconds = (ticks: number): number => ticks / TICKS_PER_SECOND;
++
++export const formatTicks = (ticks: number): string => {
++    const totalSeconds = Math.floor(ticksToSeconds(ticks));
++    const hours = Math.floor(totalSeconds / 3600);
++    const minutes = Math.floor((totalSeconds % 3600) / 60);
++
++    if (hours > 0) {
++        return `${hours}h ${minutes}m`;
++    }
++
++    if (minutes > 0) {
++        return `${minutes}m`;
++    }
++
++    return `${totalSeconds}s`;
++};
+diff --git a/src/apps/dashboard/features/users/components/UserPlaybackStats.tsx b/src/apps/dashboard/features/users/components/UserPlaybackStats.tsx
+new file mode 100644
+index 0000000000..ad6c78d039
+--- /dev/null
++++ b/src/apps/dashboard/features/users/components/UserPlaybackStats.tsx
+@@ -0,0 +1,142 @@
++import React, { useCallback, useMemo, useState } from 'react';
++import Alert from '@mui/material/Alert';
++import Box from '@mui/material/Box';
++import CircularProgress from '@mui/material/CircularProgress';
++import Collapse from '@mui/material/Collapse';
++import Paper from '@mui/material/Paper';
++import Stack from '@mui/material/Stack';
++import Table from '@mui/material/Table';
++import TableBody from '@mui/material/TableBody';
++import TableCell from '@mui/material/TableCell';
++import TableContainer from '@mui/material/TableContainer';
++import TableHead from '@mui/material/TableHead';
++import TableRow from '@mui/material/TableRow';
++import Typography from '@mui/material/Typography';
++import globalize from 'lib/globalize';
++
++import { useUserPlaybackStats, useUserPlaybackStatsByType } from 'apps/dashboard/features/playbackStatistics/api/usePlaybackStats';
++import { formatTicks } from 'apps/dashboard/features/playbackStatistics/utils/formatTicks';
++
++interface UserPlaybackStatsProps {
++    userId: string;
++}
++
++const UserPlaybackStats = ({ userId }: UserPlaybackStatsProps) => {
++    const { data: stats = [], isLoading, isError, error } = useUserPlaybackStats(userId);
++    const [ expandedMediaType, setExpandedMediaType ] = useState<string | null>(null);
++    const {
++        data: subGroupStats = [],
++        isLoading: isSubGroupLoading,
++        isError: isSubGroupError,
++        error: subGroupError
++    } = useUserPlaybackStatsByType(userId, expandedMediaType);
++
++    const totals = useMemo(() => stats.reduce((acc, row) => ({
++        totalTicks: acc.totalTicks + row.TotalTicks,
++        playCount: acc.playCount + row.PlayCount
++    }), { totalTicks: 0, playCount: 0 }), [ stats ]);
++
++    const onRowClick = useCallback((mediaType: string) => {
++        setExpandedMediaType(current => current === mediaType ? null : mediaType);
++    }, []);
++
++    if (isLoading) {
++        return (
++            <Box display='flex' justifyContent='center' py={4}>
++                <CircularProgress />
++            </Box>
++        );
++    }
++
++    if (isError) {
++        return <Alert severity='error'>{error?.message}</Alert>;
++    }
++
++    if (stats.length === 0) {
++        return <Alert severity='info'>{globalize.translate('PlaybackStatsEmpty')}</Alert>;
++    }
++
++    return (
++        <Stack spacing={2}>
++            <Stack direction='row' spacing={2}>
++                <Paper sx={{ p: 2, flex: 1 }}>
++                    <Typography variant='body2' color='text.secondary'>
++                        {globalize.translate('LabelWatchTime')}
++                    </Typography>
++                    <Typography variant='h5'>{formatTicks(totals.totalTicks)}</Typography>
++                </Paper>
++                <Paper sx={{ p: 2, flex: 1 }}>
++                    <Typography variant='body2' color='text.secondary'>
++                        {globalize.translate('LabelPlayCount')}
++                    </Typography>
++                    <Typography variant='h5'>{totals.playCount}</Typography>
++                </Paper>
++            </Stack>
++
++            <TableContainer component={Paper}>
++                <Table size='small'>
++                    <TableHead>
++                        <TableRow>
++                            <TableCell>{globalize.translate('LabelMediaType')}</TableCell>
++                            <TableCell align='right'>{globalize.translate('LabelPlayCount')}</TableCell>
++                            <TableCell align='right'>{globalize.translate('LabelWatchTime')}</TableCell>
++                        </TableRow>
++                    </TableHead>
++                    <TableBody>
++                        {stats.map(row => (
++                            <React.Fragment key={row.MediaType}>
++                                <TableRow
++                                    hover
++                                    sx={{ cursor: 'pointer' }}
++                                    onClick={() => onRowClick(row.MediaType)}
++                                    selected={expandedMediaType === row.MediaType}
++                                >
++                                    <TableCell>{row.MediaType}</TableCell>
++                                    <TableCell align='right'>{row.PlayCount}</TableCell>
++                                    <TableCell align='right'>{formatTicks(row.TotalTicks)}</TableCell>
++                                </TableRow>
++                                <TableRow>
++                                    <TableCell colSpan={3} sx={{ py: 0, borderBottom: expandedMediaType === row.MediaType ? undefined : 0 }}>
++                                        <Collapse in={expandedMediaType === row.MediaType} timeout='auto' unmountOnExit>
++                                            <Box py={2} pl={2}>
++                                                {isSubGroupLoading && <CircularProgress size={24} />}
++                                                {isSubGroupError && <Alert severity='error'>{subGroupError?.message}</Alert>}
++                                                {!isSubGroupLoading && !isSubGroupError && subGroupStats.length === 0 && (
++                                                    <Typography variant='body2' color='text.secondary'>
++                                                        {globalize.translate('PlaybackStatsEmpty')}
++                                                    </Typography>
++                                                )}
++                                                {!isSubGroupLoading && !isSubGroupError && subGroupStats.length > 0 && (
++                                                    <Table size='small'>
++                                                        <TableHead>
++                                                            <TableRow>
++                                                                <TableCell>{globalize.translate('LabelSubGroup')}</TableCell>
++                                                                <TableCell align='right'>{globalize.translate('LabelPlayCount')}</TableCell>
++                                                                <TableCell align='right'>{globalize.translate('LabelWatchTime')}</TableCell>
++                                                            </TableRow>
++                                                        </TableHead>
++                                                        <TableBody>
++                                                            {subGroupStats.map(subRow => (
++                                                                <TableRow key={subRow.SubGroup}>
++                                                                    <TableCell>{subRow.SubGroup}</TableCell>
++                                                                    <TableCell align='right'>{subRow.PlayCount}</TableCell>
++                                                                    <TableCell align='right'>{formatTicks(subRow.TotalTicks)}</TableCell>
++                                                                </TableRow>
++                                                            ))}
++                                                        </TableBody>
++                                                    </Table>
++                                                )}
++                                            </Box>
++                                        </Collapse>
++                                    </TableCell>
++                                </TableRow>
++                            </React.Fragment>
++                        ))}
++                    </TableBody>
++                </Table>
++            </TableContainer>
++        </Stack>
++    );
++};
++
++export default UserPlaybackStats;
 diff --git a/src/apps/dashboard/features/users/constants/userTab.ts b/src/apps/dashboard/features/users/constants/userTab.ts
 index 3519c324a9..60c2de12a3 100644
 --- a/src/apps/dashboard/features/users/constants/userTab.ts
@@ -42,6 +403,236 @@ index e8411bdc27..425be2f9d6 100644
      { path: 'tasks', type: AppType.Dashboard },
      { path: 'tasks/:id', page: 'tasks/task', type: AppType.Dashboard },
      { path: 'users', type: AppType.Dashboard },
+diff --git a/src/apps/dashboard/routes/reports/playback.tsx b/src/apps/dashboard/routes/reports/playback.tsx
+new file mode 100644
+index 0000000000..377e455aa4
+--- /dev/null
++++ b/src/apps/dashboard/routes/reports/playback.tsx
+@@ -0,0 +1,194 @@
++import React, { useMemo } from 'react';
++import Alert from '@mui/material/Alert';
++import Box from '@mui/material/Box';
++import CircularProgress from '@mui/material/CircularProgress';
++import Link from '@mui/material/Link';
++import Paper from '@mui/material/Paper';
++import Stack from '@mui/material/Stack';
++import Typography from '@mui/material/Typography';
++import { type MRT_ColumnDef, type MRT_TableOptions, useMaterialReactTable } from 'material-react-table';
++import { Link as RouterLink } from 'react-router-dom';
++import { useUsersDetails } from 'hooks/useUsers';
++import globalize from 'lib/globalize';
++
++import TablePage, { DEFAULT_TABLE_OPTIONS } from 'apps/dashboard/components/table/TablePage';
++import UserAvatarButton from 'apps/dashboard/components/UserAvatarButton';
++import {
++    useServerPlaybackStats,
++    useServerPlaybackStatsByUser
++} from 'apps/dashboard/features/playbackStatistics/api/usePlaybackStats';
++import type { PlaybackUserTableRow } from 'apps/dashboard/features/playbackStatistics/types';
++import { formatTicks } from 'apps/dashboard/features/playbackStatistics/utils/formatTicks';
++
++const buildUserRows = (
++    rows: Array<{ UserId: string; MediaType: string; TotalTicks: number; PlayCount: number }>
++): { userRows: PlaybackUserTableRow[]; mediaTypes: string[] } => {
++    const mediaTypeSet = new Set<string>();
++    const byUser = new Map<string, PlaybackUserTableRow>();
++
++    for (const row of rows) {
++        mediaTypeSet.add(row.MediaType);
++
++        const existing = byUser.get(row.UserId) ?? {
++            userId: row.UserId,
++            totalTicks: 0,
++            playCount: 0,
++            byMediaType: {}
++        };
++
++        existing.totalTicks += row.TotalTicks;
++        existing.playCount += row.PlayCount;
++        existing.byMediaType[row.MediaType] = {
++            totalTicks: row.TotalTicks,
++            playCount: row.PlayCount
++        };
++
++        byUser.set(row.UserId, existing);
++    }
++
++    return {
++        userRows: Array.from(byUser.values()).sort((a, b) => b.totalTicks - a.totalTicks),
++        mediaTypes: Array.from(mediaTypeSet).sort()
++    };
++};
++
++export const Component = () => {
++    const {
++        data: serverStats = [],
++        isLoading: isServerStatsLoading,
++        isError: isServerStatsError,
++        error: serverStatsError
++    } = useServerPlaybackStats();
++    const {
++        data: userStats = [],
++        isLoading: isUserStatsLoading,
++        isError: isUserStatsError,
++        error: userStatsError
++    } = useServerPlaybackStatsByUser();
++    const {
++        usersById: users,
++        isLoading: isUsersLoading,
++        isError: isUsersError
++    } = useUsersDetails();
++
++    const { userRows, mediaTypes } = useMemo(
++        () => buildUserRows(userStats),
++        [ userStats ]
++    );
++
++    const serverTotals = useMemo(() => serverStats.reduce((acc, row) => ({
++        totalTicks: acc.totalTicks + row.TotalTicks,
++        playCount: acc.playCount + row.PlayCount
++    }), { totalTicks: 0, playCount: 0 }), [ serverStats ]);
++
++    const columns = useMemo<MRT_ColumnDef<PlaybackUserTableRow>[]>(() => [
++        {
++            id: 'User',
++            header: globalize.translate('LabelUser'),
++            size: 220,
++            Cell: ({ row }) => {
++                const user = users[row.original.userId];
++
++                return (
++                    <Stack direction='row' spacing={1} alignItems='center'>
++                        <UserAvatarButton user={user} />
++                        <Link
++                            component={RouterLink}
++                            to={`/dashboard/users/${row.original.userId}/playbackstats`}
++                            underline='hover'
++                        >
++                            {user?.Name || row.original.userId}
++                        </Link>
++                    </Stack>
++                );
++            }
++        },
++        ...mediaTypes.map(mediaType => ({
++            id: mediaType,
++            header: mediaType,
++            size: 120,
++            accessorFn: (row: PlaybackUserTableRow) => row.byMediaType[mediaType]?.totalTicks ?? 0,
++            Cell: ({ row }: { row: { original: PlaybackUserTableRow } }) => {
++                const stat = row.original.byMediaType[mediaType];
++                return stat ? formatTicks(stat.totalTicks) : '—';
++            }
++        })),
++        {
++            id: 'TotalWatchTime',
++            header: globalize.translate('LabelWatchTime'),
++            size: 120,
++            accessorFn: row => row.totalTicks,
++            Cell: ({ row }) => formatTicks(row.original.totalTicks)
++        },
++        {
++            id: 'PlayCount',
++            header: globalize.translate('LabelPlayCount'),
++            size: 100,
++            accessorKey: 'playCount'
++        }
++    ], [ mediaTypes, users ]);
++
++    const table = useMaterialReactTable<PlaybackUserTableRow>({
++        ...(DEFAULT_TABLE_OPTIONS as Partial<MRT_TableOptions<PlaybackUserTableRow>>),
++        columns,
++        data: userRows,
++        initialState: {
++            density: 'compact',
++            sorting: [{ id: 'TotalWatchTime', desc: true }]
++        },
++        state: {
++            isLoading: isUserStatsLoading || isUsersLoading
++        },
++        enableColumnFilters: false,
++        enableGlobalFilter: true,
++        enablePagination: userRows.length > 25,
++        enableBottomToolbar: userRows.length > 25
++    });
++
++    const isLoading = isServerStatsLoading || isUserStatsLoading || isUsersLoading;
++    const isError = isServerStatsError || isUserStatsError || isUsersError;
++    const errorMessage = serverStatsError?.message || userStatsError?.message || globalize.translate('PlaybackStatsLoadError');
++
++    if (isLoading) {
++        return (
++            <Box display='flex' justifyContent='center' py={8}>
++                <CircularProgress />
++            </Box>
++        );
++    }
++
++    return (
++        <TablePage
++            id='playbackStatisticsPage'
++            title={globalize.translate('HeaderPlaybackStatistics')}
++            className='mainAnimatedPage type-interior'
++            table={table}
++            isError={isError}
++            errorMessage={errorMessage}
++        >
++            {!isError && serverStats.length === 0 && userRows.length === 0 && (
++                <Alert severity='info' sx={{ mb: 2 }}>
++                    {globalize.translate('PlaybackStatsEmpty')}
++                </Alert>
++            )}
++            {!isError && serverStats.length > 0 && (
++                <Stack direction='row' spacing={2} sx={{ mb: 2 }}>
++                    <Paper sx={{ p: 2, flex: 1 }}>
++                        <Typography variant='body2' color='text.secondary'>
++                            {globalize.translate('LabelWatchTime')}
++                        </Typography>
++                        <Typography variant='h5'>{formatTicks(serverTotals.totalTicks)}</Typography>
++                    </Paper>
++                    <Paper sx={{ p: 2, flex: 1 }}>
++                        <Typography variant='body2' color='text.secondary'>
++                            {globalize.translate('LabelPlayCount')}
++                        </Typography>
++                        <Typography variant='h5'>{serverTotals.playCount}</Typography>
++                    </Paper>
++                </Stack>
++            )}
++        </TablePage>
++    );
++};
++
++Component.displayName = 'PlaybackStatisticsPage';
+diff --git a/src/apps/dashboard/routes/users/edit.tsx b/src/apps/dashboard/routes/users/edit.tsx
+index 2c69784c58..2180c978c8 100644
+--- a/src/apps/dashboard/routes/users/edit.tsx
++++ b/src/apps/dashboard/routes/users/edit.tsx
+@@ -14,6 +14,7 @@ import Profile from 'apps/dashboard/features/users/components/Profile';
+ import Access from 'apps/dashboard/features/users/components/Access';
+ import ParentalControl from 'apps/dashboard/features/users/components/ParentalControl';
+ import Password from 'apps/dashboard/features/users/components/Password';
++import UserPlaybackStats from 'apps/dashboard/features/users/components/UserPlaybackStats';
+ import Alert from '@mui/material/Alert';
+ 
+ export const Component = () => {
+@@ -76,6 +77,7 @@ export const Component = () => {
+                             {!isSsoUser && (
+                                 <Tab label={globalize.translate('HeaderPassword')} value={UserTab.Password} />
+                             )}
++                            <Tab label={globalize.translate('TabPlaybackStats')} value={UserTab.PlaybackStats} />
+                         </Tabs>
+ 
+                         {tab == UserTab.Profile && (
+@@ -90,6 +92,9 @@ export const Component = () => {
+                         {tab == UserTab.Password && !isSsoUser && (
+                             <Password user={user} />
+                         )}
++                        {tab == UserTab.PlaybackStats && (
++                            <UserPlaybackStats userId={user.Id || ''} />
++                        )}
+                     </Stack>
+                 )}
+             </Box>
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
 index c18c3ebd40..561edfe375 100755
 --- a/src/strings/en-us.json
@@ -111,34 +702,3 @@ index c18c3ebd40..561edfe375 100755
      "TabPlugins": "Plugins",
      "TabRepositories": "Repositories",
      "TabScheduledTasks": "Scheduled Tasks",
-diff --git a/src/apps/dashboard/routes/users/edit.tsx b/src/apps/dashboard/routes/users/edit.tsx
-index 2c69784c58..2180c978c8 100644
---- a/src/apps/dashboard/routes/users/edit.tsx
-+++ b/src/apps/dashboard/routes/users/edit.tsx
-@@ -14,6 +14,7 @@ import Profile from 'apps/dashboard/features/users/components/Profile';
- import Access from 'apps/dashboard/features/users/components/Access';
- import ParentalControl from 'apps/dashboard/features/users/components/ParentalControl';
- import Password from 'apps/dashboard/features/users/components/Password';
-+import UserPlaybackStats from 'apps/dashboard/features/users/components/UserPlaybackStats';
- import Alert from '@mui/material/Alert';
- 
- export const Component = () => {
-@@ -76,6 +77,7 @@ export const Component = () => {
-                             {!isSsoUser && (
-                                 <Tab label={globalize.translate('HeaderPassword')} value={UserTab.Password} />
-                             )}
-+                            <Tab label={globalize.translate('TabPlaybackStats')} value={UserTab.PlaybackStats} />
-                         </Tabs>
- 
-                         {tab == UserTab.Profile && (
-@@ -90,6 +92,9 @@ export const Component = () => {
-                         {tab == UserTab.Password && !isSsoUser && (
-                             <Password user={user} />
-                         )}
-+                        {tab == UserTab.PlaybackStats && (
-+                            <UserPlaybackStats userId={user.Id || ''} />
-+                        )}
-                     </Stack>
-                 )}
-             </Box>
-diff --git a/src/strings/en-us.json b/src/strings/en-us.json
