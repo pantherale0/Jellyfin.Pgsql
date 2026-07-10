@@ -104,9 +104,10 @@ Configure the OIDC integration using the following environment variables in your
 | `JELLYFIN_SSO_OIDC_CREATE_USERS` | `true` | Set to `false` to disable auto-creation of new users |
 
 ### How it is Built
-To maintain a clean upstream repository, changes to the `jellyfin` server are packaged as a patch:
-1. All changes to `jellyfin` are in [`docker/jellyfin_sso.patch`](docker/jellyfin_sso.patch).
-2. During `docker build`, the `Dockerfile` automatically applies this patch to the submodule, compiles the server from source, and overrides the official binaries in the final image.
+To maintain a clean upstream repository, changes to the `jellyfin` server and `jellyfin-web` client are packaged as patches under [`patches/`](patches/):
+1. `jellyfin_*.patch` files (e.g. [`patches/jellyfin_sso.patch`](patches/jellyfin_sso.patch)) are applied to the `jellyfin` submodule.
+2. `jellyfin_web_*.patch` files (e.g. [`patches/jellyfin_web_rbac.patch`](patches/jellyfin_web_rbac.patch)) are applied to the `jellyfin-web` submodule.
+3. During `docker build`, [`scripts/apply-patches.sh`](scripts/apply-patches.sh) scans `patches/` and applies every matching patch before compiling the server and web client from source.
 
 ## Build (from source)
 
