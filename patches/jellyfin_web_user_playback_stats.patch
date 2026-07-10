@@ -506,7 +506,7 @@ index e8411bdc27..425be2f9d6 100644
      { path: 'users', type: AppType.Dashboard },
 diff --git a/src/apps/dashboard/routes/reports/playback.tsx b/src/apps/dashboard/routes/reports/playback.tsx
 new file mode 100644
-index 0000000000..26c3502904
+index 0000000000..5c8fe0319d
 --- /dev/null
 +++ b/src/apps/dashboard/routes/reports/playback.tsx
 @@ -0,0 +1,196 @@
@@ -518,7 +518,7 @@ index 0000000000..26c3502904
 +import Paper from '@mui/material/Paper';
 +import Stack from '@mui/material/Stack';
 +import Typography from '@mui/material/Typography';
-+import { type MRT_ColumnDef, useMaterialReactTable } from 'material-react-table';
++import { type MRT_ColumnDef, type MRT_TableOptions, useMaterialReactTable } from 'material-react-table';
 +import { Link as RouterLink } from 'react-router-dom';
 +import { useApi } from 'hooks/useApi';
 +import { useUsersDetails } from 'hooks/useUsers';
@@ -642,8 +642,8 @@ index 0000000000..26c3502904
 +        }
 +    ], [ mediaTypes, users ]);
 +
-+    const table = useMaterialReactTable({
-+        ...DEFAULT_TABLE_OPTIONS,
++    const table = useMaterialReactTable<PlaybackUserTableRow>({
++        ...(DEFAULT_TABLE_OPTIONS as Partial<MRT_TableOptions<PlaybackUserTableRow>>),
 +        columns,
 +        data: userRows,
 +        initialState: {
