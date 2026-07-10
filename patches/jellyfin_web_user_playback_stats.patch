@@ -60,7 +60,7 @@ index 0000000000..eec7f3e103
 +export default ReportsDrawerSection;
 diff --git a/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts b/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts
 new file mode 100644
-index 0000000000..e3230559b0
+index 0000000000..56b496e138
 --- /dev/null
 +++ b/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts
 @@ -0,0 +1,48 @@
@@ -73,20 +73,20 @@ index 0000000000..e3230559b0
 +    PlaybackUserStatRow
 +} from '../types';
 +
-+const fetchJson = async <T>(
++const fetchJsonArray = async <T>(
 +    api: Api,
 +    path: string,
 +    options?: AxiosRequestConfig
-+): Promise<T> => {
-+    const response = await api.axiosInstance.get<T>(path, options);
-+    return response.data;
++): Promise<T[]> => {
++    const response = await api.axiosInstance.get<T[] | null>(path, options);
++    return Array.isArray(response.data) ? response.data : [];
 +};
 +
 +export const fetchUserPlaybackStats = (
 +    api: Api,
 +    userId: string,
 +    options?: AxiosRequestConfig
-+): Promise<PlaybackStatRow[]> => fetchJson(
++): Promise<PlaybackStatRow[]> => fetchJsonArray(
 +    api,
 +    `/Users/${userId}/PlaybackStats`,
 +    options
@@ -97,7 +97,7 @@ index 0000000000..e3230559b0
 +    userId: string,
 +    mediaType: string,
 +    options?: AxiosRequestConfig
-+): Promise<PlaybackSubGroupStatRow[]> => fetchJson(
++): Promise<PlaybackSubGroupStatRow[]> => fetchJsonArray(
 +    api,
 +    `/Users/${userId}/PlaybackStats/${encodeURIComponent(mediaType)}`,
 +    options
@@ -106,12 +106,12 @@ index 0000000000..e3230559b0
 +export const fetchServerPlaybackStats = (
 +    api: Api,
 +    options?: AxiosRequestConfig
-+): Promise<PlaybackStatRow[]> => fetchJson(api, '/PlaybackStats', options);
++): Promise<PlaybackStatRow[]> => fetchJsonArray(api, '/PlaybackStats', options);
 +
 +export const fetchServerPlaybackStatsByUser = (
 +    api: Api,
 +    options?: AxiosRequestConfig
-+): Promise<PlaybackUserStatRow[]> => fetchJson(api, '/PlaybackStats/Users', options);
++): Promise<PlaybackUserStatRow[]> => fetchJsonArray(api, '/PlaybackStats/Users', options);
 diff --git a/src/apps/dashboard/features/playbackStatistics/api/usePlaybackStats.ts b/src/apps/dashboard/features/playbackStatistics/api/usePlaybackStats.ts
 new file mode 100644
 index 0000000000..9c99c2741e
@@ -233,7 +233,7 @@ index 0000000000..fb7a7ecf13
 +};
 diff --git a/src/apps/dashboard/features/users/components/UserPlaybackStats.tsx b/src/apps/dashboard/features/users/components/UserPlaybackStats.tsx
 new file mode 100644
-index 0000000000..ad6c78d039
+index 0000000000..a543c08fea
 --- /dev/null
 +++ b/src/apps/dashboard/features/users/components/UserPlaybackStats.tsx
 @@ -0,0 +1,142 @@
@@ -261,16 +261,16 @@ index 0000000000..ad6c78d039
 +}
 +
 +const UserPlaybackStats = ({ userId }: UserPlaybackStatsProps) => {
-+    const { data: stats = [], isLoading, isError, error } = useUserPlaybackStats(userId);
++    const { data: stats, isLoading, isError, error } = useUserPlaybackStats(userId);
 +    const [ expandedMediaType, setExpandedMediaType ] = useState<string | null>(null);
 +    const {
-+        data: subGroupStats = [],
++        data: subGroupStats,
 +        isLoading: isSubGroupLoading,
 +        isError: isSubGroupError,
 +        error: subGroupError
 +    } = useUserPlaybackStatsByType(userId, expandedMediaType);
 +
-+    const totals = useMemo(() => stats.reduce((acc, row) => ({
++    const totals = useMemo(() => (stats ?? []).reduce((acc, row) => ({
 +        totalTicks: acc.totalTicks + row.TotalTicks,
 +        playCount: acc.playCount + row.PlayCount
 +    }), { totalTicks: 0, playCount: 0 }), [ stats ]);
@@ -291,7 +291,7 @@ index 0000000000..ad6c78d039
 +        return <Alert severity='error'>{error?.message}</Alert>;
 +    }
 +
-+    if (stats.length === 0) {
++    if ((stats?.length ?? 0) === 0) {
 +        return <Alert severity='info'>{globalize.translate('PlaybackStatsEmpty')}</Alert>;
 +    }
 +
@@ -322,7 +322,7 @@ index 0000000000..ad6c78d039
 +                        </TableRow>
 +                    </TableHead>
 +                    <TableBody>
-+                        {stats.map(row => (
++                        {(stats ?? []).map(row => (
 +                            <React.Fragment key={row.MediaType}>
 +                                <TableRow
 +                                    hover
@@ -340,22 +340,22 @@ index 0000000000..ad6c78d039
 +                                            <Box py={2} pl={2}>
 +                                                {isSubGroupLoading && <CircularProgress size={24} />}
 +                                                {isSubGroupError && <Alert severity='error'>{subGroupError?.message}</Alert>}
-+                                                {!isSubGroupLoading && !isSubGroupError && subGroupStats.length === 0 && (
++                                                {!isSubGroupLoading && !isSubGroupError && (subGroupStats?.length ?? 0) === 0 && (
 +                                                    <Typography variant='body2' color='text.secondary'>
 +                                                        {globalize.translate('PlaybackStatsEmpty')}
 +                                                    </Typography>
 +                                                )}
-+                                                {!isSubGroupLoading && !isSubGroupError && subGroupStats.length > 0 && (
++                                                {!isSubGroupLoading && !isSubGroupError && (subGroupStats?.length ?? 0) > 0 && (
 +                                                    <Table size='small'>
 +                                                        <TableHead>
 +                                                            <TableRow>
-+                                                                <TableCell>{globalize.translate('LabelSubGroup')}</TableCell>
++                                                                <TableCell>{globalize.translate('Genre')}</TableCell>
 +                                                                <TableCell align='right'>{globalize.translate('LabelPlayCount')}</TableCell>
 +                                                                <TableCell align='right'>{globalize.translate('LabelWatchTime')}</TableCell>
 +                                                            </TableRow>
 +                                                        </TableHead>
 +                                                        <TableBody>
-+                                                            {subGroupStats.map(subRow => (
++                                                            {(subGroupStats ?? []).map(subRow => (
 +                                                                <TableRow key={subRow.SubGroup}>
 +                                                                    <TableCell>{subRow.SubGroup}</TableCell>
 +                                                                    <TableCell align='right'>{subRow.PlayCount}</TableCell>
@@ -405,10 +405,10 @@ index e8411bdc27..425be2f9d6 100644
      { path: 'users', type: AppType.Dashboard },
 diff --git a/src/apps/dashboard/routes/reports/playback.tsx b/src/apps/dashboard/routes/reports/playback.tsx
 new file mode 100644
-index 0000000000..377e455aa4
+index 0000000000..ed47fe6f97
 --- /dev/null
 +++ b/src/apps/dashboard/routes/reports/playback.tsx
-@@ -0,0 +1,194 @@
+@@ -0,0 +1,198 @@
 +import React, { useMemo } from 'react';
 +import Alert from '@mui/material/Alert';
 +import Box from '@mui/material/Box';
@@ -428,16 +428,16 @@ index 0000000000..377e455aa4
 +    useServerPlaybackStats,
 +    useServerPlaybackStatsByUser
 +} from 'apps/dashboard/features/playbackStatistics/api/usePlaybackStats';
-+import type { PlaybackUserTableRow } from 'apps/dashboard/features/playbackStatistics/types';
++import type { PlaybackUserStatRow, PlaybackUserTableRow } from 'apps/dashboard/features/playbackStatistics/types';
 +import { formatTicks } from 'apps/dashboard/features/playbackStatistics/utils/formatTicks';
 +
 +const buildUserRows = (
-+    rows: Array<{ UserId: string; MediaType: string; TotalTicks: number; PlayCount: number }>
++    rows: PlaybackUserStatRow[] | null | undefined
 +): { userRows: PlaybackUserTableRow[]; mediaTypes: string[] } => {
 +    const mediaTypeSet = new Set<string>();
 +    const byUser = new Map<string, PlaybackUserTableRow>();
 +
-+    for (const row of rows) {
++    for (const row of rows ?? []) {
 +        mediaTypeSet.add(row.MediaType);
 +
 +        const existing = byUser.get(row.UserId) ?? {
@@ -465,13 +465,13 @@ index 0000000000..377e455aa4
 +
 +export const Component = () => {
 +    const {
-+        data: serverStats = [],
++        data: serverStats,
 +        isLoading: isServerStatsLoading,
 +        isError: isServerStatsError,
 +        error: serverStatsError
 +    } = useServerPlaybackStats();
 +    const {
-+        data: userStats = [],
++        data: userStats,
 +        isLoading: isUserStatsLoading,
 +        isError: isUserStatsError,
 +        error: userStatsError
@@ -479,7 +479,8 @@ index 0000000000..377e455aa4
 +    const {
 +        usersById: users,
 +        isLoading: isUsersLoading,
-+        isError: isUsersError
++        isError: isUsersError,
++        error: usersError
 +    } = useUsersDetails();
 +
 +    const { userRows, mediaTypes } = useMemo(
@@ -487,7 +488,7 @@ index 0000000000..377e455aa4
 +        [ userStats ]
 +    );
 +
-+    const serverTotals = useMemo(() => serverStats.reduce((acc, row) => ({
++    const serverTotals = useMemo(() => (serverStats ?? []).reduce((acc, row) => ({
 +        totalTicks: acc.totalTicks + row.TotalTicks,
 +        playCount: acc.playCount + row.PlayCount
 +    }), { totalTicks: 0, playCount: 0 }), [ serverStats ]);
@@ -539,6 +540,13 @@ index 0000000000..377e455aa4
 +        }
 +    ], [ mediaTypes, users ]);
 +
++    const isLoading = isServerStatsLoading || isUserStatsLoading || isUsersLoading;
++    const isError = isServerStatsError || isUserStatsError || isUsersError;
++    const errorMessage = serverStatsError?.message
++        || userStatsError?.message
++        || usersError?.message
++        || globalize.translate('PlaybackStatsLoadError');
++
 +    const table = useMaterialReactTable<PlaybackUserTableRow>({
 +        ...(DEFAULT_TABLE_OPTIONS as Partial<MRT_TableOptions<PlaybackUserTableRow>>),
 +        columns,
@@ -548,17 +556,13 @@ index 0000000000..377e455aa4
 +            sorting: [{ id: 'TotalWatchTime', desc: true }]
 +        },
 +        state: {
-+            isLoading: isUserStatsLoading || isUsersLoading
++            isLoading
 +        },
 +        enableColumnFilters: false,
 +        enableGlobalFilter: true,
 +        enablePagination: userRows.length > 25,
 +        enableBottomToolbar: userRows.length > 25
 +    });
-+
-+    const isLoading = isServerStatsLoading || isUserStatsLoading || isUsersLoading;
-+    const isError = isServerStatsError || isUserStatsError || isUsersError;
-+    const errorMessage = serverStatsError?.message || userStatsError?.message || globalize.translate('PlaybackStatsLoadError');
 +
 +    if (isLoading) {
 +        return (
@@ -577,12 +581,12 @@ index 0000000000..377e455aa4
 +            isError={isError}
 +            errorMessage={errorMessage}
 +        >
-+            {!isError && serverStats.length === 0 && userRows.length === 0 && (
++            {!isError && (serverStats?.length ?? 0) === 0 && userRows.length === 0 && (
 +                <Alert severity='info' sx={{ mb: 2 }}>
 +                    {globalize.translate('PlaybackStatsEmpty')}
 +                </Alert>
 +            )}
-+            {!isError && serverStats.length > 0 && (
++            {!isError && (serverStats?.length ?? 0) > 0 && (
 +                <Stack direction='row' spacing={2} sx={{ mb: 2 }}>
 +                    <Paper sx={{ p: 2, flex: 1 }}>
 +                        <Typography variant='body2' color='text.secondary'>
@@ -634,7 +638,7 @@ index 2c69784c58..2180c978c8 100644
                  )}
              </Box>
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index c18c3ebd40..561edfe375 100755
+index c18c3ebd40..0846375a9b 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
 @@ -512,6 +512,7 @@
@@ -645,47 +649,39 @@ index c18c3ebd40..561edfe375 100755
      "HeaderPlayOn": "Play On",
      "HeaderPleaseSignIn": "Please sign in",
      "HeaderPortRanges": "Firewall and Proxy Settings",
-@@ -523,6 +524,7 @@
-     "HeaderRecordingPostProcessing": "Recording Post Processing",
-     "HeaderRemoteAccessSettings": "Remote Access Settings",
+@@ -525,6 +526,7 @@
      "HeaderRemoteControl": "Remote Control",
-+    "HeaderReports": "Reports",
      "HeaderRemoveMediaFolder": "Remove Media Folder",
      "HeaderRemoveMediaLocation": "Remove Media Location",
++    "HeaderReports": "Reports",
      "HeaderRevisionHistory": "Revision History",
-@@ -814,6 +816,7 @@
-     "LabelMediaDetails": "Media details",
+     "HeaderRunningTasks": "Running Tasks",
+     "HeaderScenes": "Scenes",
+@@ -815,6 +817,7 @@
      "LabelMediaSegmentProviders": "Media segment providers",
      "LabelMediaSegmentsType": "{0} Segments",
-+    "LabelMediaType": "Media type",
      "LabelLineup": "Lineup",
++    "LabelMediaType": "Media type",
      "LabelLocalCustomCss": "Custom CSS code for styling which applies to this client only. You may want to disable server custom CSS code.",
      "LabelLocalHttpServerPortNumber": "Local HTTP port number",
-@@ -888,6 +891,7 @@
+     "LabelLocalHttpServerPortNumberHelp": "The TCP port number for the HTTP server.",
+@@ -887,6 +890,7 @@
+     "LabelPlayer": "Player",
      "LabelPlayerDimensions": "Player dimensions",
      "LabelPlaylist": "Playlist",
-     "LabelPlayMethod": "Play method",
 +    "LabelPlayCount": "Play count",
+     "LabelPlayMethod": "Play method",
      "LabelPleaseRestart": "Changes will take effect after manually reloading the web client.",
      "LabelPostProcessor": "Post-processing application",
-     "LabelPostProcessorArguments": "Post-processor command line arguments",
-@@ -967,6 +971,7 @@
-     "LabelSubtitleDownloaders": "Subtitle downloaders",
-     "LabelSubtitlePlaybackMode": "Subtitle mode",
-     "LabelSubtitleStyling": "Subtitle styling",
-+    "LabelSubGroup": "Genre",
-     "LabelSubtitleVerticalPosition": "Vertical position",
-     "LabelSyncPlayAccess": "SyncPlay access",
-     "LabelSyncPlayAccessCreateAndJoinGroups": "Allow user to create and join groups",
-@@ -1041,6 +1046,7 @@
-     "LabelUnstable": "Unstable",
-     "LabelUseSamePublishedServerUri": "Use same published server URI for internal and external access",
-     "LabelUser": "User",
+@@ -1056,6 +1060,7 @@
+     "LabelVideoRange": "Video range",
+     "LabelVideoResolution": "Video resolution",
+     "LabelSelectPreferredTranscodeVideoCodec": "Preferred transcode video codec",
 +    "LabelWatchTime": "Watch time",
-     "LabelUserAgent": "User agent",
-     "LabelUserLoginAttemptsBeforeLockout": "Failed login tries before user is locked out",
-     "LabelUserMaxActiveSessions": "Maximum number of simultaneous user sessions",
-@@ -1416,6 +1422,8 @@
+     "LabelWeb": "Web",
+     "LabelWebVersion": "Web version",
+     "LabelYear": "Year",
+@@ -1416,6 +1421,8 @@
      "PlaybackErrorNoCompatibleStream": "This client isn't compatible with the media and the server isn't sending a compatible media format.",
      "PlaybackErrorPlaceHolder": "This is a placeholder for physical media that Jellyfin cannot play. Please insert the disc to play.",
      "PlaybackRate": "Playback Speed",
@@ -694,7 +690,7 @@ index c18c3ebd40..561edfe375 100755
      "PlayCount": "Play count",
      "Played": "Played",
      "PlayFromBeginning": "Play from beginning",
-@@ -1651,6 +1659,7 @@
+@@ -1651,6 +1658,7 @@
      "TabNfoSettings": "NFO Settings",
      "TabOther": "Other",
      "TabParentalControl": "Parental Control",

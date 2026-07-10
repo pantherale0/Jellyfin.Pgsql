@@ -791,40 +791,6 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.ToTable("KeyframeData");
                 });
 
-            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.PlaybackActivity", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("DatePlayed")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("ItemId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("ItemName")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("ItemSubGroup")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("MediaType")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<long>("PlayedTicks")
-                        .HasColumnType("bigint");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("PlaybackActivity");
-                });
-
             modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.LinkedChildEntity", b =>
                 {
                     b.Property<Guid>("ParentId")
@@ -1107,6 +1073,60 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                         .HasFilter("[UserId] IS NOT NULL");
 
                     b.ToTable("Permissions");
+                });
+
+            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.PlaybackActivity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ClientName")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("DatePlayed")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("DeviceId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("DeviceName")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("ItemId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ItemName")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ItemSubGroup")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("MediaType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("PlaybackMethod")
+                        .HasColumnType("text");
+
+                    b.Property<long>("PlayedTicks")
+                        .HasColumnType("bigint");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeviceId")
+                        .HasFilter("\"DeviceId\" IS NOT NULL");
+
+                    b.HasIndex("ItemId", "DatePlayed");
+
+                    b.HasIndex("UserId", "DatePlayed");
+
+                    b.ToTable("PlaybackActivity");
                 });
 
             modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.Preference", b =>
@@ -1701,6 +1721,24 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                         .WithMany("Permissions")
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade);
+                });
+
+            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.PlaybackActivity", b =>
+                {
+                    b.HasOne("Jellyfin.Database.Implementations.Entities.Security.Device", "Device")
+                        .WithMany()
+                        .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Jellyfin.Database.Implementations.Entities.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Device");
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.Preference", b =>

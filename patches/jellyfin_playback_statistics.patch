@@ -1,5 +1,5 @@
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 19823dff37..b6cadca00d 100644
+index 19823dff37..ab2b5171c6 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -11,6 +11,7 @@ using Jellyfin.Data;
@@ -44,7 +44,7 @@ index 19823dff37..b6cadca00d 100644
          }
  
          /// <summary>
-@@ -1091,6 +1096,30 @@ namespace Emby.Server.Implementations.Session
+@@ -1091,6 +1096,54 @@ namespace Emby.Server.Implementations.Session
                  {
                      playedToCompletion = OnPlaybackStopped(user, libraryItem, info.PositionTicks, info.Failed);
                  }
@@ -53,20 +53,44 @@ index 19823dff37..b6cadca00d 100644
 +                {
 +                    using var dbContext = await _dbProvider.CreateDbContextAsync().ConfigureAwait(false);
 +
++                    var playbackMethod = FormatPlaybackMethod(session);
++                    var clientName = session.Client;
++                    var deviceName = session.DeviceName;
++
 +                    foreach (var user in users)
 +                    {
 +                        var genre = libraryItem.Genres?.FirstOrDefault() ?? "Unknown";
++
++                        int? deviceId = null;
++                        if (!string.IsNullOrEmpty(session.DeviceId))
++                        {
++                            var resolvedDeviceId = await dbContext.Devices
++                                .Where(d => d.UserId == user.Id && d.DeviceId == session.DeviceId)
++                                .OrderByDescending(d => d.DateLastActivity)
++                                .Select(d => d.Id)
++                                .FirstOrDefaultAsync()
++                                .ConfigureAwait(false);
++
++                            if (resolvedDeviceId != 0)
++                            {
++                                deviceId = resolvedDeviceId;
++                            }
++                        }
 +
 +                        dbContext.PlaybackActivity.Add(new PlaybackActivity
 +                        {
 +                            Id = Guid.NewGuid(),
 +                            UserId = user.Id,
++                            DeviceId = deviceId,
 +                            ItemId = info.ItemId,
 +                            ItemName = libraryItem.Name ?? string.Empty,
 +                            MediaType = libraryItem.GetType().Name,
 +                            PlayedTicks = info.PositionTicks.Value,
 +                            DatePlayed = DateTime.UtcNow,
-+                            ItemSubGroup = genre
++                            ItemSubGroup = genre,
++                            PlaybackMethod = playbackMethod,
++                            ClientName = clientName,
++                            DeviceName = deviceName
 +                        });
 +                    }
 +
@@ -75,6 +99,31 @@ index 19823dff37..b6cadca00d 100644
              }
  
              if (!string.IsNullOrEmpty(info.LiveStreamId))
+@@ -1118,6 +1171,24 @@ namespace Emby.Server.Implementations.Session
+             EventHelper.QueueEventIfNotNull(PlaybackStopped, this, eventArgs, _logger);
+         }
+ 
++        private static string FormatPlaybackMethod(SessionInfo session)
++        {
++            var playMethod = "na";
++            if (session.PlayState?.PlayMethod is not null)
++            {
++                playMethod = session.PlayState.PlayMethod.Value.ToString();
++            }
++
++            if (session.PlayState?.PlayMethod == PlayMethod.Transcode && session.TranscodingInfo is not null)
++            {
++                var videoCodec = session.TranscodingInfo.IsVideoDirect ? "direct" : session.TranscodingInfo.VideoCodec;
++                var audioCodec = session.TranscodingInfo.IsAudioDirect ? "direct" : session.TranscodingInfo.AudioCodec;
++                playMethod += string.Create(CultureInfo.InvariantCulture, $" (v:{videoCodec} a:{audioCodec})");
++            }
++
++            return playMethod;
++        }
++
+         private bool OnPlaybackStopped(User user, BaseItem item, long? positionTicks, bool playbackFailed)
+         {
+             if (playbackFailed)
 diff --git a/Jellyfin.Api/Controllers/PlaybackActivityController.cs b/Jellyfin.Api/Controllers/PlaybackActivityController.cs
 new file mode 100644
 index 0000000000..4efd473fb2
@@ -169,7 +218,7 @@ index 0000000000..4efd473fb2
 +}
 diff --git a/Jellyfin.Api/Controllers/ServerPlaybackStatsController.cs b/Jellyfin.Api/Controllers/ServerPlaybackStatsController.cs
 new file mode 100644
-index 0000000000..a8f3c2d1e4
+index 0000000000..92d75b4823
 --- /dev/null
 +++ b/Jellyfin.Api/Controllers/ServerPlaybackStatsController.cs
 @@ -0,0 +1,83 @@
@@ -258,11 +307,12 @@ index 0000000000..a8f3c2d1e4
 +}
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivity.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivity.cs
 new file mode 100644
-index 0000000000..317ebee90d
+index 0000000000..52ddc29fed
 --- /dev/null
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivity.cs
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,80 @@
 +using System;
++using Jellyfin.Database.Implementations.Entities.Security;
 +
 +namespace Jellyfin.Database.Implementations.Entities;
 +
@@ -280,6 +330,21 @@ index 0000000000..317ebee90d
 +    /// Gets or sets the user identifier.
 +    /// </summary>
 +    public Guid UserId { get; set; }
++
++    /// <summary>
++    /// Gets or sets the user.
++    /// </summary>
++    public User? User { get; set; }
++
++    /// <summary>
++    /// Gets or sets the optional device identifier.
++    /// </summary>
++    public int? DeviceId { get; set; }
++
++    /// <summary>
++    /// Gets or sets the device.
++    /// </summary>
++    public Device? Device { get; set; }
 +
 +    /// <summary>
 +    /// Gets or sets the item identifier.
@@ -310,6 +375,21 @@ index 0000000000..317ebee90d
 +    /// Gets or sets the subgroup of the item (e.g. genre).
 +    /// </summary>
 +    public string ItemSubGroup { get; set; } = string.Empty;
++
++    /// <summary>
++    /// Gets or sets the playback method snapshot (e.g. DirectPlay, Transcode).
++    /// </summary>
++    public string? PlaybackMethod { get; set; }
++
++    /// <summary>
++    /// Gets or sets the client name snapshot.
++    /// </summary>
++    public string? ClientName { get; set; }
++
++    /// <summary>
++    /// Gets or sets the device name snapshot.
++    /// </summary>
++    public string? DeviceName { get; set; }
 +}
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
 index b0c12bf592..f440b1cb95 100644

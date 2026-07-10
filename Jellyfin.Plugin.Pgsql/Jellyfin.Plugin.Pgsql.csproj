@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <AnalysisMode>AllEnabledByDefault</AnalysisMode>
     <CodeAnalysisRuleSet>../jellyfin.ruleset</CodeAnalysisRuleSet>
-    <NoWarn>$(NoWarn);CA1861</NoWarn>
+    <NoWarn>$(NoWarn);CA1861;NU1903;CA2007</NoWarn>
   </PropertyGroup>
 
   <!-- EF-generated migrations are excluded from analyzers (see also .editorconfig) -->
@@ -16,11 +16,19 @@
     <Compile Update="Migrations/**/*.cs">
       <NoWarn>$(NoWarn);CA1707;SA1122</NoWarn>
     </Compile>
+    <Compile Update="PlaybackReportingImport/**/*.cs">
+      <NoWarn>$(NoWarn);CA2007</NoWarn>
+    </Compile>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\jellyfin\src\Jellyfin.Database\Jellyfin.Database.Implementations\Jellyfin.Database.Implementations.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinVersion)" PrivateAssets="all" />
     <PackageReference Include="Jellyfin.Model" Version="$(JellyfinVersion)" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="$(MicrosoftPackageVersion)" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="$(NpgsqlEfVersion)" />
     <PackageReference Include="Npgsql" Version="$(NpgsqlVersion)" />
     <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="$(MicrosoftPackageVersion)" />

@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Database.Implementations.DbConfiguration;
+using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Configuration;
 using Microsoft.EntityFrameworkCore;
@@ -122,6 +123,24 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
                 }
             }
         }
+
+        modelBuilder.Entity<PlaybackActivity>(entity =>
+        {
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Device)
+                .WithMany()
+                .HasForeignKey(e => e.DeviceId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasIndex(e => new { e.UserId, e.DatePlayed });
+            entity.HasIndex(e => new { e.ItemId, e.DatePlayed });
+            entity.HasIndex(e => e.DeviceId)
+                .HasFilter("\"DeviceId\" IS NOT NULL");
+        });
     }
 
     /// <inheritdoc/>
