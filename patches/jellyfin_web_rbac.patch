@@ -21,10 +21,10 @@ index ec3268aceb..3522432572 100644
  
 diff --git a/src/apps/dashboard/features/users/components/SSOMappings.tsx b/src/apps/dashboard/features/users/components/SSOMappings.tsx
 new file mode 100644
-index 0000000000..e62021e5c1
+index 0000000000..996ba24bde
 --- /dev/null
 +++ b/src/apps/dashboard/features/users/components/SSOMappings.tsx
-@@ -0,0 +1,370 @@
+@@ -0,0 +1,377 @@
 +import React, { useEffect, useState, useCallback } from 'react';
 +import { useApi } from 'hooks/useApi';
 +import Box from '@mui/material/Box';
@@ -108,9 +108,13 @@ index 0000000000..e62021e5c1
 +        setLoading(true);
 +        setError(null);
 +        try {
++            const requestConfig = {
++                baseURL: api.basePath,
++                headers: { Authorization: api.authorizationHeader }
++            };
 +            const [ configRes, libRes ] = await Promise.all([
-+                api.axiosInstance.get<Mapping[]>('/sso/rbac/config'),
-+                api.axiosInstance.get<LibraryFolder[]>('/sso/rbac/libraries')
++                api.axiosInstance.get<Mapping[]>('/sso/rbac/config', requestConfig),
++                api.axiosInstance.get<LibraryFolder[]>('/sso/rbac/libraries', requestConfig)
 +            ]);
 +
 +            setMappings((configRes.data || []).map((m: Mapping) => ({
@@ -133,7 +137,10 @@ index 0000000000..e62021e5c1
 +        if (!api) return;
 +        setError(null);
 +        try {
-+            await api.axiosInstance.post('/sso/rbac/config', updatedMappings);
++            await api.axiosInstance.post('/sso/rbac/config', updatedMappings, {
++                baseURL: api.basePath,
++                headers: { Authorization: api.authorizationHeader }
++            });
 +            setMappings(updatedMappings);
 +        } catch (err: any) {
 +            setError(err.message || 'Failed to save mappings.');
