@@ -11,6 +11,7 @@
             "**/bin": true,
             "**/obj": true
         },
-        "formatFiles.excludePattern": "**/node_modules,**/.vscode,**/dist/**,**/.chrome,ThirdParty,unRaid,debian"
+        "formatFiles.excludePattern": "**/node_modules,**/.vscode,**/dist/**,**/.chrome,ThirdParty,unRaid,debian",
+        "dotnet.defaultSolution": "disable"
     }
 }

@@ -398,6 +398,8 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasIndex("Type", "TopParentId", "StartDate");
 
+                    b.HasIndex("Type", "TopParentId", "ChannelId", "StartDate");
+
                     b.HasIndex("MediaType", "TopParentId", "IsVirtualItem", "PresentationUniqueKey");
 
                     b.HasIndex("TopParentId", "IsFolder", "IsVirtualItem", "DateCreated");

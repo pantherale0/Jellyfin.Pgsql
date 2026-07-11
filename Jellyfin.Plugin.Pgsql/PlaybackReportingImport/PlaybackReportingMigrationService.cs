@@ -19,7 +19,7 @@ public sealed class PlaybackReportingMigrationService : IHostedService
     private const string MigratedSqliteFileName = "playback_reporting.db.migrated";
 
     private readonly IApplicationPaths _applicationPaths;
-    private readonly PlaybackReportingImporter _importer;
+    private readonly IPlaybackReportingImporter _importer;
     private readonly ILogger<PlaybackReportingMigrationService> _logger;
 
     /// <summary>
@@ -30,7 +30,7 @@ public sealed class PlaybackReportingMigrationService : IHostedService
     /// <param name="logger">The logger.</param>
     public PlaybackReportingMigrationService(
         IApplicationPaths applicationPaths,
-        PlaybackReportingImporter importer,
+        IPlaybackReportingImporter importer,
         ILogger<PlaybackReportingMigrationService> logger)
     {
         _applicationPaths = applicationPaths;

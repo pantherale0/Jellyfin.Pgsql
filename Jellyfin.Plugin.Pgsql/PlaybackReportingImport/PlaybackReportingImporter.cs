@@ -16,7 +16,7 @@ namespace Jellyfin.Plugin.Pgsql.PlaybackReportingImport;
 /// <summary>
 /// Imports playback activity rows from the Playback Reporting plugin SQLite database or TSV export.
 /// </summary>
-public sealed class PlaybackReportingImporter
+public sealed class PlaybackReportingImporter : IPlaybackReportingImporter
 {
     private const long TicksPerSecond = 10_000_000L;
     private const string DateTimeFormat = "yyyy-MM-dd HH:mm:ss";

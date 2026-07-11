@@ -64,6 +64,7 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
             sp.GetRequiredService<ILoggerFactory>().CreateLogger<CachingItemRepository>()));
 
         serviceCollection.AddSingleton<PlaybackReportingImporter>();
+        serviceCollection.AddSingleton<IPlaybackReportingImporter>(sp => sp.GetRequiredService<PlaybackReportingImporter>());
         serviceCollection.AddHostedService<PlaybackReportingMigrationService>();
     }
 
