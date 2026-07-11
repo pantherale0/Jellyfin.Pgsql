@@ -43,6 +43,12 @@ public class PluginConfiguration : BasePluginConfiguration
     public int ResumeCacheTtlSeconds { get; set; } = 30;
 
     /// <summary>
+    /// Gets or sets the time-to-live in seconds for cached NextUp batch results. Zero disables NextUp caching.
+    /// Overridden by <c>Pgsql_CACHE_NEXTUP_TTL</c>.
+    /// </summary>
+    public int NextUpCacheTtlSeconds { get; set; } = 45;
+
+    /// <summary>
     /// Gets or sets a value indicating whether PostgreSQL-optimised Latest queries are enabled.
     /// Overridden by <c>Pgsql_PG_OPTIMIZE_LATEST</c> (per-type overrides:
     /// <c>Pgsql_PG_OPTIMIZE_MOVIES_LATEST</c>, <c>Pgsql_PG_OPTIMIZE_TV_LATEST</c>, <c>Pgsql_PG_OPTIMIZE_MUSIC_LATEST</c>).

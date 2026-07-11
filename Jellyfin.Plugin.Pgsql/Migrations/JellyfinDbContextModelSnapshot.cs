@@ -1487,6 +1487,8 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasIndex("UserId", "ItemId", "LastPlayedDate");
 
+                    b.HasIndex("UserId", "PlaybackPositionTicks");
+
                     b.HasIndex("UserId", "Played", "ItemId");
 
                     b.ToTable("UserData");
