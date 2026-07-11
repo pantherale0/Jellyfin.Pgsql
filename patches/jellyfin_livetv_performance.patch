@@ -2039,7 +2039,7 @@ index 15e20d6f64..5721cbf6f1 100644
  
          result = new EpgChannelData(channels);
 diff --git a/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs b/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs
-index 7088d1f0bf..6ba435c9b1 100644
+index 7088d1f0bf..ed5aff2ea0 100644
 --- a/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs
 +++ b/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs
 @@ -9,6 +9,7 @@ using System.Linq;
@@ -2055,7 +2055,7 @@ index 7088d1f0bf..6ba435c9b1 100644
          private readonly IHttpClientFactory _httpClientFactory;
          private readonly ILogger<XmlTvListingsProvider> _logger;
 +        private readonly object _programmeCacheLock = new();
-+        private ProgrammeCacheEntry _programmeCache;
++        private ProgrammeCacheEntry? _programmeCache;
  
          public XmlTvListingsProvider(
              IServerConfigurationManager config,
@@ -2172,17 +2172,17 @@ index 7088d1f0bf..6ba435c9b1 100644
 +
 +        private sealed class ProgrammeCacheEntry
 +        {
-+            public string Path { get; init; }
++            public required string Path { get; init; }
 +
 +            public DateTime FileWriteTimeUtc { get; init; }
 +
-+            public string Language { get; init; }
++            public required string Language { get; init; }
 +
 +            public DateTime StartDateUtc { get; init; }
 +
 +            public DateTime EndDateUtc { get; init; }
 +
-+            public Dictionary<string, List<ProgramInfo>> ProgrammesByChannel { get; init; }
++            public required Dictionary<string, List<ProgramInfo>> ProgrammesByChannel { get; init; }
 +        }
      }
  }
