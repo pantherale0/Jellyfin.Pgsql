@@ -13,8 +13,54 @@ on:
       - '**/*.md'
   workflow_dispatch:
 
+env:
+  POSTGRES_HOST: localhost
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: jellyfin
+  POSTGRES_USER: jellyfin
+  POSTGRES_PASSWORD: jellyfin
+  ConnectionStrings__Default: Host=localhost;Port=5432;Database=jellyfin;Username=jellyfin;Password=jellyfin
+
 jobs:
-  call:
-    uses: jellyfin/jellyfin-meta-plugins/.github/workflows/test.yaml@master
-    with:
-      dotnet-version: "10.0.x"
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: jellyfin
+          POSTGRES_PASSWORD: jellyfin
+          POSTGRES_DB: jellyfin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jellyfin -d jellyfin"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Apply Jellyfin patches
+        run: ./scripts/apply-patches.sh jellyfin
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore tools and packages
+        run: |
+          dotnet tool restore
+          dotnet restore Jellyfin.Plugin.Pgsql.sln
+
+      - name: Build
+        run: dotnet build Jellyfin.Plugin.Pgsql.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test Jellyfin.Plugin.Pgsql.sln --configuration Release --no-build --verbosity normal
