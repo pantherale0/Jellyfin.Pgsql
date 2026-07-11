@@ -21,10 +21,10 @@ index ec3268aceb..3522432572 100644
  
 diff --git a/src/apps/dashboard/features/users/components/SSOMappings.tsx b/src/apps/dashboard/features/users/components/SSOMappings.tsx
 new file mode 100644
-index 0000000000..d657161f52
+index 0000000000..e62021e5c1
 --- /dev/null
 +++ b/src/apps/dashboard/features/users/components/SSOMappings.tsx
-@@ -0,0 +1,399 @@
+@@ -0,0 +1,370 @@
 +import React, { useEffect, useState, useCallback } from 'react';
 +import { useApi } from 'hooks/useApi';
 +import Box from '@mui/material/Box';
@@ -88,7 +88,7 @@ index 0000000000..d657161f52
 +];
 +
 +const SSOMappings = () => {
-+    const { __legacyApiClient__: apiClient } = useApi();
++    const { api } = useApi();
 +    const [ mappings, setMappings ] = useState<Mapping[]>([]);
 +    const [ libraries, setLibraries ] = useState<LibraryFolder[]>([]);
 +    const [ loading, setLoading ] = useState(true);
@@ -103,66 +103,37 @@ index 0000000000..d657161f52
 +    const [ selectedPermissions, setSelectedPermissions ] = useState<Record<string, boolean>>({});
 +    const [ selectedUnratedItems, setSelectedUnratedItems ] = useState<string[]>([]);
 +
-+    const serverUrl = apiClient ? apiClient.serverAddress() : '';
-+    const token = apiClient ? apiClient.accessToken() : '';
-+
 +    const fetchData = useCallback(async () => {
-+        if (!serverUrl || !token) return;
++        if (!api) return;
 +        setLoading(true);
 +        setError(null);
 +        try {
-+            const headers = {
-+                'X-MediaBrowser-Token': token,
-+                'Content-Type': 'application/json'
-+            };
-+
 +            const [ configRes, libRes ] = await Promise.all([
-+                fetch(`${serverUrl}/sso/rbac/config?api_key=${token}`, { headers }),
-+                fetch(`${serverUrl}/sso/rbac/libraries?api_key=${token}`, { headers })
++                api.axiosInstance.get<Mapping[]>('/sso/rbac/config'),
++                api.axiosInstance.get<LibraryFolder[]>('/sso/rbac/libraries')
 +            ]);
 +
-+            if (!configRes.ok || !libRes.ok) {
-+                throw new Error('Failed to fetch SSO configuration or libraries.');
-+            }
-+
-+            const configData = await configRes.json();
-+            const libData = await libRes.json();
-+
-+            setMappings((configData || []).map((m: Mapping) => ({
++            setMappings((configRes.data || []).map((m: Mapping) => ({
 +                ...m,
 +                blockUnratedItems: m.blockUnratedItems || []
 +            })));
-+            setLibraries(libData || []);
++            setLibraries(libRes.data || []);
 +        } catch (err: any) {
 +            setError(err.message || 'An error occurred.');
 +        } finally {
 +            setLoading(false);
 +        }
-+    }, [ serverUrl, token ]);
++    }, [ api ]);
 +
 +    useEffect(() => {
 +        fetchData();
 +    }, [ fetchData ]);
 +
 +    const saveMappings = async (updatedMappings: Mapping[]) => {
-+        if (!serverUrl || !token) return;
++        if (!api) return;
 +        setError(null);
 +        try {
-+            const headers = {
-+                'X-MediaBrowser-Token': token,
-+                'Content-Type': 'application/json'
-+            };
-+
-+            const response = await fetch(`${serverUrl}/sso/rbac/config?api_key=${token}`, {
-+                method: 'POST',
-+                headers,
-+                body: JSON.stringify(updatedMappings)
-+            });
-+
-+            if (!response.ok) {
-+                throw new Error('Failed to save mappings.');
-+            }
-+
++            await api.axiosInstance.post('/sso/rbac/config', updatedMappings);
 +            setMappings(updatedMappings);
 +        } catch (err: any) {
 +            setError(err.message || 'Failed to save mappings.');
