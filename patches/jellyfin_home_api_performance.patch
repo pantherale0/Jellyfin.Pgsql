@@ -1,22 +1,105 @@
-diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs
-index 8556fb7bb3..a8c7af8b4c 100644
---- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs
-+++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs
-@@ -48,6 +48,8 @@ public class BaseItemConfiguration : IEntityTypeConfiguration<BaseItemEntity>
-         builder.HasIndex(e => new { e.Type, e.SeriesPresentationUniqueKey, e.IsFolder, e.IsVirtualItem });
-         // live tv programs
-         builder.HasIndex(e => new { e.Type, e.TopParentId, e.StartDate });
-+        // live tv programs filtered by channel (EPG grid / current program queries)
-+        builder.HasIndex(e => new { e.Type, e.TopParentId, e.ChannelId, e.StartDate });
-         // covering index for getitemvalues
-         builder.HasIndex(e => new { e.Type, e.TopParentId, e.Id });
-         // used by movie suggestions
-diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260711120000_AddLiveTvChannelStartDateIndex.Designer.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260711120000_AddLiveTvChannelStartDateIndex.Designer.cs
+diff --git a/Emby.Server.Implementations/TV/TVSeriesManager.cs b/Emby.Server.Implementations/TV/TVSeriesManager.cs
+index 535dc01a31..2cbea04ed3 100644
+--- a/Emby.Server.Implementations/TV/TVSeriesManager.cs
++++ b/Emby.Server.Implementations/TV/TVSeriesManager.cs
+@@ -123,6 +123,29 @@ namespace Emby.Server.Implementations.TV
+ 
+             var batchResult = _libraryManager.GetNextUpEpisodesBatch(query, seriesKeys, includeSpecials, includeRewatching);
+ 
++            var itemsForUserData = new List<BaseItem>();
++            foreach (var seriesKey in seriesKeys)
++            {
++                if (!batchResult.TryGetValue(seriesKey, out var result))
++                {
++                    continue;
++                }
++
++                if (result.LastWatched is not null)
++                {
++                    itemsForUserData.Add(result.LastWatched);
++                }
++
++                if (result.LastWatchedForRewatching is not null)
++                {
++                    itemsForUserData.Add(result.LastWatchedForRewatching);
++                }
++            }
++
++            var userDataByItemId = itemsForUserData.Count > 0
++                ? _userDataManager.GetUserDataBatch(itemsForUserData, user)
++                : new Dictionary<Guid, UserItemData>();
++
+             var nextUpList = new List<(DateTime LastWatchedDate, Episode Episode)>();
+ 
+             foreach (var seriesKey in seriesKeys)
+@@ -137,10 +160,10 @@ namespace Emby.Server.Implementations.TV
+                 if (nextEpisode is not null)
+                 {
+                     DateTime lastWatchedDate = DateTime.MinValue;
+-                    if (result.LastWatched is not null)
++                    if (result.LastWatched is not null
++                        && userDataByItemId.TryGetValue(result.LastWatched.Id, out var userData))
+                     {
+-                        var userData = _userDataManager.GetUserData(user, result.LastWatched);
+-                        lastWatchedDate = userData?.LastPlayedDate ?? DateTime.MinValue.AddDays(1);
++                        lastWatchedDate = userData.LastPlayedDate ?? DateTime.MinValue.AddDays(1);
+                     }
+ 
+                     nextUpList.Add((lastWatchedDate, nextEpisode));
+@@ -153,10 +176,10 @@ namespace Emby.Server.Implementations.TV
+                     if (nextPlayedEpisode is not null)
+                     {
+                         DateTime rewatchLastWatchedDate = DateTime.MinValue;
+-                        if (result.LastWatchedForRewatching is not null)
++                        if (result.LastWatchedForRewatching is not null
++                            && userDataByItemId.TryGetValue(result.LastWatchedForRewatching.Id, out var userData))
+                         {
+-                            var userData = _userDataManager.GetUserData(user, result.LastWatchedForRewatching);
+-                            rewatchLastWatchedDate = userData?.LastPlayedDate ?? DateTime.MinValue.AddDays(1);
++                            rewatchLastWatchedDate = userData.LastPlayedDate ?? DateTime.MinValue.AddDays(1);
+                         }
+ 
+                         nextUpList.Add((rewatchLastWatchedDate, nextPlayedEpisode));
+diff --git a/Jellyfin.Server.Implementations/Item/NextUpService.cs b/Jellyfin.Server.Implementations/Item/NextUpService.cs
+index 725b4cfaac..76dd62c049 100644
+--- a/Jellyfin.Server.Implementations/Item/NextUpService.cs
++++ b/Jellyfin.Server.Implementations/Item/NextUpService.cs
+@@ -170,7 +170,7 @@ public class NextUpService : INextUpService
+                 .Where(e => e.ParentIndexNumber == 0)
+                 .Where(e => !e.IsVirtualItem);
+             specialsQuery = _queryHelpers.ApplyAccessFiltering(context, specialsQuery, filter);
+-            specialsQuery = _queryHelpers.ApplyNavigations(specialsQuery, filter).AsSingleQuery();
++            specialsQuery = _queryHelpers.ApplyNavigations(specialsQuery, filter).AsSplitQuery();
+ 
+             foreach (var special in specialsQuery)
+             {
+@@ -305,7 +305,7 @@ public class NextUpService : INextUpService
+         if (nextEpisodeIds.Count > 0)
+         {
+             var nextQuery = context.BaseItems.AsNoTracking().Where(e => nextEpisodeIds.Contains(e.Id));
+-            nextQuery = _queryHelpers.ApplyNavigations(nextQuery, filter).AsSingleQuery();
++            nextQuery = _queryHelpers.ApplyNavigations(nextQuery, filter).AsSplitQuery();
+             nextEpisodes = nextQuery.ToDictionary(e => e.Id);
+         }
+ 
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserDataConfiguration.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserDataConfiguration.cs
+index 42848c6c4e..216e3144b0 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserDataConfiguration.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserDataConfiguration.cs
+@@ -18,6 +18,7 @@ public class UserDataConfiguration : IEntityTypeConfiguration<UserData>
+         builder.HasIndex(d => new { d.ItemId, d.UserId, d.IsFavorite });
+         builder.HasIndex(d => new { d.ItemId, d.UserId, d.LastPlayedDate });
+         builder.HasIndex(d => new { d.UserId, d.ItemId, d.LastPlayedDate });
++        builder.HasIndex(d => new { d.UserId, d.PlaybackPositionTicks });
+         builder.HasIndex(d => new { d.UserId, d.Played, d.ItemId });
+         builder.HasIndex(d => new { d.UserId, d.IsFavorite, d.ItemId });
+         builder.HasOne(e => e.Item).WithMany(e => e.UserData);
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260711200000_AddUserDataUserIdPlaybackPositionTicksIndex.Designer.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260711200000_AddUserDataUserIdPlaybackPositionTicksIndex.Designer.cs
 new file mode 100644
-index 0000000000..7269a271d1
+index 0000000000..e41f39f5d5
 --- /dev/null
-+++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260711120000_AddLiveTvChannelStartDateIndex.Designer.cs
-@@ -0,0 +1,1809 @@
++++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260711200000_AddUserDataUserIdPlaybackPositionTicksIndex.Designer.cs
+@@ -0,0 +1,1811 @@
 +// <auto-generated />
 +using System;
 +using Jellyfin.Database.Implementations;
@@ -30,8 +113,8 @@ index 0000000000..7269a271d1
 +namespace Jellyfin.Server.Implementations.Migrations
 +{
 +    [DbContext(typeof(JellyfinDbContext))]
-+    [Migration("20260711120000_AddLiveTvChannelStartDateIndex")]
-+    partial class AddLiveTvChannelStartDateIndex
++    [Migration("20260711200000_AddUserDataUserIdPlaybackPositionTicksIndex")]
++    partial class AddUserDataUserIdPlaybackPositionTicksIndex
 +    {
 +        /// <inheritdoc />
 +        protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -1482,6 +1565,8 @@ index 0000000000..7269a271d1
 +
 +                    b.HasIndex("UserId", "ItemId", "LastPlayedDate");
 +
++                    b.HasIndex("UserId", "PlaybackPositionTicks");
++
 +                    b.HasIndex("UserId", "Played", "ItemId");
 +
 +                    b.ToTable("UserData");
@@ -1826,12 +1911,12 @@ index 0000000000..7269a271d1
 +        }
 +    }
 +}
-diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260711120000_AddLiveTvChannelStartDateIndex.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260711120000_AddLiveTvChannelStartDateIndex.cs
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260711200000_AddUserDataUserIdPlaybackPositionTicksIndex.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260711200000_AddUserDataUserIdPlaybackPositionTicksIndex.cs
 new file mode 100644
-index 0000000000..e5389dc64a
+index 0000000000..766d101690
 --- /dev/null
-+++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260711120000_AddLiveTvChannelStartDateIndex.cs
-@@ -0,0 +1,27 @@
++++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260711200000_AddUserDataUserIdPlaybackPositionTicksIndex.cs
+@@ -0,0 +1,28 @@
 +using Microsoft.EntityFrameworkCore.Migrations;
 +
 +#nullable disable
@@ -1839,556 +1924,46 @@ index 0000000000..e5389dc64a
 +namespace Jellyfin.Server.Implementations.Migrations
 +{
 +    /// <inheritdoc />
-+    public partial class AddLiveTvChannelStartDateIndex : Migration
++    public partial class AddUserDataUserIdPlaybackPositionTicksIndex : Migration
 +    {
 +        /// <inheritdoc />
 +        protected override void Up(MigrationBuilder migrationBuilder)
 +        {
 +            migrationBuilder.CreateIndex(
-+                name: "IX_BaseItems_Type_TopParentId_ChannelId_StartDate",
-+                table: "BaseItems",
-+                columns: new[] { "Type", "TopParentId", "ChannelId", "StartDate" });
++                name: "IX_UserData_UserId_PlaybackPositionTicks",
++                table: "UserData",
++                columns: new[] { "UserId", "PlaybackPositionTicks" },
++                filter: "\"PlaybackPositionTicks\" > 0");
 +        }
 +
 +        /// <inheritdoc />
 +        protected override void Down(MigrationBuilder migrationBuilder)
 +        {
 +            migrationBuilder.DropIndex(
-+                name: "IX_BaseItems_Type_TopParentId_ChannelId_StartDate",
-+                table: "BaseItems");
++                name: "IX_UserData_UserId_PlaybackPositionTicks",
++                table: "UserData");
 +        }
 +    }
 +}
-diff --git a/src/Jellyfin.LiveTv/DefaultLiveTvService.cs b/src/Jellyfin.LiveTv/DefaultLiveTvService.cs
-index d477bc3713..58d5c83ae8 100644
---- a/src/Jellyfin.LiveTv/DefaultLiveTvService.cs
-+++ b/src/Jellyfin.LiveTv/DefaultLiveTvService.cs
-@@ -40,6 +40,7 @@ namespace Jellyfin.LiveTv
-         private readonly LiveTvDtoService _tvDtoService;
-         private readonly TimerManager _timerManager;
-         private readonly SeriesTimerManager _seriesTimerManager;
-+        private Dictionary<string, ChannelInfo> _channelsById;
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
+index fd18c035e6..0d1a608c9a 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
+@@ -396,6 +396,8 @@ namespace Jellyfin.Server.Implementations.Migrations
  
-         public DefaultLiveTvService(
-             ILogger<DefaultLiveTvService> logger,
-@@ -118,6 +119,11 @@ namespace Jellyfin.LiveTv
+                     b.HasIndex("Type", "TopParentId", "StartDate");
  
-         private async Task<IEnumerable<ChannelInfo>> GetChannelsAsync(bool enableCache, CancellationToken cancellationToken)
-         {
-+            if (enableCache && _channelsById is not null)
-+            {
-+                return _channelsById.Values;
-+            }
++                    b.HasIndex("Type", "TopParentId", "ChannelId", "StartDate");
 +
-             var channels = new List<ChannelInfo>();
+                     b.HasIndex("MediaType", "TopParentId", "IsVirtualItem", "PresentationUniqueKey");
  
-             foreach (var hostInstance in _tunerHostManager.TunerHosts)
-@@ -136,11 +142,13 @@ namespace Jellyfin.LiveTv
+                     b.HasIndex("TopParentId", "IsFolder", "IsVirtualItem", "DateCreated");
+@@ -1461,6 +1463,8 @@ namespace Jellyfin.Server.Implementations.Migrations
  
-             await _listingsManager.AddProviderMetadata(channels, enableCache, cancellationToken).ConfigureAwait(false);
+                     b.HasIndex("UserId", "ItemId", "LastPlayedDate");
  
-+            _channelsById = channels.ToDictionary(i => i.Id, StringComparer.OrdinalIgnoreCase);
-             return channels;
-         }
- 
-         public Task<IEnumerable<ChannelInfo>> GetChannelsAsync(CancellationToken cancellationToken)
-         {
-+            _channelsById = null;
-             return GetChannelsAsync(false, cancellationToken);
-         }
- 
-@@ -447,8 +455,11 @@ namespace Jellyfin.LiveTv
- 
-         public async Task<IEnumerable<ProgramInfo>> GetProgramsAsync(string channelId, DateTime startDateUtc, DateTime endDateUtc, CancellationToken cancellationToken)
-         {
--            var channels = await GetChannelsAsync(true, cancellationToken).ConfigureAwait(false);
--            var channel = channels.First(i => string.Equals(i.Id, channelId, StringComparison.OrdinalIgnoreCase));
-+            await GetChannelsAsync(true, cancellationToken).ConfigureAwait(false);
-+            if (_channelsById is null || !_channelsById.TryGetValue(channelId, out var channel))
-+            {
-+                throw new ResourceNotFoundException($"Channel not found: {channelId}");
-+            }
- 
-             return await _listingsManager.GetProgramsAsync(channel, startDateUtc, endDateUtc, cancellationToken)
-                 .ConfigureAwait(false);
-diff --git a/src/Jellyfin.LiveTv/Guide/GuideManager.cs b/src/Jellyfin.LiveTv/Guide/GuideManager.cs
-index b8545cbb64..724410f6fc 100644
---- a/src/Jellyfin.LiveTv/Guide/GuideManager.cs
-+++ b/src/Jellyfin.LiveTv/Guide/GuideManager.cs
-@@ -240,12 +240,22 @@ public class GuideManager : IGuideManager
- 
-                 var channelPrograms = (await service.GetProgramsAsync(currentChannel.ExternalId, start, end, cancellationToken).ConfigureAwait(false)).ToList();
- 
--                var existingPrograms = _libraryManager.GetItemList(new InternalItemsQuery
--                {
--                    IncludeItemTypes = [BaseItemKind.LiveTvProgram],
--                    ChannelIds = [currentChannel.Id],
--                    DtoOptions = new DtoOptions(true)
--                }).Cast<LiveTvProgram>().ToDictionary(i => i.Id);
-+                // Only load programs that appear in this refresh window, instead of the
-+                // entire channel history (which can be enormous and dominated guide refresh).
-+                var existingProgramIds = channelPrograms
-+                    .Select(p => _tvDtoService.GetInternalProgramId(p.Id))
-+                    .Distinct()
-+                    .ToArray();
++                    b.HasIndex("UserId", "PlaybackPositionTicks");
 +
-+                var existingPrograms = existingProgramIds.Length == 0
-+                    ? new Dictionary<Guid, LiveTvProgram>()
-+                    : _libraryManager.GetItemList(new InternalItemsQuery
-+                    {
-+                        IncludeItemTypes = [BaseItemKind.LiveTvProgram],
-+                        ItemIds = existingProgramIds,
-+                        ChannelIds = [currentChannel.Id],
-+                        DtoOptions = new DtoOptions(false)
-+                    }).Cast<LiveTvProgram>().ToDictionary(i => i.Id);
+                     b.HasIndex("UserId", "Played", "ItemId");
  
-                 var newPrograms = new List<LiveTvProgram>();
-                 var updatedPrograms = new List<LiveTvProgram>();
-@@ -341,40 +351,47 @@ public class GuideManager : IGuideManager
-             DtoOptions = new DtoOptions(false)
-         });
- 
--        var numComplete = 0;
-+        var currentIds = new HashSet<Guid>(currentIdList);
-+        var staleIds = new List<Guid>(list.Count);
- 
-         foreach (var itemId in list)
-         {
--            cancellationToken.ThrowIfCancellationRequested();
--
-             if (itemId.IsEmpty())
-             {
-                 // Somehow some invalid data got into the db. It probably predates the boundary checking
-                 continue;
-             }
- 
--            if (!currentIdList.Contains(itemId))
-+            if (!currentIds.Contains(itemId))
-             {
--                var item = _libraryManager.GetItemById(itemId);
--
--                if (item is not null)
--                {
--                    _libraryManager.DeleteItem(
--                        item,
--                        new DeleteOptions
--                        {
--                            DeleteFileLocation = false,
--                            DeleteFromExternalProvider = false
--                        },
--                        false);
--                }
-+                staleIds.Add(itemId);
-             }
-+        }
- 
--            numComplete++;
--            double percent = numComplete / (double)list.Count;
-+        const int batchSize = 500;
-+        var numComplete = 0;
- 
--            progress.Report(100 * percent);
-+        for (var offset = 0; offset < staleIds.Count; offset += batchSize)
-+        {
-+            cancellationToken.ThrowIfCancellationRequested();
-+
-+            var batchIds = staleIds.Skip(offset).Take(batchSize).ToArray();
-+            var items = _libraryManager.GetItemList(new InternalItemsQuery
-+            {
-+                ItemIds = batchIds,
-+                DtoOptions = new DtoOptions(false)
-+            });
-+
-+            if (items.Count > 0)
-+            {
-+                _libraryManager.DeleteItemsUnsafeFast(items);
-+            }
-+
-+            numComplete += batchIds.Length;
-+            progress.Report(staleIds.Count == 0 ? 100 : 100.0 * numComplete / staleIds.Count);
-         }
-+
-+        progress.Report(100);
-     }
- 
-     private async Task<LiveTvChannel> GetChannel(
-diff --git a/src/Jellyfin.LiveTv/Listings/ListingsManager.cs b/src/Jellyfin.LiveTv/Listings/ListingsManager.cs
-index 15e20d6f64..5721cbf6f1 100644
---- a/src/Jellyfin.LiveTv/Listings/ListingsManager.cs
-+++ b/src/Jellyfin.LiveTv/Listings/ListingsManager.cs
-@@ -375,7 +375,7 @@ public class ListingsManager : IListingsManager
-         var channels = await provider.GetChannels(info, cancellationToken).ConfigureAwait(false);
-         foreach (var channel in channels)
-         {
--            _logger.LogInformation("Found epg channel in {0} {1} {2} {3}", provider.Name, info.ListingsId, channel.Name, channel.Id);
-+            _logger.LogDebug("Found epg channel in {0} {1} {2} {3}", provider.Name, info.ListingsId, channel.Name, channel.Id);
-         }
- 
-         result = new EpgChannelData(channels);
-diff --git a/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs b/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs
-index 7088d1f0bf..ed5aff2ea0 100644
---- a/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs
-+++ b/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs
-@@ -9,6 +9,7 @@ using System.Linq;
- using System.Net.Http;
- using System.Threading;
- using System.Threading.Tasks;
-+using System.Xml;
- using Jellyfin.Extensions;
- using Jellyfin.XmlTv;
- using Jellyfin.XmlTv.Entities;
-@@ -31,6 +32,8 @@ namespace Jellyfin.LiveTv.Listings
-         private readonly IServerConfigurationManager _config;
-         private readonly IHttpClientFactory _httpClientFactory;
-         private readonly ILogger<XmlTvListingsProvider> _logger;
-+        private readonly object _programmeCacheLock = new();
-+        private ProgrammeCacheEntry? _programmeCache;
- 
-         public XmlTvListingsProvider(
-             IServerConfigurationManager config,
-@@ -169,11 +172,101 @@ namespace Jellyfin.LiveTv.Listings
-             _logger.LogDebug("Getting xmltv programs for channel {Id}", channelId);
- 
-             string path = await GetXml(info, cancellationToken).ConfigureAwait(false);
--            _logger.LogDebug("Opening XmlTvReader for {Path}", path);
--            var reader = new XmlTvReader(path, GetLanguage(info));
-+            var language = GetLanguage(info);
-+            var programmesByChannel = GetOrBuildProgrammeCache(info, path, language, startDateUtc, endDateUtc, cancellationToken);
-+
-+            if (programmesByChannel.TryGetValue(channelId, out var programs))
-+            {
-+                return programs;
-+            }
- 
--            return reader.GetProgrammes(channelId, startDateUtc, endDateUtc, cancellationToken)
--                        .Select(p => GetProgramInfo(p, info));
-+            return [];
-+        }
-+
-+        private Dictionary<string, List<ProgramInfo>> GetOrBuildProgrammeCache(
-+            ListingsProviderInfo info,
-+            string path,
-+            string language,
-+            DateTime startDateUtc,
-+            DateTime endDateUtc,
-+            CancellationToken cancellationToken)
-+        {
-+            var writeTime = File.GetLastWriteTimeUtc(path);
-+
-+            lock (_programmeCacheLock)
-+            {
-+                if (_programmeCache is not null
-+                    && string.Equals(_programmeCache.Path, path, StringComparison.Ordinal)
-+                    && _programmeCache.FileWriteTimeUtc == writeTime
-+                    && string.Equals(_programmeCache.Language, language, StringComparison.Ordinal)
-+                    && _programmeCache.StartDateUtc == startDateUtc
-+                    && _programmeCache.EndDateUtc == endDateUtc)
-+                {
-+                    return _programmeCache.ProgrammesByChannel;
-+                }
-+            }
-+
-+            _logger.LogDebug("Parsing XmlTV programmes once for {Path}", path);
-+
-+            var programmesByChannel = new Dictionary<string, List<ProgramInfo>>(StringComparer.OrdinalIgnoreCase);
-+            var reader = new XmlTvReader(path, language);
-+            var settings = new XmlReaderSettings
-+            {
-+                DtdProcessing = DtdProcessing.Ignore,
-+                CheckCharacters = false,
-+                IgnoreProcessingInstructions = true,
-+                IgnoreComments = true
-+            };
-+
-+            using (var xmlReader = XmlReader.Create(path, settings))
-+            {
-+                if (xmlReader.ReadToDescendant("tv")
-+                    && xmlReader.ReadToDescendant("programme"))
-+                {
-+                    do
-+                    {
-+                        cancellationToken.ThrowIfCancellationRequested();
-+
-+                        var programmeChannelId = xmlReader.GetAttribute("channel");
-+                        if (string.IsNullOrEmpty(programmeChannelId))
-+                        {
-+                            continue;
-+                        }
-+
-+                        // Pass the programme's own channel id so GetProgramme accepts it,
-+                        // allowing a single full-file pass instead of one scan per channel.
-+                        var programme = reader.GetProgramme(xmlReader, programmeChannelId, startDateUtc, endDateUtc);
-+                        if (programme is null)
-+                        {
-+                            continue;
-+                        }
-+
-+                        if (!programmesByChannel.TryGetValue(programmeChannelId, out var list))
-+                        {
-+                            list = [];
-+                            programmesByChannel[programmeChannelId] = list;
-+                        }
-+
-+                        list.Add(GetProgramInfo(programme, info));
-+                    }
-+                    while (xmlReader.ReadToFollowing("programme"));
-+                }
-+            }
-+
-+            lock (_programmeCacheLock)
-+            {
-+                _programmeCache = new ProgrammeCacheEntry
-+                {
-+                    Path = path,
-+                    FileWriteTimeUtc = writeTime,
-+                    Language = language,
-+                    StartDateUtc = startDateUtc,
-+                    EndDateUtc = endDateUtc,
-+                    ProgrammesByChannel = programmesByChannel
-+                };
-+            }
-+
-+            return programmesByChannel;
-         }
- 
-         private static ProgramInfo GetProgramInfo(XmlTvProgram program, ListingsProviderInfo info)
-@@ -297,5 +390,20 @@ namespace Jellyfin.LiveTv.Listings
-                 Number = string.IsNullOrWhiteSpace(c.Number) ? c.Id : c.Number
-             }).ToList();
-         }
-+
-+        private sealed class ProgrammeCacheEntry
-+        {
-+            public required string Path { get; init; }
-+
-+            public DateTime FileWriteTimeUtc { get; init; }
-+
-+            public required string Language { get; init; }
-+
-+            public DateTime StartDateUtc { get; init; }
-+
-+            public DateTime EndDateUtc { get; init; }
-+
-+            public required Dictionary<string, List<ProgramInfo>> ProgrammesByChannel { get; init; }
-+        }
-     }
- }
-diff --git a/src/Jellyfin.LiveTv/LiveTvManager.cs b/src/Jellyfin.LiveTv/LiveTvManager.cs
-index 173d3c3e8e..9826424134 100644
---- a/src/Jellyfin.LiveTv/LiveTvManager.cs
-+++ b/src/Jellyfin.LiveTv/LiveTvManager.cs
-@@ -13,6 +13,7 @@ using Jellyfin.Data.Enums;
- using Jellyfin.Data.Events;
- using Jellyfin.Database.Implementations.Entities;
- using Jellyfin.Database.Implementations.Enums;
-+using Jellyfin.Extensions;
- using Jellyfin.LiveTv.Configuration;
- using MediaBrowser.Common.Extensions;
- using MediaBrowser.Controller.Channels;
-@@ -294,18 +295,32 @@ namespace Jellyfin.LiveTv
- 
-             if (query.Limit.HasValue && query.Limit.Value > 0)
-             {
--                internalQuery.Limit = Math.Max(query.Limit.Value * 4, 200);
-+                var limit = query.Limit.Value;
-+                internalQuery.Limit = Math.Min(Math.Max(limit * 2, limit + 16), 64);
-             }
- 
-             var programList = _libraryManager.QueryItems(internalQuery).Items;
-             var totalCount = programList.Count;
- 
--            var orderedPrograms = programList.Cast<LiveTvProgram>().OrderBy(i => i.StartDate.Date);
-+            var livePrograms = programList.Cast<LiveTvProgram>().ToArray();
-+            IReadOnlyDictionary<Guid, BaseItem> channelsById = new Dictionary<Guid, BaseItem>();
-+
-+            if ((query.IsAiring ?? false) && livePrograms.Length > 0)
-+            {
-+                var channelIds = livePrograms.Select(i => i.ChannelId).Distinct().ToArray();
-+                channelsById = _libraryManager.GetItemList(new InternalItemsQuery
-+                {
-+                    ItemIds = channelIds,
-+                    DtoOptions = new DtoOptions(false)
-+                }).ToDictionary(i => i.Id);
-+            }
-+
-+            var orderedPrograms = livePrograms.OrderBy(i => i.StartDate.Date);
- 
-             if (query.IsAiring ?? false)
-             {
-                 orderedPrograms = orderedPrograms
--                    .ThenByDescending(i => GetRecommendationScore(i, user, true));
-+                    .ThenByDescending(i => GetRecommendationScore(i, user, true, channelsById));
-             }
- 
-             IEnumerable<BaseItem> programs = orderedPrograms;
-@@ -338,7 +353,11 @@ namespace Jellyfin.LiveTv
-                 _dtoService.GetBaseItemDtos(internalResult.Items, options, query.User)));
-         }
- 
--        private int GetRecommendationScore(LiveTvProgram program, User user, bool factorChannelWatchCount)
-+        private int GetRecommendationScore(
-+            LiveTvProgram program,
-+            User user,
-+            bool factorChannelWatchCount,
-+            IReadOnlyDictionary<Guid, BaseItem> channelsById)
-         {
-             var score = 0;
- 
-@@ -352,9 +371,7 @@ namespace Jellyfin.LiveTv
-                 score++;
-             }
- 
--            var channel = _libraryManager.GetItemById(program.ChannelId);
--
--            if (channel is null)
-+            if (!channelsById.TryGetValue(program.ChannelId, out var channel))
-             {
-                 return score;
-             }
-@@ -381,18 +398,28 @@ namespace Jellyfin.LiveTv
- 
-         private async Task AddRecordingInfo(IEnumerable<(BaseItemDto ItemDto, string ExternalId, string ExternalSeriesId)> programs, CancellationToken cancellationToken)
-         {
--            IReadOnlyList<TimerInfo> timerList = null;
--            IReadOnlyList<SeriesTimerInfo> seriesTimerList = null;
-+            var programList = programs as IList<(BaseItemDto ItemDto, string ExternalId, string ExternalSeriesId)>
-+                ?? programs.ToList();
-+            if (programList.Count == 0)
-+            {
-+                return;
-+            }
-+
-+            var timerList = (await GetTimersInternal(new TimerQuery(), cancellationToken).ConfigureAwait(false)).Items;
-+            var timersByProgramId = timerList
-+                .Where(i => !string.IsNullOrEmpty(i.ProgramId))
-+                .GroupBy(i => i.ProgramId, StringComparer.OrdinalIgnoreCase)
-+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
- 
--            foreach (var programTuple in programs)
-+            Dictionary<string, SeriesTimerInfo> seriesTimersBySeriesId = null;
-+
-+            foreach (var programTuple in programList)
-             {
-                 var program = programTuple.ItemDto;
-                 var externalProgramId = programTuple.ExternalId;
-                 string externalSeriesId = programTuple.ExternalSeriesId;
- 
--                timerList ??= (await GetTimersInternal(new TimerQuery(), cancellationToken).ConfigureAwait(false)).Items;
--
--                var timer = timerList.FirstOrDefault(i => string.Equals(i.ProgramId, externalProgramId, StringComparison.OrdinalIgnoreCase));
-+                timersByProgramId.TryGetValue(externalProgramId ?? string.Empty, out var timer);
-                 var foundSeriesTimer = false;
- 
-                 if (timer is not null)
-@@ -418,11 +445,12 @@ namespace Jellyfin.LiveTv
-                     continue;
-                 }
- 
--                seriesTimerList ??= (await GetSeriesTimersInternal(new SeriesTimerQuery(), cancellationToken).ConfigureAwait(false)).Items;
--
--                var seriesTimer = seriesTimerList.FirstOrDefault(i => string.Equals(i.SeriesId, externalSeriesId, StringComparison.OrdinalIgnoreCase));
-+                seriesTimersBySeriesId ??= (await GetSeriesTimersInternal(new SeriesTimerQuery(), cancellationToken).ConfigureAwait(false)).Items
-+                    .Where(i => !string.IsNullOrEmpty(i.SeriesId))
-+                    .GroupBy(i => i.SeriesId, StringComparer.OrdinalIgnoreCase)
-+                    .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
- 
--                if (seriesTimer is not null)
-+                if (seriesTimersBySeriesId.TryGetValue(externalSeriesId, out var seriesTimer))
-                 {
-                     program.SeriesTimerId = _tvDtoService.GetInternalSeriesTimerId(seriesTimer.Id)
-                         .ToString("N", CultureInfo.InvariantCulture);
-@@ -543,6 +571,24 @@ namespace Jellyfin.LiveTv
-             var hasChannelImage = fields.Contains(ItemFields.ChannelImage);
-             var hasChannelInfo = fields.Contains(ItemFields.ChannelInfo);
- 
-+            Dictionary<Guid, LiveTvChannel> channelsById = null;
-+            if (hasChannelInfo || hasChannelImage)
-+            {
-+                var channelIds = programs
-+                    .Select(i => ((LiveTvProgram)i.Item).ChannelId)
-+                    .Where(id => !id.Equals(default))
-+                    .Distinct()
-+                    .ToArray();
-+
-+                channelsById = channelIds.Length == 0
-+                    ? new Dictionary<Guid, LiveTvChannel>()
-+                    : _libraryManager.GetItemList(new InternalItemsQuery
-+                    {
-+                        ItemIds = channelIds,
-+                        DtoOptions = new DtoOptions(false)
-+                    }).OfType<LiveTvChannel>().ToDictionary(c => c.Id);
-+            }
-+
-             foreach (var (item, dto) in programs)
-             {
-                 var program = (LiveTvProgram)item;
-@@ -558,20 +604,16 @@ namespace Jellyfin.LiveTv
-                 dto.IsKids |= program.IsKids;
-                 dto.IsPremiere |= program.IsPremiere;
- 
--                if (hasChannelInfo || hasChannelImage)
-+                if (channelsById is not null
-+                    && channelsById.TryGetValue(program.ChannelId, out var liveChannel))
-                 {
--                    var channel = _libraryManager.GetItemById(program.ChannelId);
-+                    dto.ChannelName = liveChannel.Name;
-+                    dto.MediaType = liveChannel.MediaType;
-+                    dto.ChannelNumber = liveChannel.Number;
- 
--                    if (channel is LiveTvChannel liveChannel)
-+                    if (hasChannelImage && liveChannel.HasImage(ImageType.Primary))
-                     {
--                        dto.ChannelName = liveChannel.Name;
--                        dto.MediaType = liveChannel.MediaType;
--                        dto.ChannelNumber = liveChannel.Number;
--
--                        if (hasChannelImage && liveChannel.HasImage(ImageType.Primary))
--                        {
--                            dto.ChannelPrimaryImageTag = _tvDtoService.GetImageTag(liveChannel);
--                        }
-+                        dto.ChannelPrimaryImageTag = _tvDtoService.GetImageTag(liveChannel);
-                     }
-                 }
- 
-@@ -974,6 +1016,11 @@ namespace Jellyfin.LiveTv
-                 DtoOptions = options
-             }) : new List<BaseItem>();
- 
-+            var programsByChannelId = programs
-+                .Where(i => !i.ChannelId.IsEmpty())
-+                .GroupBy(i => i.ChannelId)
-+                .ToDictionary(g => g.Key, g => g.First());
-+
-             RemoveFields(options);
- 
-             var currentProgramsList = new List<BaseItem>();
-@@ -989,14 +1036,9 @@ namespace Jellyfin.LiveTv
- 
-                 currentChannelsDict[dto.Id] = dto;
- 
--                if (addCurrentProgram)
-+                if (addCurrentProgram && programsByChannelId.TryGetValue(channel.Id, out var currentProgram))
-                 {
--                    var currentProgram = programs.FirstOrDefault(i => channel.Id.Equals(i.ChannelId));
--
--                    if (currentProgram is not null)
--                    {
--                        currentProgramsList.Add(currentProgram);
--                    }
-+                    currentProgramsList.Add(currentProgram);
-                 }
-             }
- 
-diff --git a/src/Jellyfin.LiveTv/TunerHosts/M3uParser.cs b/src/Jellyfin.LiveTv/TunerHosts/M3uParser.cs
-index 5da7762f6f..ccd5677898 100644
---- a/src/Jellyfin.LiveTv/TunerHosts/M3uParser.cs
-+++ b/src/Jellyfin.LiveTv/TunerHosts/M3uParser.cs
-@@ -105,7 +105,7 @@ namespace Jellyfin.LiveTv.TunerHosts
- 
-                     channel.Path = trimmedLine;
-                     channels.Add(channel);
--                    _logger.LogInformation("Parsed channel: {ChannelName}", channel.Name);
-+                    _logger.LogDebug("Parsed channel: {ChannelName}", channel.Name);
-                     extInf = string.Empty;
-                 }
-             }
+                     b.ToTable("UserData");

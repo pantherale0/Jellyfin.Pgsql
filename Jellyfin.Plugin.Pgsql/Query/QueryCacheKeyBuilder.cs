@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
@@ -47,6 +48,51 @@ internal static class QueryCacheKeyBuilder
         }
 
         return $"resume:{Hash(canonical)}";
+    }
+
+    /// <summary>
+    /// Builds a cache key for a NextUp series-key query.
+    /// </summary>
+    /// <param name="filter">The query filter.</param>
+    /// <param name="dateCutoff">The next-up date cutoff.</param>
+    /// <returns>The cache key, or <c>null</c> when the query cannot be safely keyed.</returns>
+    public static string? BuildNextUpSeriesKeysKey(InternalItemsQuery filter, DateTime dateCutoff)
+    {
+        var canonical = BuildCanonical(filter);
+        if (canonical is null)
+        {
+            return null;
+        }
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"nextup-keys:{dateCutoff.Ticks}:{Hash(canonical)}");
+    }
+
+    /// <summary>
+    /// Builds a cache key for a NextUp batch query.
+    /// </summary>
+    /// <param name="filter">The query filter.</param>
+    /// <param name="seriesKeys">The series keys.</param>
+    /// <param name="includeSpecials">Whether specials are included.</param>
+    /// <param name="includeWatchedForRewatching">Whether rewatching mode is enabled.</param>
+    /// <returns>The cache key, or <c>null</c> when the query cannot be safely keyed.</returns>
+    public static string? BuildNextUpBatchKey(
+        InternalItemsQuery filter,
+        IReadOnlyList<string> seriesKeys,
+        bool includeSpecials,
+        bool includeWatchedForRewatching)
+    {
+        var canonical = BuildCanonical(filter);
+        if (canonical is null)
+        {
+            return null;
+        }
+
+        var keys = string.Join(',', seriesKeys.OrderBy(k => k, StringComparer.Ordinal));
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"nextup-batch:{includeSpecials}:{includeWatchedForRewatching}:{Hash(canonical + '|' + keys)}");
     }
 
     private static string? BuildCanonical(InternalItemsQuery filter)

@@ -56,6 +56,7 @@ internal sealed class CachedItemLoader
         using var context = _dbProvider.CreateDbContext();
         var itemsById = _queryHelpers
             .ApplyNavigations(context.BaseItems.AsNoTracking().Where(e => ids.Contains(e.Id)), filter)
+            .AsSplitQuery()
             .AsEnumerable()
             .Select(e => _queryHelpers.DeserializeBaseItem(e, filter.SkipDeserialization))
             .Where(item => item is not null)
