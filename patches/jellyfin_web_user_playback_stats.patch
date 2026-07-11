@@ -60,10 +60,10 @@ index 0000000000..eec7f3e103
 +export default ReportsDrawerSection;
 diff --git a/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts b/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts
 new file mode 100644
-index 0000000000..56b496e138
+index 0000000000..50f97c9479
 --- /dev/null
 +++ b/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,55 @@
 +import type { Api } from '@jellyfin/sdk';
 +import type { AxiosRequestConfig } from 'axios';
 +
@@ -78,7 +78,14 @@ index 0000000000..56b496e138
 +    path: string,
 +    options?: AxiosRequestConfig
 +): Promise<T[]> => {
-+    const response = await api.axiosInstance.get<T[] | null>(path, options);
++    const response = await api.axiosInstance.get<T[] | null>(path, {
++        ...options,
++        baseURL: api.basePath,
++        headers: {
++            ...options?.headers,
++            Authorization: api.authorizationHeader
++        }
++    });
 +    return Array.isArray(response.data) ? response.data : [];
 +};
 +
