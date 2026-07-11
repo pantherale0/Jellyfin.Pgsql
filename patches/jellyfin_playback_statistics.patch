@@ -65,7 +65,7 @@ index 19823dff37..ab2b5171c6 100644
 +                        if (!string.IsNullOrEmpty(session.DeviceId))
 +                        {
 +                            var resolvedDeviceId = await dbContext.Devices
-+                                .Where(d => d.UserId == user.Id && d.DeviceId == session.DeviceId)
++                                .Where(d => d.UserId.Equals(user.Id) && d.DeviceId == session.DeviceId)
 +                                .OrderByDescending(d => d.DateLastActivity)
 +                                .Select(d => d.Id)
 +                                .FirstOrDefaultAsync()

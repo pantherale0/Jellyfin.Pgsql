@@ -2039,18 +2039,10 @@ index 15e20d6f64..5721cbf6f1 100644
  
          result = new EpgChannelData(channels);
 diff --git a/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs b/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs
-index 7088d1f0bf..d0129daafb 100644
+index 7088d1f0bf..6ba435c9b1 100644
 --- a/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs
 +++ b/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs
-@@ -1,5 +1,7 @@
- #pragma warning disable CS1591
- 
-+#nullable disable
-+
- using System;
- using System.Collections.Generic;
- using System.Globalization;
-@@ -9,6 +11,7 @@ using System.Linq;
+@@ -9,6 +9,7 @@ using System.Linq;
  using System.Net.Http;
  using System.Threading;
  using System.Threading.Tasks;
@@ -2058,7 +2050,7 @@ index 7088d1f0bf..d0129daafb 100644
  using Jellyfin.Extensions;
  using Jellyfin.XmlTv;
  using Jellyfin.XmlTv.Entities;
-@@ -31,6 +34,8 @@ namespace Jellyfin.LiveTv.Listings
+@@ -31,6 +32,8 @@ namespace Jellyfin.LiveTv.Listings
          private readonly IServerConfigurationManager _config;
          private readonly IHttpClientFactory _httpClientFactory;
          private readonly ILogger<XmlTvListingsProvider> _logger;
@@ -2067,7 +2059,7 @@ index 7088d1f0bf..d0129daafb 100644
  
          public XmlTvListingsProvider(
              IServerConfigurationManager config,
-@@ -169,11 +174,101 @@ namespace Jellyfin.LiveTv.Listings
+@@ -169,11 +172,101 @@ namespace Jellyfin.LiveTv.Listings
              _logger.LogDebug("Getting xmltv programs for channel {Id}", channelId);
  
              string path = await GetXml(info, cancellationToken).ConfigureAwait(false);
@@ -2080,7 +2072,9 @@ index 7088d1f0bf..d0129daafb 100644
 +            {
 +                return programs;
 +            }
-+
+ 
+-            return reader.GetProgrammes(channelId, startDateUtc, endDateUtc, cancellationToken)
+-                        .Select(p => GetProgramInfo(p, info));
 +            return [];
 +        }
 +
@@ -2118,9 +2112,7 @@ index 7088d1f0bf..d0129daafb 100644
 +                IgnoreProcessingInstructions = true,
 +                IgnoreComments = true
 +            };
- 
--            return reader.GetProgrammes(channelId, startDateUtc, endDateUtc, cancellationToken)
--                        .Select(p => GetProgramInfo(p, info));
++
 +            using (var xmlReader = XmlReader.Create(path, settings))
 +            {
 +                if (xmlReader.ReadToDescendant("tv")
@@ -2173,7 +2165,7 @@ index 7088d1f0bf..d0129daafb 100644
          }
  
          private static ProgramInfo GetProgramInfo(XmlTvProgram program, ListingsProviderInfo info)
-@@ -297,5 +392,20 @@ namespace Jellyfin.LiveTv.Listings
+@@ -297,5 +390,20 @@ namespace Jellyfin.LiveTv.Listings
                  Number = string.IsNullOrWhiteSpace(c.Number) ? c.Id : c.Number
              }).ToList();
          }
@@ -2195,10 +2187,18 @@ index 7088d1f0bf..d0129daafb 100644
      }
  }
 diff --git a/src/Jellyfin.LiveTv/LiveTvManager.cs b/src/Jellyfin.LiveTv/LiveTvManager.cs
-index 173d3c3e8e..8311a4499f 100644
+index 173d3c3e8e..5194d15b58 100644
 --- a/src/Jellyfin.LiveTv/LiveTvManager.cs
 +++ b/src/Jellyfin.LiveTv/LiveTvManager.cs
-@@ -300,12 +300,25 @@ namespace Jellyfin.LiveTv
+@@ -13,6 +13,7 @@ using Jellyfin.Data.Enums;
+ using Jellyfin.Data.Events;
+ using Jellyfin.Database.Implementations.Entities;
+ using Jellyfin.Database.Implementations.Enums;
++using Jellyfin.Extensions;
+ using Jellyfin.LiveTv.Configuration;
+ using MediaBrowser.Common.Extensions;
+ using MediaBrowser.Controller.Channels;
+@@ -300,12 +301,25 @@ namespace Jellyfin.LiveTv
              var programList = _libraryManager.QueryItems(internalQuery).Items;
              var totalCount = programList.Count;
  
@@ -2226,7 +2226,7 @@ index 173d3c3e8e..8311a4499f 100644
              }
  
              IEnumerable<BaseItem> programs = orderedPrograms;
-@@ -338,7 +351,11 @@ namespace Jellyfin.LiveTv
+@@ -338,7 +352,11 @@ namespace Jellyfin.LiveTv
                  _dtoService.GetBaseItemDtos(internalResult.Items, options, query.User)));
          }
  
@@ -2239,7 +2239,7 @@ index 173d3c3e8e..8311a4499f 100644
          {
              var score = 0;
  
-@@ -352,9 +369,7 @@ namespace Jellyfin.LiveTv
+@@ -352,9 +370,7 @@ namespace Jellyfin.LiveTv
                  score++;
              }
  
@@ -2250,7 +2250,7 @@ index 173d3c3e8e..8311a4499f 100644
              {
                  return score;
              }
-@@ -381,18 +396,28 @@ namespace Jellyfin.LiveTv
+@@ -381,18 +397,28 @@ namespace Jellyfin.LiveTv
  
          private async Task AddRecordingInfo(IEnumerable<(BaseItemDto ItemDto, string ExternalId, string ExternalSeriesId)> programs, CancellationToken cancellationToken)
          {
@@ -2285,7 +2285,7 @@ index 173d3c3e8e..8311a4499f 100644
                  var foundSeriesTimer = false;
  
                  if (timer is not null)
-@@ -418,11 +443,12 @@ namespace Jellyfin.LiveTv
+@@ -418,11 +444,12 @@ namespace Jellyfin.LiveTv
                      continue;
                  }
  
@@ -2302,7 +2302,7 @@ index 173d3c3e8e..8311a4499f 100644
                  {
                      program.SeriesTimerId = _tvDtoService.GetInternalSeriesTimerId(seriesTimer.Id)
                          .ToString("N", CultureInfo.InvariantCulture);
-@@ -543,6 +569,24 @@ namespace Jellyfin.LiveTv
+@@ -543,6 +570,24 @@ namespace Jellyfin.LiveTv
              var hasChannelImage = fields.Contains(ItemFields.ChannelImage);
              var hasChannelInfo = fields.Contains(ItemFields.ChannelInfo);
  
@@ -2327,7 +2327,7 @@ index 173d3c3e8e..8311a4499f 100644
              foreach (var (item, dto) in programs)
              {
                  var program = (LiveTvProgram)item;
-@@ -558,20 +602,16 @@ namespace Jellyfin.LiveTv
+@@ -558,20 +603,16 @@ namespace Jellyfin.LiveTv
                  dto.IsKids |= program.IsKids;
                  dto.IsPremiere |= program.IsPremiere;
  
@@ -2355,7 +2355,7 @@ index 173d3c3e8e..8311a4499f 100644
                      }
                  }
  
-@@ -974,6 +1014,11 @@ namespace Jellyfin.LiveTv
+@@ -974,6 +1015,11 @@ namespace Jellyfin.LiveTv
                  DtoOptions = options
              }) : new List<BaseItem>();
  
@@ -2367,7 +2367,7 @@ index 173d3c3e8e..8311a4499f 100644
              RemoveFields(options);
  
              var currentProgramsList = new List<BaseItem>();
-@@ -989,14 +1034,9 @@ namespace Jellyfin.LiveTv
+@@ -989,14 +1035,9 @@ namespace Jellyfin.LiveTv
  
                  currentChannelsDict[dto.Id] = dto;
  
