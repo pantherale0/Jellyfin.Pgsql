@@ -9,7 +9,7 @@ index d6ddf8f5c8..1842a9b0a0 100644
 -            dbQuery = dbQuery.Include(e => e.UserData);
 +            if (filter.User is not null)
 +            {
-+                dbQuery = dbQuery.Include(e => e.UserData.Where(ud => ud.UserId == filter.User.Id));
++                dbQuery = dbQuery.Include(e => e.UserData!.Where(ud => ud.UserId == filter.User.Id));
 +            }
 +            else
 +            {
