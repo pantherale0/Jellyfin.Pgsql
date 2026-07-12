@@ -65,8 +65,12 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
 
         serviceCollection.AddSingleton<INextUpService>(sp => new CachingNextUpService(
             CoreNextUpServiceAccessor.Create(sp),
+            sp.GetRequiredService<IQueryResultCache>(),
             sp.GetRequiredService<CachedItemLoader>(),
+            sp.GetRequiredService<QueryRuntimeStats>(),
             sp.GetRequiredService<ILoggerFactory>().CreateLogger<CachingNextUpService>()));
+
+        serviceCollection.AddHostedService<QueryCacheInvalidationService>();
 
         serviceCollection.AddSingleton<PlaybackReportingImporter>();
         serviceCollection.AddSingleton<IPlaybackReportingImporter>(sp => sp.GetRequiredService<PlaybackReportingImporter>());

@@ -30,6 +30,31 @@ internal sealed class MemoryQueryResultCache : IQueryResultCache, IDisposable
     }
 
     /// <inheritdoc/>
+    public bool TryGetPayload(string key, out byte[] payload)
+    {
+        if (_cache.TryGetValue(key, out byte[]? cached) && cached is not null)
+        {
+            payload = cached;
+            return true;
+        }
+
+        payload = [];
+        return false;
+    }
+
+    /// <inheritdoc/>
+    public void SetPayload(string key, byte[] payload, TimeSpan timeToLive)
+    {
+        _cache.Set(key, payload, timeToLive);
+    }
+
+    /// <inheritdoc/>
+    public void InvalidateAll()
+    {
+        _cache.Compact(1.0);
+    }
+
+    /// <inheritdoc/>
     public void Dispose()
     {
         _cache.Dispose();

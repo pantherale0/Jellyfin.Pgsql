@@ -17,6 +17,8 @@ public sealed class QueryRuntimeStats
     private long _redisSetErrors;
     private long _optimizedLatestRuns;
     private long _optimizedLatestFailures;
+    private long _nextUpCacheHits;
+    private long _nextUpCacheMisses;
 
     /// <summary>
     /// Marks a Latest cache lookup outcome.
@@ -80,6 +82,21 @@ public sealed class QueryRuntimeStats
     }
 
     /// <summary>
+    /// Marks a NextUp cache lookup outcome.
+    /// </summary>
+    /// <param name="hit">True when served from cache.</param>
+    public void RecordNextUpCacheLookup(bool hit)
+    {
+        if (hit)
+        {
+            Interlocked.Increment(ref _nextUpCacheHits);
+            return;
+        }
+
+        Interlocked.Increment(ref _nextUpCacheMisses);
+    }
+
+    /// <summary>
     /// Creates an immutable snapshot of current counters.
     /// </summary>
     /// <returns>The stats snapshot.</returns>
@@ -91,6 +108,8 @@ public sealed class QueryRuntimeStats
             Interlocked.Read(ref _latestCacheMisses),
             Interlocked.Read(ref _resumeCacheHits),
             Interlocked.Read(ref _resumeCacheMisses),
+            Interlocked.Read(ref _nextUpCacheHits),
+            Interlocked.Read(ref _nextUpCacheMisses),
             Interlocked.Read(ref _redisGetErrors),
             Interlocked.Read(ref _redisSetErrors),
             Interlocked.Read(ref _optimizedLatestRuns),

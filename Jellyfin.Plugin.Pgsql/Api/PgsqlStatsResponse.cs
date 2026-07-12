@@ -43,6 +43,15 @@ public sealed class PgsqlStatsResponse
     /// <summary>Gets or sets resume cache misses.</summary>
     public long ResumeCacheMisses { get; set; }
 
+    /// <summary>Gets or sets next-up cache TTL in seconds.</summary>
+    public int NextUpTtlSeconds { get; set; }
+
+    /// <summary>Gets or sets next-up cache hits.</summary>
+    public long NextUpCacheHits { get; set; }
+
+    /// <summary>Gets or sets next-up cache misses.</summary>
+    public long NextUpCacheMisses { get; set; }
+
     /// <summary>Gets or sets redis get errors.</summary>
     public long RedisGetErrors { get; set; }
 

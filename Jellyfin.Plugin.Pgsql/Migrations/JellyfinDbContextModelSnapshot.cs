@@ -383,6 +383,8 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasIndex("ExtraType", "OwnerId");
 
+                    b.HasIndex("SeriesName", "DateCreated");
+
                     b.HasIndex("TopParentId", "Id");
 
                     b.HasIndex("Type", "CleanName");
@@ -398,8 +400,6 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasIndex("Type", "TopParentId", "StartDate");
 
-                    b.HasIndex("Type", "TopParentId", "ChannelId", "StartDate");
-
                     b.HasIndex("MediaType", "TopParentId", "IsVirtualItem", "PresentationUniqueKey");
 
                     b.HasIndex("TopParentId", "IsFolder", "IsVirtualItem", "DateCreated");
@@ -413,6 +413,8 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.HasIndex("Type", "SeriesPresentationUniqueKey", "ParentIndexNumber", "IndexNumber");
 
                     b.HasIndex("Type", "SeriesPresentationUniqueKey", "PresentationUniqueKey", "SortName");
+
+                    b.HasIndex("Type", "TopParentId", "ChannelId", "StartDate");
 
                     b.HasIndex("IsFolder", "TopParentId", "IsVirtualItem", "PresentationUniqueKey", "DateCreated");
 
@@ -1475,6 +1477,10 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasKey("ItemId", "UserId", "CustomDataKey");
 
+                    b.HasIndex("UserId", "PlaybackPositionTicks");
+
+                    b.HasIndex("UserId", "Rating");
+
                     b.HasIndex("ItemId", "UserId", "IsFavorite");
 
                     b.HasIndex("ItemId", "UserId", "LastPlayedDate");
@@ -1486,8 +1492,6 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.HasIndex("UserId", "IsFavorite", "ItemId");
 
                     b.HasIndex("UserId", "ItemId", "LastPlayedDate");
-
-                    b.HasIndex("UserId", "PlaybackPositionTicks");
 
                     b.HasIndex("UserId", "Played", "ItemId");
 

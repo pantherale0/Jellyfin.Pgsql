@@ -210,7 +210,7 @@ internal sealed class PgLatestTvShowsQuery
             ? _queryHelpers.ApplyNavigations(
                     context.BaseItems.AsNoTracking().Where(e => entitiesToFetch.Contains(e.Id)),
                     filter)
-                .AsSingleQuery()
+                .AsSplitQuery()
                 .ToDictionary(e => e.Id)
             : [];
 
