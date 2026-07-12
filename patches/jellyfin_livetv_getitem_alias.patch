@@ -1,0 +1,126 @@
+diff --git a/Jellyfin.Api/Controllers/UserLibraryController.cs b/Jellyfin.Api/Controllers/UserLibraryController.cs
+index 25f781e496..e61d34be89 100644
+--- a/Jellyfin.Api/Controllers/UserLibraryController.cs
++++ b/Jellyfin.Api/Controllers/UserLibraryController.cs
+@@ -15,6 +15,7 @@ using MediaBrowser.Controller.Entities;
+ using MediaBrowser.Controller.Entities.Audio;
+ using MediaBrowser.Controller.Entities.TV;
+ using MediaBrowser.Controller.Library;
++using MediaBrowser.Controller.LiveTv;
+ using MediaBrowser.Controller.Providers;
+ using MediaBrowser.Model.Dto;
+ using MediaBrowser.Model.Entities;
+@@ -40,6 +41,7 @@ public class UserLibraryController : BaseJellyfinApiController
+     private readonly IDtoService _dtoService;
+     private readonly IUserViewManager _userViewManager;
+     private readonly IFileSystem _fileSystem;
++    private readonly ILiveTvManager _liveTvManager;
+ 
+     /// <summary>
+     /// Initializes a new instance of the <see cref="UserLibraryController"/> class.
+@@ -50,13 +52,15 @@ public class UserLibraryController : BaseJellyfinApiController
+     /// <param name="dtoService">Instance of the <see cref="IDtoService"/> interface.</param>
+     /// <param name="userViewManager">Instance of the <see cref="IUserViewManager"/> interface.</param>
+     /// <param name="fileSystem">Instance of the <see cref="IFileSystem"/> interface.</param>
++    /// <param name="liveTvManager">Instance of the <see cref="ILiveTvManager"/> interface.</param>
+     public UserLibraryController(
+         IUserManager userManager,
+         IUserDataManager userDataRepository,
+         ILibraryManager libraryManager,
+         IDtoService dtoService,
+         IUserViewManager userViewManager,
+-        IFileSystem fileSystem)
++        IFileSystem fileSystem,
++        ILiveTvManager liveTvManager)
+     {
+         _userManager = userManager;
+         _userDataRepository = userDataRepository;
+@@ -64,20 +68,22 @@ public class UserLibraryController : BaseJellyfinApiController
+         _dtoService = dtoService;
+         _userViewManager = userViewManager;
+         _fileSystem = fileSystem;
++        _liveTvManager = liveTvManager;
+     }
+ 
+     /// <summary>
+     /// Gets an item from a user's library.
+     /// </summary>
+     /// <param name="userId">User id.</param>
+-    /// <param name="itemId">Item id.</param>
++    /// <param name="itemId">Item id. Accepts a GUID, or the alias <c>livetv</c> for the Live TV view.</param>
+     /// <response code="200">Item returned.</response>
+     /// <returns>An <see cref="OkResult"/> containing the item.</returns>
+     [HttpGet("Items/{itemId}")]
+     [ProducesResponseType(StatusCodes.Status200OK)]
++    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+     public async Task<ActionResult<BaseItemDto>> GetItem(
+         [FromQuery] Guid? userId,
+-        [FromRoute, Required] Guid itemId)
++        [FromRoute, Required] string itemId)
+     {
+         userId = RequestHelpers.GetUserId(User, userId);
+         var user = _userManager.GetUserById(userId.Value);
+@@ -86,9 +92,14 @@ public class UserLibraryController : BaseJellyfinApiController
+             return NotFound();
+         }
+ 
+-        var item = itemId.IsEmpty()
++        if (!TryResolveItemId(itemId, out var resolvedItemId))
++        {
++            return BadRequest($"The value '{itemId}' is not valid.");
++        }
++
++        var item = resolvedItemId.IsEmpty()
+             ? _libraryManager.GetUserRootFolder()
+-            : _libraryManager.GetItemById<BaseItem>(itemId, user);
++            : _libraryManager.GetItemById<BaseItem>(resolvedItemId, user);
+         if (item is null)
+         {
+             return NotFound();
+@@ -105,7 +116,7 @@ public class UserLibraryController : BaseJellyfinApiController
+     /// Gets an item from a user's library.
+     /// </summary>
+     /// <param name="userId">User id.</param>
+-    /// <param name="itemId">Item id.</param>
++    /// <param name="itemId">Item id. Accepts a GUID, or the alias <c>livetv</c> for the Live TV view.</param>
+     /// <response code="200">Item returned.</response>
+     /// <returns>An <see cref="OkResult"/> containing the item.</returns>
+     [HttpGet("Users/{userId}/Items/{itemId}")]
+@@ -114,7 +125,7 @@ public class UserLibraryController : BaseJellyfinApiController
+     [ApiExplorerSettings(IgnoreApi = true)]
+     public Task<ActionResult<BaseItemDto>> GetItemLegacy(
+         [FromRoute, Required] Guid userId,
+-        [FromRoute, Required] Guid itemId)
++        [FromRoute, Required] string itemId)
+         => GetItem(userId, itemId);
+ 
+     /// <summary>
+@@ -704,4 +715,28 @@ public class UserLibraryController : BaseJellyfinApiController
+ 
+         return _userDataRepository.GetUserDataDto(item, user);
+     }
++
++    /// <summary>
++    /// Resolves an item id string to a <see cref="Guid"/>.
++    /// Supports GUID values and the <c>livetv</c> alias for the Live TV view.
++    /// </summary>
++    /// <param name="itemId">The item id string from the route.</param>
++    /// <param name="resolvedItemId">The resolved item GUID.</param>
++    /// <returns><c>true</c> if the id was resolved; otherwise <c>false</c>.</returns>
++    private bool TryResolveItemId(string itemId, out Guid resolvedItemId)
++    {
++        if (Guid.TryParse(itemId, out resolvedItemId))
++        {
++            return true;
++        }
++
++        if (string.Equals(itemId, "livetv", StringComparison.OrdinalIgnoreCase))
++        {
++            resolvedItemId = _liveTvManager.GetInternalLiveTvFolder(CancellationToken.None).Id;
++            return true;
++        }
++
++        resolvedItemId = default;
++        return false;
++    }
+ }
