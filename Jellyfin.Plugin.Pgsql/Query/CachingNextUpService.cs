@@ -13,7 +13,7 @@ namespace Jellyfin.Plugin.Pgsql.Query;
 /// <summary>
 /// Decorates <see cref="INextUpService"/> with short-lived caching for home-screen NextUp loads.
 /// </summary>
-internal sealed class CachingNextUpService : INextUpService
+internal sealed class CachingNextUpService : INextUpService, IDisposable
 {
     private static readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -103,18 +103,22 @@ internal sealed class CachingNextUpService : INextUpService
         return result;
     }
 
-    private IReadOnlyDictionary<string, NextUpEpisodeBatchResult>? RebuildBatchResults(
+    private Dictionary<string, NextUpEpisodeBatchResult>? RebuildBatchResults(
         Dictionary<string, NextUpBatchCacheEntry> cachedEntries,
         InternalItemsQuery filter)
     {
         var ids = cachedEntries.Values
-            .SelectMany(e => new[]
+            .SelectMany(static e =>
             {
-                e.LastWatchedId,
-                e.NextUpId,
-                e.LastWatchedForRewatchingId,
-                e.NextPlayedForRewatchingId
-            }.Concat(e.SpecialIds))
+                IEnumerable<Guid?> values = new Guid?[]
+                {
+                    e.LastWatchedId,
+                    e.NextUpId,
+                    e.LastWatchedForRewatchingId,
+                    e.NextPlayedForRewatchingId
+                };
+                return values.Concat(e.SpecialIds.Select(id => (Guid?)id));
+            })
             .Where(id => id.HasValue && !id.Value.Equals(default))
             .Select(id => id!.Value)
             .Distinct()
@@ -200,6 +204,12 @@ internal sealed class CachingNextUpService : INextUpService
         {
             return false;
         }
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        _cache.Dispose();
     }
 
     private sealed class NextUpBatchCacheEntry
