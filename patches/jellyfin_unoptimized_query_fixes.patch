@@ -1,0 +1,633 @@
+diff --git a/Emby.Server.Implementations/Library/LibraryManager.cs b/Emby.Server.Implementations/Library/LibraryManager.cs
+index 3691f4e..b672df6 100644
+--- a/Emby.Server.Implementations/Library/LibraryManager.cs
++++ b/Emby.Server.Implementations/Library/LibraryManager.cs
+@@ -1219,6 +1219,70 @@ namespace Emby.Server.Implementations.Library
+             return GetItemByNameId<Studio>(Studio.GetPath(name));
+         }
+ 
++        public Guid[] GetStudioIdsByNames(IReadOnlyList<string> names)
++        {
++            if (names.Count == 0)
++            {
++                return Array.Empty<Guid>();
++            }
++
++            var ids = names
++                .Select(name => GetStudioId(name))
++                .Where(id => !id.Equals(default))
++                .Distinct()
++                .ToArray();
++
++            if (ids.Length == 0)
++            {
++                return Array.Empty<Guid>();
++            }
++
++            return GetItemList(new InternalItemsQuery
++            {
++                IncludeItemTypes = [BaseItemKind.Studio],
++                ItemIds = ids,
++                DtoOptions = new DtoOptions(false)
++            }).Select(i => i.Id).ToArray();
++        }
++
++        public Guid[] GetMusicAlbumIdsByNames(IReadOnlyList<string> names)
++        {
++            if (names.Count == 0)
++            {
++                return Array.Empty<Guid>();
++            }
++
++            return _linkedChildrenService.FindMusicAlbumIds(names).ToArray();
++        }
++
++        public IReadOnlyDictionary<string, Person> GetPersonsByNames(IReadOnlyList<string> names)
++        {
++            if (names.Count == 0)
++            {
++                return new Dictionary<string, Person>(StringComparer.OrdinalIgnoreCase);
++            }
++
++            var ids = names
++                .Select(name => GetItemByNameId<Person>(Person.GetPath(name)))
++                .Where(id => !id.Equals(default))
++                .Distinct()
++                .ToArray();
++
++            if (ids.Length == 0)
++            {
++                return new Dictionary<string, Person>(StringComparer.OrdinalIgnoreCase);
++            }
++
++            return GetItemList(new InternalItemsQuery
++            {
++                IncludeItemTypes = [BaseItemKind.Person],
++                ItemIds = ids,
++                DtoOptions = new DtoOptions(false)
++            }).OfType<Person>()
++            .GroupBy(p => p.Name!, StringComparer.OrdinalIgnoreCase)
++            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
++        }
++
+         public Guid GetGenreId(string name)
+         {
+             return GetItemByNameId<Genre>(Genre.GetPath(name));
+@@ -3555,14 +3619,20 @@ namespace Emby.Server.Implementations.Library
+ 
+         private async Task SavePeopleMetadataAsync(IEnumerable<PersonInfo> people, CancellationToken cancellationToken)
+         {
+-            foreach (var person in people)
++            var peopleList = people.ToList();
++            var peopleByName = GetPersonsByNames(peopleList.Select(p => p.Name).ToList());
++
++            foreach (var person in peopleList)
+             {
+                 cancellationToken.ThrowIfCancellationRequested();
+ 
+                 var itemUpdateType = ItemUpdateType.MetadataDownload;
+                 var saveEntity = false;
+                 var createEntity = false;
+-                var personEntity = GetPerson(person.Name);
++                if (!peopleByName.TryGetValue(person.Name, out var personEntity))
++                {
++                    personEntity = null;
++                }
+ 
+                 if (personEntity is null)
+                 {
+diff --git a/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs b/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
+index dacef10..15d6790 100644
+--- a/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
++++ b/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
+@@ -54,6 +54,7 @@ public class PeopleValidator
+         var numComplete = 0;
+ 
+         var numPeople = people.Count;
++        var peopleByName = _libraryManager.GetPersonsByNames(people);
+ 
+         IProgress<double> subProgress = new Progress<double>((val) => progress.Report(val / 2));
+ 
+@@ -65,7 +66,11 @@ public class PeopleValidator
+ 
+             try
+             {
+-                var item = _libraryManager.GetPerson(person);
++                if (!peopleByName.TryGetValue(person, out var item))
++                {
++                    item = _libraryManager.GetPerson(person);
++                }
++
+                 if (item is null)
+                 {
+                     _logger.LogWarning("Failed to get person: {Name}", person);
+diff --git a/Emby.Server.Implementations/TV/TVSeriesManager.cs b/Emby.Server.Implementations/TV/TVSeriesManager.cs
+index 2cbea04..bada9f2 100644
+--- a/Emby.Server.Implementations/TV/TVSeriesManager.cs
++++ b/Emby.Server.Implementations/TV/TVSeriesManager.cs
+@@ -233,7 +233,10 @@ namespace Emby.Server.Implementations.TV
+ 
+                     if (!includePlayed)
+                     {
+-                        sortedEpisodes = sortedEpisodes.Where(episode => _userDataManager.GetUserData(user, episode) is not { Played: true });
++                        var episodeList = sortedEpisodes.ToList();
++                        var userDataByItemId = _userDataManager.GetUserDataBatch(episodeList, user);
++                        sortedEpisodes = episodeList.Where(episode =>
++                            !userDataByItemId.TryGetValue(episode.Id, out var userData) || !userData.Played);
+                     }
+ 
+                     nextEpisode = sortedEpisodes.FirstOrDefault();
+@@ -242,7 +245,7 @@ namespace Emby.Server.Implementations.TV
+ 
+             if (nextEpisode is not null && !includeResumable)
+             {
+-                var userData = _userDataManager.GetUserData(user, nextEpisode);
++                var userData = _userDataManager.GetUserDataBatch([nextEpisode], user).GetValueOrDefault(nextEpisode.Id);
+                 if (userData?.PlaybackPositionTicks > 0)
+                 {
+                     return null;
+diff --git a/Jellyfin.Api/Controllers/ItemsController.cs b/Jellyfin.Api/Controllers/ItemsController.cs
+index 982212e..ed2557d 100644
+--- a/Jellyfin.Api/Controllers/ItemsController.cs
++++ b/Jellyfin.Api/Controllers/ItemsController.cs
+@@ -526,17 +526,12 @@ public class ItemsController : BaseJellyfinApiController
+         // Artists
+         if (artists.Length != 0)
+         {
+-            query.ArtistIds = artists.Select(i =>
+-            {
+-                try
+-                {
+-                    return _libraryManager.GetArtist(i, new DtoOptions(false));
+-                }
+-                catch
+-                {
+-                    return null;
+-                }
+-            }).Where(i => i is not null).Select(i => i!.Id).ToArray();
++            var artistLookup = _libraryManager.GetArtists(artists);
++            query.ArtistIds = artistLookup.Values
++                .SelectMany(i => i)
++                .Select(i => i.Id)
++                .Distinct()
++                .ToArray();
+         }
+ 
+         // ExcludeArtistIds
+@@ -553,26 +548,12 @@ public class ItemsController : BaseJellyfinApiController
+         // Albums
+         if (albums.Length != 0)
+         {
+-            query.AlbumIds = albums.SelectMany(i =>
+-            {
+-                return _libraryManager.GetItemIds(new InternalItemsQuery { IncludeItemTypes = [BaseItemKind.MusicAlbum], Name = i, Limit = 1 });
+-            }).ToArray();
++            query.AlbumIds = _libraryManager.GetMusicAlbumIdsByNames(albums);
+         }
+ 
+-        // Studios
+         if (studios.Length != 0)
+         {
+-            query.StudioIds = studios.Select(i =>
+-            {
+-                try
+-                {
+-                    return _libraryManager.GetStudio(i);
+-                }
+-                catch
+-                {
+-                    return null;
+-                }
+-            }).Where(i => i is not null).Select(i => i!.Id).ToArray();
++            query.StudioIds = _libraryManager.GetStudioIdsByNames(studios);
+         }
+ 
+         // Apply default sorting if none requested
+diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
+index 1842a9b..c065112 100644
+--- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
++++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
+@@ -297,6 +297,16 @@ public sealed partial class BaseItemRepository
+             return ApplyDatePlayedOrder(query, filter, context, orderBy);
+         }
+ 
++        // User-scoped sorts use a single UserData join instead of correlated subqueries.
++        if (!hasSearch
++            && filter.User is not null
++            && orderBy.Length > 0
++            && orderBy.All(o => IsUserDataSortField(o.OrderBy))
++            && TryApplyUserDataOrder(query, filter, context, orderBy, out var userDataOrdered))
++        {
++            return userDataOrdered;
++        }
++
+         IOrderedQueryable<BaseItemEntity>? orderedQuery = null;
+ 
+         if (hasSearch)
+@@ -410,6 +420,108 @@ public sealed partial class BaseItemRepository
+         return ordered.ThenBy(x => x.Item.SortName).Select(x => x.Item);
+     }
+ 
++    private static bool IsUserDataSortField(ItemSortBy sortBy) =>
++        sortBy is ItemSortBy.DatePlayed
++            or ItemSortBy.PlayCount
++            or ItemSortBy.IsFavoriteOrLiked
++            or ItemSortBy.IsPlayed
++            or ItemSortBy.IsUnplayed;
++
++    private bool TryApplyUserDataOrder(
++        IQueryable<BaseItemEntity> query,
++        InternalItemsQuery filter,
++        JellyfinDbContext context,
++        (ItemSortBy OrderBy, SortOrder SortOrder)[] orderBy,
++        out IQueryable<BaseItemEntity> orderedQuery)
++    {
++        var userId = filter.User!.Id;
++        var primaryUserData = context.UserData
++            .AsNoTracking()
++            .Where(ud => ud.UserId == userId)
++            .GroupBy(ud => ud.ItemId)
++            .Select(g => new UserDataOrderProjection
++            {
++                ItemId = g.Key,
++                LastPlayedDate = g.OrderBy(x => x.CustomDataKey).Select(x => x.LastPlayedDate).FirstOrDefault(),
++                PlayCount = g.OrderBy(x => x.CustomDataKey).Select(x => x.PlayCount).FirstOrDefault(),
++                Played = g.OrderBy(x => x.CustomDataKey).Select(x => x.Played).FirstOrDefault(),
++                IsFavorite = g.OrderBy(x => x.CustomDataKey).Select(x => x.IsFavorite).FirstOrDefault()
++            });
++
++        var joined = query.LeftJoin(
++            primaryUserData,
++            item => item.Id,
++            ud => ud.ItemId,
++            (item, ud) => new UserDataOrderJoinRow { Item = item, UserData = ud });
++
++        IOrderedQueryable<UserDataOrderJoinRow>? orderedJoined = null;
++        foreach (var (sortField, sortDirection) in orderBy)
++        {
++            orderedJoined = ApplyUserDataSortStep(orderedJoined, joined, sortField, sortDirection);
++            if (orderedJoined is null)
++            {
++                orderedQuery = query;
++                return false;
++            }
++        }
++
++        orderedQuery = orderedJoined!.ThenBy(x => x.Item.SortName).Select(x => x.Item);
++        return true;
++    }
++
++    private static IOrderedQueryable<UserDataOrderJoinRow>? ApplyUserDataSortStep(
++        IOrderedQueryable<UserDataOrderJoinRow>? orderedJoined,
++        IQueryable<UserDataOrderJoinRow> joined,
++        ItemSortBy sortField,
++        SortOrder sortDirection)
++    {
++        return (orderedJoined, sortField, sortDirection) switch
++        {
++            (null, ItemSortBy.DatePlayed, SortOrder.Ascending) =>
++                joined.OrderBy(x => x.UserData != null ? x.UserData.LastPlayedDate : null),
++            (null, ItemSortBy.DatePlayed, SortOrder.Descending) =>
++                joined.OrderByDescending(x => x.UserData != null ? x.UserData.LastPlayedDate : null),
++            (null, ItemSortBy.PlayCount, SortOrder.Ascending) =>
++                joined.OrderBy(x => x.UserData != null ? x.UserData.PlayCount : 0),
++            (null, ItemSortBy.PlayCount, SortOrder.Descending) =>
++                joined.OrderByDescending(x => x.UserData != null ? x.UserData.PlayCount : 0),
++            (null, ItemSortBy.IsFavoriteOrLiked, SortOrder.Ascending) =>
++                joined.OrderBy(x => x.UserData != null && x.UserData.IsFavorite),
++            (null, ItemSortBy.IsFavoriteOrLiked, SortOrder.Descending) =>
++                joined.OrderByDescending(x => x.UserData != null && x.UserData.IsFavorite),
++            (null, ItemSortBy.IsPlayed, SortOrder.Ascending) =>
++                joined.OrderBy(x => x.UserData != null && x.UserData.Played),
++            (null, ItemSortBy.IsPlayed, SortOrder.Descending) =>
++                joined.OrderByDescending(x => x.UserData != null && x.UserData.Played),
++            (null, ItemSortBy.IsUnplayed, SortOrder.Ascending) =>
++                joined.OrderBy(x => x.UserData == null || !x.UserData.Played),
++            (null, ItemSortBy.IsUnplayed, SortOrder.Descending) =>
++                joined.OrderByDescending(x => x.UserData == null || !x.UserData.Played),
++
++            (not null, ItemSortBy.DatePlayed, SortOrder.Ascending) =>
++                orderedJoined.ThenBy(x => x.UserData != null ? x.UserData.LastPlayedDate : null),
++            (not null, ItemSortBy.DatePlayed, SortOrder.Descending) =>
++                orderedJoined.ThenByDescending(x => x.UserData != null ? x.UserData.LastPlayedDate : null),
++            (not null, ItemSortBy.PlayCount, SortOrder.Ascending) =>
++                orderedJoined.ThenBy(x => x.UserData != null ? x.UserData.PlayCount : 0),
++            (not null, ItemSortBy.PlayCount, SortOrder.Descending) =>
++                orderedJoined.ThenByDescending(x => x.UserData != null ? x.UserData.PlayCount : 0),
++            (not null, ItemSortBy.IsFavoriteOrLiked, SortOrder.Ascending) =>
++                orderedJoined.ThenBy(x => x.UserData != null && x.UserData.IsFavorite),
++            (not null, ItemSortBy.IsFavoriteOrLiked, SortOrder.Descending) =>
++                orderedJoined.ThenByDescending(x => x.UserData != null && x.UserData.IsFavorite),
++            (not null, ItemSortBy.IsPlayed, SortOrder.Ascending) =>
++                orderedJoined.ThenBy(x => x.UserData != null && x.UserData.Played),
++            (not null, ItemSortBy.IsPlayed, SortOrder.Descending) =>
++                orderedJoined.ThenByDescending(x => x.UserData != null && x.UserData.Played),
++            (not null, ItemSortBy.IsUnplayed, SortOrder.Ascending) =>
++                orderedJoined.ThenBy(x => x.UserData == null || !x.UserData.Played),
++            (not null, ItemSortBy.IsUnplayed, SortOrder.Descending) =>
++                orderedJoined.ThenByDescending(x => x.UserData == null || !x.UserData.Played),
++            _ => null
++        };
++    }
++
+     /// <summary>
+     /// Builds a query for descendants of an ancestor with user access filtering applied.
+     /// Uses recursive CTE to traverse both hierarchical (AncestorIds) and linked (LinkedChildren) relationships.
+@@ -592,4 +704,24 @@ public sealed partial class BaseItemRepository
+             .Where(g => g.Select(x => x.Id).Distinct().Count() == g.Where(x => x.Played).Select(x => x.Id).Distinct().Count())
+             .Select(g => g.Key);
+     }
++
++    private sealed class UserDataOrderJoinRow
++    {
++        public BaseItemEntity Item { get; init; } = null!;
++
++        public UserDataOrderProjection? UserData { get; init; }
++    }
++
++    private sealed class UserDataOrderProjection
++    {
++        public Guid ItemId { get; init; }
++
++        public DateTime? LastPlayedDate { get; init; }
++
++        public int PlayCount { get; init; }
++
++        public bool Played { get; init; }
++
++        public bool IsFavorite { get; init; }
++    }
+ }
+diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
+index 3357f87..10c551a 100644
+--- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
++++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
+@@ -461,15 +461,24 @@ public sealed partial class BaseItemRepository
+                 var isPlayed = filter.IsPlayed.Value;
+                 var seriesTypeName = _itemTypeLookup.BaseItemKindNames[BaseItemKind.Series];
+                 var boxSetTypeName = _itemTypeLookup.BaseItemKindNames[BaseItemKind.BoxSet];
++                var playedEpisodeIds = context.UserData
++                    .AsNoTracking()
++                    .Where(ud => ud.UserId == userId && ud.Played)
++                    .Select(ud => ud.ItemId);
+ 
+-                // Series: played = at least one episode AND all episodes played; unplayed = otherwise.
+                 IQueryable<Guid> playedSeriesIds = hasSeries
+                     ? context.BaseItems
+                         .AsNoTracking()
+                         .Where(e => !e.IsFolder && !e.IsVirtualItem && e.SeriesId.HasValue)
+                         .GroupBy(e => e.SeriesId!.Value)
+-                        .Where(g => !g.Any(e => !e.UserData!.Any(ud => ud.UserId == userId && ud.Played)))
+-                        .Select(g => g.Key)
++                        .Select(g => new
++                        {
++                            SeriesId = g.Key,
++                            EpisodeCount = g.Count(),
++                            PlayedCount = g.Count(e => playedEpisodeIds.Contains(e.Id))
++                        })
++                        .Where(x => x.EpisodeCount > 0 && x.EpisodeCount == x.PlayedCount)
++                        .Select(x => x.SeriesId)
+                     : Enumerable.Empty<Guid>().AsQueryable();
+ 
+                 // BoxSet: played = all children played.
+@@ -519,8 +528,15 @@ public sealed partial class BaseItemRepository
+                 var userId = filter.User!.Id;
+                 var seriesTypeName = _itemTypeLookup.BaseItemKindNames[BaseItemKind.Series];
+                 var isResumable = filter.IsResumable.Value;
++                var playedEpisodeIds = context.UserData
++                    .AsNoTracking()
++                    .Where(ud => ud.UserId == userId && ud.Played)
++                    .Select(ud => ud.ItemId);
++                var inProgressItemIds = context.UserData
++                    .AsNoTracking()
++                    .Where(ud => ud.UserId == userId && ud.PlaybackPositionTicks > 0)
++                    .Select(ud => ud.ItemId);
+ 
+-                // Aggregate per series in a single GROUP BY pass, instead of three full scans.
+                 var seriesEpisodeStats = context.BaseItems
+                     .AsNoTracking()
+                     .Where(e => !e.IsFolder && !e.IsVirtualItem && e.SeriesId.HasValue)
+@@ -528,9 +544,9 @@ public sealed partial class BaseItemRepository
+                     .Select(g => new
+                     {
+                         SeriesId = g.Key,
+-                        HasInProgress = g.Any(e => e.UserData!.Any(ud => ud.UserId == userId && ud.PlaybackPositionTicks > 0)),
+-                        HasPlayed = g.Any(e => e.UserData!.Any(ud => ud.UserId == userId && ud.Played)),
+-                        HasUnplayed = g.Any(e => !e.UserData!.Any(ud => ud.UserId == userId && ud.Played))
++                        HasInProgress = g.Any(e => inProgressItemIds.Contains(e.Id)),
++                        HasPlayed = g.Any(e => playedEpisodeIds.Contains(e.Id)),
++                        HasUnplayed = g.Any(e => !playedEpisodeIds.Contains(e.Id))
+                     });
+ 
+                 // A series is resumable if it has an in-progress episode,
+diff --git a/Jellyfin.Server.Implementations/Item/LinkedChildrenService.cs b/Jellyfin.Server.Implementations/Item/LinkedChildrenService.cs
+index 5e5ce32..405b9c8 100644
+--- a/Jellyfin.Server.Implementations/Item/LinkedChildrenService.cs
++++ b/Jellyfin.Server.Implementations/Item/LinkedChildrenService.cs
+@@ -7,6 +7,7 @@ using System.Collections.Generic;
+ using System.Linq;
+ using Jellyfin.Data.Enums;
+ using Jellyfin.Database.Implementations;
++using Jellyfin.Extensions;
+ using MediaBrowser.Controller.Entities.Audio;
+ using MediaBrowser.Controller.Persistence;
+ using Microsoft.EntityFrameworkCore;
+@@ -90,6 +91,34 @@ public class LinkedChildrenService : ILinkedChildrenService
+         return result;
+     }
+ 
++    /// <inheritdoc/>
++    public IReadOnlyList<Guid> FindMusicAlbumIds(IReadOnlyList<string> albumNames)
++    {
++        if (albumNames.Count == 0)
++        {
++            return Array.Empty<Guid>();
++        }
++
++        using var dbContext = _dbProvider.CreateDbContext();
++        var cleanNames = albumNames
++            .Where(name => !string.IsNullOrWhiteSpace(name))
++            .Select(name => name.GetCleanValue())
++            .Distinct(StringComparer.Ordinal)
++            .ToArray();
++
++        if (cleanNames.Length == 0)
++        {
++            return Array.Empty<Guid>();
++        }
++
++        return dbContext.BaseItems
++            .AsNoTracking()
++            .Where(e => e.Type == _itemTypeLookup.BaseItemKindNames[BaseItemKind.MusicAlbum]!)
++            .Where(e => cleanNames.Contains(e.CleanName!))
++            .Select(e => e.Id)
++            .ToArray();
++    }
++
+     /// <inheritdoc/>
+     public IReadOnlyList<Guid> GetManualLinkedParentIds(Guid childId, BaseItemKind? parentType = null)
+     {
+diff --git a/MediaBrowser.Controller/Library/ILibraryManager.cs b/MediaBrowser.Controller/Library/ILibraryManager.cs
+index 0b64da2..063a46e 100644
+--- a/MediaBrowser.Controller/Library/ILibraryManager.cs
++++ b/MediaBrowser.Controller/Library/ILibraryManager.cs
+@@ -690,6 +690,12 @@ namespace MediaBrowser.Controller.Library
+ 
+         Guid GetStudioId(string name);
+ 
++        Guid[] GetStudioIdsByNames(IReadOnlyList<string> names);
++
++        Guid[] GetMusicAlbumIdsByNames(IReadOnlyList<string> names);
++
++        IReadOnlyDictionary<string, Person> GetPersonsByNames(IReadOnlyList<string> names);
++
+         Guid GetGenreId(string name);
+ 
+         Guid GetMusicGenreId(string name);
+diff --git a/MediaBrowser.Controller/Persistence/ILinkedChildrenService.cs b/MediaBrowser.Controller/Persistence/ILinkedChildrenService.cs
+index a4614fc..8308f60 100644
+--- a/MediaBrowser.Controller/Persistence/ILinkedChildrenService.cs
++++ b/MediaBrowser.Controller/Persistence/ILinkedChildrenService.cs
+@@ -26,6 +26,8 @@ public interface ILinkedChildrenService
+     /// <returns>A map of the artist name and the potential matches.</returns>
+     IReadOnlyDictionary<string, MusicArtist[]> FindArtists(IReadOnlyList<string> artistNames);
+ 
++    IReadOnlyList<Guid> FindMusicAlbumIds(IReadOnlyList<string> albumNames);
++
+     /// <summary>
+     /// Gets parent IDs that reference the specified child with LinkedChildType.Manual.
+     /// </summary>
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs
+index a8c7af8..7940cf3 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs
+@@ -71,6 +71,7 @@ public class BaseItemConfiguration : IEntityTypeConfiguration<BaseItemEntity>
+         builder.HasIndex(e => new { e.Type, e.CleanName });
+         // Latest TV: GROUP BY SeriesName
+         builder.HasIndex(e => e.SeriesName);
++        builder.HasIndex(e => new { e.SeriesName, e.DateCreated });
+         // Latest TV: episode count per season, season count per series
+         builder.HasIndex(e => e.SeasonId);
+         builder.HasIndex(e => e.SeriesId);
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserDataConfiguration.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserDataConfiguration.cs
+index 216e314..6127e3a 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserDataConfiguration.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserDataConfiguration.cs
+@@ -21,6 +21,7 @@ public class UserDataConfiguration : IEntityTypeConfiguration<UserData>
+         builder.HasIndex(d => new { d.UserId, d.PlaybackPositionTicks });
+         builder.HasIndex(d => new { d.UserId, d.Played, d.ItemId });
+         builder.HasIndex(d => new { d.UserId, d.IsFavorite, d.ItemId });
++        builder.HasIndex(d => new { d.UserId, d.Rating });
+         builder.HasOne(e => e.Item).WithMany(e => e.UserData);
+     }
+ }
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260711210000_AddQueryPerformanceIndexes.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260711210000_AddQueryPerformanceIndexes.cs
+new file mode 100644
+index 0000000..e2bbe11
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260711210000_AddQueryPerformanceIndexes.cs
+@@ -0,0 +1,37 @@
++using Microsoft.EntityFrameworkCore.Migrations;
++
++#nullable disable
++
++namespace Jellyfin.Server.Implementations.Migrations
++{
++    /// <inheritdoc />
++    public partial class AddQueryPerformanceIndexes : Migration
++    {
++        /// <inheritdoc />
++        protected override void Up(MigrationBuilder migrationBuilder)
++        {
++            migrationBuilder.CreateIndex(
++                name: "IX_BaseItems_SeriesName_DateCreated",
++                table: "BaseItems",
++                columns: new[] { "SeriesName", "DateCreated" });
++
++            migrationBuilder.CreateIndex(
++                name: "IX_UserData_UserId_Rating",
++                table: "UserData",
++                columns: new[] { "UserId", "Rating" },
++                filter: "\"Rating\" >= 6.5");
++        }
++
++        /// <inheritdoc />
++        protected override void Down(MigrationBuilder migrationBuilder)
++        {
++            migrationBuilder.DropIndex(
++                name: "IX_BaseItems_SeriesName_DateCreated",
++                table: "BaseItems");
++
++            migrationBuilder.DropIndex(
++                name: "IX_UserData_UserId_Rating",
++                table: "UserData");
++        }
++    }
++}
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
+index 0d1a608..abfa2af 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
+@@ -379,6 +379,8 @@ namespace Jellyfin.Server.Implementations.Migrations
+ 
+                     b.HasIndex("SeriesName");
+ 
++                    b.HasIndex("SeriesName", "DateCreated");
++
+                     b.HasIndex("ExtraType", "OwnerId");
+ 
+                     b.HasIndex("TopParentId", "Id");
+@@ -1465,6 +1467,9 @@ namespace Jellyfin.Server.Implementations.Migrations
+ 
+                     b.HasIndex("UserId", "PlaybackPositionTicks");
+ 
++                    b.HasIndex("UserId", "Rating")
++                        .HasFilter("\"Rating\" >= 6.5");
++
+                     b.HasIndex("UserId", "Played", "ItemId");
+ 
+                     b.ToTable("UserData");
+diff --git a/src/Jellyfin.LiveTv/LiveTvManager.cs b/src/Jellyfin.LiveTv/LiveTvManager.cs
+index 9826424..5294625 100644
+--- a/src/Jellyfin.LiveTv/LiveTvManager.cs
++++ b/src/Jellyfin.LiveTv/LiveTvManager.cs
+@@ -315,12 +315,16 @@ namespace Jellyfin.LiveTv
+                 }).ToDictionary(i => i.Id);
+             }
+ 
++            var channelUserDataById = channelsById.Count > 0
++                ? _userDataManager.GetUserDataBatch(channelsById.Values.ToList(), user)
++                : new Dictionary<Guid, UserItemData>();
++
+             var orderedPrograms = livePrograms.OrderBy(i => i.StartDate.Date);
+ 
+             if (query.IsAiring ?? false)
+             {
+                 orderedPrograms = orderedPrograms
+-                    .ThenByDescending(i => GetRecommendationScore(i, user, true, channelsById));
++                    .ThenByDescending(i => GetRecommendationScore(i, user, true, channelsById, channelUserDataById));
+             }
+ 
+             IEnumerable<BaseItem> programs = orderedPrograms;
+@@ -357,7 +361,8 @@ namespace Jellyfin.LiveTv
+             LiveTvProgram program,
+             User user,
+             bool factorChannelWatchCount,
+-            IReadOnlyDictionary<Guid, BaseItem> channelsById)
++            IReadOnlyDictionary<Guid, BaseItem> channelsById,
++            IReadOnlyDictionary<Guid, UserItemData> channelUserDataById)
+         {
+             var score = 0;
+ 
+@@ -376,7 +381,10 @@ namespace Jellyfin.LiveTv
+                 return score;
+             }
+ 
+-            var channelUserdata = _userDataManager.GetUserData(user, channel);
++            if (!channelUserDataById.TryGetValue(channel.Id, out var channelUserdata))
++            {
++                channelUserdata = _userDataManager.GetUserData(user, channel);
++            }
+ 
+             if (channelUserdata.Likes.HasValue)
+             {

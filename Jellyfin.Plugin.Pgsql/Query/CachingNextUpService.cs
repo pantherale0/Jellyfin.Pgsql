@@ -5,7 +5,6 @@ using System.Linq;
 using System.Text.Json;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Persistence;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.Pgsql.Query;
@@ -13,13 +12,14 @@ namespace Jellyfin.Plugin.Pgsql.Query;
 /// <summary>
 /// Decorates <see cref="INextUpService"/> with short-lived caching for home-screen NextUp loads.
 /// </summary>
-internal sealed class CachingNextUpService : INextUpService, IDisposable
+internal sealed class CachingNextUpService : INextUpService
 {
     private static readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly INextUpService _inner;
+    private readonly IQueryResultCache _cache;
     private readonly CachedItemLoader _loader;
-    private readonly MemoryCache _cache = new(new MemoryCacheOptions());
+    private readonly QueryRuntimeStats _stats;
     private readonly TimeSpan _ttl;
     private readonly ILogger<CachingNextUpService> _logger;
 
@@ -27,12 +27,21 @@ internal sealed class CachingNextUpService : INextUpService, IDisposable
     /// Initializes a new instance of the <see cref="CachingNextUpService"/> class.
     /// </summary>
     /// <param name="inner">The core next-up service.</param>
+    /// <param name="cache">The query result cache.</param>
     /// <param name="loader">The cached item loader.</param>
+    /// <param name="stats">The runtime stats collector.</param>
     /// <param name="logger">The logger.</param>
-    public CachingNextUpService(INextUpService inner, CachedItemLoader loader, ILogger<CachingNextUpService> logger)
+    public CachingNextUpService(
+        INextUpService inner,
+        IQueryResultCache cache,
+        CachedItemLoader loader,
+        QueryRuntimeStats stats,
+        ILogger<CachingNextUpService> logger)
     {
         _inner = inner;
+        _cache = cache;
         _loader = loader;
+        _stats = stats;
         _logger = logger;
         _ttl = PgsqlQueryOptions.Current.NextUpTtl;
     }
@@ -52,13 +61,16 @@ internal sealed class CachingNextUpService : INextUpService, IDisposable
             return _inner.GetNextUpSeriesKeys(filter, dateCutoff);
         }
 
-        if (_cache.TryGetValue(key, out string[]? cached) && cached is not null)
+        if (_cache.TryGetPayload(key, out var cachedPayload)
+            && TryDeserializeStringArray(cachedPayload, out var cached))
         {
+            _stats.RecordNextUpCacheLookup(hit: true);
             return cached;
         }
 
+        _stats.RecordNextUpCacheLookup(hit: false);
         var result = _inner.GetNextUpSeriesKeys(filter, dateCutoff).ToArray();
-        _cache.Set(key, result, _ttl);
+        _cache.SetPayload(key, JsonSerializer.SerializeToUtf8Bytes(result, _jsonOptions), _ttl);
         return result;
     }
 
@@ -81,13 +93,14 @@ internal sealed class CachingNextUpService : INextUpService, IDisposable
             return _inner.GetNextUpEpisodesBatch(filter, seriesKeys, includeSpecials, includeWatchedForRewatching);
         }
 
-        if (_cache.TryGetValue(key, out byte[]? cachedPayload)
+        if (_cache.TryGetPayload(key, out var cachedPayload)
             && cachedPayload is not null
             && TryDeserializeBatch(cachedPayload, out var cachedEntries))
         {
             var rebuilt = RebuildBatchResults(cachedEntries, filter);
             if (rebuilt is not null)
             {
+                _stats.RecordNextUpCacheLookup(hit: true);
                 if (_logger.IsEnabled(LogLevel.Debug))
                 {
                     _logger.LogDebug("NextUp batch served from cache ({Count} series)", rebuilt.Count);
@@ -97,9 +110,10 @@ internal sealed class CachingNextUpService : INextUpService, IDisposable
             }
         }
 
+        _stats.RecordNextUpCacheLookup(hit: false);
         var result = _inner.GetNextUpEpisodesBatch(filter, seriesKeys, includeSpecials, includeWatchedForRewatching);
         var payload = SerializeBatch(result);
-        _cache.Set(key, payload, _ttl);
+        _cache.SetPayload(key, payload, _ttl);
         return result;
     }
 
@@ -206,10 +220,24 @@ internal sealed class CachingNextUpService : INextUpService, IDisposable
         }
     }
 
-    /// <inheritdoc />
-    public void Dispose()
+    private static bool TryDeserializeStringArray(byte[] payload, out string[] values)
     {
-        _cache.Dispose();
+        values = Array.Empty<string>();
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<string[]>(payload, _jsonOptions);
+            if (parsed is null)
+            {
+                return false;
+            }
+
+            values = parsed;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private sealed class NextUpBatchCacheEntry

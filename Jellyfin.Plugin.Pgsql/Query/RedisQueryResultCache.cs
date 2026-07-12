@@ -18,6 +18,7 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
     private static readonly TimeSpan _warningThrottle = TimeSpan.FromSeconds(60);
 
     private readonly RedisCache _cache;
+    private readonly ConnectionMultiplexer _connection;
     private readonly ILogger _logger;
     private readonly QueryRuntimeStats _stats;
     private DateTimeOffset _lastWarning = DateTimeOffset.MinValue;
@@ -32,6 +33,7 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
     {
         _logger = logger;
         _stats = stats;
+        _connection = ConnectionMultiplexer.Connect(connectionString);
         _cache = new RedisCache(Options.Create(new RedisCacheOptions
         {
             Configuration = connectionString,
@@ -94,9 +96,114 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
     }
 
     /// <inheritdoc/>
+    public bool TryGetPayload(string key, out byte[] payload)
+    {
+        payload = [];
+        try
+        {
+            var cached = _cache.Get(key);
+            if (cached is null || cached.Length == 0)
+            {
+                return false;
+            }
+
+            payload = cached;
+            return true;
+        }
+        catch (RedisException ex)
+        {
+            return HandlePayloadFailure(ex, "get");
+        }
+        catch (IOException ex)
+        {
+            return HandlePayloadFailure(ex, "get");
+        }
+        catch (TimeoutException ex)
+        {
+            return HandlePayloadFailure(ex, "get");
+        }
+        catch (ObjectDisposedException ex)
+        {
+            return HandlePayloadFailure(ex, "get");
+        }
+    }
+
+    /// <inheritdoc/>
+    public void SetPayload(string key, byte[] payload, TimeSpan timeToLive)
+    {
+        try
+        {
+            _cache.Set(key, payload, new DistributedCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = timeToLive,
+            });
+        }
+        catch (RedisException ex)
+        {
+            ReportCacheFailure(ex, "set");
+        }
+        catch (IOException ex)
+        {
+            ReportCacheFailure(ex, "set");
+        }
+        catch (TimeoutException ex)
+        {
+            ReportCacheFailure(ex, "set");
+        }
+        catch (ObjectDisposedException ex)
+        {
+            ReportCacheFailure(ex, "set");
+        }
+    }
+
+    /// <inheritdoc/>
+    public void InvalidateAll()
+    {
+        try
+        {
+            foreach (var endpoint in _connection.GetEndPoints())
+            {
+                var server = _connection.GetServer(endpoint);
+                if (!server.IsConnected || server.IsReplica)
+                {
+                    continue;
+                }
+
+                foreach (var key in server.Keys(pattern: KeyPrefix + "*"))
+                {
+                    _cache.Remove(key.ToString()[KeyPrefix.Length..]);
+                }
+            }
+        }
+        catch (RedisException ex)
+        {
+            ReportCacheFailure(ex, "invalidate");
+        }
+        catch (IOException ex)
+        {
+            ReportCacheFailure(ex, "invalidate");
+        }
+        catch (TimeoutException ex)
+        {
+            ReportCacheFailure(ex, "invalidate");
+        }
+        catch (ObjectDisposedException ex)
+        {
+            ReportCacheFailure(ex, "invalidate");
+        }
+    }
+
+    /// <inheritdoc/>
     public void Dispose()
     {
         _cache.Dispose();
+        _connection.Dispose();
+    }
+
+    private bool HandlePayloadFailure(Exception ex, string operation)
+    {
+        ReportCacheFailure(ex, operation);
+        return false;
     }
 
     private bool HandleCacheFailure(Exception ex, string operation)

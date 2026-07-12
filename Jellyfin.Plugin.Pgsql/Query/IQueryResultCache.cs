@@ -23,6 +23,27 @@ internal interface IQueryResultCache
     /// <param name="ids">The IDs in result order.</param>
     /// <param name="timeToLive">Absolute expiration relative to now.</param>
     void Set(string key, Guid[] ids, TimeSpan timeToLive);
+
+    /// <summary>
+    /// Attempts to retrieve an opaque cached payload.
+    /// </summary>
+    /// <param name="key">The cache key (without global prefix).</param>
+    /// <param name="payload">The cached payload.</param>
+    /// <returns><c>true</c> on a cache hit.</returns>
+    bool TryGetPayload(string key, out byte[] payload);
+
+    /// <summary>
+    /// Stores an opaque payload under the given key.
+    /// </summary>
+    /// <param name="key">The cache key (without global prefix).</param>
+    /// <param name="payload">The payload bytes.</param>
+    /// <param name="timeToLive">Absolute expiration relative to now.</param>
+    void SetPayload(string key, byte[] payload, TimeSpan timeToLive);
+
+    /// <summary>
+    /// Clears all cached query results.
+    /// </summary>
+    void InvalidateAll();
 }
 
 /// <summary>
