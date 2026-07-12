@@ -488,10 +488,15 @@ diff --git a/MediaBrowser.Controller/Persistence/ILinkedChildrenService.cs b/Med
 index a4614fc..8308f60 100644
 --- a/MediaBrowser.Controller/Persistence/ILinkedChildrenService.cs
 +++ b/MediaBrowser.Controller/Persistence/ILinkedChildrenService.cs
-@@ -26,6 +26,8 @@ public interface ILinkedChildrenService
+@@ -26,6 +26,13 @@ public interface ILinkedChildrenService
      /// <returns>A map of the artist name and the potential matches.</returns>
      IReadOnlyDictionary<string, MusicArtist[]> FindArtists(IReadOnlyList<string> artistNames);
  
++    /// <summary>
++    /// Finds music album IDs matching the given album names.
++    /// </summary>
++    /// <param name="albumNames">The album names.</param>
++    /// <returns>Matching album item IDs.</returns>
 +    IReadOnlyList<Guid> FindMusicAlbumIds(IReadOnlyList<string> albumNames);
 +
      /// <summary>
