@@ -1,0 +1,731 @@
+diff --git a/Emby.Server.Implementations/Library/Search/SearchManager.cs b/Emby.Server.Implementations/Library/Search/SearchManager.cs
+index a5be3f07bd..219fdca047 100644
+--- a/Emby.Server.Implementations/Library/Search/SearchManager.cs
++++ b/Emby.Server.Implementations/Library/Search/SearchManager.cs
+@@ -75,7 +75,7 @@ public class SearchManager : ISearchManager
+     }
+ 
+     /// <inheritdoc/>
+-    public async Task<IReadOnlyList<SearchResult>> GetSearchResultsAsync(
++    public async Task<SearchQueryResult> GetSearchResultsAsync(
+         SearchProviderQuery query,
+         CancellationToken cancellationToken = default)
+     {
+@@ -84,16 +84,16 @@ public class SearchManager : ISearchManager
+ 
+         var searchTerm = query.SearchTerm.Trim().RemoveDiacritics();
+ 
+-        var externalTask = CollectFromProvidersAsync(_externalProviders, query, searchTerm, cancellationToken);
++        var externalTask = CollectFromProvidersAsync(_externalProviders, query, searchTerm, applyPaging: false, cancellationToken);
+         var internalTask = _internalProviders.Length > 0
+-            ? CollectFromProvidersAsync(_internalProviders, query, searchTerm, cancellationToken)
+-            : Task.FromResult<IReadOnlyList<SearchResult>>([]);
++            ? CollectFromProvidersAsync(_internalProviders, query, searchTerm, applyPaging: true, cancellationToken)
++            : Task.FromResult(SearchQueryResult.Empty);
+ 
+         await Task.WhenAll(externalTask, internalTask).ConfigureAwait(false);
+ 
+         var externalResults = await externalTask.ConfigureAwait(false);
+-        var fromExternal = externalResults.Count > 0;
+-        IReadOnlyList<SearchResult> results;
++        var fromExternal = externalResults.Items.Count > 0;
++        SearchQueryResult results;
+         if (fromExternal)
+         {
+             results = externalResults;
+@@ -110,10 +110,8 @@ public class SearchManager : ISearchManager
+         // Internal providers apply user-access filtering inline in their queries. External
+         // providers don't know about user permissions, so they may return IDs from hidden
+         // libraries or items the user is otherwise blocked from. Run the post-filter only
+-        // when results came from externals to close that gap. The Items controller's second
+-        // roundtrip via folder.GetItems applies most of these again, but it does not restrict
+-        // by TopParentIds when ItemIds is set.
+-        if (fromExternal && results.Count > 0 && query.UserId.HasValue && !query.UserId.Value.IsEmpty())
++        // when results came from externals to close that gap.
++        if (fromExternal && results.Items.Count > 0 && query.UserId.HasValue && !query.UserId.Value.IsEmpty())
+         {
+             var user = _userManager.GetUserById(query.UserId.Value);
+             if (user is not null)
+@@ -122,21 +120,24 @@ public class SearchManager : ISearchManager
+             }
+         }
+ 
++        // External providers are collected without SQL paging; page the lightweight ID/score list here.
++        if (fromExternal)
++        {
++            results = PageResults(results, query);
++        }
++
+         return results;
+     }
+ 
+-    private async Task<IReadOnlyList<SearchResult>> FilterByUserAccessAsync(
+-        IReadOnlyList<SearchResult> candidates,
++    private async Task<SearchQueryResult> FilterByUserAccessAsync(
++        SearchQueryResult candidates,
+         User user,
+         CancellationToken cancellationToken)
+     {
+-        // SetUser populates parental rating + blocked/allowed tags. ConfigureUserAccess populates
+-        // TopParentIds for the user's accessible libraries — we call it before assigning ItemIds
+-        // because LibraryManager.AddUserToQuery skips TopParentIds when ItemIds is non-empty.
+         var accessFilter = new InternalItemsQuery(user);
+         _libraryManager.ConfigureUserAccess(accessFilter, user);
+ 
+-        Guid[] candidateIds = [.. candidates.Select(c => c.ItemId)];
++        Guid[] candidateIds = [.. candidates.Items.Select(c => c.ItemId)];
+ 
+         var dbContext = await _dbProvider.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+         await using (dbContext.ConfigureAwait(false))
+@@ -148,7 +149,7 @@ public class SearchManager : ISearchManager
+             baseQuery = _queryHelpers.ApplyAccessFiltering(dbContext, baseQuery, accessFilter);
+ 
+             var allowedCount = await baseQuery.CountAsync(cancellationToken).ConfigureAwait(false);
+-            if (allowedCount == candidates.Count)
++            if (allowedCount == candidates.Items.Count)
+             {
+                 return candidates;
+             }
+@@ -158,16 +159,16 @@ public class SearchManager : ISearchManager
+                 .ToHashSetAsync(cancellationToken)
+                 .ConfigureAwait(false);
+ 
+-            var filtered = candidates.Where(c => allowedIds.Contains(c.ItemId)).ToList();
+-            if (filtered.Count < candidates.Count)
++            var filtered = candidates.Items.Where(c => allowedIds.Contains(c.ItemId)).ToList();
++            if (filtered.Count < candidates.Items.Count)
+             {
+                 _logger.LogDebug(
+                     "Dropped {Dropped} of {Total} search candidates due to user access filtering",
+-                    candidates.Count - filtered.Count,
+-                    candidates.Count);
++                    candidates.Items.Count - filtered.Count,
++                    candidates.Items.Count);
+             }
+ 
+-            return filtered;
++            return new SearchQueryResult(filtered, filtered.Count);
+         }
+     }
+ 
+@@ -178,13 +179,13 @@ public class SearchManager : ISearchManager
+         ArgumentException.ThrowIfNullOrWhiteSpace(query.SearchTerm);
+ 
+         var providerQuery = BuildProviderQuery(query);
+-        var candidates = await GetSearchResultsAsync(providerQuery, cancellationToken).ConfigureAwait(false);
+-        if (candidates.Count == 0)
++        var searchPage = await GetSearchResultsAsync(providerQuery, cancellationToken).ConfigureAwait(false);
++        if (searchPage.Items.Count == 0)
+         {
+-            return new QueryResult<SearchHintInfo>();
++            return new QueryResult<SearchHintInfo>(query.StartIndex, searchPage.TotalRecordCount, []);
+         }
+ 
+-        var candidateScores = BuildScoreLookup(candidates);
++        var candidateScores = BuildScoreLookup(searchPage.Items);
+         var user = query.UserId.IsEmpty() ? null : _userManager.GetUserById(query.UserId);
+ 
+         var excludeItemTypes = BuildExcludeItemTypes(query);
+@@ -204,6 +205,10 @@ public class SearchManager : ISearchManager
+             IsNews = query.IsNews,
+             IsSeries = query.IsSeries,
+             IsSports = query.IsSports,
++            // Provider already returned the page of IDs; hydrate only those.
++            Limit = searchPage.Items.Count,
++            StartIndex = 0,
++            EnableTotalRecordCount = false,
+             DtoOptions = new DtoOptions
+             {
+                 Fields =
+@@ -240,92 +245,126 @@ public class SearchManager : ISearchManager
+             items = _libraryManager.GetItemList(internalQuery);
+         }
+ 
+-        var orderedResults = items
+-            .Select(item => new SearchHintInfo { Item = item })
+-            .OrderByDescending(hint => candidateScores.GetValueOrDefault(hint.Item.Id, 0f))
+-            .ToList();
+-
+-        var totalCount = orderedResults.Count;
+-
+-        if (query.StartIndex.HasValue)
+-        {
+-            orderedResults = orderedResults.Skip(query.StartIndex.Value).ToList();
+-        }
+-
+-        if (query.Limit.HasValue)
++        // Preserve provider score order without sorting a large hydrated set.
++        var itemsById = items.ToDictionary(i => i.Id);
++        var orderedResults = new List<SearchHintInfo>(searchPage.Items.Count);
++        foreach (var candidate in searchPage.Items)
+         {
+-            orderedResults = orderedResults.Take(query.Limit.Value).ToList();
++            if (itemsById.TryGetValue(candidate.ItemId, out var item))
++            {
++                orderedResults.Add(new SearchHintInfo { Item = item });
++            }
+         }
+ 
+-        return new QueryResult<SearchHintInfo>(query.StartIndex, totalCount, orderedResults);
++        return new QueryResult<SearchHintInfo>(query.StartIndex, searchPage.TotalRecordCount, orderedResults);
+     }
+ 
+-    private async Task<IReadOnlyList<SearchResult>> CollectFromProvidersAsync(
++    private async Task<SearchQueryResult> CollectFromProvidersAsync(
+         IEnumerable<ISearchProvider> providers,
+         SearchProviderQuery providerQuery,
+         string searchTerm,
++        bool applyPaging,
+         CancellationToken cancellationToken)
+     {
+-        var requestedLimit = providerQuery.Limit ?? 100;
+         var applicable = providers.Where(p => p.CanSearch(providerQuery)).ToArray();
+         if (applicable.Length == 0)
+         {
+-            return [];
++            return SearchQueryResult.Empty;
+         }
+ 
++        // Single internal provider: let it apply SQL Skip/Take + Count directly.
++        if (applyPaging && applicable.Length == 1 && applicable[0] is IInternalSearchProvider)
++        {
++            return await CollectFromProviderAsync(applicable[0], providerQuery, searchTerm, cancellationToken).ConfigureAwait(false);
++        }
++
++        // Multiple providers or external collection: gather candidates without relying on one provider's page.
++        var collectQuery = applyPaging
++            ? providerQuery
++            : new SearchProviderQuery
++            {
++                SearchTerm = providerQuery.SearchTerm,
++                UserId = providerQuery.UserId,
++                IncludeItemTypes = providerQuery.IncludeItemTypes,
++                ExcludeItemTypes = providerQuery.ExcludeItemTypes,
++                MediaTypes = providerQuery.MediaTypes,
++                // Over-collect slightly for merge quality; page later on the ID list only.
++                Limit = providerQuery.Limit,
++                StartIndex = 0,
++                EnableTotalRecordCount = false,
++                ParentId = providerQuery.ParentId
++            };
++
+         var perProvider = await Task.WhenAll(
+-            applicable.Select(p => CollectFromProviderAsync(p, providerQuery, searchTerm, requestedLimit, cancellationToken)))
++            applicable.Select(p => CollectFromProviderAsync(p, collectQuery, searchTerm, cancellationToken)))
+             .ConfigureAwait(false);
+ 
+         var bestScores = new Dictionary<Guid, float>();
+-        foreach (var providerResults in perProvider)
++        var maxTotal = 0;
++        foreach (var providerResult in perProvider)
+         {
+-            foreach (var result in providerResults)
++            maxTotal = Math.Max(maxTotal, providerResult.TotalRecordCount);
++            foreach (var result in providerResult.Items)
+             {
+                 UpdateBestScore(bestScores, result);
+             }
+         }
+ 
+-        return bestScores
++        var merged = bestScores
+             .Select(kvp => new SearchResult(kvp.Key, kvp.Value))
+             .OrderByDescending(r => r.Score)
+-            .Take(requestedLimit)
+             .ToList();
++
++        var totalCount = providerQuery.EnableTotalRecordCount
++            ? Math.Max(maxTotal, merged.Count)
++            : merged.Count;
++
++        if (applyPaging)
++        {
++            return PageResults(new SearchQueryResult(merged, totalCount), providerQuery);
++        }
++
++        return new SearchQueryResult(merged, totalCount);
+     }
+ 
+-    private async Task<IReadOnlyList<SearchResult>> CollectFromProviderAsync(
++    private async Task<SearchQueryResult> CollectFromProviderAsync(
+         ISearchProvider provider,
+         SearchProviderQuery providerQuery,
+         string searchTerm,
+-        int requestedLimit,
+         CancellationToken cancellationToken)
+     {
+         try
+         {
+-            var results = provider is IExternalSearchProvider externalProvider
+-                ? await CollectFromExternalProviderAsync(externalProvider, providerQuery, requestedLimit, cancellationToken).ConfigureAwait(false)
+-                : await provider.SearchAsync(providerQuery, cancellationToken).ConfigureAwait(false);
++            SearchQueryResult results;
++            if (provider is IExternalSearchProvider externalProvider)
++            {
++                results = await CollectFromExternalProviderAsync(externalProvider, providerQuery, cancellationToken).ConfigureAwait(false);
++            }
++            else
++            {
++                results = await provider.SearchAsync(providerQuery, cancellationToken).ConfigureAwait(false);
++            }
+ 
+             _logger.LogDebug(
+                 "Provider {Provider} returned {Count} candidates for search term '{SearchTerm}'",
+                 provider.Name,
+-                results.Count,
++                results.Items.Count,
+                 searchTerm);
+             return results;
+         }
+         catch (Exception ex)
+         {
+             _logger.LogWarning(ex, "Search provider {Provider} failed for term '{SearchTerm}'", provider.Name, searchTerm);
+-            return [];
++            return SearchQueryResult.Empty;
+         }
+     }
+ 
+-    private static async Task<IReadOnlyList<SearchResult>> CollectFromExternalProviderAsync(
++    private static async Task<SearchQueryResult> CollectFromExternalProviderAsync(
+         IExternalSearchProvider provider,
+         SearchProviderQuery providerQuery,
+-        int requestedLimit,
+         CancellationToken cancellationToken)
+     {
++        var requestedLimit = providerQuery.Limit ?? 100;
+         var results = new List<SearchResult>();
+         await foreach (var result in provider.SearchAsync(providerQuery, cancellationToken).ConfigureAwait(false))
+         {
+@@ -336,7 +375,22 @@ public class SearchManager : ISearchManager
+             }
+         }
+ 
+-        return results;
++        return new SearchQueryResult(results, results.Count);
++    }
++
++    private static SearchQueryResult PageResults(SearchQueryResult results, SearchProviderQuery query)
++    {
++        var startIndex = Math.Max(query.StartIndex ?? 0, 0);
++        var limit = query.Limit ?? 100;
++        var totalCount = results.TotalRecordCount;
++
++        IReadOnlyList<SearchResult> page = results.Items;
++        if (startIndex > 0 || page.Count > limit)
++        {
++            page = results.Items.Skip(startIndex).Take(limit).ToArray();
++        }
++
++        return new SearchQueryResult(page, totalCount);
+     }
+ 
+     private static void UpdateBestScore(Dictionary<Guid, float> bestScores, SearchResult result)
+@@ -377,6 +431,8 @@ public class SearchManager : ISearchManager
+             ExcludeItemTypes = excludeItemTypes.ToArray(),
+             MediaTypes = query.MediaTypes.ToArray(),
+             Limit = query.Limit,
++            StartIndex = query.StartIndex,
++            EnableTotalRecordCount = true,
+             ParentId = query.ParentId
+         };
+     }
+diff --git a/Emby.Server.Implementations/Library/Search/SqlSearchProvider.cs b/Emby.Server.Implementations/Library/Search/SqlSearchProvider.cs
+index bc766f1c8c..9c1cdef919 100644
+--- a/Emby.Server.Implementations/Library/Search/SqlSearchProvider.cs
++++ b/Emby.Server.Implementations/Library/Search/SqlSearchProvider.cs
+@@ -28,6 +28,7 @@ public class SqlSearchProvider : IInternalSearchProvider
+     private const float PrefixMatchScore = 80f;
+     private const float WordPrefixMatchScore = 75f;
+     private const float ContainsMatchScore = 50f;
++    private const string LikeEscapeChar = "\\";
+ 
+     private static readonly Guid _placeholderId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+ 
+@@ -76,7 +77,7 @@ public class SqlSearchProvider : IInternalSearchProvider
+     }
+ 
+     /// <inheritdoc/>
+-    public async Task<IReadOnlyList<SearchResult>> SearchAsync(SearchProviderQuery query, CancellationToken cancellationToken)
++    public async Task<SearchQueryResult> SearchAsync(SearchProviderQuery query, CancellationToken cancellationToken)
+     {
+         ArgumentNullException.ThrowIfNull(query);
+         ArgumentException.ThrowIfNullOrWhiteSpace(query.SearchTerm);
+@@ -84,43 +85,55 @@ public class SqlSearchProvider : IInternalSearchProvider
+         var rawSearchTerm = query.SearchTerm.Trim().RemoveDiacritics();
+         if (string.IsNullOrEmpty(rawSearchTerm))
+         {
+-            return [];
++            return SearchQueryResult.Empty;
+         }
+ 
+         var cleanSearchTerm = rawSearchTerm.GetCleanValue();
+         if (string.IsNullOrEmpty(cleanSearchTerm))
+         {
+-            return [];
++            return SearchQueryResult.Empty;
+         }
+ 
+         var cleanPrefix = cleanSearchTerm + " ";
+-        // OriginalTitle is stored mixed-case and isn't pre-normalized like CleanName,
+-        // so match it via a case-insensitive LIKE rather than a per-row case conversion
+-        // that may not translate to SQL on every provider.
+-        var likeOriginal = $"%{rawSearchTerm}%";
++        // Escape LIKE metacharacters so user input is treated as a literal substring.
++        // Patterns are EF parameters (not SQL text), but %/_ would still widen matches.
++        var likeClean = "%" + EscapeLikeLiteral(cleanSearchTerm) + "%";
++        var likeOriginal = "%" + EscapeLikeLiteral(rawSearchTerm) + "%";
+         var limit = query.Limit ?? DefaultSearchLimit;
++        var startIndex = Math.Max(query.StartIndex ?? 0, 0);
+ 
+         var dbContext = await _dbProvider.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+         await using (dbContext.ConfigureAwait(false))
+         {
+             // Lightweight projection: select only what's needed to score and identify items.
++            // Use Like (not Contains/strpos) so PostgreSQL gin_trgm_ops indexes can be used.
+             var dbQuery = dbContext.BaseItems
+                 .AsNoTracking()
+                 .Where(e => e.Id != _placeholderId)
+                 .Where(e => !e.IsVirtualItem)
+-                .Where(e => e.CleanName!.Contains(cleanSearchTerm)
+-                    || (e.OriginalTitle != null && EF.Functions.Like(e.OriginalTitle, likeOriginal)));
++                .Where(e => EF.Functions.Like(e.CleanName!, likeClean, LikeEscapeChar)
++                    || (e.OriginalTitle != null && EF.Functions.Like(e.OriginalTitle, likeOriginal, LikeEscapeChar)));
+ 
+             dbQuery = ApplyTypeFilter(dbQuery, query.IncludeItemTypes, query.ExcludeItemTypes);
+             dbQuery = ApplyMediaTypeFilter(dbQuery, query.MediaTypes);
+             dbQuery = ApplyParentFilter(dbQuery, query.ParentId);
+             dbQuery = ApplyUserAccessFilter(dbContext, dbQuery, query.UserId);
+ 
++            var totalRecordCount = 0;
++            if (query.EnableTotalRecordCount)
++            {
++                totalRecordCount = await dbQuery.CountAsync(cancellationToken).ConfigureAwait(false);
++                if (totalRecordCount == 0)
++                {
++                    return SearchQueryResult.Empty;
++                }
++            }
++
+             // Compute the score in SQL: the ternary translates to a CASE WHEN. CleanName is
+             // the pre-normalized (lowercase, diacritic-stripped) form, so we score against it
+             // directly without any per-row case conversion. Items that match only via
+             // OriginalTitle fall through to the Contains tier.
+-            // Tie-break by Id for deterministic ordering so the explicit OrderBy + Take
++            // Tie-break by Id for deterministic ordering so the explicit OrderBy + Skip/Take
+             // satisfies EF Core's row-limiting-with-OrderBy requirement.
+             var scored = dbQuery.Select(e => new
+             {
+@@ -132,16 +145,33 @@ public class SqlSearchProvider : IInternalSearchProvider
+                     : ContainsMatchScore
+             });
+ 
+-            return await scored
++            var rows = await scored
+                 .OrderByDescending(x => x.Score)
+                 .ThenBy(x => x.Id)
++                .Skip(startIndex)
+                 .Take(limit)
+-                .Select(x => new SearchResult(x.Id, x.Score))
++                .Select(x => new { x.Id, x.Score })
+                 .ToArrayAsync(cancellationToken)
+                 .ConfigureAwait(false);
++
++            if (!query.EnableTotalRecordCount)
++            {
++                totalRecordCount = startIndex + rows.Length;
++            }
++
++            var items = rows.Select(x => new SearchResult(x.Id, x.Score)).ToArray();
++            return new SearchQueryResult(items, totalRecordCount);
+         }
+     }
+ 
++    internal static string EscapeLikeLiteral(string value)
++    {
++        return value
++            .Replace("\\", "\\\\", StringComparison.Ordinal)
++            .Replace("%", "\\%", StringComparison.Ordinal)
++            .Replace("_", "\\_", StringComparison.Ordinal);
++    }
++
+     private IQueryable<BaseItemEntity> ApplyTypeFilter(
+         IQueryable<BaseItemEntity> query,
+         BaseItemKind[] includeItemTypes,
+diff --git a/Jellyfin.Api/Controllers/ItemsController.cs b/Jellyfin.Api/Controllers/ItemsController.cs
+index c52a6cd7dc..e712dcb7db 100644
+--- a/Jellyfin.Api/Controllers/ItemsController.cs
++++ b/Jellyfin.Api/Controllers/ItemsController.cs
+@@ -349,10 +349,12 @@ public class ItemsController : BaseJellyfinApiController
+         }
+ 
+         // Build the query up front so the dispatch below can decide the path from it.
+-        // Use search providers when searchTerm is provided. Providers return only IDs and scores;
+-        // items are loaded server-side via folder.GetItems below, which applies user-access filtering.
++        // Use search providers when searchTerm is provided. Providers return only IDs and scores
++        // for the requested page (SQL Skip/Take); items are hydrated via folder.GetItems below.
+         Dictionary<Guid, float>? searchResultScores = null;
++        int? searchTotalRecordCount = null;
+         Guid[] itemIds = ids;
++        IReadOnlyList<Guid>? searchOrderedIds = null;
+ 
+         if (!string.IsNullOrWhiteSpace(searchTerm))
+         {
+@@ -363,17 +365,21 @@ public class ItemsController : BaseJellyfinApiController
+                 IncludeItemTypes = includeItemTypes,
+                 ExcludeItemTypes = excludeItemTypes,
+                 MediaTypes = mediaTypes,
+-                Limit = limit.HasValue ? limit.Value * 3 : null,
++                Limit = limit,
++                StartIndex = startIndex,
++                EnableTotalRecordCount = enableTotalRecordCount,
+                 ParentId = parentId
+             };
+ 
+-            var searchResults = await _searchManager.GetSearchResultsAsync(searchProviderQuery, HttpContext.RequestAborted).ConfigureAwait(false);
+-            if (searchResults.Count > 0)
++            var searchPage = await _searchManager.GetSearchResultsAsync(searchProviderQuery, HttpContext.RequestAborted).ConfigureAwait(false);
++            if (searchPage.Items.Count > 0)
+             {
+-                searchResultScores = searchResults.ToDictionary(r => r.ItemId, r => r.Score);
++                searchResultScores = searchPage.Items.ToDictionary(r => r.ItemId, r => r.Score);
++                searchTotalRecordCount = searchPage.TotalRecordCount;
++                searchOrderedIds = searchPage.Items.Select(r => r.ItemId).ToArray();
+                 itemIds = ids.Length > 0
+-                    ? ids.Concat(searchResultScores.Keys).Distinct().ToArray()
+-                    : searchResultScores.Keys.ToArray();
++                    ? ids.Concat(searchOrderedIds).Distinct().ToArray()
++                    : searchOrderedIds.ToArray();
+             }
+         }
+ 
+@@ -386,8 +392,9 @@ public class ItemsController : BaseJellyfinApiController
+             Recursive = recursive ?? false,
+             OrderBy = RequestHelpers.GetOrderBy(sortBy, sortOrder),
+             IsFavorite = isFavorite,
+-            Limit = searchResultScores is null ? limit : null,
+-            StartIndex = searchResultScores is null ? startIndex : null,
++            // When search providers returned a page of IDs, hydrate only that page.
++            Limit = searchResultScores is null ? limit : itemIds.Length,
++            StartIndex = searchResultScores is null ? startIndex : 0,
+             IsMissing = isMissing,
+             IsUnaired = isUnaired,
+             CollapseBoxSetItems = collapseBoxSetItems,
+@@ -440,7 +447,7 @@ public class ItemsController : BaseJellyfinApiController
+             ParentId = parentId ?? Guid.Empty,
+             IndexNumber = indexNumber,
+             ParentIndexNumber = parentIndexNumber,
+-            EnableTotalRecordCount = enableTotalRecordCount,
++            EnableTotalRecordCount = searchResultScores is null && enableTotalRecordCount,
+             ExcludeItemIds = excludeItemIds,
+             DtoOptions = dtoOptions,
+             SearchTerm = searchResultScores is null ? searchTerm : null,
+@@ -592,27 +599,22 @@ public class ItemsController : BaseJellyfinApiController
+         {
+             // folder.GetItems applies user-access filtering via the InternalItemsQuery's User.
+             result = folder.GetItems(query);
+-            if (searchResultScores is not null && searchResultScores.Count > 0)
++            if (searchResultScores is not null && searchResultScores.Count > 0 && searchOrderedIds is not null)
+             {
+-                var orderedItems = result.Items
+-                    .OrderByDescending(item => searchResultScores.GetValueOrDefault(item.Id, 0f))
+-                    .ThenBy(item => item.SortName)
+-                    .ToArray();
+-
+-                var totalCount = orderedItems.Length;
+-                if (startIndex.HasValue && startIndex.Value > 0)
+-                {
+-                    orderedItems = orderedItems.Skip(startIndex.Value).ToArray();
+-                }
+-
+-                if (limit.HasValue)
++                // Preserve provider score order; do not sort/page a large hydrated set in memory.
++                var itemsById = result.Items.ToDictionary(i => i.Id);
++                var orderedItems = new List<BaseItem>(searchOrderedIds.Count);
++                foreach (var id in searchOrderedIds)
+                 {
+-                    orderedItems = orderedItems.Take(limit.Value).ToArray();
++                    if (itemsById.TryGetValue(id, out var matched))
++                    {
++                        orderedItems.Add(matched);
++                    }
+                 }
+ 
+                 return new QueryResult<BaseItemDto>(
+                     startIndex,
+-                    totalCount,
++                    searchTotalRecordCount ?? orderedItems.Count,
+                     _dtoService.GetBaseItemDtos(orderedItems, dtoOptions, user));
+             }
+         }
+diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
+index 3357f874d2..257d7076bb 100644
+--- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
++++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
+@@ -183,8 +183,14 @@ public sealed partial class BaseItemRepository
+             }
+             else
+             {
+-                var likeSearchTerm = $"%{originalSearchTerm}%";
+-                baseQuery = baseQuery.Where(e => e.CleanName!.Contains(cleanedSearchTerm) || (e.OriginalTitle != null && EF.Functions.Like(e.OriginalTitle, likeSearchTerm)));
++                // Escaped literal substring so %/_ in the term cannot act as LIKE wildcards.
++                // Like (not Contains/strpos) can use PostgreSQL gin_trgm_ops indexes.
++                const string likeEscape = "\\";
++                var likeClean = "%" + EscapeLikeLiteral(cleanedSearchTerm) + "%";
++                var likeOriginal = "%" + EscapeLikeLiteral(originalSearchTerm) + "%";
++                baseQuery = baseQuery.Where(e =>
++                    EF.Functions.Like(e.CleanName!, likeClean, likeEscape)
++                    || (e.OriginalTitle != null && EF.Functions.Like(e.OriginalTitle, likeOriginal, likeEscape)));
+             }
+         }
+ 
+@@ -358,13 +364,13 @@ public sealed partial class BaseItemRepository
+ 
+         if (filter.PersonIds.Length > 0)
+         {
+-            var peopleEntityIds = context.BaseItems
++            var personNames = context.BaseItems
+                 .WhereOneOrMany(filter.PersonIds, b => b.Id)
+-                .Join(
+-                    context.Peoples,
+-                    b => b.Name,
+-                    p => p.Name,
+-                    (b, p) => p.Id);
++                .Select(b => b.Name);
++
++            var peopleEntityIds = context.Peoples
++                .Where(p => personNames.Contains(p.Name))
++                .Select(p => p.Id);
+ 
+             baseQuery = baseQuery
+                 .Where(e => context.PeopleBaseItemMap
+@@ -410,10 +416,11 @@ public sealed partial class BaseItemRepository
+             }
+             else
+             {
+-                var likeNameContains = $"%{nameContains}%";
++                const string likeEscape = "\\";
++                var likeNameContains = "%" + EscapeLikeLiteral(nameContains) + "%";
+                 baseQuery = baseQuery.Where(e =>
+-                                    e.CleanName!.Contains(nameContains)
+-                                    || EF.Functions.Like(e.OriginalTitle, likeNameContains));
++                    EF.Functions.Like(e.CleanName!, likeNameContains, likeEscape)
++                    || (e.OriginalTitle != null && EF.Functions.Like(e.OriginalTitle, likeNameContains, likeEscape)));
+             }
+         }
+ 
+@@ -1221,4 +1228,12 @@ public sealed partial class BaseItemRepository
+ 
+         return baseQuery;
+     }
++
++    private static string EscapeLikeLiteral(string value)
++    {
++        return value
++            .Replace("\\", "\\\\", StringComparison.Ordinal)
++            .Replace("%", "\\%", StringComparison.Ordinal)
++            .Replace("_", "\\_", StringComparison.Ordinal);
++    }
+ }
+diff --git a/MediaBrowser.Controller/Library/ISearchManager.cs b/MediaBrowser.Controller/Library/ISearchManager.cs
+index 4f763829a7..a1ef7b79ec 100644
+--- a/MediaBrowser.Controller/Library/ISearchManager.cs
++++ b/MediaBrowser.Controller/Library/ISearchManager.cs
+@@ -24,12 +24,12 @@ public interface ISearchManager
+ 
+     /// <summary>
+     /// Gets ranked search results from registered providers. Returns only item IDs and
+-    /// relevance scores; callers are responsible for loading items and applying user-access filtering.
++    /// relevance scores for the requested page; callers are responsible for loading items.
+     /// </summary>
+-    /// <param name="query">The search provider query with type/media filters.</param>
++    /// <param name="query">The search provider query with type/media filters and paging.</param>
+     /// <param name="cancellationToken">Cancellation token.</param>
+-    /// <returns>Search results containing item IDs and relevance scores.</returns>
+-    Task<IReadOnlyList<SearchResult>> GetSearchResultsAsync(
++    /// <returns>Paginated search results containing item IDs, relevance scores, and total count.</returns>
++    Task<SearchQueryResult> GetSearchResultsAsync(
+         SearchProviderQuery query,
+         CancellationToken cancellationToken = default);
+ 
+diff --git a/MediaBrowser.Controller/Library/ISearchProvider.cs b/MediaBrowser.Controller/Library/ISearchProvider.cs
+index 3b300ed38b..a52f49ece9 100644
+--- a/MediaBrowser.Controller/Library/ISearchProvider.cs
++++ b/MediaBrowser.Controller/Library/ISearchProvider.cs
+@@ -1,4 +1,3 @@
+-using System.Collections.Generic;
+ using System.Threading;
+ using System.Threading.Tasks;
+ using MediaBrowser.Model.Configuration;
+@@ -30,8 +29,8 @@ public interface ISearchProvider
+     /// </summary>
+     /// <param name="query">The search query.</param>
+     /// <param name="cancellationToken">Cancellation token.</param>
+-    /// <returns>Ranked list of candidate item IDs with scores.</returns>
+-    Task<IReadOnlyList<SearchResult>> SearchAsync(
++    /// <returns>Paginated ranked candidate item IDs with scores and total count.</returns>
++    Task<SearchQueryResult> SearchAsync(
+         SearchProviderQuery query,
+         CancellationToken cancellationToken);
+ 
+diff --git a/MediaBrowser.Controller/Library/SearchProviderQuery.cs b/MediaBrowser.Controller/Library/SearchProviderQuery.cs
+index 845588c872..4ec91cadf5 100644
+--- a/MediaBrowser.Controller/Library/SearchProviderQuery.cs
++++ b/MediaBrowser.Controller/Library/SearchProviderQuery.cs
+@@ -38,6 +38,16 @@ public class SearchProviderQuery
+     /// </summary>
+     public int? Limit { get; init; }
+ 
++    /// <summary>
++    /// Gets the record index to start at.
++    /// </summary>
++    public int? StartIndex { get; init; }
++
++    /// <summary>
++    /// Gets a value indicating whether the total matching record count should be computed.
++    /// </summary>
++    public bool EnableTotalRecordCount { get; init; } = true;
++
+     /// <summary>
+     /// Gets the parent ID to scope the search.
+     /// </summary>
+diff --git a/MediaBrowser.Controller/Library/SearchQueryResult.cs b/MediaBrowser.Controller/Library/SearchQueryResult.cs
+new file mode 100644
+index 0000000000..f64af703b1
+--- /dev/null
++++ b/MediaBrowser.Controller/Library/SearchQueryResult.cs
+@@ -0,0 +1,35 @@
++using System.Collections.Generic;
++
++namespace MediaBrowser.Controller.Library;
++
++/// <summary>
++/// Paginated search results from a search provider or the search manager.
++/// </summary>
++public class SearchQueryResult
++{
++    /// <summary>
++    /// Initializes a new instance of the <see cref="SearchQueryResult"/> class.
++    /// </summary>
++    /// <param name="items">The page of search results.</param>
++    /// <param name="totalRecordCount">The total number of matching records.</param>
++    public SearchQueryResult(IReadOnlyList<SearchResult> items, int totalRecordCount)
++    {
++        Items = items;
++        TotalRecordCount = totalRecordCount;
++    }
++
++    /// <summary>
++    /// Gets an empty result.
++    /// </summary>
++    public static SearchQueryResult Empty { get; } = new([], 0);
++
++    /// <summary>
++    /// Gets the page of search results (item IDs and scores).
++    /// </summary>
++    public IReadOnlyList<SearchResult> Items { get; }
++
++    /// <summary>
++    /// Gets the total number of matching records before paging.
++    /// </summary>
++    public int TotalRecordCount { get; }
++}
