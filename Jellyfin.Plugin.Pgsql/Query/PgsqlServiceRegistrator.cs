@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Plugin.Pgsql.PlaybackReportingImport;
 using MediaBrowser.Controller;
@@ -7,6 +8,7 @@ using MediaBrowser.Controller.Plugins;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using StackExchange.Redis;
 
 namespace Jellyfin.Plugin.Pgsql.Query;
 
@@ -86,8 +88,20 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
         {
             if (!string.IsNullOrWhiteSpace(options.RedisConnectionString))
             {
-                logger.LogInformation("PostgreSQL plugin query cache using Redis backend");
-                return new RedisQueryResultCache(options.RedisConnectionString, logger, serviceProvider.GetRequiredService<QueryRuntimeStats>());
+                try
+                {
+                    logger.LogInformation("PostgreSQL plugin query cache using Redis backend");
+                    return new RedisQueryResultCache(
+                        options.RedisConnectionString,
+                        logger,
+                        serviceProvider.GetRequiredService<QueryRuntimeStats>());
+                }
+                catch (Exception ex) when (ex is RedisException or IOException or TimeoutException or ArgumentException)
+                {
+                    // Redis must never take down Jellyfin; degrade to in-process cache.
+                    logger.LogWarning(ex, "Failed to initialize Redis query cache; falling back to memory backend");
+                    return new MemoryQueryResultCache();
+                }
             }
 
             logger.LogInformation("Redis cache backend selected but no connection string configured; using memory backend");
