@@ -22,14 +22,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Must not be copied into the plugin folder: PluginManager loads every DLL into
-         the plugin ALC, and a private copy of this assembly makes User (and any other
-         shared entity types) diverge from the host. GetIsPlayed is the first
-         IItemRepository member that takes User, so that mismatch surfaces as
-         ReflectionTypeLoadException at plugin load. -->
-    <ProjectReference Include="..\jellyfin\src\Jellyfin.Database\Jellyfin.Database.Implementations\Jellyfin.Database.Implementations.csproj">
-      <Private>false</Private>
-    </ProjectReference>
+    <!-- Keep Copy Local so EF design-time (migrations add/bundle) can load DbContext
+         types. Publish strips host-shared assemblies below; Docker/entrypoint also
+         remove them so PluginManager never LoadFromAssemblyPath's a private copy. -->
+    <ProjectReference Include="..\jellyfin\src\Jellyfin.Database\Jellyfin.Database.Implementations\Jellyfin.Database.Implementations.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -76,5 +72,17 @@
   <ItemGroup>
     <None Update="meta.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <!-- Host-shared Jellyfin assemblies must not ship in the plugin package.
+       PluginManager loads every DLL into the plugin ALC; a private
+       Jellyfin.Database.Implementations makes entity types (e.g. User on
+       GetIsPlayed) diverge from the host and fails plugin load. -->
+  <Target Name="StripSharedJellyfinAssembliesFromPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <_SharedJellyfinPublishFiles Include="$(PublishDir)Jellyfin.Database.Implementations.*" />
+      <_SharedJellyfinPublishFiles Include="$(PublishDir)Jellyfin.CodeAnalysis.*" />
+    </ItemGroup>
+    <Delete Files="@(_SharedJellyfinPublishFiles)" TreatErrorsAsWarnings="true" />
+  </Target>
 
 </Project>
