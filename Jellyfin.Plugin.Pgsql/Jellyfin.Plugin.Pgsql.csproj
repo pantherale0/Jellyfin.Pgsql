@@ -22,7 +22,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\jellyfin\src\Jellyfin.Database\Jellyfin.Database.Implementations\Jellyfin.Database.Implementations.csproj" />
+    <!-- Must not be copied into the plugin folder: PluginManager loads every DLL into
+         the plugin ALC, and a private copy of this assembly makes User (and any other
+         shared entity types) diverge from the host. GetIsPlayed is the first
+         IItemRepository member that takes User, so that mismatch surfaces as
+         ReflectionTypeLoadException at plugin load. -->
+    <ProjectReference Include="..\jellyfin\src\Jellyfin.Database\Jellyfin.Database.Implementations\Jellyfin.Database.Implementations.csproj">
+      <Private>false</Private>
+    </ProjectReference>
   </ItemGroup>
 
   <ItemGroup>

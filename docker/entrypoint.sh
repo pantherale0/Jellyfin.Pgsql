@@ -67,6 +67,12 @@ sync_plugin_if_needed() {
         cp -f "${src_dir}/meta.json" "${dst_dir}/meta.json"
         echo "[entrypoint] Refreshed plugin meta.json (status=Active)"
     fi
+
+    # Host-shared Jellyfin assemblies must not live in the plugin folder. A private
+    # Jellyfin.Database.Implementations.dll makes entity types (e.g. User) diverge
+    # from the host and fails load with ReflectionTypeLoadException on GetIsPlayed.
+    rm -f "${dst_dir}"/Jellyfin.Database.Implementations.* \
+          "${dst_dir}"/Jellyfin.CodeAnalysis.*
 }
 
 sync_plugin_if_needed

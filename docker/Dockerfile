@@ -47,6 +47,12 @@ RUN apt-get update && apt-get install -y git && \
 RUN dotnet restore Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj
 RUN dotnet restore jellyfin/Jellyfin.Server/Jellyfin.Server.csproj -r linux-x64 -p:AllowMissingPrunePackageData=true
 RUN dotnet publish Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj -c Release --no-restore -o /app/publish
+# Host-shared Jellyfin assemblies must not ship in the plugin folder. PluginManager
+# LoadFromAssemblyPath's every DLL into the plugin ALC; a private
+# Jellyfin.Database.Implementations makes entity types (e.g. User on GetIsPlayed)
+# diverge from the host and fails plugin load with ReflectionTypeLoadException.
+RUN rm -f /app/publish/Jellyfin.Database.Implementations.* \
+        /app/publish/Jellyfin.CodeAnalysis.*
 RUN dotnet publish jellyfin/Jellyfin.Server/Jellyfin.Server.csproj -c Release --no-restore -o /app/jellyfin-server -r linux-x64 --self-contained true -p:AllowMissingPrunePackageData=true
 RUN dotnet tool restore
 RUN dotnet ef migrations bundle \
