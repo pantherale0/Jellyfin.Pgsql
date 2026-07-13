@@ -66,4 +66,8 @@
     <EmbeddedResource Include="Configuration\configPage.html" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="meta.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
