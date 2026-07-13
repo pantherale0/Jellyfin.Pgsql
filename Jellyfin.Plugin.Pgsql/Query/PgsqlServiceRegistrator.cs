@@ -90,11 +90,13 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
             {
                 try
                 {
-                    logger.LogInformation("PostgreSQL plugin query cache using Redis backend");
-                    return new RedisQueryResultCache(
-                        options.RedisConnectionString,
-                        logger,
-                        serviceProvider.GetRequiredService<QueryRuntimeStats>());
+                    logger.LogInformation("PostgreSQL plugin query cache using Redis backend with memory fallback");
+                    return new FallbackQueryResultCache(
+                        new RedisQueryResultCache(
+                            options.RedisConnectionString,
+                            logger,
+                            serviceProvider.GetRequiredService<QueryRuntimeStats>()),
+                        new MemoryQueryResultCache());
                 }
                 catch (Exception ex) when (ex is RedisException or IOException or TimeoutException or ArgumentException)
                 {
