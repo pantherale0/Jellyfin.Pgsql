@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.StackExchangeRedis;
 using Microsoft.Extensions.Logging;
@@ -10,12 +11,12 @@ namespace Jellyfin.Plugin.Pgsql.Query;
 
 /// <summary>
 /// Redis-backed <see cref="IQueryResultCache"/>. Recoverable Redis failures are swallowed and treated
-/// as cache misses so that a Redis outage never breaks queries.
+/// as cache misses so that a Redis outage never breaks queries or server startup.
 /// </summary>
 internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
 {
     private const string KeyPrefix = "jf:pgsql:v1:";
-    private static readonly TimeSpan _warningThrottle = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan WarningThrottle = TimeSpan.FromSeconds(60);
 
     private readonly RedisCache _cache;
     private readonly ConnectionMultiplexer _connection;
@@ -33,10 +34,16 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
     {
         _logger = logger;
         _stats = stats;
-        _connection = ConnectionMultiplexer.Connect(connectionString);
+
+        var configuration = ConfigurationOptions.Parse(connectionString);
+        // Never fail server startup because Redis is briefly unreachable; the multiplexer
+        // keeps retrying in the background and cache ops degrade to misses until then.
+        configuration.AbortOnConnectFail = false;
+
+        _connection = ConnectionMultiplexer.Connect(configuration);
         _cache = new RedisCache(Options.Create(new RedisCacheOptions
         {
-            Configuration = connectionString,
+            ConnectionMultiplexerFactory = () => Task.FromResult<IConnectionMultiplexer>(_connection),
             InstanceName = KeyPrefix,
         }));
     }
@@ -49,19 +56,7 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
         {
             return QueryResultPayload.TryDeserialize(_cache.Get(key), out ids);
         }
-        catch (RedisException ex)
-        {
-            return HandleCacheFailure(ex, "get");
-        }
-        catch (IOException ex)
-        {
-            return HandleCacheFailure(ex, "get");
-        }
-        catch (TimeoutException ex)
-        {
-            return HandleCacheFailure(ex, "get");
-        }
-        catch (ObjectDisposedException ex)
+        catch (Exception ex) when (IsTransientRedisFailure(ex))
         {
             return HandleCacheFailure(ex, "get");
         }
@@ -77,19 +72,7 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
                 AbsoluteExpirationRelativeToNow = timeToLive,
             });
         }
-        catch (RedisException ex)
-        {
-            ReportCacheFailure(ex, "set");
-        }
-        catch (IOException ex)
-        {
-            ReportCacheFailure(ex, "set");
-        }
-        catch (TimeoutException ex)
-        {
-            ReportCacheFailure(ex, "set");
-        }
-        catch (ObjectDisposedException ex)
+        catch (Exception ex) when (IsTransientRedisFailure(ex))
         {
             ReportCacheFailure(ex, "set");
         }
@@ -110,19 +93,7 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
             payload = cached;
             return true;
         }
-        catch (RedisException ex)
-        {
-            return HandlePayloadFailure(ex, "get");
-        }
-        catch (IOException ex)
-        {
-            return HandlePayloadFailure(ex, "get");
-        }
-        catch (TimeoutException ex)
-        {
-            return HandlePayloadFailure(ex, "get");
-        }
-        catch (ObjectDisposedException ex)
+        catch (Exception ex) when (IsTransientRedisFailure(ex))
         {
             return HandlePayloadFailure(ex, "get");
         }
@@ -138,19 +109,7 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
                 AbsoluteExpirationRelativeToNow = timeToLive,
             });
         }
-        catch (RedisException ex)
-        {
-            ReportCacheFailure(ex, "set");
-        }
-        catch (IOException ex)
-        {
-            ReportCacheFailure(ex, "set");
-        }
-        catch (TimeoutException ex)
-        {
-            ReportCacheFailure(ex, "set");
-        }
-        catch (ObjectDisposedException ex)
+        catch (Exception ex) when (IsTransientRedisFailure(ex))
         {
             ReportCacheFailure(ex, "set");
         }
@@ -161,6 +120,11 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
     {
         try
         {
+            if (!_connection.IsConnected)
+            {
+                return;
+            }
+
             foreach (var endpoint in _connection.GetEndPoints())
             {
                 var server = _connection.GetServer(endpoint);
@@ -175,19 +139,7 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
                 }
             }
         }
-        catch (RedisException ex)
-        {
-            ReportCacheFailure(ex, "invalidate");
-        }
-        catch (IOException ex)
-        {
-            ReportCacheFailure(ex, "invalidate");
-        }
-        catch (TimeoutException ex)
-        {
-            ReportCacheFailure(ex, "invalidate");
-        }
-        catch (ObjectDisposedException ex)
+        catch (Exception ex) when (IsTransientRedisFailure(ex))
         {
             ReportCacheFailure(ex, "invalidate");
         }
@@ -199,6 +151,9 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
         _cache.Dispose();
         _connection.Dispose();
     }
+
+    private static bool IsTransientRedisFailure(Exception ex)
+        => ex is RedisException or IOException or TimeoutException or ObjectDisposedException;
 
     private bool HandlePayloadFailure(Exception ex, string operation)
     {
@@ -221,7 +176,7 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
     private void LogThrottled(Exception ex, string operation)
     {
         var now = DateTimeOffset.UtcNow;
-        if (now - _lastWarning >= _warningThrottle)
+        if (now - _lastWarning >= WarningThrottle)
         {
             _lastWarning = now;
             _logger.LogWarning(ex, "Redis query cache {Operation} failed; continuing without cache", operation);
