@@ -1,0 +1,20 @@
+diff --git a/Emby.Server.Implementations/Plugins/PluginManager.cs b/Emby.Server.Implementations/Plugins/PluginManager.cs
+index f699c99d85..d7b800f353 100644
+--- a/Emby.Server.Implementations/Plugins/PluginManager.cs
++++ b/Emby.Server.Implementations/Plugins/PluginManager.cs
+@@ -127,7 +127,14 @@ namespace Emby.Server.Implementations.Plugins
+                     continue;
+                 }
+ 
+-                var assemblyLoadContext = new PluginLoadContext(plugin.Path);
++                // AssemblyDependencyResolver requires the path to the plugin's main assembly
++                // (where .deps.json lives), not the plugin directory. Passing the directory
++                // makes ResolveAssemblyToPath always return null, so whitelisted plugins cannot
++                // load transitive dependencies such as StackExchange.Redis.
++                var resolverAssembly = plugin.DllFiles.FirstOrDefault(static f => File.Exists(Path.ChangeExtension(f, ".deps.json")))
++                    ?? plugin.DllFiles.FirstOrDefault()
++                    ?? Path.Combine(plugin.Path, "plugin.dll");
++                var assemblyLoadContext = new PluginLoadContext(resolverAssembly);
+                 _assemblyLoadContexts.Add(assemblyLoadContext);
+ 
+                 var assemblies = new List<Assembly>(plugin.DllFiles.Count);
