@@ -60,6 +60,13 @@ sync_plugin_if_needed() {
     else
         echo "[entrypoint] Plugin hash unchanged, skipping plugin copy"
     fi
+
+    # Always refresh meta.json so a stale Malfunctioned/Disabled status on the
+    # volume cannot leave the critical DB plugin marked for cleanup.
+    if [ -f "${src_dir}/meta.json" ]; then
+        cp -f "${src_dir}/meta.json" "${dst_dir}/meta.json"
+        echo "[entrypoint] Refreshed plugin meta.json (status=Active)"
+    fi
 }
 
 sync_plugin_if_needed

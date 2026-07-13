@@ -1,0 +1,17 @@
+{
+  "category": "General",
+  "changelog": "Initial PostgreSQL database provider implementation",
+  "description": "Adds PostgreSQL database support to Jellyfin server. Configure using standard PostgreSQL environment variables (POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD).",
+  "guid": "27e7ad18-ea71-4b19-b1a9-6e4c2e4d5e18",
+  "name": "PostgreSQL Database",
+  "overview": "PostgreSQL database provider for Jellyfin",
+  "owner": "jellyfin",
+  "targetAbi": "12.0.0.0",
+  "timestamp": "2026-07-13T00:00:00.0000000Z",
+  "version": "1.0.0.0",
+  "status": "Active",
+  "autoUpdate": false,
+  "assemblies": [
+    "Jellyfin.Plugin.Pgsql.dll"
+  ]
+}
