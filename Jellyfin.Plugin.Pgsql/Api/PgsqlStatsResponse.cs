@@ -31,6 +31,9 @@ public sealed class PgsqlStatsResponse
     /// <summary>Gets or sets a value indicating whether music latest optimization is enabled.</summary>
     public bool OptimizeMusicLatest { get; set; }
 
+    /// <summary>Gets or sets a value indicating whether NextUp batch optimization is enabled.</summary>
+    public bool OptimizeNextUp { get; set; }
+
     /// <summary>Gets or sets latest cache hits.</summary>
     public long LatestCacheHits { get; set; }
 
@@ -63,4 +66,10 @@ public sealed class PgsqlStatsResponse
 
     /// <summary>Gets or sets optimized latest failures.</summary>
     public long OptimizedLatestFailures { get; set; }
+
+    /// <summary>Gets or sets optimized NextUp attempts.</summary>
+    public long OptimizedNextUpRuns { get; set; }
+
+    /// <summary>Gets or sets optimized NextUp failures.</summary>
+    public long OptimizedNextUpFailures { get; set; }
 }

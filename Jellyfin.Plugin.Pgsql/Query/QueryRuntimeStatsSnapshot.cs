@@ -16,6 +16,8 @@ namespace Jellyfin.Plugin.Pgsql.Query;
 /// <param name="RedisSetErrors">Redis set failures.</param>
 /// <param name="OptimizedLatestRuns">Attempted optimized latest query runs.</param>
 /// <param name="OptimizedLatestFailures">Failed optimized latest query runs.</param>
+/// <param name="OptimizedNextUpRuns">Attempted optimized NextUp batch runs.</param>
+/// <param name="OptimizedNextUpFailures">Failed optimized NextUp batch runs.</param>
 public sealed record QueryRuntimeStatsSnapshot(
     DateTimeOffset StartedAtUtc,
     long LatestCacheHits,
@@ -27,4 +29,6 @@ public sealed record QueryRuntimeStatsSnapshot(
     long RedisGetErrors,
     long RedisSetErrors,
     long OptimizedLatestRuns,
-    long OptimizedLatestFailures);
+    long OptimizedLatestFailures,
+    long OptimizedNextUpRuns,
+    long OptimizedNextUpFailures);

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using MediaBrowser.Controller.Entities;
@@ -10,7 +9,8 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Pgsql.Query;
 
 /// <summary>
-/// Decorates <see cref="INextUpService"/> with short-lived caching for home-screen NextUp loads.
+/// Decorates <see cref="INextUpService"/> with PostgreSQL-optimised batch queries and
+/// short-lived caching for home-screen NextUp loads.
 /// </summary>
 internal sealed class CachingNextUpService : INextUpService
 {
@@ -19,6 +19,7 @@ internal sealed class CachingNextUpService : INextUpService
     private readonly INextUpService _inner;
     private readonly IQueryResultCache _cache;
     private readonly CachedItemLoader _loader;
+    private readonly PgNextUpQuery _pgNextUp;
     private readonly QueryRuntimeStats _stats;
     private readonly TimeSpan _ttl;
     private readonly ILogger<CachingNextUpService> _logger;
@@ -29,18 +30,21 @@ internal sealed class CachingNextUpService : INextUpService
     /// <param name="inner">The core next-up service.</param>
     /// <param name="cache">The query result cache.</param>
     /// <param name="loader">The cached item loader.</param>
+    /// <param name="pgNextUp">The PostgreSQL NextUp optimiser.</param>
     /// <param name="stats">The runtime stats collector.</param>
     /// <param name="logger">The logger.</param>
     public CachingNextUpService(
         INextUpService inner,
         IQueryResultCache cache,
         CachedItemLoader loader,
+        PgNextUpQuery pgNextUp,
         QueryRuntimeStats stats,
         ILogger<CachingNextUpService> logger)
     {
         _inner = inner;
         _cache = cache;
         _loader = loader;
+        _pgNextUp = pgNextUp;
         _stats = stats;
         _logger = logger;
         _ttl = PgsqlQueryOptions.Current.NextUpTtl;
@@ -81,39 +85,50 @@ internal sealed class CachingNextUpService : INextUpService
         bool includeSpecials,
         bool includeWatchedForRewatching)
     {
+        if (seriesKeys.Count == 0)
+        {
+            return new Dictionary<string, NextUpEpisodeBatchResult>();
+        }
+
         var options = PgsqlQueryOptions.Current;
-        if (!options.CacheActive || _ttl <= TimeSpan.Zero || seriesKeys.Count == 0)
-        {
-            return _inner.GetNextUpEpisodesBatch(filter, seriesKeys, includeSpecials, includeWatchedForRewatching);
-        }
+        var cacheEnabled = options.CacheActive && _ttl > TimeSpan.Zero;
+        string? cacheKey = null;
 
-        var key = QueryCacheKeyBuilder.BuildNextUpBatchKey(filter, seriesKeys, includeSpecials, includeWatchedForRewatching);
-        if (key is null)
+        if (cacheEnabled)
         {
-            return _inner.GetNextUpEpisodesBatch(filter, seriesKeys, includeSpecials, includeWatchedForRewatching);
-        }
-
-        if (_cache.TryGetPayload(key, out var cachedPayload)
-            && cachedPayload is not null
-            && TryDeserializeBatch(cachedPayload, out var cachedEntries))
-        {
-            var rebuilt = RebuildBatchResults(cachedEntries, filter);
-            if (rebuilt is not null)
+            cacheKey = QueryCacheKeyBuilder.BuildNextUpBatchKey(filter, seriesKeys, includeSpecials, includeWatchedForRewatching);
+            if (cacheKey is not null
+                && _cache.TryGetPayload(cacheKey, out var cachedPayload)
+                && cachedPayload is not null
+                && TryDeserializeBatch(cachedPayload, out var cachedEntries))
             {
-                _stats.RecordNextUpCacheLookup(hit: true);
-                if (_logger.IsEnabled(LogLevel.Debug))
+                var rebuilt = RebuildBatchResults(cachedEntries, filter);
+                if (rebuilt is not null)
                 {
-                    _logger.LogDebug("NextUp batch served from cache ({Count} series)", rebuilt.Count);
-                }
+                    _stats.RecordNextUpCacheLookup(hit: true);
+                    if (_logger.IsEnabled(LogLevel.Debug))
+                    {
+                        _logger.LogDebug("NextUp batch served from cache ({Count} series)", rebuilt.Count);
+                    }
 
-                return rebuilt;
+                    return rebuilt;
+                }
+            }
+
+            if (cacheKey is not null)
+            {
+                _stats.RecordNextUpCacheLookup(hit: false);
             }
         }
 
-        _stats.RecordNextUpCacheLookup(hit: false);
-        var result = _inner.GetNextUpEpisodesBatch(filter, seriesKeys, includeSpecials, includeWatchedForRewatching);
-        var payload = SerializeBatch(result);
-        _cache.SetPayload(key, payload, _ttl);
+        var result = _pgNextUp.TryGetBatch(filter, seriesKeys, includeSpecials, includeWatchedForRewatching)
+            ?? _inner.GetNextUpEpisodesBatch(filter, seriesKeys, includeSpecials, includeWatchedForRewatching);
+
+        if (cacheEnabled && cacheKey is not null)
+        {
+            _cache.SetPayload(cacheKey, SerializeBatch(result), _ttl);
+        }
+
         return result;
     }
 

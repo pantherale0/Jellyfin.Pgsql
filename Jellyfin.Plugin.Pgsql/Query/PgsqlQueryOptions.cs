@@ -83,6 +83,11 @@ internal sealed class PgsqlQueryOptions
     /// </summary>
     public bool OptimizeMusicLatest { get; private init; }
 
+    /// <summary>
+    /// Gets a value indicating whether the PostgreSQL-optimised NextUp batch query is enabled.
+    /// </summary>
+    public bool OptimizeNextUp { get; private init; }
+
     private static PgsqlQueryOptions Resolve()
     {
         var config = Plugin.Instance?.Configuration;
@@ -108,6 +113,7 @@ internal sealed class PgsqlQueryOptions
             OptimizeMoviesLatest = GetBool("Pgsql_PG_OPTIMIZE_MOVIES_LATEST", optimizeLatest),
             OptimizeTvLatest = GetBool("Pgsql_PG_OPTIMIZE_TV_LATEST", optimizeLatest),
             OptimizeMusicLatest = GetBool("Pgsql_PG_OPTIMIZE_MUSIC_LATEST", optimizeLatest),
+            OptimizeNextUp = GetBool("Pgsql_PG_OPTIMIZE_NEXTUP", config?.OptimizeNextUpQueries ?? true),
         };
     }
 
