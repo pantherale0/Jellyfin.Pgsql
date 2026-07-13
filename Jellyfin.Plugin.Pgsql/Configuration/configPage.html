@@ -52,8 +52,10 @@
                             <li><strong>REDIS_CONNECTION_STRING</strong> - StackExchange.Redis connection string, e.g. <code>redis:6379</code></li>
                             <li><strong>Pgsql_CACHE_LATEST_TTL</strong> - Latest cache TTL in seconds (default: 120)</li>
                             <li><strong>Pgsql_CACHE_RESUME_TTL</strong> - Resume cache TTL in seconds, 0 disables (default: 30)</li>
+                            <li><strong>Pgsql_CACHE_NEXTUP_TTL</strong> - NextUp cache TTL in seconds, 0 disables (default: 45)</li>
                             <li><strong>Pgsql_PG_OPTIMIZE_LATEST</strong> - Enable PostgreSQL-optimised Latest queries (default: true)</li>
                             <li><strong>Pgsql_PG_OPTIMIZE_MOVIES_LATEST / Pgsql_PG_OPTIMIZE_TV_LATEST / Pgsql_PG_OPTIMIZE_MUSIC_LATEST</strong> - Per-type overrides (default: inherit master flag)</li>
+                            <li><strong>Pgsql_PG_OPTIMIZE_NEXTUP</strong> - Enable PostgreSQL-optimised NextUp batch queries (default: true)</li>
                             <li><strong>Pgsql_COMMAND_TIMEOUT</strong> - Database command timeout in seconds (default: 90)</li>
                         </ul>
                         <p>Note: cached Latest lists can lag behind library changes by up to the configured TTL.</p>
@@ -114,14 +116,21 @@ environment:
                     ["Optimize movies latest", data.OptimizeMoviesLatest ? "Yes" : "No"],
                     ["Optimize TV latest", data.OptimizeTvLatest ? "Yes" : "No"],
                     ["Optimize music latest", data.OptimizeMusicLatest ? "Yes" : "No"],
+                    ["Optimize NextUp", data.OptimizeNextUp ? "Yes" : "No"],
                     ["Latest cache hits", String(data.LatestCacheHits)],
                     ["Latest cache misses", String(data.LatestCacheMisses)],
                     ["Latest cache hit-rate", rate(data.LatestCacheHits, data.LatestCacheMisses)],
                     ["Resume cache hits", String(data.ResumeCacheHits)],
                     ["Resume cache misses", String(data.ResumeCacheMisses)],
                     ["Resume cache hit-rate", rate(data.ResumeCacheHits, data.ResumeCacheMisses)],
+                    ["NextUp TTL", data.NextUpTtlSeconds + "s"],
+                    ["NextUp cache hits", String(data.NextUpCacheHits)],
+                    ["NextUp cache misses", String(data.NextUpCacheMisses)],
+                    ["NextUp cache hit-rate", rate(data.NextUpCacheHits, data.NextUpCacheMisses)],
                     ["Optimized latest runs", String(data.OptimizedLatestRuns)],
                     ["Optimized latest failures", String(data.OptimizedLatestFailures)],
+                    ["Optimized NextUp runs", String(data.OptimizedNextUpRuns)],
+                    ["Optimized NextUp failures", String(data.OptimizedNextUpFailures)],
                     ["Redis get errors", String(data.RedisGetErrors)],
                     ["Redis set errors", String(data.RedisSetErrors)]
                 ];

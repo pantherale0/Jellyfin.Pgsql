@@ -41,6 +41,7 @@ public sealed class PgsqlStatsController : ControllerBase
             OptimizeMoviesLatest = options.OptimizeMoviesLatest,
             OptimizeTvLatest = options.OptimizeTvLatest,
             OptimizeMusicLatest = options.OptimizeMusicLatest,
+            OptimizeNextUp = options.OptimizeNextUp,
             LatestCacheHits = snapshot.LatestCacheHits,
             LatestCacheMisses = snapshot.LatestCacheMisses,
             ResumeCacheHits = snapshot.ResumeCacheHits,
@@ -51,6 +52,8 @@ public sealed class PgsqlStatsController : ControllerBase
             RedisSetErrors = snapshot.RedisSetErrors,
             OptimizedLatestRuns = snapshot.OptimizedLatestRuns,
             OptimizedLatestFailures = snapshot.OptimizedLatestFailures,
+            OptimizedNextUpRuns = snapshot.OptimizedNextUpRuns,
+            OptimizedNextUpFailures = snapshot.OptimizedNextUpFailures,
         });
     }
 }

@@ -17,6 +17,8 @@ public sealed class QueryRuntimeStats
     private long _redisSetErrors;
     private long _optimizedLatestRuns;
     private long _optimizedLatestFailures;
+    private long _optimizedNextUpRuns;
+    private long _optimizedNextUpFailures;
     private long _nextUpCacheHits;
     private long _nextUpCacheMisses;
 
@@ -97,6 +99,22 @@ public sealed class QueryRuntimeStats
     }
 
     /// <summary>
+    /// Marks one attempted optimized NextUp batch execution.
+    /// </summary>
+    public void RecordOptimizedNextUpRun()
+    {
+        Interlocked.Increment(ref _optimizedNextUpRuns);
+    }
+
+    /// <summary>
+    /// Marks one optimized NextUp batch failure.
+    /// </summary>
+    public void RecordOptimizedNextUpFailure()
+    {
+        Interlocked.Increment(ref _optimizedNextUpFailures);
+    }
+
+    /// <summary>
     /// Creates an immutable snapshot of current counters.
     /// </summary>
     /// <returns>The stats snapshot.</returns>
@@ -113,6 +131,8 @@ public sealed class QueryRuntimeStats
             Interlocked.Read(ref _redisGetErrors),
             Interlocked.Read(ref _redisSetErrors),
             Interlocked.Read(ref _optimizedLatestRuns),
-            Interlocked.Read(ref _optimizedLatestFailures));
+            Interlocked.Read(ref _optimizedLatestFailures),
+            Interlocked.Read(ref _optimizedNextUpRuns),
+            Interlocked.Read(ref _optimizedNextUpFailures));
     }
 }

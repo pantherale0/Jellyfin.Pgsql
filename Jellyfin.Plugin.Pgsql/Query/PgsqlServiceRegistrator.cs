@@ -57,6 +57,14 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
             sp.GetRequiredService<QueryRuntimeStats>(),
             sp.GetRequiredService<ILoggerFactory>().CreateLogger<PgLatestQueryService>()));
 
+        serviceCollection.AddSingleton(sp => new PgNextUpQuery(
+            sp.GetRequiredService<IDbContextFactory<JellyfinDbContext>>(),
+            sp.GetRequiredService<IItemQueryHelpers>(),
+            sp.GetRequiredService<IItemTypeLookup>(),
+            sp.GetRequiredService<CachedItemLoader>(),
+            sp.GetRequiredService<QueryRuntimeStats>(),
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger<PgNextUpQuery>()));
+
         serviceCollection.AddSingleton<IItemRepository>(sp => new CachingItemRepository(
             (IItemRepository)sp.GetRequiredService(coreRepositoryType),
             sp.GetRequiredService<IQueryResultCache>(),
@@ -69,6 +77,7 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
             CoreNextUpServiceAccessor.Create(sp),
             sp.GetRequiredService<IQueryResultCache>(),
             sp.GetRequiredService<CachedItemLoader>(),
+            sp.GetRequiredService<PgNextUpQuery>(),
             sp.GetRequiredService<QueryRuntimeStats>(),
             sp.GetRequiredService<ILoggerFactory>().CreateLogger<CachingNextUpService>()));
 

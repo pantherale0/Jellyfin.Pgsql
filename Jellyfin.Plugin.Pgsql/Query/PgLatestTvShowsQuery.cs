@@ -12,11 +12,11 @@ namespace Jellyfin.Plugin.Pgsql.Query;
 
 /// <summary>
 /// PostgreSQL-optimised TV Latest query. Replaces the core "top series" selection
-/// (EF GroupBy(SeriesName) + Max(DateCreated)) with a <c>DISTINCT ON</c> statement and then
-/// ports the core container-selection logic (Season vs Series vs Episode) unchanged.
+/// (EF GroupBy(SeriesName) + Max(DateCreated)) and the in-memory recent-window analysis
+/// with <c>DISTINCT ON</c> / window SQL, then ports container selection (Season vs Series vs Episode).
 /// </summary>
 /// <remarks>
-/// The container-selection steps are a direct port of
+/// Container-selection rules mirror
 /// <c>BaseItemRepository.GetLatestTvShowItems</c> (Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs).
 /// Review this class whenever the core method changes during a Jellyfin sync.
 /// </remarks>
@@ -35,6 +35,41 @@ internal sealed class PgLatestTvShowsQuery
             ORDER BY t."SeriesName", t."DateCreated" DESC NULLS LAST
         ) x
         ORDER BY x."DateCreated" DESC NULLS LAST
+        """;
+
+    // Per top-series analysis: most-recent episode, recent-window count, distinct seasons, series id.
+    private const string SeriesAnalysisSqlTemplate = """
+        WITH episodes AS (
+            /*INNER*/
+        ),
+        series_max AS (
+            SELECT DISTINCT ON ("SeriesName")
+                "SeriesName",
+                "DateCreated" AS max_date,
+                "Id" AS most_recent_id,
+                "SeriesId" AS series_id
+            FROM episodes
+            ORDER BY "SeriesName", "DateCreated" DESC NULLS LAST, "Id" DESC
+        ),
+        recent AS (
+            SELECT e."SeriesName", e."SeasonId", e."Id"
+            FROM episodes e
+            INNER JOIN series_max m ON m."SeriesName" = e."SeriesName"
+            WHERE e."DateCreated" >= (m.max_date - (@pgsql_window_hours * INTERVAL '1 hour'))
+        )
+        SELECT
+            m."SeriesName",
+            m.max_date,
+            m.most_recent_id,
+            m.series_id,
+            COUNT(r."Id")::int AS recent_count,
+            COALESCE(
+                array_agg(DISTINCT r."SeasonId") FILTER (WHERE r."SeasonId" IS NOT NULL),
+                ARRAY[]::uuid[]) AS season_ids
+        FROM series_max m
+        INNER JOIN recent r ON r."SeriesName" = m."SeriesName"
+        GROUP BY m."SeriesName", m.max_date, m.most_recent_id, m.series_id
+        ORDER BY m.max_date DESC NULLS LAST
         """;
 
     private readonly IItemQueryHelpers _queryHelpers;
@@ -68,18 +103,18 @@ internal sealed class PgLatestTvShowsQuery
             .Select(e => new { e.SeriesName, e.DateCreated });
 
         var topSeriesSql = TopSeriesSqlTemplate;
-        var extraParameters = new Dictionary<string, object>();
+        var topSeriesParams = new Dictionary<string, object>();
         if (limit.HasValue)
         {
             topSeriesSql += "\nLIMIT @pgsql_limit";
-            extraParameters["pgsql_limit"] = limit.Value;
+            topSeriesParams["pgsql_limit"] = limit.Value;
         }
 
         var topSeriesData = PgQuerySqlBuilder.ExecuteWrapped(
             context,
             topSeriesInner,
             topSeriesSql,
-            extraParameters,
+            topSeriesParams,
             reader => (SeriesName: reader.GetString(0), MaxDate: reader.IsDBNull(1) ? (DateTime?)null : reader.GetDateTime(1)));
 
         if (topSeriesData.Count == 0)
@@ -92,55 +127,53 @@ internal sealed class PgLatestTvShowsQuery
         // Episodes before this cutoff cannot be in any series' "recent additions" window.
         var globalCutoff = topSeriesData.Min(g => g.MaxDate)?.AddHours(-RecentAdditionWindowHours);
 
-        // Step 2: fetch candidate episodes for the top series (EF translates Contains to = ANY(@)).
+        // Step 2 (PG-optimised): recent-window analysis per top series — IDs/counts only.
         var episodeQuery = baseQuery.Where(e => e.SeriesName != null && topSeriesNames.Contains(e.SeriesName));
         if (globalCutoff is not null)
         {
             episodeQuery = episodeQuery.Where(e => e.DateCreated >= globalCutoff);
         }
 
-        var allEpisodes = episodeQuery
-            .OrderByDescending(e => e.DateCreated)
-            .ThenByDescending(e => e.Id)
-            .Select(e => new { e.Id, e.SeriesName, e.DateCreated, e.SeasonId, e.SeriesId })
-            .AsEnumerable();
+        var analysisInner = episodeQuery.Select(e => new
+        {
+            e.Id,
+            e.SeriesName,
+            e.DateCreated,
+            e.SeasonId,
+            e.SeriesId
+        });
+
+        var analysisData = PgQuerySqlBuilder.ExecuteWrapped(
+            context,
+            analysisInner,
+            SeriesAnalysisSqlTemplate,
+            new Dictionary<string, object> { ["pgsql_window_hours"] = RecentAdditionWindowHours },
+            reader =>
+            {
+                var seasonIds = reader.IsDBNull(5)
+                    ? Array.Empty<Guid>()
+                    : reader.GetFieldValue<Guid[]>(5);
+                return (
+                    SeriesName: reader.GetString(0),
+                    MaxDate: reader.IsDBNull(1) ? DateTime.MinValue : reader.GetDateTime(1),
+                    MostRecentEpisodeId: reader.GetGuid(2),
+                    FirstRecentSeriesId: reader.IsDBNull(3) ? (Guid?)null : reader.GetGuid(3),
+                    RecentEpisodeCount: reader.GetInt32(4),
+                    SeasonIds: seasonIds ?? Array.Empty<Guid>());
+            });
 
         var allSeasonIds = new HashSet<Guid>();
         var allSeriesIds = new HashSet<Guid>();
-
-        var analysisData = new List<(
-            int RecentEpisodeCount,
-            List<Guid> SeasonIds,
-            Guid? FirstRecentSeriesId,
-            DateTime MaxDate,
-            Guid MostRecentEpisodeId)>();
-
-        // Step 3: analyze each series to identify recent additions within the time window.
-        foreach (var episodes in allEpisodes.GroupBy(e => e.SeriesName).Select(group => group.ToList()))
+        foreach (var row in analysisData)
         {
-            var mostRecentDate = episodes[0].DateCreated ?? DateTime.MinValue;
-            var recentCutoff = mostRecentDate.AddHours(-RecentAdditionWindowHours);
-
-            var recentEpisodes = episodes.Where(ep => ep.DateCreated >= recentCutoff).ToList();
-            var recentEpisodeCount = recentEpisodes.Count;
-            var seasonIdSet = recentEpisodes
-                .Where(ep => ep.SeasonId.HasValue)
-                .Select(ep => ep.SeasonId!.Value)
-                .ToHashSet();
-            Guid? firstRecentSeriesId = recentEpisodes.Count > 0 ? recentEpisodes[0].SeriesId : null;
-
-            var seasonIds = seasonIdSet.ToList();
-            analysisData.Add((recentEpisodeCount, seasonIds, firstRecentSeriesId, mostRecentDate, episodes[0].Id));
-
-            allSeasonIds.UnionWith(seasonIds);
-
-            if (firstRecentSeriesId.HasValue)
+            allSeasonIds.UnionWith(row.SeasonIds);
+            if (row.FirstRecentSeriesId.HasValue)
             {
-                allSeriesIds.Add(firstRecentSeriesId.Value);
+                allSeriesIds.Add(row.FirstRecentSeriesId.Value);
             }
         }
 
-        // Step 4: batch fetch counts (bounded ID sets after top-N selection).
+        // Step 3: batch fetch counts (bounded ID sets after top-N selection).
         var episodeType = _itemTypeLookup.BaseItemKindNames[BaseItemKind.Episode];
         var seasonType = _itemTypeLookup.BaseItemKindNames[BaseItemKind.Season];
         var seasonEpisodeCounts = allSeasonIds.Count > 0
@@ -161,16 +194,19 @@ internal sealed class PgLatestTvShowsQuery
                 .ToDictionary(x => x.SeriesId, x => x.Count)
             : [];
 
-        // Step 5: container selection per series (Season > Series > Episode).
+        // Step 4: container selection per series (Season > Series > Episode).
         var entitiesToFetch = new HashSet<Guid>();
         var seriesResults = new List<(Guid? SeasonId, Guid? SeriesId, DateTime MaxDate, Guid MostRecentEpisodeId)>(analysisData.Count);
 
-        foreach (var (recentEpisodeCount, seasonIds, firstRecentSeriesId, maxDate, mostRecentEpisodeId) in analysisData)
+        foreach (var row in analysisData)
         {
             Guid? seasonId = null;
             Guid? seriesId = null;
+            var seasonIds = row.SeasonIds;
+            var recentEpisodeCount = row.RecentEpisodeCount;
+            var firstRecentSeriesId = row.FirstRecentSeriesId;
 
-            if (seasonIds.Count == 1)
+            if (seasonIds.Length == 1)
             {
                 var sid = seasonIds[0];
                 var totalEpisodes = seasonEpisodeCounts.GetValueOrDefault(sid, 0);
@@ -191,7 +227,7 @@ internal sealed class PgLatestTvShowsQuery
                     entitiesToFetch.Add(firstRecentSeriesId.Value);
                 }
             }
-            else if (seasonIds.Count > 1 && firstRecentSeriesId.HasValue)
+            else if (seasonIds.Length > 1 && firstRecentSeriesId.HasValue)
             {
                 seriesId = firstRecentSeriesId;
                 entitiesToFetch.Add(seriesId!.Value);
@@ -199,13 +235,13 @@ internal sealed class PgLatestTvShowsQuery
 
             if (seasonId is null && seriesId is null)
             {
-                entitiesToFetch.Add(mostRecentEpisodeId);
+                entitiesToFetch.Add(row.MostRecentEpisodeId);
             }
 
-            seriesResults.Add((seasonId, seriesId, maxDate, mostRecentEpisodeId));
+            seriesResults.Add((seasonId, seriesId, row.MaxDate, row.MostRecentEpisodeId));
         }
 
-        // Step 6: fetch the chosen entities with navigation properties.
+        // Step 5: fetch the chosen entities with navigation properties.
         var entities = entitiesToFetch.Count > 0
             ? _queryHelpers.ApplyNavigations(
                     context.BaseItems.AsNoTracking().Where(e => entitiesToFetch.Contains(e.Id)),
@@ -214,7 +250,7 @@ internal sealed class PgLatestTvShowsQuery
                 .ToDictionary(e => e.Id)
             : [];
 
-        // Step 7: build final results, preferring Season > Series > Episode.
+        // Step 6: build final results, preferring Season > Series > Episode.
         var results = new List<(BaseItemEntity Entity, DateTime MaxDate)>(seriesResults.Count);
         foreach (var (seasonId, seriesId, maxDate, mostRecentEpisodeId) in seriesResults)
         {

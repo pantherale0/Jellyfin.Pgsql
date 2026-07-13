@@ -54,4 +54,10 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <c>Pgsql_PG_OPTIMIZE_MOVIES_LATEST</c>, <c>Pgsql_PG_OPTIMIZE_TV_LATEST</c>, <c>Pgsql_PG_OPTIMIZE_MUSIC_LATEST</c>).
     /// </summary>
     public bool OptimizeLatestQueries { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether PostgreSQL-optimised NextUp batch queries are enabled.
+    /// Overridden by <c>Pgsql_PG_OPTIMIZE_NEXTUP</c>.
+    /// </summary>
+    public bool OptimizeNextUpQueries { get; set; } = true;
 }
