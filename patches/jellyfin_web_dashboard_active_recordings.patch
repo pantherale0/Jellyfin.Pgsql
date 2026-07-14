@@ -1,0 +1,101 @@
+diff --git a/src/apps/dashboard/components/widgets/ActiveRecordingsWidget.tsx b/src/apps/dashboard/components/widgets/ActiveRecordingsWidget.tsx
+new file mode 100644
+index 0000000000..47c7c2ff08
+--- /dev/null
++++ b/src/apps/dashboard/components/widgets/ActiveRecordingsWidget.tsx
+@@ -0,0 +1,75 @@
++import React, { useMemo } from 'react';
++import { ImageType } from '@jellyfin/sdk/lib/generated-client/models/image-type';
++import { ItemFields } from '@jellyfin/sdk/lib/generated-client/models/item-fields';
++import { useQuery } from '@tanstack/react-query';
++
++import { getRecordingsQuery } from 'apps/stable/features/liveTv/api/useRecordings';
++import Cards from 'components/cardbuilder/Card/Cards';
++import { CardShape } from 'components/cardbuilder/utils/shape';
++import { ItemAction } from 'constants/itemAction';
++import ItemsContainer from 'elements/emby-itemscontainer/ItemsContainer';
++import { useApi } from 'hooks/useApi';
++import globalize from 'lib/globalize';
++import type { ItemDto } from 'types/base/models/item-dto';
++import type { CardOptions } from 'types/cardOptions';
++
++import Widget from './Widget';
++
++const QUERY_PARAMS = {
++    isInProgress: true,
++    fields: [ ItemFields.CanDelete, ItemFields.PrimaryImageAspectRatio ],
++    enableTotalRecordCount: false,
++    enableImageTypes: [ ImageType.Primary, ImageType.Thumb, ImageType.Backdrop ]
++};
++
++const CARD_OPTIONS: CardOptions = {
++    shape: CardShape.Auto,
++    defaultShape: CardShape.Backdrop,
++    showTitle: true,
++    showParentTitle: true,
++    coverImage: true,
++    cardLayout: false,
++    centerText: true,
++    preferThumb: 'auto',
++    overlayText: false,
++    overlayMoreButton: true,
++    action: ItemAction.None,
++    centerPlayButton: true
++};
++
++const ActiveRecordingsWidget = () => {
++    const { api, user } = useApi();
++
++    const { data } = useQuery({
++        ...getRecordingsQuery(api, {
++            ...QUERY_PARAMS,
++            userId: user?.Id
++        }),
++        refetchInterval: 15_000
++    });
++
++    const items = useMemo(
++        () => (data?.Items ?? []) as ItemDto[],
++        [ data?.Items ]
++    );
++
++    if (!items.length) {
++        return null;
++    }
++
++    return (
++        <Widget
++            title={globalize.translate('HeaderActiveRecordings')}
++            href='/livetv'
++        >
++            <ItemsContainer className='itemsContainer vertical-wrap'>
++                <Cards
++                    items={items}
++                    cardOptions={CARD_OPTIONS}
++                />
++            </ItemsContainer>
++        </Widget>
++    );
++};
++
++export default ActiveRecordingsWidget;
+diff --git a/src/apps/dashboard/routes/index.tsx b/src/apps/dashboard/routes/index.tsx
+index 5a6c475d39..d8c69b962b 100644
+--- a/src/apps/dashboard/routes/index.tsx
++++ b/src/apps/dashboard/routes/index.tsx
+@@ -14,6 +14,7 @@ import ConfirmDialog from 'components/ConfirmDialog';
+ import useLiveTasks from '../features/tasks/hooks/useLiveTasks';
+ import RunningTasksWidget from '../components/widgets/RunningTasksWidget';
+ import DevicesWidget from '../components/widgets/DevicesWidget';
++import ActiveRecordingsWidget from '../components/widgets/ActiveRecordingsWidget';
+ import { useStartTask } from '../features/tasks/api/useStartTask';
+ import ItemCountsWidget from '../components/widgets/ItemCountsWidget';
+ import { TaskState } from '@jellyfin/sdk/lib/generated-client/models/task-state';
+@@ -104,6 +105,7 @@ export const Component = () => {
+                             <ItemCountsWidget />
+                             <RunningTasksWidget tasks={tasks} />
+                             <DevicesWidget />
++                            <ActiveRecordingsWidget />
+                         </Stack>
+                     </Grid>
+                     <Grid item xs={12} md={5} lg={5} xl={3}>
