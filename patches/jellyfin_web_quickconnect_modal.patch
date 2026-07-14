@@ -1,0 +1,449 @@
+diff --git a/src/apps/stable/routes/quickConnect/index.tsx b/src/apps/stable/routes/quickConnect/index.tsx
+index 217b900ae2..77246a5527 100644
+--- a/src/apps/stable/routes/quickConnect/index.tsx
++++ b/src/apps/stable/routes/quickConnect/index.tsx
+@@ -1,119 +1,30 @@
+-import { getQuickConnectApi } from '@jellyfin/sdk/lib/utils/api/quick-connect-api';
+-import React, { FC, FormEvent, useCallback, useState } from 'react';
+-import { Link, useSearchParams } from 'react-router-dom';
++import React, { FC, useCallback } from 'react';
++import { useNavigate, useSearchParams } from 'react-router-dom';
+ 
+-import Page from 'components/Page';
+-import globalize from 'lib/globalize';
+-import Input from 'elements/emby-input/Input';
+-import Button from 'elements/emby-button/Button';
+-import { useApi } from 'hooks/useApi';
+-
+-import './quickConnect.scss';
++import QuickConnectDialog from 'components/QuickConnectDialog';
+ 
+ const QuickConnectPage: FC = () => {
+-    const { api, user } = useApi();
++    const navigate = useNavigate();
+     const [ searchParams ] = useSearchParams();
+-    const [ code, setCode ] = useState(searchParams.get('code') ?? '');
+-    const [ error, setError ] = useState<string>();
+-    const [ success, setSuccess ] = useState(false);
+-
+-    const onCodeChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+-        setCode(event.currentTarget.value);
+-    }, []);
+-
+-    const onSubmitCode = useCallback((e: FormEvent<HTMLFormElement>) => {
+-        e.preventDefault();
+-        setError(undefined);
+-
+-        const form = e.currentTarget;
+-        if (!form.checkValidity()) {
+-            setError('QuickConnectInvalidCode');
+-            return;
+-        }
+-
+-        if (!api) {
+-            console.error('[QuickConnect] cannot authorize, missing api instance');
+-            setError('UnknownError');
+-            return;
++    const initialCode = searchParams.get('code') ?? '';
++    const userId = searchParams.get('userId') ?? undefined;
++
++    const onClose = useCallback(() => {
++        // React Router stores the history index in location state.
++        if ((window.history.state as { idx?: number } | null)?.idx) {
++            navigate(-1);
++        } else {
++            navigate('/home', { replace: true });
+         }
+-
+-        const userId = searchParams.get('userId') ?? user?.Id;
+-        const normalizedCode = code.replace(/\s/g, '');
+-        console.log('[QuickConnect] authorizing code %s as user %s', normalizedCode, userId);
+-
+-        getQuickConnectApi(api)
+-            .authorizeQuickConnect({
+-                code: normalizedCode,
+-                userId
+-            })
+-            .then(() => {
+-                setSuccess(true);
+-            })
+-            .catch(() => {
+-                setError('QuickConnectAuthorizeFail');
+-            });
+-    }, [api, code, searchParams, user?.Id]);
++    }, [ navigate ]);
+ 
+     return (
+-        <Page
+-            id='quickConnectPreferencesPage'
+-            title={globalize.translate('QuickConnect')}
+-            className='mainAnimatedPage libraryPage userPreferencesPage noSecondaryNavPage'
+-            shouldAutoFocus
+-        >
+-            <div className='padded-left padded-right padded-bottom-page'>
+-                <form onSubmit={onSubmitCode}>
+-                    <div className='verticalSection'>
+-                        <h2 className='sectionTitle'>
+-                            {globalize.translate('QuickConnect')}
+-                        </h2>
+-                        <div>
+-                            {globalize.translate('QuickConnectDescription')}
+-                        </div>
+-                        <br />
+-
+-                        {error && (
+-                            <div className='quickConnectError'>
+-                                {globalize.translate(error)}
+-                            </div>
+-                        )}
+-
+-                        {success ? (
+-                            <div style={{ textAlign: 'center' }}>
+-                                <p>
+-                                    {globalize.translate('QuickConnectAuthorizeSuccess')}
+-                                </p>
+-                                <Link to='/home' className='button-link emby-button'>
+-                                    {globalize.translate('GoHome')}
+-                                </Link>
+-                            </div>
+-                        ) : (
+-                            <>
+-                                <div className='inputContainer'>
+-                                    <Input
+-                                        value={code}
+-                                        onChange={onCodeChange}
+-                                        id='txtQuickConnectCode'
+-                                        label={globalize.translate('LabelQuickConnectCode')}
+-                                        type='text'
+-                                        inputMode='numeric'
+-                                        pattern='[0-9\s]*'
+-                                        minLength={6}
+-                                        required
+-                                        autoComplete='off'
+-                                    />
+-                                </div>
+-                                <Button
+-                                    type='submit'
+-                                    className='raised button-submit block'
+-                                    title={globalize.translate('Authorize')}
+-                                />
+-                            </>
+-                        )}
+-                    </div>
+-                </form>
+-            </div>
+-        </Page>
++        <QuickConnectDialog
++            open
++            onClose={onClose}
++            initialCode={initialCode}
++            userId={userId}
++        />
+     );
+ };
+ 
+diff --git a/src/apps/stable/routes/quickConnect/quickConnect.scss b/src/apps/stable/routes/quickConnect/quickConnect.scss
+deleted file mode 100644
+index d81e715613..0000000000
+--- a/src/apps/stable/routes/quickConnect/quickConnect.scss
++++ /dev/null
+@@ -1,7 +0,0 @@
+-.quickConnectError {
+-    border-radius: 0.2em;
+-    background-color: #160b0b;
+-    color: #f4c7c3;
+-    padding: 0.7em 0.5em;
+-    margin-bottom: 1em;
+-}
+diff --git a/src/apps/stable/routes/user/settings/index.tsx b/src/apps/stable/routes/user/settings/index.tsx
+index df5071f3c9..5739dca4f8 100644
+--- a/src/apps/stable/routes/user/settings/index.tsx
++++ b/src/apps/stable/routes/user/settings/index.tsx
+@@ -1,11 +1,12 @@
+ import type { UserDto } from '@jellyfin/sdk/lib/generated-client/models/user-dto';
+-import React, { useEffect, useMemo, useState, type FC } from 'react';
++import React, { useCallback, useEffect, useMemo, useState, type FC } from 'react';
+ import { useSearchParams } from 'react-router-dom';
+ 
+ import { appHost } from 'components/apphost';
+ import layoutManager from 'components/layoutManager';
+ import Loading from 'components/loading/LoadingComponent';
+ import Page from 'components/Page';
++import QuickConnectDialog from 'components/QuickConnectDialog';
+ import { AppFeature } from 'constants/appFeature';
+ import LinkButton from 'elements/emby-button/LinkButton';
+ import { useApi } from 'hooks/useApi';
+@@ -26,6 +27,7 @@ const UserSettingsPage: FC = () => {
+     } = useQuickConnectEnabled();
+     const { data: users } = useUsers();
+     const [ user, setUser ] = useState<UserDto>();
++    const [ isQuickConnectOpen, setIsQuickConnectOpen ] = useState(false);
+ 
+     const userId = useMemo(() => (
+         searchParams.get('userId') || currentUser?.Id
+@@ -41,6 +43,14 @@ const UserSettingsPage: FC = () => {
+         }
+     }, [ currentUser, userId, users ]);
+ 
++    const onQuickConnectClick = useCallback(() => {
++        setIsQuickConnectOpen(true);
++    }, []);
++
++    const onQuickConnectClose = useCallback(() => {
++        setIsQuickConnectOpen(false);
++    }, []);
++
+     if (!userId || !user || isQuickConnectEnabledPending) {
+         return (
+             <Loading />
+@@ -95,7 +105,7 @@ const UserSettingsPage: FC = () => {
+ 
+                         {isQuickConnectEnabled && (
+                             <LinkButton
+-                                href={`#/quickconnect?userId=${userId}`}
++                                onClick={onQuickConnectClick}
+                                 className='lnkQuickConnectPreferences listItem-border'
+                                 style={{
+                                     display: 'block',
+@@ -380,6 +390,11 @@ const UserSettingsPage: FC = () => {
+                     )}
+                 </div>
+             </div>
++            <QuickConnectDialog
++                open={isQuickConnectOpen}
++                onClose={onQuickConnectClose}
++                userId={userId}
++            />
+         </Page>
+     );
+ };
+diff --git a/src/components/QuickConnectDialog.tsx b/src/components/QuickConnectDialog.tsx
+new file mode 100644
+index 0000000000..6d27554ca5
+--- /dev/null
++++ b/src/components/QuickConnectDialog.tsx
+@@ -0,0 +1,158 @@
++import { getQuickConnectApi } from '@jellyfin/sdk/lib/utils/api/quick-connect-api';
++import Alert from '@mui/material/Alert';
++import Button from '@mui/material/Button';
++import Dialog from '@mui/material/Dialog';
++import DialogActions from '@mui/material/DialogActions';
++import DialogContent from '@mui/material/DialogContent';
++import DialogContentText from '@mui/material/DialogContentText';
++import DialogTitle from '@mui/material/DialogTitle';
++import TextField from '@mui/material/TextField';
++import React, { type FC, FormEvent, useCallback, useEffect, useState } from 'react';
++
++import { useApi } from 'hooks/useApi';
++import globalize from 'lib/globalize';
++
++interface QuickConnectDialogProps {
++    open: boolean
++    onClose: () => void
++    initialCode?: string
++    userId?: string
++}
++
++const QuickConnectDialog: FC<QuickConnectDialogProps> = ({
++    open,
++    onClose,
++    initialCode = '',
++    userId
++}) => {
++    const { api, user } = useApi();
++    const [ code, setCode ] = useState(initialCode);
++    const [ error, setError ] = useState<string>();
++    const [ success, setSuccess ] = useState(false);
++    const [ isSubmitting, setIsSubmitting ] = useState(false);
++
++    useEffect(() => {
++        if (open) {
++            setCode(initialCode);
++            setError(undefined);
++            setSuccess(false);
++            setIsSubmitting(false);
++        }
++    }, [ open, initialCode ]);
++
++    const onCodeChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
++        setCode(event.currentTarget.value);
++        setError(undefined);
++    }, []);
++
++    const onSubmit = useCallback((e: FormEvent<HTMLFormElement>) => {
++        e.preventDefault();
++        setError(undefined);
++
++        const normalizedCode = code.replace(/\s/g, '');
++        if (!/^\d{6,}$/.test(normalizedCode)) {
++            setError('QuickConnectInvalidCode');
++            return;
++        }
++
++        if (!api) {
++            console.error('[QuickConnect] cannot authorize, missing api instance');
++            setError('UnknownError');
++            return;
++        }
++
++        const authorizeUserId = userId ?? user?.Id;
++        console.log('[QuickConnect] authorizing code %s as user %s', normalizedCode, authorizeUserId);
++        setIsSubmitting(true);
++
++        getQuickConnectApi(api)
++            .authorizeQuickConnect({
++                code: normalizedCode,
++                userId: authorizeUserId
++            })
++            .then(() => {
++                setSuccess(true);
++            })
++            .catch(() => {
++                setError('QuickConnectAuthorizeFail');
++            })
++            .finally(() => {
++                setIsSubmitting(false);
++            });
++    }, [ api, code, user?.Id, userId ]);
++
++    return (
++        <Dialog
++            open={open}
++            onClose={onClose}
++            maxWidth='xs'
++            fullWidth
++        >
++            <DialogTitle>
++                {globalize.translate('QuickConnect')}
++            </DialogTitle>
++            {success ? (
++                <>
++                    <DialogContent>
++                        <DialogContentText>
++                            {globalize.translate('QuickConnectAuthorizeSuccess')}
++                        </DialogContentText>
++                    </DialogContent>
++                    <DialogActions>
++                        <Button onClick={onClose}>
++                            {globalize.translate('ButtonClose')}
++                        </Button>
++                    </DialogActions>
++                </>
++            ) : (
++                <form onSubmit={onSubmit}>
++                    <DialogContent>
++                        <DialogContentText sx={{ mb: 2 }}>
++                            {globalize.translate('QuickConnectDescription')}
++                        </DialogContentText>
++                        {error && (
++                            <Alert severity='error' sx={{ mb: 2 }}>
++                                {globalize.translate(error)}
++                            </Alert>
++                        )}
++                        <TextField
++                            autoFocus
++                            fullWidth
++                            id='txtQuickConnectCode'
++                            label={globalize.translate('LabelQuickConnectCode')}
++                            value={code}
++                            onChange={onCodeChange}
++                            type='text'
++                            inputMode='numeric'
++                            autoComplete='off'
++                            required
++                            inputProps={{
++                                pattern: '[0-9\\s]*',
++                                minLength: 6
++                            }}
++                            variant='standard'
++                        />
++                    </DialogContent>
++                    <DialogActions>
++                        <Button
++                            variant='text'
++                            onClick={onClose}
++                            disabled={isSubmitting}
++                        >
++                            {globalize.translate('ButtonCancel')}
++                        </Button>
++                        <Button
++                            type='submit'
++                            color='primary'
++                            disabled={isSubmitting}
++                        >
++                            {globalize.translate('Authorize')}
++                        </Button>
++                    </DialogActions>
++                </form>
++            )}
++        </Dialog>
++    );
++};
++
++export default QuickConnectDialog;
+diff --git a/src/components/toolbar/AppUserMenu.tsx b/src/components/toolbar/AppUserMenu.tsx
+index 58b9d4d560..029c0e4bb0 100644
+--- a/src/components/toolbar/AppUserMenu.tsx
++++ b/src/components/toolbar/AppUserMenu.tsx
+@@ -13,10 +13,11 @@ import ListItemIcon from '@mui/material/ListItemIcon';
+ import ListItemText from '@mui/material/ListItemText';
+ import Menu, { MenuProps } from '@mui/material/Menu';
+ import MenuItem from '@mui/material/MenuItem';
+-import React, { FC, useCallback } from 'react';
++import React, { FC, useCallback, useState } from 'react';
+ import { Link } from 'react-router-dom';
+ 
+ import { appHost } from 'components/apphost';
++import QuickConnectDialog from 'components/QuickConnectDialog';
+ import { AppFeature } from 'constants/appFeature';
+ import { useApi } from 'hooks/useApi';
+ import { useQuickConnectEnabled } from 'hooks/useQuickConnect';
+@@ -37,6 +38,7 @@ const AppUserMenu: FC<AppUserMenuProps> = ({
+ }) => {
+     const { user } = useApi();
+     const { data: isQuickConnectEnabled } = useQuickConnectEnabled();
++    const [ isQuickConnectOpen, setIsQuickConnectOpen ] = useState(false);
+ 
+     const onDownloadManagerClick = useCallback(() => {
+         shell.openDownloadManager();
+@@ -63,7 +65,17 @@ const AppUserMenu: FC<AppUserMenuProps> = ({
+         onMenuClose();
+     }, [ onMenuClose ]);
+ 
++    const onQuickConnectClick = useCallback(() => {
++        onMenuClose();
++        setIsQuickConnectOpen(true);
++    }, [ onMenuClose ]);
++
++    const onQuickConnectClose = useCallback(() => {
++        setIsQuickConnectOpen(false);
++    }, []);
++
+     return (
++        <>
+         <Menu
+             anchorEl={anchorEl}
+             anchorOrigin={{
+@@ -165,9 +177,7 @@ const AppUserMenu: FC<AppUserMenuProps> = ({
+             <Divider />
+             {isQuickConnectEnabled && (
+                 <MenuItem
+-                    component={Link}
+-                    to='/quickconnect'
+-                    onClick={onMenuClose}
++                    onClick={onQuickConnectClick}
+                 >
+                     <ListItemIcon>
+                         <PhonelinkLock />
+@@ -217,6 +227,11 @@ const AppUserMenu: FC<AppUserMenuProps> = ({
+                 </MenuItem>
+             ])}
+         </Menu>
++        <QuickConnectDialog
++            open={isQuickConnectOpen}
++            onClose={onQuickConnectClose}
++        />
++        </>
+     );
+ };
+ 
