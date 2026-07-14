@@ -1,0 +1,417 @@
+diff --git a/Jellyfin.Api/Controllers/MediaEncoderController.cs b/Jellyfin.Api/Controllers/MediaEncoderController.cs
+new file mode 100644
+index 0000000000..17234f1283
+--- /dev/null
++++ b/Jellyfin.Api/Controllers/MediaEncoderController.cs
+@@ -0,0 +1,41 @@
++using MediaBrowser.Common.Api;
++using MediaBrowser.Controller.MediaEncoding;
++using MediaBrowser.Model.MediaEncoding;
++using Microsoft.AspNetCore.Authorization;
++using Microsoft.AspNetCore.Http;
++using Microsoft.AspNetCore.Mvc;
++
++namespace Jellyfin.Api.Controllers;
++
++/// <summary>
++/// Media encoder capabilities controller.
++/// </summary>
++[Route("System/MediaEncoder")]
++[Authorize]
++[Tags("System")]
++public class MediaEncoderController : BaseJellyfinApiController
++{
++    private readonly IMediaEncoder _mediaEncoder;
++
++    /// <summary>
++    /// Initializes a new instance of the <see cref="MediaEncoderController"/> class.
++    /// </summary>
++    /// <param name="mediaEncoder">Instance of the <see cref="IMediaEncoder"/> interface.</param>
++    public MediaEncoderController(IMediaEncoder mediaEncoder)
++    {
++        _mediaEncoder = mediaEncoder;
++    }
++
++    /// <summary>
++    /// Gets probed FFmpeg hardware capabilities for the Transcoding admin UI.
++    /// </summary>
++    /// <response code="200">Capabilities returned.</response>
++    /// <returns>Media encoder capabilities.</returns>
++    [HttpGet("Capabilities")]
++    [Authorize(Policy = Policies.RequiresElevation)]
++    [ProducesResponseType(StatusCodes.Status200OK)]
++    public ActionResult<MediaEncoderCapabilities> GetCapabilities()
++    {
++        return _mediaEncoder.GetCapabilities();
++    }
++}
+diff --git a/MediaBrowser.Controller/MediaEncoding/IMediaEncoder.cs b/MediaBrowser.Controller/MediaEncoding/IMediaEncoder.cs
+index de6353c4c1..e8c471c14d 100644
+--- a/MediaBrowser.Controller/MediaEncoding/IMediaEncoder.cs
++++ b/MediaBrowser.Controller/MediaEncoding/IMediaEncoder.cs
+@@ -12,6 +12,7 @@ using MediaBrowser.Model.Dlna;
+ using MediaBrowser.Model.Drawing;
+ using MediaBrowser.Model.Dto;
+ using MediaBrowser.Model.Entities;
++using MediaBrowser.Model.MediaEncoding;
+ using MediaBrowser.Model.MediaInfo;
+ 
+ namespace MediaBrowser.Controller.MediaEncoding
+@@ -81,6 +82,21 @@ namespace MediaBrowser.Controller.MediaEncoding
+         /// <value><c>true</c> if the av1 is available via VideoToolbox, <c>false</c> otherwise.</value>
+         bool IsVideoToolboxAv1DecodeAvailable { get; }
+ 
++        /// <summary>
++        /// Gets the probed FFmpeg encoder names.
++        /// </summary>
++        IReadOnlyList<string> SupportedEncoders { get; }
++
++        /// <summary>
++        /// Gets the probed FFmpeg decoder names.
++        /// </summary>
++        IReadOnlyList<string> SupportedDecoders { get; }
++
++        /// <summary>
++        /// Gets the probed FFmpeg hardware acceleration names.
++        /// </summary>
++        IReadOnlyList<string> SupportedHwaccels { get; }
++
+         /// <summary>
+         /// Whether given encoder codec is supported.
+         /// </summary>
+@@ -102,6 +118,12 @@ namespace MediaBrowser.Controller.MediaEncoding
+         /// <returns><c>true</c> if XXXX, <c>false</c> otherwise.</returns>
+         bool SupportsHwaccel(string hwaccel);
+ 
++        /// <summary>
++        /// Gets a snapshot of probed hardware capabilities for the admin UI.
++        /// </summary>
++        /// <returns>Derived media encoder capabilities.</returns>
++        MediaEncoderCapabilities GetCapabilities();
++
+         /// <summary>
+         /// Whether given filter is supported.
+         /// </summary>
+diff --git a/MediaBrowser.MediaEncoding/Encoder/HardwareCapabilityResolver.cs b/MediaBrowser.MediaEncoding/Encoder/HardwareCapabilityResolver.cs
+new file mode 100644
+index 0000000000..7da04dcc9e
+--- /dev/null
++++ b/MediaBrowser.MediaEncoding/Encoder/HardwareCapabilityResolver.cs
+@@ -0,0 +1,198 @@
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using MediaBrowser.Controller.MediaEncoding;
++using MediaBrowser.Model.Entities;
++using MediaBrowser.Model.MediaEncoding;
++
++namespace MediaBrowser.MediaEncoding.Encoder;
++
++/// <summary>
++/// Derives UI-facing hardware capability matrices from FFmpeg probe results.
++/// </summary>
++public static class HardwareCapabilityResolver
++{
++    // Mirrors jellyfin-web codecs.ts for which codecs each HWA type may expose in the UI.
++    private static readonly Dictionary<HardwareAccelerationType, string[]> DecodeCodecsByType = new()
++    {
++        [HardwareAccelerationType.amf] =
++        [
++            "h264", "hevc", "mpeg2video", "vc1", "vp9", "av1"
++        ],
++        [HardwareAccelerationType.nvenc] =
++        [
++            "h264", "hevc", "mpeg2video", "mpeg4", "vc1", "vp8", "vp9", "av1"
++        ],
++        [HardwareAccelerationType.qsv] =
++        [
++            "h264", "hevc", "mpeg2video", "vc1", "vp8", "vp9", "av1"
++        ],
++        [HardwareAccelerationType.vaapi] =
++        [
++            "h264", "hevc", "mpeg2video", "vc1", "vp8", "vp9", "av1"
++        ],
++        [HardwareAccelerationType.rkmpp] =
++        [
++            "h264", "hevc", "mpeg1video", "mpeg2video", "mpeg4", "vp8", "vp9", "av1"
++        ],
++        [HardwareAccelerationType.videotoolbox] =
++        [
++            "h264", "hevc", "vp8", "vp9", "av1"
++        ],
++        [HardwareAccelerationType.v4l2m2m] =
++        [
++            "h264"
++        ]
++    };
++
++    /// <summary>
++    /// Builds a <see cref="MediaEncoderCapabilities"/> snapshot from an <see cref="IMediaEncoder"/>.
++    /// </summary>
++    /// <param name="mediaEncoder">The media encoder.</param>
++    /// <returns>Derived capabilities.</returns>
++    public static MediaEncoderCapabilities Resolve(IMediaEncoder mediaEncoder)
++    {
++        ArgumentNullException.ThrowIfNull(mediaEncoder);
++
++        var result = new MediaEncoderCapabilities
++        {
++            Hwaccels = mediaEncoder.SupportedHwaccels.ToArray(),
++            Decoders = mediaEncoder.SupportedDecoders.ToArray(),
++            Encoders = mediaEncoder.SupportedEncoders.ToArray()
++        };
++
++        var availableTypes = new List<string>();
++
++        foreach (HardwareAccelerationType type in Enum.GetValues<HardwareAccelerationType>())
++        {
++            if (type == HardwareAccelerationType.none)
++            {
++                continue;
++            }
++
++            var typeKey = type.ToString();
++            var encoding = ResolveEncoding(mediaEncoder, type);
++            result.HardwareEncoding[typeKey] = encoding;
++
++            if (!IsTypeAvailable(mediaEncoder, type, encoding))
++            {
++                result.HardwareDecodingCodecs[typeKey] = [];
++                continue;
++            }
++
++            availableTypes.Add(typeKey);
++            result.HardwareDecodingCodecs[typeKey] = ResolveDecodingCodecs(mediaEncoder, type);
++        }
++
++        result.AvailableAccelerationTypes = availableTypes;
++        return result;
++    }
++
++    private static bool IsTypeAvailable(
++        IMediaEncoder mediaEncoder,
++        HardwareAccelerationType type,
++        HardwareEncodingCapabilities encoding)
++    {
++        return type switch
++        {
++            HardwareAccelerationType.nvenc =>
++                mediaEncoder.SupportsHwaccel("cuda") && encoding.H264,
++            HardwareAccelerationType.qsv =>
++                mediaEncoder.SupportsHwaccel("qsv") && encoding.H264,
++            HardwareAccelerationType.vaapi =>
++                mediaEncoder.SupportsHwaccel("vaapi") && encoding.H264,
++            HardwareAccelerationType.amf =>
++                mediaEncoder.SupportsHwaccel("d3d11va") && encoding.H264,
++            HardwareAccelerationType.rkmpp =>
++                mediaEncoder.SupportsHwaccel("rkmpp") && encoding.H264,
++            HardwareAccelerationType.videotoolbox =>
++                mediaEncoder.SupportsHwaccel("videotoolbox") && encoding.H264,
++            HardwareAccelerationType.v4l2m2m =>
++                encoding.H264,
++            _ => false
++        };
++    }
++
++    private static HardwareEncodingCapabilities ResolveEncoding(
++        IMediaEncoder mediaEncoder,
++        HardwareAccelerationType type)
++    {
++        var suffix = type switch
++        {
++            HardwareAccelerationType.nvenc => "nvenc",
++            HardwareAccelerationType.qsv => "qsv",
++            HardwareAccelerationType.vaapi => "vaapi",
++            HardwareAccelerationType.amf => "amf",
++            HardwareAccelerationType.rkmpp => "rkmpp",
++            HardwareAccelerationType.videotoolbox => "videotoolbox",
++            HardwareAccelerationType.v4l2m2m => "v4l2m2m",
++            _ => string.Empty
++        };
++
++        if (string.IsNullOrEmpty(suffix))
++        {
++            return new HardwareEncodingCapabilities();
++        }
++
++        return new HardwareEncodingCapabilities
++        {
++            H264 = mediaEncoder.SupportsEncoder("h264_" + suffix),
++            Hevc = mediaEncoder.SupportsEncoder("hevc_" + suffix),
++            Av1 = mediaEncoder.SupportsEncoder("av1_" + suffix)
++        };
++    }
++
++    private static string[] ResolveDecodingCodecs(
++        IMediaEncoder mediaEncoder,
++        HardwareAccelerationType type)
++    {
++        if (!DecodeCodecsByType.TryGetValue(type, out var candidates))
++        {
++            return [];
++        }
++
++        return candidates
++            .Where(codec => IsDecodingCodecAvailable(mediaEncoder, type, codec))
++            .ToArray();
++    }
++
++    private static bool IsDecodingCodecAvailable(
++        IMediaEncoder mediaEncoder,
++        HardwareAccelerationType type,
++        string codec)
++    {
++        return type switch
++        {
++            HardwareAccelerationType.nvenc =>
++                mediaEncoder.SupportsHwaccel("cuda")
++                && mediaEncoder.SupportsDecoder(GetNamedDecoder(codec, "cuvid")),
++            HardwareAccelerationType.qsv =>
++                mediaEncoder.SupportsDecoder(GetNamedDecoder(codec, "qsv")),
++            HardwareAccelerationType.rkmpp =>
++                mediaEncoder.SupportsDecoder(GetNamedDecoder(codec, "rkmpp")),
++            HardwareAccelerationType.vaapi =>
++                mediaEncoder.SupportsHwaccel("vaapi"),
++            HardwareAccelerationType.amf =>
++                mediaEncoder.SupportsHwaccel("d3d11va"),
++            HardwareAccelerationType.videotoolbox =>
++                mediaEncoder.SupportsHwaccel("videotoolbox")
++                && (codec != "av1" || mediaEncoder.IsVideoToolboxAv1DecodeAvailable),
++            // Jellyfin has no V4L2M2M hardware decode path today.
++            HardwareAccelerationType.v4l2m2m => false,
++            _ => false
++        };
++    }
++
++    private static string GetNamedDecoder(string codec, string suffix)
++    {
++        // FFmpeg decoder names use shortened prefixes for some codecs.
++        var prefix = codec switch
++        {
++            "mpeg1video" => "mpeg1",
++            "mpeg2video" => "mpeg2",
++            _ => codec
++        };
++
++        return prefix + '_' + suffix;
++    }
++}
+diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
+index 66bf6ebd24..ed06261462 100644
+--- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
++++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
+@@ -30,6 +30,7 @@ using MediaBrowser.Model.Dto;
+ using MediaBrowser.Model.Entities;
+ using MediaBrowser.Model.Globalization;
+ using MediaBrowser.Model.IO;
++using MediaBrowser.Model.MediaEncoding;
+ using MediaBrowser.Model.MediaInfo;
+ using Microsoft.Extensions.Configuration;
+ using Microsoft.Extensions.Logging;
+@@ -167,6 +168,15 @@ namespace MediaBrowser.MediaEncoding.Encoder
+ 
+         public bool IsVideoToolboxAv1DecodeAvailable => _isVideoToolboxAv1DecodeAvailable;
+ 
++        /// <inheritdoc />
++        public IReadOnlyList<string> SupportedEncoders => _encoders;
++
++        /// <inheritdoc />
++        public IReadOnlyList<string> SupportedDecoders => _decoders;
++
++        /// <inheritdoc />
++        public IReadOnlyList<string> SupportedHwaccels => _hwaccels;
++
+         [GeneratedRegex(@"[^\/\\]+?(\.[^\/\\\n.]+)?$")]
+         private static partial Regex FfprobePathRegex();
+ 
+@@ -376,6 +386,12 @@ namespace MediaBrowser.MediaEncoding.Encoder
+             return _hwaccels.Contains(hwaccel, StringComparer.OrdinalIgnoreCase);
+         }
+ 
++        /// <inheritdoc />
++        public MediaEncoderCapabilities GetCapabilities()
++        {
++            return HardwareCapabilityResolver.Resolve(this);
++        }
++
+         /// <inheritdoc />
+         public bool SupportsFilter(string filter)
+         {
+diff --git a/MediaBrowser.Model/MediaEncoding/HardwareEncodingCapabilities.cs b/MediaBrowser.Model/MediaEncoding/HardwareEncodingCapabilities.cs
+new file mode 100644
+index 0000000000..f13400fd03
+--- /dev/null
++++ b/MediaBrowser.Model/MediaEncoding/HardwareEncodingCapabilities.cs
+@@ -0,0 +1,22 @@
++namespace MediaBrowser.Model.MediaEncoding;
++
++/// <summary>
++/// Hardware encoding availability for a single acceleration type.
++/// </summary>
++public class HardwareEncodingCapabilities
++{
++    /// <summary>
++    /// Gets or sets a value indicating whether H.264 hardware encoding is available.
++    /// </summary>
++    public bool H264 { get; set; }
++
++    /// <summary>
++    /// Gets or sets a value indicating whether HEVC hardware encoding is available.
++    /// </summary>
++    public bool Hevc { get; set; }
++
++    /// <summary>
++    /// Gets or sets a value indicating whether AV1 hardware encoding is available.
++    /// </summary>
++    public bool Av1 { get; set; }
++}
+diff --git a/MediaBrowser.Model/MediaEncoding/MediaEncoderCapabilities.cs b/MediaBrowser.Model/MediaEncoding/MediaEncoderCapabilities.cs
+new file mode 100644
+index 0000000000..ef7988a50f
+--- /dev/null
++++ b/MediaBrowser.Model/MediaEncoding/MediaEncoderCapabilities.cs
+@@ -0,0 +1,44 @@
++using System;
++using System.Collections.Generic;
++
++namespace MediaBrowser.Model.MediaEncoding;
++
++/// <summary>
++/// FFmpeg-probed media encoder capabilities for the admin Transcoding UI.
++/// </summary>
++public class MediaEncoderCapabilities
++{
++    /// <summary>
++    /// Gets or sets the raw hardware acceleration names reported by FFmpeg.
++    /// </summary>
++    public IReadOnlyList<string> Hwaccels { get; set; } = Array.Empty<string>();
++
++    /// <summary>
++    /// Gets or sets the raw decoder names reported by FFmpeg.
++    /// </summary>
++    public IReadOnlyList<string> Decoders { get; set; } = Array.Empty<string>();
++
++    /// <summary>
++    /// Gets or sets the raw encoder names reported by FFmpeg.
++    /// </summary>
++    public IReadOnlyList<string> Encoders { get; set; } = Array.Empty<string>();
++
++    /// <summary>
++    /// Gets or sets the hardware acceleration types that appear usable on this host.
++    /// Values match <see cref="Entities.HardwareAccelerationType"/> names (e.g. "nvenc").
++    /// </summary>
++    public IReadOnlyList<string> AvailableAccelerationTypes { get; set; } = Array.Empty<string>();
++
++    /// <summary>
++    /// Gets or sets hardware decoding codec ids keyed by acceleration type name.
++    /// Codec ids match EncodingOptions.HardwareDecodingCodecs (e.g. "h264", "hevc").
++    /// </summary>
++    public Dictionary<string, string[]> HardwareDecodingCodecs { get; set; }
++        = new(StringComparer.OrdinalIgnoreCase);
++
++    /// <summary>
++    /// Gets or sets hardware encoding availability keyed by acceleration type name.
++    /// </summary>
++    public Dictionary<string, HardwareEncodingCapabilities> HardwareEncoding { get; set; }
++        = new(StringComparer.OrdinalIgnoreCase);
++}
