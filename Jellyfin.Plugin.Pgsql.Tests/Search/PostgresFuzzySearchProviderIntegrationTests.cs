@@ -44,10 +44,10 @@ public sealed class PostgresFuzzySearchProviderIntegrationTests
         var provider = CreateProvider(factory);
 
         var shortResults = await provider.SearchAsync(
-            new SearchProviderQuery { SearchTerm = "fa" },
+            new SearchProviderQuery { SearchTerm = "fa", EnableTotalRecordCount = false },
             default).ConfigureAwait(false);
 
-        Assert.Empty(shortResults);
+        Assert.Empty(shortResults.Items);
         Assert.False(provider.CanSearch(new SearchProviderQuery { SearchTerm = "fa" }));
     }
 
@@ -62,14 +62,14 @@ public sealed class PostgresFuzzySearchProviderIntegrationTests
 
         var provider = CreateProvider(factory);
         var results = await provider.SearchAsync(
-            new SearchProviderQuery { SearchTerm = "Family" },
+            new SearchProviderQuery { SearchTerm = "Family", EnableTotalRecordCount = false },
             default).ConfigureAwait(false);
 
-        Assert.Contains(results, r => r.ItemId == ExactTitleId);
-        Assert.Contains(results, r => r.ItemId == FamilyGenreId);
+        Assert.Contains(results.Items, r => r.ItemId == ExactTitleId);
+        Assert.Contains(results.Items, r => r.ItemId == FamilyGenreId);
 
-        var exactScore = results.First(r => r.ItemId == ExactTitleId).Score;
-        var genreScore = results.First(r => r.ItemId == FamilyGenreId).Score;
+        var exactScore = results.Items.First(r => r.ItemId == ExactTitleId).Score;
+        var genreScore = results.Items.First(r => r.ItemId == FamilyGenreId).Score;
         Assert.True(exactScore > genreScore, $"Expected exact title score {exactScore} > genre score {genreScore}");
     }
 
@@ -84,10 +84,10 @@ public sealed class PostgresFuzzySearchProviderIntegrationTests
 
         var provider = CreateProvider(factory);
         var results = await provider.SearchAsync(
-            new SearchProviderQuery { SearchTerm = "batmn" },
+            new SearchProviderQuery { SearchTerm = "batmn", EnableTotalRecordCount = false },
             default).ConfigureAwait(false);
 
-        Assert.Contains(results, r => r.ItemId == TypoTitleId);
+        Assert.Contains(results.Items, r => r.ItemId == TypoTitleId);
     }
 
     [PostgresTestFact]
@@ -101,10 +101,10 @@ public sealed class PostgresFuzzySearchProviderIntegrationTests
 
         var provider = CreateProvider(factory);
         var results = await provider.SearchAsync(
-            new SearchProviderQuery { SearchTerm = "mr robot" },
+            new SearchProviderQuery { SearchTerm = "mr robot", EnableTotalRecordCount = false },
             default).ConfigureAwait(false);
 
-        Assert.Contains(results, r => r.ItemId == PunctuationTitleId);
+        Assert.Contains(results.Items, r => r.ItemId == PunctuationTitleId);
     }
 
     [PostgresTestFact]
@@ -118,10 +118,10 @@ public sealed class PostgresFuzzySearchProviderIntegrationTests
 
         var provider = CreateProvider(factory);
         var results = await provider.SearchAsync(
-            new SearchProviderQuery { SearchTerm = "Family" },
+            new SearchProviderQuery { SearchTerm = "Family", EnableTotalRecordCount = false },
             default).ConfigureAwait(false);
 
-        Assert.DoesNotContain(results, r => r.ItemId == UnrelatedId);
+        Assert.DoesNotContain(results.Items, r => r.ItemId == UnrelatedId);
     }
 
     private static PostgresFuzzySearchProvider CreateProvider(TestDbContextFactory factory)

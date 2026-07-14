@@ -102,7 +102,7 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
     }
 
     /// <inheritdoc/>
-    public async Task<IReadOnlyList<SearchResult>> SearchAsync(
+    public async Task<SearchQueryResult> SearchAsync(
         SearchProviderQuery query,
         CancellationToken cancellationToken)
     {
@@ -112,19 +112,20 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
         var rawSearchTerm = query.SearchTerm.Trim().RemoveDiacritics();
         if (string.IsNullOrEmpty(rawSearchTerm))
         {
-            return [];
+            return SearchQueryResult.Empty;
         }
 
         var cleanSearchTerm = rawSearchTerm.GetCleanValue();
         if (string.IsNullOrEmpty(cleanSearchTerm) || cleanSearchTerm.Length < MinSearchTermLength)
         {
-            return [];
+            return SearchQueryResult.Empty;
         }
 
         var cleanPrefix = cleanSearchTerm + " ";
         var likeOriginal = $"%{rawSearchTerm}%";
         var allowMetadataTrigram = cleanSearchTerm.Length >= 4;
         var limit = Math.Clamp(query.Limit ?? DefaultSearchLimit, 1, MaxSearchLimit);
+        var startIndex = Math.Max(query.StartIndex ?? 0, 0);
 
         var dbContext = await _dbProvider.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         await using (dbContext.ConfigureAwait(false))
@@ -152,6 +153,16 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
             dbQuery = ApplyMediaTypeFilter(dbQuery, query.MediaTypes);
             dbQuery = ApplyParentFilter(dbQuery, query.ParentId);
             dbQuery = ApplyUserAccessFilter(dbContext, dbQuery, query.UserId);
+
+            var totalRecordCount = 0;
+            if (query.EnableTotalRecordCount)
+            {
+                totalRecordCount = await dbQuery.CountAsync(cancellationToken).ConfigureAwait(false);
+                if (totalRecordCount == 0)
+                {
+                    return SearchQueryResult.Empty;
+                }
+            }
 
             // Score bands: title exact/prefix/trigram always beat genre/tag-only matches.
             var scored = dbQuery.Select(e => new
@@ -183,13 +194,22 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
                     : GenreContainsScore
             });
 
-            return await scored
+            var rows = await scored
                 .OrderByDescending(x => x.Score)
                 .ThenBy(x => x.Id)
+                .Skip(startIndex)
                 .Take(limit)
-                .Select(x => new SearchResult(x.Id, x.Score))
+                .Select(x => new { x.Id, x.Score })
                 .ToArrayAsync(cancellationToken)
                 .ConfigureAwait(false);
+
+            if (!query.EnableTotalRecordCount)
+            {
+                totalRecordCount = startIndex + rows.Length;
+            }
+
+            var items = rows.Select(x => new SearchResult(x.Id, x.Score)).ToArray();
+            return new SearchQueryResult(items, totalRecordCount);
         }
     }
 

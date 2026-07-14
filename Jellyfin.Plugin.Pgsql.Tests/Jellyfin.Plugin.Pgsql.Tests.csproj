@@ -16,7 +16,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinVersion)" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageReference Include="Moq" Version="4.20.72" />
     <PackageReference Include="xunit" Version="2.9.2" />
@@ -33,6 +32,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Jellyfin.Plugin.Pgsql\Jellyfin.Plugin.Pgsql.csproj" />
     <ProjectReference Include="..\jellyfin\src\Jellyfin.Database\Jellyfin.Database.Implementations\Jellyfin.Database.Implementations.csproj" />
+    <ProjectReference Include="..\jellyfin\MediaBrowser.Controller\MediaBrowser.Controller.csproj" />
   </ItemGroup>
 
 </Project>

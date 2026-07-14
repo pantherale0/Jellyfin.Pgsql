@@ -9,6 +9,8 @@
     <AnalysisMode>AllEnabledByDefault</AnalysisMode>
     <CodeAnalysisRuleSet>../jellyfin.ruleset</CodeAnalysisRuleSet>
     <NoWarn>$(NoWarn);CA1861;NU1903;CA2007</NoWarn>
+    <!-- Required when ProjectReferencing patched jellyfin MediaBrowser.* projects. -->
+    <AllowMissingPrunePackageData>true</AllowMissingPrunePackageData>
   </PropertyGroup>
 
   <!-- EF-generated migrations are excluded from analyzers (see also .editorconfig) -->
@@ -24,15 +26,17 @@
   <ItemGroup>
     <!-- Keep Copy Local so EF design-time (migrations add/bundle) can load DbContext
          types. Publish strips host-shared assemblies below; Docker/entrypoint also
-         remove them so PluginManager never LoadFromAssemblyPath's a private copy. -->
+         remove them so PluginManager never LoadFromAssemblyPath's a private copy.
+         MediaBrowser.Controller is a project reference so the plugin matches this
+         fork's patched search API (SearchQueryResult), not the NuGet package surface. -->
     <ProjectReference Include="..\jellyfin\src\Jellyfin.Database\Jellyfin.Database.Implementations\Jellyfin.Database.Implementations.csproj" />
+    <ProjectReference Include="..\jellyfin\MediaBrowser.Controller\MediaBrowser.Controller.csproj">
+      <PrivateAssets>all</PrivateAssets>
+    </ProjectReference>
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinVersion)" PrivateAssets="all" />
-    <PackageReference Include="Jellyfin.Model" Version="$(JellyfinVersion)" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="$(MicrosoftPackageVersion)" />
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="$(NpgsqlEfVersion)" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="$(MicrosoftPackageVersion)" />    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="$(NpgsqlEfVersion)" />
     <PackageReference Include="Npgsql" Version="$(NpgsqlVersion)" />
     <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="$(MicrosoftPackageVersion)" />
     <PackageReference Include="StackExchange.Redis" Version="2.8.58" />
@@ -81,6 +85,12 @@
     <ItemGroup>
       <_SharedJellyfinPublishFiles Include="$(PublishDir)Jellyfin.Database.Implementations.*" />
       <_SharedJellyfinPublishFiles Include="$(PublishDir)Jellyfin.CodeAnalysis.*" />
+      <_SharedJellyfinPublishFiles Include="$(PublishDir)MediaBrowser.Controller.*" />
+      <_SharedJellyfinPublishFiles Include="$(PublishDir)MediaBrowser.Model.*" />
+      <_SharedJellyfinPublishFiles Include="$(PublishDir)MediaBrowser.Common.*" />
+      <_SharedJellyfinPublishFiles Include="$(PublishDir)Emby.Naming.*" />
+      <_SharedJellyfinPublishFiles Include="$(PublishDir)Jellyfin.Data.*" />
+      <_SharedJellyfinPublishFiles Include="$(PublishDir)Jellyfin.Extensions.*" />
     </ItemGroup>
     <Delete Files="@(_SharedJellyfinPublishFiles)" TreatErrorsAsWarnings="true" />
   </Target>
