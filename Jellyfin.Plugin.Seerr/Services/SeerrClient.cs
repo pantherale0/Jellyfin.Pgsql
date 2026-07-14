@@ -171,10 +171,13 @@ public sealed class SeerrClient
     /// <returns>Matching users.</returns>
     public async Task<IReadOnlyList<SeerrUserDto>> FindUsersAsync(string query, CancellationToken cancellationToken)
     {
-        var path = string.Format(
-            CultureInfo.InvariantCulture,
-            "user?take=20&skip=0&q={0}",
-            Uri.EscapeDataString(query));
+        // Seerr rejects an empty q= value; omit the parameter when listing without a filter.
+        var path = string.IsNullOrWhiteSpace(query)
+            ? "user?take=20&skip=0"
+            : string.Format(
+                CultureInfo.InvariantCulture,
+                "user?take=20&skip=0&q={0}",
+                Uri.EscapeDataString(query));
 
         using var response = await SendAsync(HttpMethod.Get, path, null, cancellationToken).ConfigureAwait(false);
         var payload = await response.Content.ReadFromJsonAsync<SeerrUserResultsDto>(JsonOptions, cancellationToken).ConfigureAwait(false);
