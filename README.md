@@ -87,7 +87,7 @@ The custom Docker image supports built-in Single Sign-On (SSO) using OpenID Conn
 *   **Emergency Bypass**: For emergency local administration (e.g. if the identity provider is offline), you can append `?local=true` to the URL (e.g. `http://jellyfin/web/index.html#!/login.html?local=true`) to bypass the redirect and show the local login form.
 *   **Auto-creation & RBAC**: Users successfully authenticated via OIDC are automatically created if they do not exist. If they possess the configured OIDC admin role, they are granted Administrator privileges (and administrative permissions are synced dynamically upon each login).
 *   **Parental controls from claims**: When a birthdate claim is present, the user's max parental rating is set from their age (Jellyfin rating scores are age-aligned). Ages 18+ are unrestricted. Block-unrated item types can be assigned per OIDC group in **Dashboard → Users → SSO Mappings**.
-*   **Client Compatibility**: Native surfaces that do not support web redirects (like smart TVs and game consoles) can pair with an active web session using Jellyfin's standard **Quick Connect** feature.
+*   **Client Compatibility**: Smart TV / webOS wrappers (and other TV browsers) skip forced SSO auto-redirect and open **Quick Connect** automatically on the login page so users can approve a code from a phone or desktop. Native surfaces that do not use the web UI can still pair with an active session via Quick Connect. Ensure Quick Connect is enabled on the server for TV deployments. `?local=true` remains the emergency bypass for non-TV browsers.
 
 ### Configuration
 Configure the OIDC integration using the following environment variables in your `docker-compose.yaml`:
