@@ -1,0 +1,24 @@
+diff --git a/src/controllers/session/login/index.js b/src/controllers/session/login/index.js
+index fd38855284..dea26b28d3 100644
+--- a/src/controllers/session/login/index.js
++++ b/src/controllers/session/login/index.js
+@@ -272,10 +272,19 @@ export default function (view, params) {
+ 
+         const apiClient = getApiClient();
+ 
++        let autoQuickConnectStarted = false;
++
+         apiClient.getQuickConnect('Enabled')
+             .then(enabled => {
+                 if (enabled === true) {
+                     view.querySelector('.btnQuick').classList.remove('hide');
++
++                    // TV remotes struggle with username/password (and SSO IdP UIs).
++                    // Auto-start Quick Connect once per login view when on a TV client.
++                    if (browser.tv && !autoQuickConnectStarted) {
++                        autoQuickConnectStarted = true;
++                        authenticateQuickConnect(apiClient, getTargetUrl());
++                    }
+                 }
+             })
+             .catch(() => {

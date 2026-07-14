@@ -1,9 +1,9 @@
 diff --git a/Jellyfin.Api/Controllers/SSOController.cs b/Jellyfin.Api/Controllers/SSOController.cs
 new file mode 100644
-index 0000000000..adc3da50b7
+index 0000000000..824ada2362
 --- /dev/null
 +++ b/Jellyfin.Api/Controllers/SSOController.cs
-@@ -0,0 +1,776 @@
+@@ -0,0 +1,809 @@
 +using System;
 +using System.Collections.Concurrent;
 +using System.Collections.Generic;
@@ -567,10 +567,38 @@ index 0000000000..adc3da50b7
 +        var script = @"(function() {
 +    console.log('[SSO] Injected login script loaded');
 +
++    function isTvClient() {
++        try {
++            if (window.NativeShell && window.NativeShell.AppHost
++                && typeof window.NativeShell.AppHost.getDefaultLayout === 'function'
++                && window.NativeShell.AppHost.getDefaultLayout() === 'tv') {
++                return true;
++            }
++        } catch (e) { /* ignore */ }
++
++        const ua = (navigator.userAgent || '').toLowerCase();
++        if (ua.includes('oculusbrowser')) {
++            return false;
++        }
++
++        return ua.includes('tv')
++            || ua.includes('samsungbrowser')
++            || ua.includes('viera')
++            || ua.includes('titanos')
++            || ua.includes('netcast')
++            || ua.includes('web0s')
++            || ua.includes('tizen')
++            || ua.includes('xbox')
++            || ua.includes('playstation 4')
++            || ua.includes('kepler')
++            || (typeof window.tizen !== 'undefined' && window.tizen != null);
++    }
++
 +    const hasLocalParam = window.location.search.includes('local=true') || window.location.hash.includes('local=true');
 +    const isLoggedIn = localStorage.getItem('api_key') || localStorage.getItem('userId');
++    const isTv = isTvClient();
 +
-+    if (!hasLocalParam && !isLoggedIn) {
++    if (!hasLocalParam && !isLoggedIn && !isTv) {
 +        console.log('[SSO] Redirecting to SSO login...');
 +        let deviceId = localStorage.getItem('deviceId') || localStorage.getItem('_deviceId2') || '';
 +        if (!deviceId) {
@@ -578,6 +606,11 @@ index 0000000000..adc3da50b7
 +            localStorage.setItem('_deviceId2', deviceId);
 +        }
 +        window.location.href = '/sso/login?deviceId=' + encodeURIComponent(deviceId);
++        return;
++    }
++
++    if (isTv) {
++        console.log('[SSO] TV client detected; skipping SSO auto-redirect and button injection');
 +        return;
 +    }
 +
