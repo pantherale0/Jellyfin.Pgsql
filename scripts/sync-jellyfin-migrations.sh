@@ -302,7 +302,8 @@ rollback_sync() {
     local previous_commit
     previous_commit="$(cat "${SYNC_BACKUP_DIR}/submodule_commit")"
     if [[ -d "${REPO_ROOT}/jellyfin/.git" ]] || [[ -f "${REPO_ROOT}/jellyfin/.git" ]]; then
-        git -C "${REPO_ROOT}/jellyfin" checkout "${previous_commit}" >/dev/null 2>&1 || true
+        git -C "${REPO_ROOT}/jellyfin" reset --hard "${previous_commit}" >/dev/null 2>&1 || true
+        git -C "${REPO_ROOT}/jellyfin" clean -fd >/dev/null 2>&1 || true
         git -C "${REPO_ROOT}" add jellyfin 2>/dev/null || true
     fi
 
@@ -545,6 +546,10 @@ SYNC_STAGE="update-submodule"
 update_submodule "${TARGET_VERSION}"
 SUBMODULE_COMMIT="$(get_submodule_commit)"
 
+SYNC_STAGE="apply-patches"
+echo "[sync] Applying jellyfin patches..."
+bash "${SCRIPT_DIR}/apply-patches.sh" jellyfin
+
 SYNC_STAGE="restore-packages"
 echo "[sync] Restoring packages..."
 dotnet tool restore
@@ -597,6 +602,10 @@ fi
 
 PG_MIGRATION="$(get_latest_pg_migration)"
 write_state "${TARGET_VERSION}" "${LATEST_CORE}" "${PG_MIGRATION}" "${SUBMODULE_COMMIT}"
+
+# Patches are only needed for the build; restore a clean submodule tree for the PR.
+git -C "${REPO_ROOT}/jellyfin" reset --hard HEAD >/dev/null
+git -C "${REPO_ROOT}/jellyfin" clean -fd >/dev/null
 
 echo "" >> "${SYNC_REPORT}"
 echo "## Result" >> "${SYNC_REPORT}"
