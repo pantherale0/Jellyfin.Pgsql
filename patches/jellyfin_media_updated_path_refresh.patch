@@ -1,0 +1,243 @@
+diff --git a/Emby.Server.Implementations/IO/FileRefresher.cs b/Emby.Server.Implementations/IO/FileRefresher.cs
+index f634084034..dc3d2aa86a 100644
+--- a/Emby.Server.Implementations/IO/FileRefresher.cs
++++ b/Emby.Server.Implementations/IO/FileRefresher.cs
+@@ -5,9 +5,11 @@ using System.Collections.Generic;
+ using System.IO;
+ using System.Linq;
+ using System.Threading;
++using Emby.Server.Implementations.Library;
+ using MediaBrowser.Controller.Configuration;
+ using MediaBrowser.Controller.Entities;
+ using MediaBrowser.Controller.Library;
++using MediaBrowser.Model.IO;
+ using Microsoft.Extensions.Logging;
+ 
+ namespace Emby.Server.Implementations.IO
+@@ -17,19 +19,26 @@ namespace Emby.Server.Implementations.IO
+         private readonly ILogger _logger;
+         private readonly ILibraryManager _libraryManager;
+         private readonly IServerConfigurationManager _configurationManager;
++        private readonly IFileSystem _fileSystem;
+ 
+         private readonly List<string> _affectedPaths = new();
+         private readonly Lock _timerLock = new();
+         private Timer? _timer;
+         private bool _disposed;
+ 
+-        public FileRefresher(string path, IServerConfigurationManager configurationManager, ILibraryManager libraryManager, ILogger logger)
++        public FileRefresher(
++            string path,
++            IServerConfigurationManager configurationManager,
++            ILibraryManager libraryManager,
++            IFileSystem fileSystem,
++            ILogger logger)
+         {
+             logger.LogDebug("New file refresher created for {0}", path);
+             Path = path;
+ 
+             _configurationManager = configurationManager;
+             _libraryManager = libraryManager;
++            _fileSystem = fileSystem;
+             _logger = logger;
+             AddPath(path);
+         }
+@@ -129,13 +138,35 @@ namespace Emby.Server.Implementations.IO
+ 
+         private void ProcessPathChanges(List<string> paths)
+         {
+-            IEnumerable<BaseItem> itemsToRefresh = paths
+-                .Distinct()
+-                .Select(GetAffectedBaseItem)
+-                .Where(item => item is not null)
+-                .DistinctBy(x => x!.Id)!;  // Removed null values in the previous .Where()
++            var itemsToRefresh = new Dictionary<Guid, BaseItem>();
+ 
+-            foreach (var item in itemsToRefresh)
++            foreach (var path in paths.Distinct(StringComparer.Ordinal))
++            {
++                var item = GetAffectedBaseItem(path);
++                if (item is null || item is AggregateFolder)
++                {
++                    continue;
++                }
++
++                // Movie folders are not tracked as DB entities. When walk-up lands on a
++                // library Folder that is only an ancestor of the reported path, import or
++                // resolve just that top-level child instead of ValidateChildren on the root.
++                if (item is Folder folder
++                    && !string.IsNullOrEmpty(folder.Path)
++                    && !_fileSystem.AreEqual(path, folder.Path)
++                    && _fileSystem.ContainsSubPath(folder.Path, path))
++                {
++                    var scoped = TryImportPathUnderFolder(path, folder);
++                    if (scoped is not null)
++                    {
++                        item = scoped;
++                    }
++                }
++
++                itemsToRefresh.TryAdd(item.Id, item);
++            }
++
++            foreach (var item in itemsToRefresh.Values)
+             {
+                 if (item is AggregateFolder)
+                 {
+@@ -155,6 +186,83 @@ namespace Emby.Server.Implementations.IO
+             }
+         }
+ 
++        /// <summary>
++        /// Resolves and optionally creates the library item for a path under a library folder,
++        /// avoiding a full-folder ValidateChildren refresh.
++        /// </summary>
++        private BaseItem? TryImportPathUnderFolder(string path, Folder libraryFolder)
++        {
++            var topLevelChild = GetTopLevelChildPath(path, libraryFolder.Path);
++            if (string.IsNullOrEmpty(topLevelChild))
++            {
++                return null;
++            }
++
++            try
++            {
++                var fileInfo = _fileSystem.GetFileSystemInfo(topLevelChild);
++                if (!fileInfo.Exists)
++                {
++                    return null;
++                }
++
++                var resolved = _libraryManager.ResolvePath(fileInfo, libraryFolder);
++                if (resolved is null)
++                {
++                    return null;
++                }
++
++                var existing = _libraryManager.FindByPath(resolved.Path, null)
++                    ?? _libraryManager.GetItemById(resolved.Id);
++                if (existing is not null)
++                {
++                    return existing;
++                }
++
++                resolved.SetParent(libraryFolder);
++                _libraryManager.CreateItem(resolved, libraryFolder);
++                _logger.LogInformation("Imported new item {Name} ({Path}) from path-scoped refresh.", resolved.Name, resolved.Path);
++                return resolved;
++            }
++            catch (Exception ex)
++            {
++                _logger.LogDebug(ex, "Error importing path {Path} under {Folder}", path, libraryFolder.Path);
++                return null;
++            }
++        }
++
++        /// <summary>
++        /// Returns the path segment that is a direct child of <paramref name="libraryFolderPath"/>.
++        /// </summary>
++        private string? GetTopLevelChildPath(string path, string libraryFolderPath)
++        {
++            var current = path;
++            while (!string.IsNullOrEmpty(current))
++            {
++                var parent = System.IO.Path.GetDirectoryName(current);
++                if (string.IsNullOrEmpty(parent))
++                {
++                    return null;
++                }
++
++                if (_fileSystem.AreEqual(parent, libraryFolderPath))
++                {
++                    return current;
++                }
++
++                // Stop if we've walked above the library folder
++                if (!_fileSystem.ContainsSubPath(libraryFolderPath, current)
++                    && !_fileSystem.AreEqual(current, libraryFolderPath))
++                {
++                    return null;
++                }
++
++                current = parent;
++            }
++
++            return null;
++        }
++
+         /// <summary>
+         /// Gets the affected base item.
+         /// </summary>
+@@ -168,7 +276,41 @@ namespace Emby.Server.Implementations.IO
+             {
+                 item = _libraryManager.FindByPath(path, null);
+ 
+-                path = System.IO.Path.GetDirectoryName(path) ?? string.Empty;
++                if (item is null)
++                {
++                    var parentDir = System.IO.Path.GetDirectoryName(path) ?? string.Empty;
++
++                    // If this path is an untracked directory, look for a known media
++                    // item inside it (eg. a movie file in a movie folder). This prevents
++                    // walking all the way up to the library root when intermediate
++                    // directories like movie folders are not tracked in the DB.
++                    if (!string.IsNullOrEmpty(parentDir) && Directory.Exists(path))
++                    {
++                        try
++                        {
++                            foreach (var file in Directory.EnumerateFiles(path))
++                            {
++                                if (IgnorePatterns.ShouldIgnore(file))
++                                {
++                                    continue;
++                                }
++
++                                var childItem = _libraryManager.FindByPath(file, false);
++                                if (childItem is not null)
++                                {
++                                    item = childItem;
++                                    break;
++                                }
++                            }
++                        }
++                        catch (Exception ex)
++                        {
++                            _logger.LogDebug(ex, "Error enumerating files in {Path}", path);
++                        }
++                    }
++
++                    path = parentDir;
++                }
+             }
+ 
+             if (item is not null)
+diff --git a/Emby.Server.Implementations/IO/LibraryMonitor.cs b/Emby.Server.Implementations/IO/LibraryMonitor.cs
+index 1bf0f8c76c..8063f9543a 100644
+--- a/Emby.Server.Implementations/IO/LibraryMonitor.cs
++++ b/Emby.Server.Implementations/IO/LibraryMonitor.cs
+@@ -414,16 +414,23 @@ namespace Emby.Server.Implementations.IO
+                         return;
+                     }
+ 
+-                    // They are siblings. Rebase the refresher to the parent folder.
++                    // They are siblings. Rebase the refresher to the parent folder,
++                    // unless that parent is already a tracked library folder — rebasing
++                    // there would trigger a full-library ValidateChildren refresh.
+                     if (parentPath is not null
+                         && Path.GetDirectoryName(refresher.Path.AsSpan()).Equals(parentPath, StringComparison.Ordinal))
+                     {
++                        if (_libraryManager.FindByPath(parentPath, true) is Folder)
++                        {
++                            continue;
++                        }
++
+                         refresher.ResetPath(parentPath, path);
+                         return;
+                     }
+                 }
+ 
+-                var newRefresher = new FileRefresher(path, _configurationManager, _libraryManager, _logger);
++                var newRefresher = new FileRefresher(path, _configurationManager, _libraryManager, _fileSystem, _logger);
+                 newRefresher.Completed += OnNewRefresherCompleted;
+                 _activeRefreshers.Add(newRefresher);
+             }
