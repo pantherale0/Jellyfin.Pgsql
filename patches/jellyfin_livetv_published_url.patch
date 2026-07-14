@@ -1,0 +1,924 @@
+# Vendored from https://github.com/jellyfin/jellyfin/pull/17298
+# Fix Live TV returning unreachable Docker/bridge IPs to clients (issue #15411).
+# Rewrites /LiveTv/LiveStreamFiles/ paths on response clones via GetSmartApiUrl;
+# keeps local buffer URL for FFmpeg. Includes published-URI host/port parsing fixes.
+# (CONTRIBUTORS.md from upstream PR omitted.)
+#
+diff --git a/Emby.Server.Implementations/ApplicationHost.cs b/Emby.Server.Implementations/ApplicationHost.cs
+index 69e23bcb63..1b37e7498d 100644
+--- a/Emby.Server.Implementations/ApplicationHost.cs
++++ b/Emby.Server.Implementations/ApplicationHost.cs
+@@ -965,8 +965,9 @@ namespace Emby.Server.Implementations
+         /// <inheritdoc/>
+         public string GetLocalApiUrl(string hostname, string scheme = null, int? port = null)
+         {
+-            // If the smartAPI doesn't start with http then treat it as a host or ip.
+-            if (hostname.StartsWith("http", StringComparison.OrdinalIgnoreCase))
++            // If the smartAPI isn't already a complete URL then treat it as a host or ip.
++            if (hostname.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
++                || hostname.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+             {
+                 return hostname.TrimEnd('/');
+             }
+diff --git a/Jellyfin.Api/Controllers/MediaInfoController.cs b/Jellyfin.Api/Controllers/MediaInfoController.cs
+index ac7c091f85..aa942e7642 100644
+--- a/Jellyfin.Api/Controllers/MediaInfoController.cs
++++ b/Jellyfin.Api/Controllers/MediaInfoController.cs
+@@ -84,7 +84,7 @@ public class MediaInfoController : BaseJellyfinApiController
+             return NotFound();
+         }
+ 
+-        return await _mediaInfoHelper.GetPlaybackInfo(item, user).ConfigureAwait(false);
++        return await _mediaInfoHelper.GetPlaybackInfo(item, user, Request).ConfigureAwait(false);
+     }
+ 
+     /// <summary>
+@@ -177,6 +177,7 @@ public class MediaInfoController : BaseJellyfinApiController
+         var info = await _mediaInfoHelper.GetPlaybackInfo(
+                 item,
+                 user,
++                Request,
+                 mediaSourceId,
+                 liveStreamId)
+             .ConfigureAwait(false);
+diff --git a/Jellyfin.Api/Controllers/UniversalAudioController.cs b/Jellyfin.Api/Controllers/UniversalAudioController.cs
+index e53d15acfd..cdbd1ee7aa 100644
+--- a/Jellyfin.Api/Controllers/UniversalAudioController.cs
++++ b/Jellyfin.Api/Controllers/UniversalAudioController.cs
+@@ -133,6 +133,7 @@ public class UniversalAudioController : BaseJellyfinApiController
+         var info = await _mediaInfoHelper.GetPlaybackInfo(
+                 item,
+                 user,
++                Request,
+                 mediaSourceId)
+             .ConfigureAwait(false);
+ 
+diff --git a/Jellyfin.Api/Helpers/MediaInfoHelper.cs b/Jellyfin.Api/Helpers/MediaInfoHelper.cs
+index ef81235808..31e907549c 100644
+--- a/Jellyfin.Api/Helpers/MediaInfoHelper.cs
++++ b/Jellyfin.Api/Helpers/MediaInfoHelper.cs
+@@ -14,6 +14,7 @@ using Jellyfin.Database.Implementations.Enums;
+ using Jellyfin.Extensions;
+ using MediaBrowser.Common.Extensions;
+ using MediaBrowser.Common.Net;
++using MediaBrowser.Controller;
+ using MediaBrowser.Controller.Configuration;
+ using MediaBrowser.Controller.Devices;
+ using MediaBrowser.Controller.Entities;
+@@ -44,6 +45,7 @@ public class MediaInfoHelper
+     private readonly ILogger<MediaInfoHelper> _logger;
+     private readonly INetworkManager _networkManager;
+     private readonly IDeviceManager _deviceManager;
++    private readonly IServerApplicationHost _appHost;
+ 
+     /// <summary>
+     /// Initializes a new instance of the <see cref="MediaInfoHelper"/> class.
+@@ -56,6 +58,7 @@ public class MediaInfoHelper
+     /// <param name="logger">Instance of the <see cref="ILogger{MediaInfoHelper}"/> interface.</param>
+     /// <param name="networkManager">Instance of the <see cref="INetworkManager"/> interface.</param>
+     /// <param name="deviceManager">Instance of the <see cref="IDeviceManager"/> interface.</param>
++    /// <param name="appHost">Instance of the <see cref="IServerApplicationHost"/> interface.</param>
+     public MediaInfoHelper(
+         IUserManager userManager,
+         ILibraryManager libraryManager,
+@@ -64,7 +67,8 @@ public class MediaInfoHelper
+         IServerConfigurationManager serverConfigurationManager,
+         ILogger<MediaInfoHelper> logger,
+         INetworkManager networkManager,
+-        IDeviceManager deviceManager)
++        IDeviceManager deviceManager,
++        IServerApplicationHost appHost)
+     {
+         _userManager = userManager;
+         _libraryManager = libraryManager;
+@@ -74,6 +78,7 @@ public class MediaInfoHelper
+         _logger = logger;
+         _networkManager = networkManager;
+         _deviceManager = deviceManager;
++        _appHost = appHost;
+     }
+ 
+     /// <summary>
+@@ -81,40 +86,20 @@ public class MediaInfoHelper
+     /// </summary>
+     /// <param name="item">The item.</param>
+     /// <param name="user">The user.</param>
++    /// <param name="request">The current <see cref="HttpRequest"/>.</param>
+     /// <param name="mediaSourceId">Media source id.</param>
+     /// <param name="liveStreamId">Live stream id.</param>
+     /// <returns>A <see cref="Task"/> containing the <see cref="PlaybackInfoResponse"/>.</returns>
+     public async Task<PlaybackInfoResponse> GetPlaybackInfo(
+         BaseItem item,
+         User? user,
++        HttpRequest request,
+         string? mediaSourceId = null,
+         string? liveStreamId = null)
+     {
+         var result = new PlaybackInfoResponse();
+ 
+-        MediaSourceInfo[] mediaSources;
+-        if (string.IsNullOrWhiteSpace(liveStreamId))
+-        {
+-            // TODO (moved from MediaBrowser.Api) handle supportedLiveMediaTypes?
+-            var mediaSourcesList = await _mediaSourceManager.GetPlaybackMediaSources(item, user, true, true, CancellationToken.None).ConfigureAwait(false);
+-
+-            if (string.IsNullOrWhiteSpace(mediaSourceId))
+-            {
+-                mediaSources = mediaSourcesList.ToArray();
+-            }
+-            else
+-            {
+-                mediaSources = mediaSourcesList
+-                    .Where(i => string.Equals(i.Id, mediaSourceId, StringComparison.OrdinalIgnoreCase))
+-                    .ToArray();
+-            }
+-        }
+-        else
+-        {
+-            var mediaSource = await _mediaSourceManager.GetLiveStream(liveStreamId, CancellationToken.None).ConfigureAwait(false);
+-
+-            mediaSources = new[] { mediaSource };
+-        }
++        var mediaSources = await ResolvePlaybackMediaSources(item, user, mediaSourceId, liveStreamId).ConfigureAwait(false);
+ 
+         if (mediaSources.Length == 0)
+         {
+@@ -136,6 +121,11 @@ public class MediaInfoHelper
+                     mediaSourcesClone[i].DefaultAudioIndexSource = mediaSources[i].DefaultAudioIndexSource;
+                 }
+ 
++                foreach (var mediaSource in mediaSourcesClone)
++                {
++                    RewritePublishedLiveStreamPath(mediaSource, request);
++                }
++
+                 result.MediaSources = mediaSourcesClone;
+             }
+ 
+@@ -145,6 +135,28 @@ public class MediaInfoHelper
+         return result;
+     }
+ 
++    private async Task<MediaSourceInfo[]> ResolvePlaybackMediaSources(BaseItem item, User? user, string? mediaSourceId, string? liveStreamId)
++    {
++        if (!string.IsNullOrWhiteSpace(liveStreamId))
++        {
++            var mediaSource = await _mediaSourceManager.GetLiveStream(liveStreamId, CancellationToken.None).ConfigureAwait(false);
++
++            return new[] { mediaSource };
++        }
++
++        // TODO (moved from MediaBrowser.Api) handle supportedLiveMediaTypes?
++        var mediaSourcesList = await _mediaSourceManager.GetPlaybackMediaSources(item, user, true, true, CancellationToken.None).ConfigureAwait(false);
++
++        if (string.IsNullOrWhiteSpace(mediaSourceId))
++        {
++            return mediaSourcesList.ToArray();
++        }
++
++        return mediaSourcesList
++            .Where(i => string.Equals(i.Id, mediaSourceId, StringComparison.OrdinalIgnoreCase))
++            .ToArray();
++    }
++
+     /// <summary>
+     /// SetDeviceSpecificData.
+     /// </summary>
+@@ -415,6 +427,8 @@ public class MediaInfoHelper
+     {
+         var result = await _mediaSourceManager.OpenLiveStream(request, CancellationToken.None).ConfigureAwait(false);
+ 
++        RewritePublishedLiveStreamPath(result.MediaSource, httpContext.Request);
++
+         var profile = request.DeviceProfile;
+         if (profile is null)
+         {
+@@ -524,4 +538,81 @@ public class MediaInfoHelper
+ 
+         return maxBitrate;
+     }
++
++    /// <summary>
++    /// Rewrites a Live TV media source's <see cref="MediaSourceInfo.Path"/> to the request-appropriate published
++    /// URL when it points at a Jellyfin-hosted live stream buffer, so response copies never leak server-local
++    /// addresses. Only opened live streams are eligible. The shared instance held by
++    /// <see cref="IMediaSourceManager"/> is never touched by this method.
++    /// </summary>
++    /// <param name="mediaSource">The media source clone to rewrite in place.</param>
++    /// <param name="request">The current <see cref="HttpRequest"/>.</param>
++    private void RewritePublishedLiveStreamPath(MediaSourceInfo mediaSource, HttpRequest request)
++    {
++        // Opened live streams always carry a LiveStreamId; this excludes pre-open and plugin/remote sources.
++        if (string.IsNullOrEmpty(mediaSource.LiveStreamId))
++        {
++            return;
++        }
++
++        if (mediaSource.Protocol != MediaProtocol.Http)
++        {
++            return;
++        }
++
++        var baseUrl = _serverConfigurationManager.GetNetworkConfiguration().BaseUrl;
++        var publishedPath = GetPublishedLiveStreamPath(_appHost.GetSmartApiUrl(request), mediaSource.Path, mediaSource.Protocol, baseUrl);
++
++        if (publishedPath is not null)
++        {
++            mediaSource.Path = publishedPath;
++            return;
++        }
++
++        if (mediaSource.Path is not null && mediaSource.Path.Contains("/LiveTv/LiveStreamFiles/", StringComparison.OrdinalIgnoreCase))
++        {
++            _logger.LogDebug("Not rewriting live stream path for media source {MediaSourceId}: the local path did not resolve under the request's smart API URL/BaseUrl", mediaSource.Id);
++        }
++    }
++
++    /// <summary>
++    /// Resolves a Jellyfin-hosted Live TV buffer path to its request-appropriate published equivalent.
++    /// Returns null when the path isn't a Jellyfin-hosted <c>/LiveTv/LiveStreamFiles/</c> HTTP URL.
++    /// </summary>
++    /// <param name="smartApiUrl">The request-appropriate base URL, as returned by <see cref="IServerApplicationHost.GetSmartApiUrl(HttpRequest)"/>.</param>
++    /// <param name="localPath">The media source's local (LAN-access) path, as built from <see cref="IServerApplicationHost.GetApiUrlForLocalAccess"/>.</param>
++    /// <param name="protocol">The media source's protocol.</param>
++    /// <param name="baseUrl">The server's configured BaseUrl, if any.</param>
++    /// <returns>The published path, or null if the local path should be left unchanged.</returns>
++    internal static string? GetPublishedLiveStreamPath(
++        string smartApiUrl,
++        string? localPath,
++        MediaProtocol protocol,
++        string baseUrl)
++    {
++        if (protocol != MediaProtocol.Http
++            || !Uri.TryCreate(localPath, UriKind.Absolute, out var localUri))
++        {
++            return null;
++        }
++
++        var relativePath = localUri.PathAndQuery;
++        if (!string.IsNullOrEmpty(baseUrl))
++        {
++            var basePrefix = baseUrl + "/";
++            if (!relativePath.StartsWith(basePrefix, StringComparison.OrdinalIgnoreCase))
++            {
++                return null;
++            }
++
++            relativePath = relativePath[baseUrl.Length..];
++        }
++
++        if (!relativePath.StartsWith("/LiveTv/LiveStreamFiles/", StringComparison.OrdinalIgnoreCase))
++        {
++            return null;
++        }
++
++        return smartApiUrl.TrimEnd('/') + relativePath;
++    }
+ }
+diff --git a/src/Jellyfin.Networking/Manager/NetworkManager.cs b/src/Jellyfin.Networking/Manager/NetworkManager.cs
+index 4559f68ce8..69f36e9bb1 100644
+--- a/src/Jellyfin.Networking/Manager/NetworkManager.cs
++++ b/src/Jellyfin.Networking/Manager/NetworkManager.cs
+@@ -851,7 +851,7 @@ public class NetworkManager : INetworkManager, IDisposable
+             bool isExternal = !IsInLocalNetwork(source);
+             _logger.LogDebug("Trying to get bind address for source {Source} - External: {IsExternal}", source, isExternal);
+ 
+-            if (!skipOverrides && MatchesPublishedServerUrl(source, isExternal, out result))
++            if (!skipOverrides && MatchesPublishedServerUrl(source, isExternal, out result, out port))
+             {
+                 return result;
+             }
+@@ -1017,11 +1017,12 @@ public class NetworkManager : INetworkManager, IDisposable
+     /// <param name="source">IP source address to use.</param>
+     /// <param name="isInExternalSubnet">True if the source is in an external subnet.</param>
+     /// <param name="bindPreference">The published server URL that matches the source address.</param>
++    /// <param name="port">The explicit port parsed from the override, if any.</param>
+     /// <returns><c>true</c> if a match is found, <c>false</c> otherwise.</returns>
+-    private bool MatchesPublishedServerUrl(IPAddress source, bool isInExternalSubnet, out string bindPreference)
++    private bool MatchesPublishedServerUrl(IPAddress source, bool isInExternalSubnet, out string bindPreference, out int? port)
+     {
+         bindPreference = string.Empty;
+-        int? port = null;
++        port = null;
+ 
+         // Only consider subnets including the source IP, preferring specific overrides
+         List<PublishedServerUriOverride> validPublishedServerUrls;
+@@ -1063,24 +1064,42 @@ public class NetworkManager : INetworkManager, IDisposable
+             return false;
+         }
+ 
+-        // Handle override specifying port
+-        var parts = bindPreference.Split(':');
+-        if (parts.Length > 1)
++        // Handle override specifying an explicit port.
++        (bindPreference, port) = ParseHostAndPort(bindPreference);
++
++        if (port.HasValue)
+         {
+-            if (int.TryParse(parts[1], out int p))
+-            {
+-                bindPreference = parts[0];
+-                port = p;
+-                _logger.LogDebug("{Source}: Matching bind address override found: {Address}:{Port}", source, bindPreference, port);
+-                return true;
+-            }
++            _logger.LogDebug("{Source}: Matching bind address override found: {Address}:{Port}", source, bindPreference, port);
++        }
++        else
++        {
++            _logger.LogDebug("{Source}: Matching bind address override found: {Address}", source, bindPreference);
+         }
+-
+-        _logger.LogDebug("{Source}: Matching bind address override found: {Address}", source, bindPreference);
+ 
+         return true;
+     }
+ 
++    /// <summary>
++    /// Splits a published server URL override into its host and explicit port, if any.
++    /// Full URLs (containing "://") are returned whole, with any port left embedded.
++    /// </summary>
++    /// <param name="value">The override value, e.g. "host:port", "[::1]:port", or a full URL.</param>
++    /// <returns>The parsed host (or the original value if not split) and the explicit port, if any.</returns>
++    private static (string Host, int? Port) ParseHostAndPort(string value)
++    {
++        if (value.Contains("://", StringComparison.Ordinal))
++        {
++            return (value, null);
++        }
++
++        if (Uri.TryCreate("any://" + value, UriKind.Absolute, out var parsed) && parsed.Port != -1)
++        {
++            return (parsed.DnsSafeHost, parsed.Port);
++        }
++
++        return (value, null);
++    }
++
+     /// <summary>
+     /// Attempts to match the source against the user defined bind interfaces.
+     /// </summary>
+diff --git a/tests/Jellyfin.Api.Tests/Helpers/MediaInfoHelperTests.cs b/tests/Jellyfin.Api.Tests/Helpers/MediaInfoHelperTests.cs
+index a003be4d96..d93935a9d0 100644
+--- a/tests/Jellyfin.Api.Tests/Helpers/MediaInfoHelperTests.cs
++++ b/tests/Jellyfin.Api.Tests/Helpers/MediaInfoHelperTests.cs
+@@ -1,13 +1,21 @@
+ using System;
+ using System.Globalization;
++using System.Text.Json;
++using System.Threading;
++using System.Threading.Tasks;
+ using Jellyfin.Api.Helpers;
++using Jellyfin.Database.Implementations.Entities;
+ using MediaBrowser.Common.Net;
++using MediaBrowser.Controller;
+ using MediaBrowser.Controller.Configuration;
+ using MediaBrowser.Controller.Devices;
++using MediaBrowser.Controller.Entities;
++using MediaBrowser.Controller.Entities.Movies;
+ using MediaBrowser.Controller.Library;
+ using MediaBrowser.Controller.MediaEncoding;
+ using MediaBrowser.Model.Dto;
+ using MediaBrowser.Model.MediaInfo;
++using Microsoft.AspNetCore.Http;
+ using Microsoft.Extensions.Logging;
+ using Moq;
+ using Xunit;
+@@ -16,17 +24,28 @@ namespace Jellyfin.Api.Tests.Helpers
+ {
+     public class MediaInfoHelperTests
+     {
+-        private static MediaInfoHelper CreateHelper()
++        private const string LiveStreamFilesPath = "/LiveTv/LiveStreamFiles/abc/stream.ts";
++
++        private static MediaInfoHelper CreateHelper(
++            IMediaSourceManager? mediaSourceManager = null,
++            IServerApplicationHost? appHost = null,
++            string baseUrl = "")
+         {
++            var serverConfigurationManager = new Mock<IServerConfigurationManager>();
++            serverConfigurationManager
++                .Setup(x => x.GetConfiguration(It.IsAny<string>()))
++                .Returns(new NetworkConfiguration { BaseUrl = baseUrl });
++
+             return new MediaInfoHelper(
+                 Mock.Of<IUserManager>(),
+                 Mock.Of<ILibraryManager>(),
+-                Mock.Of<IMediaSourceManager>(),
++                mediaSourceManager ?? Mock.Of<IMediaSourceManager>(),
+                 Mock.Of<IMediaEncoder>(),
+-                Mock.Of<IServerConfigurationManager>(),
++                serverConfigurationManager.Object,
+                 Mock.Of<ILogger<MediaInfoHelper>>(),
+                 Mock.Of<INetworkManager>(),
+-                Mock.Of<IDeviceManager>());
++                Mock.Of<IDeviceManager>(),
++                appHost ?? Mock.Of<IServerApplicationHost>());
+         }
+ 
+         private static MediaSourceInfo CreateSource(Guid itemId, int bitrate, bool supportsDirectPlay = true)
+@@ -95,5 +114,361 @@ namespace Jellyfin.Api.Tests.Helpers
+ 
+             Assert.Equal(directPlay.Id, result.MediaSources[0].Id);
+         }
++
++        [Fact]
++        public async Task GetPlaybackInfo_ExistingLiveStream_RewritesReturnedCloneOnly()
++        {
++            const string LocalPath = "http://172.19.0.3:8096" + LiveStreamFilesPath;
++
++            var sharedLiveSource = new MediaSourceInfo
++            {
++                Id = "abc",
++                Protocol = MediaProtocol.Http,
++                Path = LocalPath,
++                LiveStreamId = "livestream-1"
++            };
++
++            var mediaSourceManager = new Mock<IMediaSourceManager>();
++            mediaSourceManager
++                .Setup(x => x.GetLiveStream(It.IsAny<string>(), It.IsAny<CancellationToken>()))
++                .ReturnsAsync(sharedLiveSource);
++
++            var appHost = new Mock<IServerApplicationHost>();
++            appHost.Setup(x => x.GetSmartApiUrl(It.IsAny<HttpRequest>())).Returns("https://media.example.com");
++
++            var helper = CreateHelper(mediaSourceManager: mediaSourceManager.Object, appHost: appHost.Object);
++
++            var result = await helper.GetPlaybackInfo(new Movie(), null, Mock.Of<HttpRequest>(), liveStreamId: "live-1").ConfigureAwait(true);
++
++            Assert.Equal("https://media.example.com" + LiveStreamFilesPath, result.MediaSources[0].Path);
++
++            // The shared instance handed back by GetLiveStream must remain untouched; only the clone in the response may be rewritten.
++            Assert.Equal(LocalPath, sharedLiveSource.Path);
++        }
++
++        [Fact]
++        public async Task OpenMediaSource_RewritesReturnedLiveStreamPath()
++        {
++            var mediaSource = new MediaSourceInfo
++            {
++                Id = "abc",
++                Protocol = MediaProtocol.Http,
++                Path = "http://127.0.0.1:8096" + LiveStreamFilesPath,
++                LiveStreamId = "livestream-1"
++            };
++
++            var helper = CreateOpenMediaSourceHelper(mediaSource, "https://public.example.com");
++
++            var response = await helper.OpenMediaSource(new DefaultHttpContext(), new LiveStreamRequest()).ConfigureAwait(true);
++
++            Assert.Equal("https://public.example.com" + LiveStreamFilesPath, response.MediaSource.Path);
++        }
++
++        [Fact]
++        public async Task OpenMediaSource_ExternalDockerBridgeBehindReverseProxy_UsesPublishedUrl()
++        {
++            const string LocalPath = "http://172.23.0.5:8096" + LiveStreamFilesPath;
++
++            // Represents the instance MediaSourceManager keeps for its own bookkeeping; the helper never sees it
++            // and must not be able to affect it.
++            var localSource = new MediaSourceInfo
++            {
++                Id = "abc",
++                Protocol = MediaProtocol.Http,
++                Path = LocalPath,
++                LiveStreamId = "livestream-1"
++            };
++
++            var mediaSourceManager = new Mock<IMediaSourceManager>();
++            mediaSourceManager
++                .Setup(x => x.OpenLiveStream(It.IsAny<LiveStreamRequest>(), It.IsAny<CancellationToken>()))
++                .ReturnsAsync(() =>
++                {
++                    // Mirrors production: MediaSourceManager.OpenLiveStream hands back its own instance, so what the
++                    // helper mutates must be a deserialized copy, never localSource itself.
++                    var clone = JsonSerializer.Deserialize<MediaSourceInfo>(JsonSerializer.SerializeToUtf8Bytes(localSource))!;
++                    return new LiveStreamResponse(clone);
++                });
++
++            var appHost = new Mock<IServerApplicationHost>();
++            appHost.Setup(x => x.GetSmartApiUrl(It.IsAny<HttpRequest>())).Returns("https://jellyfin.example.com");
++
++            var helper = CreateHelper(mediaSourceManager: mediaSourceManager.Object, appHost: appHost.Object);
++
++            var response = await helper.OpenMediaSource(new DefaultHttpContext(), new LiveStreamRequest()).ConfigureAwait(true);
++
++            Assert.Equal("https://jellyfin.example.com" + LiveStreamFilesPath, response.MediaSource.Path);
++
++            // The mock now actually derives its response from localSource, so this assertion is meaningful:
++            // rewriting the returned clone must never mutate the object localSource represents.
++            Assert.Equal(LocalPath, localSource.Path);
++        }
++
++        [Fact]
++        public async Task OpenMediaSource_ForeignHostWithLiveStreamFilesRoute_PathUnchanged()
++        {
++            // A plugin or remote source can expose a path that happens to match the /LiveTv/LiveStreamFiles/
++            // route shape without actually being hosted by this server. Only opened streams (which always
++            // carry a LiveStreamId) are eligible for rewriting.
++            const string ForeignPath = "https://other-server:8096" + LiveStreamFilesPath;
++
++            var mediaSource = new MediaSourceInfo
++            {
++                Id = "abc",
++                Protocol = MediaProtocol.Http,
++                Path = ForeignPath
++            };
++
++            var helper = CreateOpenMediaSourceHelper(mediaSource, "https://media.example.com");
++
++            var response = await helper.OpenMediaSource(new DefaultHttpContext(), new LiveStreamRequest()).ConfigureAwait(true);
++
++            Assert.Equal(ForeignPath, response.MediaSource.Path);
++        }
++
++        [Theory]
++        [InlineData(MediaProtocol.Http, "http://192.168.1.50:5004/live/channel1.ts")]
++        [InlineData(MediaProtocol.File, "/media/livetv/buffer/abc/stream.ts")]
++        [InlineData(MediaProtocol.Http, "http://172.19.0.3:8096/Videos/abc/stream.ts")]
++        [InlineData(MediaProtocol.Http, "http://172.19.0.3:8096/library/movie.strm")]
++        public async Task OpenMediaSource_NotAPublishableLiveStreamFilesPath_PathUnchanged(MediaProtocol protocol, string path)
++        {
++            var mediaSource = new MediaSourceInfo
++            {
++                Id = "abc",
++                Protocol = protocol,
++                Path = path
++            };
++
++            var helper = CreateOpenMediaSourceHelper(mediaSource, "https://media.example.com");
++
++            var response = await helper.OpenMediaSource(new DefaultHttpContext(), new LiveStreamRequest()).ConfigureAwait(true);
++
++            Assert.Equal(path, response.MediaSource.Path);
++        }
++
++        [Fact]
++        public async Task OpenMediaSource_BaseUrlConfigured_RewritesWithBaseUrlPrefix()
++        {
++            var mediaSource = new MediaSourceInfo
++            {
++                Id = "abc",
++                Protocol = MediaProtocol.Http,
++                Path = "http://172.19.0.3:8096/jellyfin" + LiveStreamFilesPath,
++                LiveStreamId = "livestream-1"
++            };
++
++            var helper = CreateOpenMediaSourceHelper(mediaSource, "https://media.example.com/jellyfin", "/jellyfin");
++
++            var response = await helper.OpenMediaSource(new DefaultHttpContext(), new LiveStreamRequest()).ConfigureAwait(true);
++
++            Assert.Equal("https://media.example.com/jellyfin" + LiveStreamFilesPath, response.MediaSource.Path);
++        }
++
++        [Fact]
++        public async Task OpenMediaSource_BaseUrlSegmentMismatch_PathUnchanged()
++        {
++            const string LocalPath = "http://172.19.0.3:8096/jellyfin2" + LiveStreamFilesPath;
++
++            var mediaSource = new MediaSourceInfo
++            {
++                Id = "abc",
++                Protocol = MediaProtocol.Http,
++                Path = LocalPath
++            };
++
++            var helper = CreateOpenMediaSourceHelper(mediaSource, "https://media.example.com/jellyfin", "/jellyfin");
++
++            var response = await helper.OpenMediaSource(new DefaultHttpContext(), new LiveStreamRequest()).ConfigureAwait(true);
++
++            Assert.Equal(LocalPath, response.MediaSource.Path);
++        }
++
++        [Fact]
++        public async Task OpenMediaSource_ExplicitPortOverrideWithBaseUrl_RewritesToOverrideHostAndPort()
++        {
++            // Mirrors NetworkManager.GetBindAddress resolving a "internal=myhost:8097" override: the smart API
++            // URL carries an explicit non-default port alongside the configured BaseUrl.
++            var mediaSource = new MediaSourceInfo
++            {
++                Id = "abc",
++                Protocol = MediaProtocol.Http,
++                Path = "http://172.19.0.3:8096/jellyfin" + LiveStreamFilesPath,
++                LiveStreamId = "livestream-1"
++            };
++
++            var helper = CreateOpenMediaSourceHelper(mediaSource, "http://myhost:8097/jellyfin", "/jellyfin");
++
++            var response = await helper.OpenMediaSource(new DefaultHttpContext(), new LiveStreamRequest()).ConfigureAwait(true);
++
++            Assert.Equal("http://myhost:8097/jellyfin" + LiveStreamFilesPath, response.MediaSource.Path);
++        }
++
++        [Fact]
++        public async Task GetPlaybackInfo_TwoRequestsForSharedLiveStream_ReceiveIndependentSmartApiBases()
++        {
++            const string LocalPath = "http://172.19.0.3:8096" + LiveStreamFilesPath;
++
++            // Both requests resolve the same live stream; the manager hands back its own shared instance each time.
++            var sharedLiveSource = new MediaSourceInfo
++            {
++                Id = "abc",
++                Protocol = MediaProtocol.Http,
++                Path = LocalPath,
++                LiveStreamId = "livestream-1"
++            };
++
++            var mediaSourceManager = new Mock<IMediaSourceManager>();
++            mediaSourceManager
++                .Setup(x => x.GetLiveStream(It.IsAny<string>(), It.IsAny<CancellationToken>()))
++                .ReturnsAsync(sharedLiveSource);
++
++            var requestA = new DefaultHttpContext().Request;
++            var requestB = new DefaultHttpContext().Request;
++
++            var appHost = new Mock<IServerApplicationHost>();
++            appHost.Setup(x => x.GetSmartApiUrl(requestA)).Returns("https://a.example.com");
++            appHost.Setup(x => x.GetSmartApiUrl(requestB)).Returns("https://b.example.com");
++
++            var helper = CreateHelper(mediaSourceManager: mediaSourceManager.Object, appHost: appHost.Object);
++
++            var resultA = await helper.GetPlaybackInfo(new Movie(), null, requestA, liveStreamId: "live-1").ConfigureAwait(true);
++            var resultB = await helper.GetPlaybackInfo(new Movie(), null, requestB, liveStreamId: "live-1").ConfigureAwait(true);
++
++            Assert.Equal("https://a.example.com" + LiveStreamFilesPath, resultA.MediaSources[0].Path);
++            Assert.Equal("https://b.example.com" + LiveStreamFilesPath, resultB.MediaSources[0].Path);
++
++            // Neither request's rewrite may leak into the other's response or into the shared instance.
++            Assert.NotEqual(resultA.MediaSources[0].Path, resultB.MediaSources[0].Path);
++            Assert.Equal(LocalPath, sharedLiveSource.Path);
++        }
++
++        [Fact]
++        public async Task GetPlaybackInfo_AutoOpenLiveStreamFlow_MergedOpenedSourceHasRewrittenPath()
++        {
++            // Reproduces MediaInfoController.GetPostedPlaybackInfo's AutoOpenLiveStream branch (~line 220-246):
++            // it picks the RequiresOpening source out of GetPlaybackInfo's result, calls OpenMediaSource, then
++            // merges by replacing result.MediaSources with the opened source. Building a full controller fixture
++            // is impractical (it pulls in many unrelated dependencies), so this test drives the same two helper
++            // calls the controller makes and asserts the merged source is the rewritten one.
++            var itemId = Guid.NewGuid();
++            var sourceId = itemId.ToString("N", CultureInfo.InvariantCulture);
++
++            // The pre-open placeholder source carries a different local path than the one OpenMediaSource
++            // eventually returns, so the final assertion can prove the merge picked up the freshly opened
++            // source rather than the stale placeholder.
++            var requiresOpeningSource = new MediaSourceInfo
++            {
++                Id = sourceId,
++                Protocol = MediaProtocol.Http,
++                Path = "http://172.19.0.3:8096/LiveTv/LiveStreamFiles/placeholder/stream.ts",
++                RequiresOpening = true,
++                LiveStreamId = string.Empty
++            };
++
++            var openedSource = new MediaSourceInfo
++            {
++                Id = sourceId,
++                Protocol = MediaProtocol.Http,
++                Path = "http://172.19.0.3:8096" + LiveStreamFilesPath,
++                LiveStreamId = "livestream-1"
++            };
++
++            var mediaSourceManager = new Mock<IMediaSourceManager>();
++            mediaSourceManager
++                .Setup(x => x.GetPlaybackMediaSources(It.IsAny<BaseItem>(), It.IsAny<User>(), true, true, It.IsAny<CancellationToken>()))
++                .ReturnsAsync(new[] { requiresOpeningSource });
++            mediaSourceManager
++                .Setup(x => x.OpenLiveStream(It.IsAny<LiveStreamRequest>(), It.IsAny<CancellationToken>()))
++                .ReturnsAsync(() =>
++                {
++                    // MediaSourceManager.OpenLiveStream JSON-clones its internal MediaSourceInfo before returning
++                    // it (see Emby.Server.Implementations/Library/MediaSourceManager.cs:693-706); mirror that so
++                    // the in-place rewrite below can't be observed on openedSource itself.
++                    var clone = JsonSerializer.Deserialize<MediaSourceInfo>(JsonSerializer.SerializeToUtf8Bytes(openedSource))!;
++                    return new LiveStreamResponse(clone);
++                });
++
++            var appHost = new Mock<IServerApplicationHost>();
++            appHost.Setup(x => x.GetSmartApiUrl(It.IsAny<HttpRequest>())).Returns("https://media.example.com");
++
++            var helper = CreateHelper(mediaSourceManager: mediaSourceManager.Object, appHost: appHost.Object);
++
++            var info = await helper.GetPlaybackInfo(new Movie(), null, Mock.Of<HttpRequest>()).ConfigureAwait(true);
++
++            var mediaSource = info.MediaSources[0];
++            Assert.True(mediaSource.RequiresOpening);
++            var preOpenPath = mediaSource.Path;
++
++            var openStreamResult = await helper.OpenMediaSource(
++                new DefaultHttpContext(),
++                new LiveStreamRequest { OpenToken = mediaSource.OpenToken, ItemId = itemId }).ConfigureAwait(true);
++
++            // MediaInfoController.cs:245 - info.MediaSources = new[] { openStreamResult.MediaSource };
++            info.MediaSources = new[] { openStreamResult.MediaSource };
++
++            Assert.Equal("https://media.example.com" + LiveStreamFilesPath, info.MediaSources[0].Path);
++            Assert.NotEqual(preOpenPath, info.MediaSources[0].Path);
++
++            // The pristine OpenLiveStream response object must remain unrewritten; only the merged clone changed.
++            Assert.Equal("http://172.19.0.3:8096" + LiveStreamFilesPath, openedSource.Path);
++        }
++
++        [Theory]
++        [InlineData(
++            "https://media.example.com",
++            "http://172.19.0.3:8096" + LiveStreamFilesPath,
++            MediaProtocol.Http,
++            "",
++            "https://media.example.com" + LiveStreamFilesPath)]
++        [InlineData(
++            "https://media.example.com/",
++            "http://172.19.0.3:8096" + LiveStreamFilesPath + "?token=1",
++            MediaProtocol.Http,
++            "",
++            "https://media.example.com" + LiveStreamFilesPath + "?token=1")]
++        [InlineData(
++            "https://media.example.com",
++            "http://172.19.0.3:8096" + LiveStreamFilesPath + "#fragment",
++            MediaProtocol.Http,
++            "",
++            "https://media.example.com" + LiveStreamFilesPath)]
++        [InlineData(
++            "https://media.example.com",
++            "http://172.19.0.3:8096/jellyfin2" + LiveStreamFilesPath,
++            MediaProtocol.Http,
++            "/jellyfin",
++            null)]
++        [InlineData(
++            "https://media.example.com",
++            "/media/livetv/buffer/abc/stream.ts",
++            MediaProtocol.File,
++            "",
++            null)]
++        [InlineData(
++            "https://media.example.com",
++            "not a uri",
++            MediaProtocol.Http,
++            "",
++            null)]
++        public void GetPublishedLiveStreamPath_VariousInputs_ReturnsExpected(string smartApiUrl, string localPath, MediaProtocol protocol, string baseUrl, string? expected)
++        {
++            var result = MediaInfoHelper.GetPublishedLiveStreamPath(smartApiUrl, localPath, protocol, baseUrl);
++
++            Assert.Equal(expected, result);
++        }
++
++        private static MediaInfoHelper CreateOpenMediaSourceHelper(MediaSourceInfo mediaSource, string smartApiUrl, string baseUrl = "")
++        {
++            var mediaSourceManager = new Mock<IMediaSourceManager>();
++            mediaSourceManager
++                .Setup(x => x.OpenLiveStream(It.IsAny<LiveStreamRequest>(), It.IsAny<CancellationToken>()))
++                .ReturnsAsync(new LiveStreamResponse(mediaSource));
++
++            var appHost = new Mock<IServerApplicationHost>();
++            appHost.Setup(x => x.GetSmartApiUrl(It.IsAny<HttpRequest>())).Returns(smartApiUrl);
++
++            return CreateHelper(mediaSourceManager: mediaSourceManager.Object, appHost: appHost.Object, baseUrl: baseUrl);
++        }
+     }
+ }
+diff --git a/tests/Jellyfin.Networking.Tests/NetworkParseTests.cs b/tests/Jellyfin.Networking.Tests/NetworkParseTests.cs
+index 1f523f7f21..5f7a0efe8a 100644
+--- a/tests/Jellyfin.Networking.Tests/NetworkParseTests.cs
++++ b/tests/Jellyfin.Networking.Tests/NetworkParseTests.cs
+@@ -6,6 +6,7 @@ using Jellyfin.Networking.Manager;
+ using MediaBrowser.Common.Configuration;
+ using MediaBrowser.Common.Net;
+ using MediaBrowser.Model.Net;
++using Microsoft.AspNetCore.Http;
+ using Microsoft.Extensions.Configuration;
+ using Microsoft.Extensions.Logging;
+ using Microsoft.Extensions.Logging.Abstractions;
+@@ -493,5 +494,130 @@ namespace Jellyfin.Networking.Tests
+ 
+             Assert.Equal(result, interfaceToUse);
+         }
++
++        [Theory]
++        // Internal override with an explicit port.
++        [InlineData("192.168.1.1", "192.168.1.0/24=internal.jellyfin:8097", "internal.jellyfin", 8097)]
++        // External/all override with an explicit port.
++        [InlineData("8.8.8.8", "all=external.jellyfin:8097", "external.jellyfin", 8097)]
++        // Bracketed IPv6 override with an explicit port.
++        [InlineData("8.8.8.8", "all=[fd00:1234::1]:8097", "fd00:1234::1", 8097)]
++        // Bare IPv6 override without a port - must remain whole, not mangled by the extra colons.
++        [InlineData("8.8.8.8", "all=fd00:1234::1", "fd00:1234::1", null)]
++        // Full HTTPS URL override with an explicit port - the URL stays whole, port stays embedded.
++        [InlineData("8.8.8.8", "all=https://secure.jellyfin.org:8920", "https://secure.jellyfin.org:8920", null)]
++        // Hostname beginning with "http" is a hostname, not a URL scheme.
++        [InlineData("8.8.8.8", "all=http-proxy.lan:8097", "http-proxy.lan", 8097)]
++        // Literal "internal" keyword override (applies to every LAN subnet) with an explicit port.
++        [InlineData("192.168.1.1", "internal=myhost.internal:8097", "myhost.internal", 8097)]
++        // Literal "external" keyword override with an explicit port.
++        [InlineData("8.8.8.8", "external=myhost.external:9090", "myhost.external", 9090)]
++        public void GetBindAddress_PublishedServerOverride_ParsesHostAndPort(string source, string publishedServers, string expectedHost, int? expectedPort)
++        {
++            var conf = new NetworkConfiguration
++            {
++                LocalNetworkSubnets = new[] { "192.168.1.0/24" },
++                LocalNetworkAddresses = new[] { "eth16", "eth11" },
++                EnableIPv4 = true,
++                PublishedServerUriBySubnet = new[] { publishedServers }
++            };
++
++            NetworkManager.MockNetworkSettings = "192.168.1.208/24,-16,eth16|200.200.200.200/24,11,eth11";
++            var startupConf = new Mock<IConfiguration>();
++            using var nm = new NetworkManager(NetworkParseTests.GetMockConfig(conf), startupConf.Object, new NullLogger<NetworkManager>());
++            NetworkManager.MockNetworkSettings = string.Empty;
++
++            var intf = nm.GetBindAddress(IPAddress.Parse(source), out int? port);
++
++            Assert.Equal(expectedHost, intf);
++            Assert.Equal(expectedPort, port);
++        }
++
++        /// <summary>
++        /// Regression coverage for <c>IServerApplicationHost.GetApiUrlForLocalAccess()</c>, which calls
++        /// <see cref="NetworkManager.GetBindAddress(IPAddress, out int?, bool)"/> with a null source address.
++        /// Published server URL overrides are only matched when a source address is supplied
++        /// (<c>MatchesPublishedServerUrl</c> requires it), so a null source must never come back as a published
++        /// CLI/dashboard URL - it must fall back to a plain local bind address.
++        /// </summary>
++        [Fact]
++        public void GetBindAddress_NullSource_DoesNotApplyPublishedServerOverride()
++        {
++            var conf = new NetworkConfiguration
++            {
++                LocalNetworkSubnets = new[] { "192.168.1.0/24" },
++                LocalNetworkAddresses = new[] { "eth16", "eth11" },
++                EnableIPv4 = true,
++                PublishedServerUriBySubnet = new[] { "all=http://published.example.com" }
++            };
++
++            NetworkManager.MockNetworkSettings = "192.168.1.208/24,-16,eth16|200.200.200.200/24,11,eth11";
++            var startupConf = new Mock<IConfiguration>();
++            using var nm = new NetworkManager(NetworkParseTests.GetMockConfig(conf), startupConf.Object, new NullLogger<NetworkManager>());
++            NetworkManager.MockNetworkSettings = string.Empty;
++
++            var result = nm.GetBindAddress((IPAddress?)null, out var port);
++
++            Assert.Equal("192.168.1.208", result);
++            Assert.Null(port);
++        }
++
++        /// <summary>
++        /// <see cref="NetworkManager.GetBindAddress(HttpRequest, out int?)"/> is the piece of request-host
++        /// normalization that a request-host-aware smart API URL policy relies on: it resolves the bind address
++        /// from the request's host and falls back to the request's own port when no override applies.
++        /// </summary>
++        [Fact]
++        public void GetBindAddress_HttpRequestOverload_FallsBackToRequestPortWhenNoOverride()
++        {
++            var conf = new NetworkConfiguration
++            {
++                LocalNetworkSubnets = new[] { "192.168.1.0/24" },
++                LocalNetworkAddresses = new[] { "eth16", "eth11" },
++                EnableIPv4 = true
++            };
++
++            NetworkManager.MockNetworkSettings = "192.168.1.208/24,-16,eth16|200.200.200.200/24,11,eth11";
++            var startupConf = new Mock<IConfiguration>();
++            using var nm = new NetworkManager(NetworkParseTests.GetMockConfig(conf), startupConf.Object, new NullLogger<NetworkManager>());
++            NetworkManager.MockNetworkSettings = string.Empty;
++
++            var httpContext = new DefaultHttpContext();
++            httpContext.Request.Host = new HostString("192.168.1.1", 34567);
++
++            var result = nm.GetBindAddress(httpContext.Request, out var port);
++
++            Assert.Equal("192.168.1.208", result);
++            Assert.Equal(34567, port);
++        }
++
++        /// <summary>
++        /// Ordering check: a dashboard published-server-URL override's explicit port takes precedence over the
++        /// request's own port, even though the request's host chose which override subnet matched.
++        /// </summary>
++        [Fact]
++        public void GetBindAddress_HttpRequestOverload_PublishedOverridePortWinsOverRequestPort()
++        {
++            var conf = new NetworkConfiguration
++            {
++                LocalNetworkSubnets = new[] { "192.168.1.0/24" },
++                LocalNetworkAddresses = new[] { "eth16", "eth11" },
++                EnableIPv4 = true,
++                PublishedServerUriBySubnet = new[] { "internal=myhost.internal:9000" }
++            };
++
++            NetworkManager.MockNetworkSettings = "192.168.1.208/24,-16,eth16|200.200.200.200/24,11,eth11";
++            var startupConf = new Mock<IConfiguration>();
++            using var nm = new NetworkManager(NetworkParseTests.GetMockConfig(conf), startupConf.Object, new NullLogger<NetworkManager>());
++            NetworkManager.MockNetworkSettings = string.Empty;
++
++            var httpContext = new DefaultHttpContext();
++            httpContext.Request.Host = new HostString("192.168.1.1", 34567);
++
++            var result = nm.GetBindAddress(httpContext.Request, out var port);
++
++            Assert.Equal("myhost.internal", result);
++            Assert.Equal(9000, port);
++        }
+     }
+ }
