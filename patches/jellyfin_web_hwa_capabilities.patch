@@ -1,0 +1,334 @@
+diff --git a/src/apps/dashboard/features/playback/api/useMediaEncoderCapabilities.ts b/src/apps/dashboard/features/playback/api/useMediaEncoderCapabilities.ts
+new file mode 100644
+index 0000000000..f495da80fc
+--- /dev/null
++++ b/src/apps/dashboard/features/playback/api/useMediaEncoderCapabilities.ts
+@@ -0,0 +1,38 @@
++import type { Api } from '@jellyfin/sdk';
++import { useQuery } from '@tanstack/react-query';
++import type { AxiosRequestConfig } from 'axios';
++import { useApi } from 'hooks/useApi';
++
++import type { MediaEncoderCapabilities } from '../types/mediaEncoderCapabilities';
++
++export const MEDIA_ENCODER_CAPABILITIES_QUERY_KEY = 'MediaEncoderCapabilities';
++
++const fetchMediaEncoderCapabilities = async (
++    api: Api,
++    options?: AxiosRequestConfig
++): Promise<MediaEncoderCapabilities> => {
++    const response = await api.axiosInstance.get<MediaEncoderCapabilities>(
++        '/System/MediaEncoder/Capabilities',
++        {
++            ...options,
++            baseURL: api.basePath,
++            headers: {
++                ...options?.headers,
++                Authorization: api.authorizationHeader
++            }
++        }
++    );
++
++    return response.data;
++};
++
++export const useMediaEncoderCapabilities = () => {
++    const { api } = useApi();
++
++    return useQuery({
++        queryKey: [MEDIA_ENCODER_CAPABILITIES_QUERY_KEY],
++        queryFn: ({ signal }) => fetchMediaEncoderCapabilities(api!, { signal }),
++        enabled: !!api,
++        refetchOnMount: false
++    });
++};
+diff --git a/src/apps/dashboard/features/playback/types/mediaEncoderCapabilities.ts b/src/apps/dashboard/features/playback/types/mediaEncoderCapabilities.ts
+new file mode 100644
+index 0000000000..e6134922fd
+--- /dev/null
++++ b/src/apps/dashboard/features/playback/types/mediaEncoderCapabilities.ts
+@@ -0,0 +1,14 @@
++export interface HardwareEncodingCapabilities {
++    H264: boolean;
++    Hevc: boolean;
++    Av1: boolean;
++}
++
++export interface MediaEncoderCapabilities {
++    Hwaccels: string[];
++    Decoders: string[];
++    Encoders: string[];
++    AvailableAccelerationTypes: string[];
++    HardwareDecodingCodecs: Record<string, string[]>;
++    HardwareEncoding: Record<string, HardwareEncodingCapabilities>;
++}
+diff --git a/src/apps/dashboard/routes/playback/transcoding.tsx b/src/apps/dashboard/routes/playback/transcoding.tsx
+index 482b34b6ef..c1d36799a3 100644
+--- a/src/apps/dashboard/routes/playback/transcoding.tsx
++++ b/src/apps/dashboard/routes/playback/transcoding.tsx
+@@ -28,10 +28,22 @@ import { getConfigurationApi } from '@jellyfin/sdk/lib/utils/api/configuration-a
+ import { queryClient } from 'utils/query/queryClient';
+ import { ActionData } from 'types/actionData';
+ import { CODECS, HEVC_REXT_DECODING_TYPES, HEVC_VP9_HW_DECODING_TYPES } from 'apps/dashboard/features/playback/constants/codecs';
++import { useMediaEncoderCapabilities } from 'apps/dashboard/features/playback/api/useMediaEncoderCapabilities';
+ import SimpleAlert from 'components/SimpleAlert';
+ 
+ const CONFIG_KEY = 'encoding';
+ 
++const HWA_MENU_OPTIONS: { value: string; label: string }[] = [
++    { value: 'none', label: 'None' },
++    { value: 'amf', label: 'AMD AMF' },
++    { value: 'nvenc', label: 'Nvidia NVENC' },
++    { value: 'qsv', label: 'Intel Quicksync (QSV)' },
++    { value: 'vaapi', label: 'Video Acceleration API (VAAPI)' },
++    { value: 'rkmpp', label: 'Rockchip MPP (RKMPP)' },
++    { value: 'videotoolbox', label: 'Apple VideoToolBox' },
++    { value: 'v4l2m2m', label: 'Video4Linux2 (V4L2)' }
++];
++
+ export const action = async ({ request }: ActionFunctionArgs) => {
+     const api = ServerConnections.getCurrentApi();
+     if (!api) throw new Error('No Api instance available');
+@@ -52,6 +64,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
+ 
+ export const Component = () => {
+     const { data: initialConfig, isPending, isError } = useNamedConfiguration<EncodingOptions>(CONFIG_KEY);
++    const { data: capabilities } = useMediaEncoderCapabilities();
+     const [ config, setConfig ] = useState<EncodingOptions | null>(null);
+     const navigation = useNavigation();
+     const actionData = useActionData() as ActionData | undefined;
+@@ -155,6 +168,34 @@ export const Component = () => {
+         CODECS.filter(codec => codec.types.includes(hardwareAccelType))
+     ), [hardwareAccelType]);
+ 
++    const supportedDecodeCodecs = useMemo(() => {
++        const list = capabilities?.HardwareDecodingCodecs?.[hardwareAccelType];
++        return new Set(list ?? []);
++    }, [capabilities, hardwareAccelType]);
++
++    const availableAccelerationTypes = useMemo(() => (
++        new Set(capabilities?.AvailableAccelerationTypes ?? [])
++    ), [capabilities]);
++
++    const isAccelerationTypeDetected = hardwareAccelType === 'none'
++        || !capabilities
++        || availableAccelerationTypes.has(hardwareAccelType);
++
++    const hardwareEncoding = capabilities?.HardwareEncoding?.[hardwareAccelType];
++
++    const enableAllSupportedDecoders = useCallback(() => {
++        if (!config) return;
++
++        const supported = availableCodecs
++            .map(codec => codec.codec)
++            .filter(codec => supportedDecodeCodecs.has(codec));
++
++        setConfig({
++            ...config,
++            HardwareDecodingCodecs: supported
++        });
++    }, [availableCodecs, config, supportedDecodeCodecs]);
++
+     if (isPending || !config) return <Loading />;
+ 
+     return (
+@@ -190,19 +231,33 @@ export const Component = () => {
+                                 value={config.HardwareAccelerationType}
+                                 onChange={onConfigChange}
+                                 helperText={(
+-                                    <Link href='https://jellyfin.org/docs/general/administration/hardware-acceleration' target='_blank'>
+-                                        {globalize.translate('LabelHardwareAccelerationTypeHelp')}
+-                                    </Link>
++                                    <>
++                                        <Link href='https://jellyfin.org/docs/general/administration/hardware-acceleration' target='_blank'>
++                                            {globalize.translate('LabelHardwareAccelerationTypeHelp')}
++                                        </Link>
++                                        {!isAccelerationTypeDetected && (
++                                            <Box component='span' display='block' sx={{ mt: 1 }}>
++                                                {globalize.translate('HardwareAccelerationTypeUnavailable')}
++                                            </Box>
++                                        )}
++                                    </>
+                                 )}
+                             >
+-                                <MenuItem value='none'>{globalize.translate('None')}</MenuItem>
+-                                <MenuItem value='amf'>AMD AMF</MenuItem>
+-                                <MenuItem value='nvenc'>Nvidia NVENC</MenuItem>
+-                                <MenuItem value='qsv'>Intel Quicksync (QSV)</MenuItem>
+-                                <MenuItem value='vaapi'>Video Acceleration API (VAAPI)</MenuItem>
+-                                <MenuItem value='rkmpp'>Rockchip MPP (RKMPP)</MenuItem>
+-                                <MenuItem value='videotoolbox'>Apple VideoToolBox</MenuItem>
+-                                <MenuItem value='v4l2m2m'>Video4Linux2 (V4L2)</MenuItem>
++                                {HWA_MENU_OPTIONS.map(option => (
++                                    <MenuItem
++                                        key={option.value}
++                                        value={option.value}
++                                        disabled={
++                                            option.value !== 'none'
++                                            && !!capabilities
++                                            && !availableAccelerationTypes.has(option.value)
++                                        }
++                                    >
++                                        {option.value === 'none'
++                                            ? globalize.translate('None')
++                                            : option.label}
++                                    </MenuItem>
++                                ))}
+                             </TextField>
+ 
+                             {hardwareAccelType === 'vaapi' && (
+@@ -227,21 +282,46 @@ export const Component = () => {
+ 
+                             {hardwareAccelType !== 'none' && (
+                                 <>
+-                                    <Typography variant='h3'>{globalize.translate('LabelEnableHardwareDecodingFor')}</Typography>
++                                    <Stack
++                                        direction='row'
++                                        spacing={2}
++                                        alignItems='center'
++                                        justifyContent='space-between'
++                                        flexWrap='wrap'
++                                    >
++                                        <Typography variant='h3'>{globalize.translate('LabelEnableHardwareDecodingFor')}</Typography>
++                                        {capabilities && (
++                                            <Button
++                                                type='button'
++                                                size='small'
++                                                variant='outlined'
++                                                onClick={enableAllSupportedDecoders}
++                                            >
++                                                {globalize.translate('EnableAllSupportedHardwareDecoders')}
++                                            </Button>
++                                        )}
++                                    </Stack>
+                                     <FormGroup>
+-                                        {availableCodecs.map(codec => (
+-                                            <FormControlLabel
+-                                                key={codec.name}
+-                                                label={codec.name}
+-                                                control={
+-                                                    <Checkbox
+-                                                        name={codec.codec}
+-                                                        checked={(config.HardwareDecodingCodecs || []).includes(codec.codec)}
+-                                                        onChange={onCodecChange}
+-                                                    />
+-                                                }
+-                                            />
+-                                        ))}
++                                        {availableCodecs.map(codec => {
++                                            const isSupported = !capabilities || supportedDecodeCodecs.has(codec.codec);
++
++                                            return (
++                                                <FormControlLabel
++                                                    key={codec.name}
++                                                    label={isSupported
++                                                        ? codec.name
++                                                        : `${codec.name} (${globalize.translate('HardwareDecoderNotDetected')})`}
++                                                    control={
++                                                        <Checkbox
++                                                            name={codec.codec}
++                                                            checked={(config.HardwareDecodingCodecs || []).includes(codec.codec)}
++                                                            onChange={onCodecChange}
++                                                            disabled={!isSupported}
++                                                        />
++                                                    }
++                                                />
++                                            );
++                                        })}
+ 
+                                         {HEVC_VP9_HW_DECODING_TYPES.includes(hardwareAccelType) && (
+                                             <FormControlLabel
+@@ -251,6 +331,7 @@ export const Component = () => {
+                                                         name={'EnableDecodingColorDepth10Hevc'}
+                                                         checked={config.EnableDecodingColorDepth10Hevc}
+                                                         onChange={onCheckboxChange}
++                                                        disabled={!!capabilities && !supportedDecodeCodecs.has('hevc')}
+                                                     />
+                                                 }
+                                             />
+@@ -264,6 +345,7 @@ export const Component = () => {
+                                                         name={'EnableDecodingColorDepth10Vp9'}
+                                                         checked={config.EnableDecodingColorDepth10Vp9}
+                                                         onChange={onCheckboxChange}
++                                                        disabled={!!capabilities && !supportedDecodeCodecs.has('vp9')}
+                                                     />
+                                                 }
+                                             />
+@@ -277,6 +359,7 @@ export const Component = () => {
+                                                         name={'EnableDecodingColorDepth10HevcRext'}
+                                                         checked={config.EnableDecodingColorDepth10HevcRext}
+                                                         onChange={onCheckboxChange}
++                                                        disabled={!!capabilities && !supportedDecodeCodecs.has('hevc')}
+                                                     />
+                                                 }
+                                             />
+@@ -290,6 +373,7 @@ export const Component = () => {
+                                                         name={'EnableDecodingColorDepth12HevcRext'}
+                                                         checked={config.EnableDecodingColorDepth12HevcRext}
+                                                         onChange={onCheckboxChange}
++                                                        disabled={!!capabilities && !supportedDecodeCodecs.has('hevc')}
+                                                     />
+                                                 }
+                                             />
+@@ -381,22 +465,44 @@ export const Component = () => {
+                                 <FormHelperText>{globalize.translate('EncodingFormatHelp')}</FormHelperText>
+                                 <FormGroup>
+                                     <FormControlLabel
+-                                        label={globalize.translate('AllowHevcEncoding')}
++                                        label={
++                                            hardwareAccelType !== 'none'
++                                            && hardwareEncoding
++                                            && !hardwareEncoding.Hevc
++                                                ? `${globalize.translate('AllowHevcEncoding')} (${globalize.translate('HardwareEncoderNotDetected')})`
++                                                : globalize.translate('AllowHevcEncoding')
++                                        }
+                                         control={
+                                             <Checkbox
+                                                 name='AllowHevcEncoding'
+                                                 checked={config.AllowHevcEncoding}
+                                                 onChange={onCheckboxChange}
++                                                disabled={
++                                                    hardwareAccelType !== 'none'
++                                                    && !!hardwareEncoding
++                                                    && !hardwareEncoding.Hevc
++                                                }
+                                             />
+                                         }
+                                     />
+                                     <FormControlLabel
+-                                        label={globalize.translate('AllowAv1Encoding')}
++                                        label={
++                                            hardwareAccelType !== 'none'
++                                            && hardwareEncoding
++                                            && !hardwareEncoding.Av1
++                                                ? `${globalize.translate('AllowAv1Encoding')} (${globalize.translate('HardwareEncoderNotDetected')})`
++                                                : globalize.translate('AllowAv1Encoding')
++                                        }
+                                         control={
+                                             <Checkbox
+                                                 name='AllowAv1Encoding'
+                                                 checked={config.AllowAv1Encoding}
+                                                 onChange={onCheckboxChange}
++                                                disabled={
++                                                    hardwareAccelType !== 'none'
++                                                    && !!hardwareEncoding
++                                                    && !hardwareEncoding.Av1
++                                                }
+                                             />
+                                         }
+                                     />
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+index c18c3ebd40..5103615685 100755
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -737,6 +737,10 @@
+     "LabelEnableAudioVbr": "Enable VBR audio encoding",
+     "LabelEnableAudioVbrHelp": "Variable bitrate offers better quality to average bitrate ratio, but in some rare cases may cause buffering and compatibility issues.",
+     "LabelEnableHardwareDecodingFor": "Enable hardware decoding for",
++    "EnableAllSupportedHardwareDecoders": "Enable all supported",
++    "HardwareDecoderNotDetected": "Not detected in FFmpeg on this server",
++    "HardwareAccelerationTypeUnavailable": "This hardware acceleration type was not detected by FFmpeg on this server. A restart may be required after changing drivers or the FFmpeg path.",
++    "HardwareEncoderNotDetected": "Corresponding hardware encoder not detected in FFmpeg",
+     "LabelEnableHttps": "Enable HTTPS",
+     "LabelEnableHttpsHelp": "Listen on the configured HTTPS port. A valid certificate must also be supplied for this to take effect.",
+     "LabelEnableIP4": "Enable IPv4",
