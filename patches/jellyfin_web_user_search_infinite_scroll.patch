@@ -1,0 +1,266 @@
+diff --git a/src/apps/stable/features/search/api/useSearchItems.ts b/src/apps/stable/features/search/api/useSearchItems.ts
+index 5a23dcb63a..81e72ce47f 100644
+--- a/src/apps/stable/features/search/api/useSearchItems.ts
++++ b/src/apps/stable/features/search/api/useSearchItems.ts
+@@ -1,9 +1,10 @@
+ import { BaseItemKind } from '@jellyfin/sdk/lib/generated-client/models/base-item-kind';
+ import type { BaseItemDto } from '@jellyfin/sdk/lib/generated-client/models/base-item-dto';
+ import { CollectionType } from '@jellyfin/sdk/lib/generated-client/models/collection-type';
+-import { useQuery } from '@tanstack/react-query';
++import { useInfiniteQuery } from '@tanstack/react-query';
+ import { CardShape } from 'components/cardbuilder/utils/shape';
+ import { useApi } from '../../../../../hooks/useApi';
++import * as userSettings from 'scripts/settings/userSettings';
+ import { addSection, getCardOptionsFromType, getItemTypesFromCollectionType, getTitleFromType, isLivetv, isMovies, isMusic, isTVShows, sortSections } from '../utils/search';
+ import { useArtistsSearch } from './useArtistsSearch';
+ import { usePeopleSearch } from './usePeopleSearch';
+@@ -15,6 +16,50 @@ import { fetchItemsByType } from './fetchItemsByType';
+ import { useProgramsSearch } from './useProgramsSearch';
+ import { LIVETV_CARD_OPTIONS } from '../constants/liveTvCardOptions';
+ 
++const DEFAULT_SEARCH_LIMIT = 800;
++const MIN_INFINITE_PAGE_SIZE = 40;
++
++const getSearchPageSize = (infiniteScroll: boolean) => {
++    if (!infiniteScroll) {
++        return DEFAULT_SEARCH_LIMIT;
++    }
++
++    const libraryPageSize = userSettings.libraryPageSize();
++    if (libraryPageSize > 0 && libraryPageSize < MIN_INFINITE_PAGE_SIZE) {
++        return MIN_INFINITE_PAGE_SIZE;
++    }
++
++    return libraryPageSize || 100;
++};
++
++const dedupeItems = (items: BaseItemDto[]) => {
++    const seen = new Set<string>();
++    const result: BaseItemDto[] = [];
++
++    for (const item of items) {
++        const id = item.Id;
++        if (!id || seen.has(id)) {
++            continue;
++        }
++
++        seen.add(id);
++        result.push(item);
++    }
++
++    return result;
++};
++
++const buildTypedSections = (
++    sections: Section[],
++    itemTypes: BaseItemKind[],
++    items: BaseItemDto[]
++) => {
++    for (const itemType of itemTypes) {
++        const typedItems = items.filter(item => item.Type === itemType);
++        addSection(sections, getTitleFromType(itemType), typedItems, getCardOptionsFromType(itemType));
++    }
++};
++
+ export const useSearchItems = (
+     parentId?: string,
+     collectionType?: CollectionType,
+@@ -28,6 +73,8 @@ export const useSearchItems = (
+     const { data: liveTvSections, isPending: isLiveTvPending } = useLiveTvSearch(parentId, collectionType, searchTerm);
+     const { api, user } = useApi();
+     const userId = user?.Id;
++    const infiniteScroll = userSettings.enableInfiniteScroll();
++    const pageSize = getSearchPageSize(infiniteScroll);
+ 
+     const isArtistsEnabled = !isArtistsPending || (collectionType && !isMusic(collectionType));
+     const isPeopleEnabled = !isPeoplePending || (collectionType && !isMovies(collectionType) && !isTVShows(collectionType));
+@@ -36,11 +83,59 @@ export const useSearchItems = (
+     const isProgramsEnabled = !isProgramsPending || collectionType;
+     const isLiveTvEnabled = !isLiveTvPending || !collectionType || !isLivetv(collectionType);
+ 
+-    return useQuery({
+-        queryKey: ['Search', 'Items', collectionType, parentId, searchTerm],
+-        queryFn: async ({ signal }) => {
++    return useInfiniteQuery({
++        queryKey: ['Search', 'Items', collectionType, parentId, searchTerm, pageSize, infiniteScroll],
++        initialPageParam: 0,
++        queryFn: async ({ pageParam, signal }) => {
+             if (liveTvSections && collectionType && isLivetv(collectionType)) {
+-                return sortSections(liveTvSections);
++                return {
++                    isLiveTv: true as const,
++                    sections: sortSections(liveTvSections),
++                    items: [] as BaseItemDto[],
++                    itemCount: 0
++                };
++            }
++
++            const itemTypes: BaseItemKind[] = getItemTypesFromCollectionType(collectionType);
++
++            const searchData = await fetchItemsByType(
++                api!,
++                userId,
++                {
++                    includeItemTypes: itemTypes,
++                    parentId,
++                    searchTerm,
++                    isMissing: itemTypes.includes(BaseItemKind.Episode) && !user?.Configuration?.DisplayMissingEpisodes ? false : undefined,
++                    startIndex: pageParam,
++                    limit: pageSize
++                },
++                { signal }
++            );
++
++            const items = searchData.Items ?? [];
++
++            return {
++                isLiveTv: false as const,
++                sections: undefined as Section[] | undefined,
++                items,
++                itemCount: items.length
++            };
++        },
++        getNextPageParam: (lastPage, _pages, lastPageParam) => {
++            if (!infiniteScroll || lastPage.isLiveTv) {
++                return undefined;
++            }
++
++            if (lastPage.itemCount < pageSize) {
++                return undefined;
++            }
++
++            return lastPageParam + pageSize;
++        },
++        select: (data) => {
++            const firstPage = data.pages[0];
++            if (firstPage?.isLiveTv && firstPage.sections) {
++                return firstPage.sections;
+             }
+ 
+             const sections: Section[] = [];
+@@ -65,32 +160,9 @@ export const useSearchItems = (
+                 showParentTitle: true
+             });
+ 
+-            const itemTypes: BaseItemKind[] = getItemTypesFromCollectionType(collectionType);
+-
+-            const searchData = await fetchItemsByType(
+-                api!,
+-                userId,
+-                {
+-                    includeItemTypes: itemTypes,
+-                    parentId,
+-                    searchTerm,
+-                    isMissing: itemTypes.includes(BaseItemKind.Episode) && !user?.Configuration?.DisplayMissingEpisodes ? false : undefined,
+-                    limit: 800
+-                },
+-                { signal }
+-            );
+-
+-            if (searchData.Items) {
+-                for (const itemType of itemTypes) {
+-                    const items: BaseItemDto[] = [];
+-                    for (const searchItem of searchData.Items) {
+-                        if (searchItem.Type === itemType) {
+-                            items.push(searchItem);
+-                        }
+-                    }
+-                    addSection(sections, getTitleFromType(itemType), items, getCardOptionsFromType(itemType));
+-                }
+-            }
++            const itemTypes = getItemTypesFromCollectionType(collectionType);
++            const allItems = dedupeItems(data.pages.flatMap(page => page.items));
++            buildTypedSections(sections, itemTypes, allItems);
+ 
+             return sortSections(sections);
+         },
+diff --git a/src/apps/stable/features/search/components/SearchResults.tsx b/src/apps/stable/features/search/components/SearchResults.tsx
+index ec20884a26..79f7e7590c 100644
+--- a/src/apps/stable/features/search/components/SearchResults.tsx
++++ b/src/apps/stable/features/search/components/SearchResults.tsx
+@@ -1,4 +1,4 @@
+-import React, { type FC } from 'react';
++import React, { type FC, useEffect } from 'react';
+ import { useSearchItems } from '../api/useSearchItems';
+ import { useSeerrSearch } from '../api/useSeerrSearch';
+ import globalize from 'lib/globalize';
+@@ -9,6 +9,7 @@ import { CardShape } from 'components/cardbuilder/utils/shape';
+ import { CollectionType } from '@jellyfin/sdk/lib/generated-client/models/collection-type';
+ import { Section } from '../types';
+ import { Link } from 'react-router-dom';
++import * as userSettings from 'scripts/settings/userSettings';
+ 
+ interface SearchResultsProps {
+     parentId?: string;
+@@ -25,10 +26,49 @@ const SearchResults: FC<SearchResultsProps> = ({
+     query
+ }) => {
+     const trimmedQuery = query?.trim();
+-    const { data, isPending } = useSearchItems(parentId, collectionType, trimmedQuery);
++    const {
++        data,
++        isPending,
++        fetchNextPage,
++        hasNextPage,
++        isFetchingNextPage
++    } = useSearchItems(parentId, collectionType, trimmedQuery);
+     const { data: seerrData, isPending: isSeerrPending } = useSeerrSearch(trimmedQuery);
+     const seerrItems = (seerrData?.items || []).filter(item => item.canRequest);
+ 
++    useEffect(() => {
++        if (!userSettings.enableInfiniteScroll()) {
++            return;
++        }
++
++        const onScroll = () => {
++            if (!hasNextPage || isFetchingNextPage) {
++                return;
++            }
++
++            const scrollTop = window.scrollY || window.pageYOffset;
++            const scrollHeight = document.documentElement.scrollHeight || document.body.scrollHeight;
++            const clientHeight = document.documentElement.clientHeight || window.innerHeight;
++            const scrollable = scrollHeight - clientHeight;
++
++            if (scrollable <= 0) {
++                return;
++            }
++
++            const scrollPercentage = (scrollTop / scrollable) * 100;
++            if (scrollPercentage >= 95) {
++                void fetchNextPage();
++            }
++        };
++
++        window.addEventListener('scroll', onScroll, { passive: true });
++        onScroll();
++
++        return () => {
++            window.removeEventListener('scroll', onScroll);
++        };
++    }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
++
+     if (isPending) return <Loading />;
+ 
+     if (!data?.length && !seerrItems.length && !isSeerrPending) {
+@@ -72,6 +112,7 @@ const SearchResults: FC<SearchResultsProps> = ({
+             {!isSeerrPending && seerrItems.length > 0 && (
+                 <SeerrRequestResults items={seerrItems} />
+             )}
++            {isFetchingNextPage && <Loading />}
+         </div>
+     );
+ };
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+index 26eaff192d..ec207a1695 100755
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -308,7 +308,7 @@
+     "EnableHi10p": "Enable H.264 High 10 Profile",
+     "EnableHi10pHelp": "Enable to avoid transcoding H.264 10-bit videos. Disable this option if the video displays blank frames.",
+     "EnableInfiniteScroll": "Enable infinite scroll",
+-    "EnableInfiniteScrollHelp": "Automatically load more items when scrolling near the bottom of library pages.",
++    "EnableInfiniteScrollHelp": "Automatically load more items when scrolling near the bottom of library and search pages.",
+     "EnableLibrary": "Enable the library",
+     "EnableLibraryHelp": "Disabling the library will hide it from all user views.",
+     "EnableNextVideoInfoOverlay": "Show next video info during playback",

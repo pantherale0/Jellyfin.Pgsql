@@ -141,6 +141,16 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             entity.HasIndex(e => e.DeviceId)
                 .HasFilter("\"DeviceId\" IS NOT NULL");
         });
+
+        var tokenMatch = typeof(Jellyfin.Plugin.Pgsql.Search.PgSearchDbFunctions)
+            .GetMethod(
+                nameof(Jellyfin.Plugin.Pgsql.Search.PgSearchDbFunctions.TokenLevenshteinMatch),
+                [typeof(string), typeof(string), typeof(int)]);
+        if (tokenMatch is not null)
+        {
+            modelBuilder.HasDbFunction(tokenMatch)
+                .HasName("jellyfin_token_levenshtein_match");
+        }
     }
 
     /// <inheritdoc/>
