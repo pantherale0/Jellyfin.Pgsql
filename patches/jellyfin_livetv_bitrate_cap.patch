@@ -1,0 +1,83 @@
+# Cap Live TV transcode target bitrate at source bitrate.
+# Codec-efficiency scaling (HEVC→H.264) was raising Live TV targets above source
+# (e.g. 20 Mbps → ~30 Mbps via FallbackMaxStreamingBitrate), hurting realtime encode.
+#
+diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
+index 847f4cf187..21fd2df67e 100644
+--- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
++++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
+@@ -2714,6 +2714,17 @@ namespace MediaBrowser.Controller.MediaEncoding
+                     {
+                         bitrate = Math.Min(bitrate.Value, request.VideoBitRate.Value);
+                     }
++
++                    // Live TV: never target above the known source bitrate when not upscaling.
++                    // Codec-efficiency scaling (e.g. HEVC→H.264 ≈1.67×) can push the target above
++                    // source. That does not recover quality from an already-lossy live encode and
++                    // makes realtime software/hardware encode harder — often dropping below 1.0×.
++                    if (!isUpscaling
++                        && !string.IsNullOrWhiteSpace(request.LiveStreamId)
++                        && videoStream.BitRate.HasValue)
++                    {
++                        bitrate = Math.Min(bitrate.Value, videoStream.BitRate.Value);
++                    }
+                 }
+             }
+ 
+diff --git a/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs b/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs
+index 71b6551d0f..6910b28869 100644
+--- a/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs
++++ b/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs
+@@ -223,6 +223,52 @@ public class EncodingHelperTests
+         Assert.Contains("-ar " + expectedSampleRate, args, StringComparison.Ordinal);
+     }
+ 
++    [Fact]
++    public void GetVideoBitrateParamValue_LiveTvHevcToH264_DoesNotExceedSourceBitrate()
++    {
++        var helper = CreateHelper();
++        var videoStream = new MediaStream
++        {
++            Type = MediaStreamType.Video,
++            Codec = "hevc",
++            BitRate = 20_000_000,
++            Width = 1920,
++            Height = 1080
++        };
++        var request = new StreamingRequestDto
++        {
++            LiveStreamId = "live-1",
++            VideoBitRate = 30_000_000
++        };
++
++        var bitrate = helper.GetVideoBitrateParamValue(request, videoStream, "h264");
++
++        Assert.Equal(20_000_000, bitrate);
++    }
++
++    [Fact]
++    public void GetVideoBitrateParamValue_VodHevcToH264_StillAppliesCodecScaleUp()
++    {
++        var helper = CreateHelper();
++        var videoStream = new MediaStream
++        {
++            Type = MediaStreamType.Video,
++            Codec = "hevc",
++            BitRate = 20_000_000,
++            Width = 1920,
++            Height = 1080
++        };
++        var request = new StreamingRequestDto
++        {
++            VideoBitRate = 30_000_000
++        };
++
++        var bitrate = helper.GetVideoBitrateParamValue(request, videoStream, "h264");
++
++        // ScaleBitrate raises HEVC→H.264 (~1.67×) then caps at the requested max.
++        Assert.Equal(30_000_000, bitrate);
++    }
++
+     private static EncodingJobInfo BuildAudioState(string audioCodec, int requestedSampleRate)
+     {
+         var audio = new MediaStream { Index = 0, Type = MediaStreamType.Audio, Codec = "flac", SampleRate = 96000 };
