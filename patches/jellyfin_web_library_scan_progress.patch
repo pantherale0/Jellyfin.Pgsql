@@ -1,0 +1,140 @@
+diff --git a/src/apps/dashboard/components/BaseCard.tsx b/src/apps/dashboard/components/BaseCard.tsx
+index 325ecc9da3..d71c30558b 100644
+--- a/src/apps/dashboard/components/BaseCard.tsx
++++ b/src/apps/dashboard/components/BaseCard.tsx
+@@ -23,6 +23,7 @@ interface BaseCardProps {
+     onActionClick?: () => void;
+     height?: number;
+     width?: number;
++    mediaOverlay?: React.ReactNode;
+ };
+ 
+ const BaseCard = ({
+@@ -36,7 +37,8 @@ const BaseCard = ({
+     actionRef,
+     onActionClick,
+     height,
+-    width
++    width,
++    mediaOverlay
+ }: BaseCardProps) => {
+     return (
+         <Card
+@@ -59,22 +61,37 @@ const BaseCard = ({
+                     alignItems: 'stretch'
+                 }}
+             >
+-                {image ? (
+-                    <CardMedia
+-                        sx={{ flexGrow: 1 }}
+-                        image={image}
+-                        title={title}
+-                    />
+-                ) : (
+-                    <Box className={getDefaultBackgroundClass(title)} sx={{
+-                        flexGrow: 1,
+-                        display: 'flex',
+-                        alignItems: 'center',
+-                        justifyContent: 'center'
+-                    }}>
+-                        {icon}
+-                    </Box>
+-                )}
++                <Box sx={{ position: 'relative', flexGrow: 1, display: 'flex' }}>
++                    {image ? (
++                        <CardMedia
++                            sx={{ flexGrow: 1 }}
++                            image={image}
++                            title={title}
++                        />
++                    ) : (
++                        <Box className={getDefaultBackgroundClass(title)} sx={{
++                            flexGrow: 1,
++                            display: 'flex',
++                            alignItems: 'center',
++                            justifyContent: 'center'
++                        }}>
++                            {icon}
++                        </Box>
++                    )}
++                    {mediaOverlay ? (
++                        <Box
++                            sx={{
++                                position: 'absolute',
++                                top: 8,
++                                right: 8,
++                                zIndex: 1,
++                                pointerEvents: 'none'
++                            }}
++                        >
++                            {mediaOverlay}
++                        </Box>
++                    ) : null}
++                </Box>
+             </CardActionArea>
+             <CardContent
+                 sx={{
+diff --git a/src/apps/dashboard/features/libraries/components/LibraryCard.tsx b/src/apps/dashboard/features/libraries/components/LibraryCard.tsx
+index f1e47229e2..52e9377014 100644
+--- a/src/apps/dashboard/features/libraries/components/LibraryCard.tsx
++++ b/src/apps/dashboard/features/libraries/components/LibraryCard.tsx
+@@ -27,6 +27,7 @@ import { useApi } from 'hooks/useApi';
+ import { ImageType } from '@jellyfin/sdk/lib/generated-client/models/image-type';
+ import dom from 'utils/dom';
+ import { invalidateVirtualFolders } from '../api/invalidateVirtualFolders';
++import RefreshIndicator from 'elements/emby-itemrefreshindicator/RefreshIndicator';
+ 
+ type LibraryCardProps = {
+     virtualFolder: VirtualFolderInfo;
+@@ -189,6 +190,17 @@ const LibraryCard = ({ virtualFolder }: LibraryCardProps) => {
+                 onActionClick={onActionClick}
+                 onClick={showMediaLibraryEditor}
+                 height={260}
++                mediaOverlay={
++                    virtualFolder.ItemId ? (
++                        <RefreshIndicator
++                            item={{
++                                Id: virtualFolder.ItemId,
++                                RefreshProgress: virtualFolder.RefreshProgress,
++                                RefreshStatus: virtualFolder.RefreshStatus
++                            }}
++                        />
++                    ) : undefined
++                }
+             />
+             <Menu
+                 anchorEl={anchorEl}
+diff --git a/src/elements/emby-itemrefreshindicator/RefreshIndicator.tsx b/src/elements/emby-itemrefreshindicator/RefreshIndicator.tsx
+index c8100ec3b3..afb77f8255 100644
+--- a/src/elements/emby-itemrefreshindicator/RefreshIndicator.tsx
++++ b/src/elements/emby-itemrefreshindicator/RefreshIndicator.tsx
+@@ -51,22 +51,21 @@ interface RefreshIndicatorProps {
+ const RefreshIndicator: FC<RefreshIndicatorProps> = ({ item, className }) => {
+     const { api } = useApi();
+ 
+-    const [showProgressBar, setShowProgressBar] = useState(!!item.RefreshProgress);
++    const [showProgressBar, setShowProgressBar] = useState(
++        item.RefreshProgress != null
++            || (!!item.RefreshStatus && item.RefreshStatus !== 'Idle')
++    );
+     const [progress, setProgress] = useState(item.RefreshProgress || 0);
+ 
+     const onRefreshProgress = useCallback(({ Data }: RefreshProgressMessage) => {
+         if (Data?.ItemId === item?.Id) {
+             const pct = Number.parseFloat(Data?.Progress ?? '0');
+ 
+-            if (pct && pct < 100) {
+-                setShowProgressBar(true);
+-            } else {
+-                setShowProgressBar(false);
+-            }
+-
++            // Show for any in-progress value including 0 (refresh started).
++            setShowProgressBar(pct < 100);
+             setProgress(pct);
+         }
+-    }, [item?.Id, setShowProgressBar, setProgress]);
++    }, [item?.Id]);
+ 
+     useEffect(() => {
+         return api?.subscribe([OutboundWebSocketMessageType.RefreshProgress], onRefreshProgress);
