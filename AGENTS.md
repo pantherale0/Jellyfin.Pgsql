@@ -10,7 +10,7 @@ PostgreSQL adapter for Jellyfin. Core work lives in `Jellyfin.Plugin.Pgsql/`. Je
 
 - Do **not** commit modified files inside either submodule.
 - Implement all server/web customizations as patch files under `patches/`.
-- After editing a submodule for development, export a patch and restore the submodule to a clean checkout before committing the parent repo.
+- After making edits to a submodule, export the patch for the edits and always clean the submodules back to their original tag.
 - Submodule pointer updates (same feature/release tag on both) are allowed when intentionally bumping Jellyfin versions.
 
 ### 2. Patch naming and routing
@@ -59,6 +59,10 @@ Both submodules must track the **same** Jellyfin release (e.g. both at `v12.0-rc
 ./scripts/sync-jellyfin-migrations.sh --dry-run
 ./scripts/sync-jellyfin-migrations.sh --version 12.0-rc2
 ```
+
+### 5. Never auto-commit
+
+Auto-commits are never be allowed.
 
 ## Project map
 
