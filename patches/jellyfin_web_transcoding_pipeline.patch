@@ -1,0 +1,444 @@
+diff --git a/src/apps/dashboard/features/devices/components/DeviceCard.tsx b/src/apps/dashboard/features/devices/components/DeviceCard.tsx
+index 31e5d6837d..efed4f649a 100644
+--- a/src/apps/dashboard/features/devices/components/DeviceCard.tsx
++++ b/src/apps/dashboard/features/devices/components/DeviceCard.tsx
+@@ -17,6 +17,11 @@ import Info from '@mui/icons-material/Info';
+ import LinearProgress from '@mui/material/LinearProgress';
+ import CardActions from '@mui/material/CardActions';
+ import IconButton from '@mui/material/IconButton';
++import Button from '@mui/material/Button';
++import Dialog from '@mui/material/Dialog';
++import DialogActions from '@mui/material/DialogActions';
++import DialogContent from '@mui/material/DialogContent';
++import DialogTitle from '@mui/material/DialogTitle';
+ import SimpleAlert from 'components/SimpleAlert';
+ import playmethodhelper from 'components/playback/playmethodhelper';
+ import globalize from 'lib/globalize';
+@@ -25,6 +30,7 @@ import { useSendPlayStateCommand } from '../../sessions/api/usePlayPauseSession'
+ import { PlaystateCommand } from '@jellyfin/sdk/lib/generated-client/models/playstate-command';
+ import InputDialog from 'components/InputDialog';
+ import { useSendMessage } from '../../sessions/api/useSendMessage';
++import TranscodingPipelineGraph from '../../sessions/components/TranscodingPipelineGraph';
+ 
+ type DeviceCardProps = {
+     device: SessionInfo;
+@@ -34,6 +40,7 @@ const DeviceCard = ({ device }: DeviceCardProps) => {
+     const [ playbackInfoTitle, setPlaybackInfoTitle ] = useState('');
+     const [ playbackInfoDesc, setPlaybackInfoDesc ] = useState('');
+     const [ isPlaybackInfoOpen, setIsPlaybackInfoOpen ] = useState(false);
++    const [ isTranscodeInfoOpen, setIsTranscodeInfoOpen ] = useState(false);
+     const [ isMessageDialogOpen, setIsMessageDialogOpen ] = useState(false);
+     const sendMessage = useSendMessage();
+     const playStateCommand = useSendPlayStateCommand();
+@@ -81,6 +88,10 @@ const DeviceCard = ({ device }: DeviceCardProps) => {
+         setIsPlaybackInfoOpen(false);
+     }, []);
+ 
++    const closeTranscodeInfo = useCallback(() => {
++        setIsTranscodeInfoOpen(false);
++    }, []);
++
+     const showPlaybackInfo = useCallback(() => {
+         const displayPlayMethod = playmethodhelper.getDisplayPlayMethod(device);
+ 
+@@ -88,32 +99,31 @@ const DeviceCard = ({ device }: DeviceCardProps) => {
+             case 'Remux':
+                 setPlaybackInfoTitle(globalize.translate('Remuxing'));
+                 setPlaybackInfoDesc(globalize.translate('RemuxHelp1') + '\n' + globalize.translate('RemuxHelp2'));
++                setIsPlaybackInfoOpen(true);
+                 break;
+             case 'DirectStream':
+                 setPlaybackInfoTitle(globalize.translate('DirectStreaming'));
+                 setPlaybackInfoDesc(globalize.translate('DirectStreamHelp1') + '\n' + globalize.translate('DirectStreamHelp2'));
++                setIsPlaybackInfoOpen(true);
+                 break;
+             case 'DirectPlay':
+                 setPlaybackInfoTitle(globalize.translate('DirectPlaying'));
+                 setPlaybackInfoDesc(globalize.translate('DirectPlayHelp'));
++                setIsPlaybackInfoOpen(true);
+                 break;
+-            case 'Transcode': {
+-                const transcodeReasons = device.TranscodingInfo?.TranscodeReasons as string[] | undefined;
+-                const localizedTranscodeReasons = transcodeReasons?.map(transcodeReason => globalize.translate(transcodeReason)) || [];
+-                setPlaybackInfoTitle(globalize.translate('Transcoding'));
+-                setPlaybackInfoDesc(
+-                    globalize.translate('MediaIsBeingConverted')
+-                    + '\n\n' + getSessionNowPlayingStreamInfo(device)
+-                    + '\n\n' + globalize.translate('LabelReasonForTranscoding')
+-                    + '\n' + localizedTranscodeReasons.join('\n')
+-                );
++            case 'Transcode':
++                setIsTranscodeInfoOpen(true);
+                 break;
+-            }
+         }
+-
+-        setIsPlaybackInfoOpen(true);
+     }, [ device ]);
+ 
++    const transcodeReasons = useMemo(() => {
++        const reasons = device.TranscodingInfo?.TranscodeReasons as string[] | undefined;
++        return reasons?.map(transcodeReason => globalize.translate(transcodeReason)) || [];
++    }, [ device.TranscodingInfo?.TranscodeReasons ]);
++
++    const streamSummary = useMemo(() => getSessionNowPlayingStreamInfo(device), [ device ]);
++
+     const nowPlayingName = useMemo(() => (
+         getNowPlayingName(device)
+     ), [ device ]);
+@@ -149,6 +159,28 @@ const DeviceCard = ({ device }: DeviceCardProps) => {
+                 text={playbackInfoDesc}
+                 onClose={closePlaybackInfo}
+             />
++            <Dialog
++                open={isTranscodeInfoOpen}
++                onClose={closeTranscodeInfo}
++                maxWidth='md'
++                fullWidth
++            >
++                <DialogTitle>
++                    {globalize.translate('Transcoding')}
++                </DialogTitle>
++                <DialogContent>
++                    <TranscodingPipelineGraph
++                        transcodingInfo={device.TranscodingInfo}
++                        streamSummary={streamSummary}
++                        reasonLines={transcodeReasons}
++                    />
++                </DialogContent>
++                <DialogActions>
++                    <Button onClick={closeTranscodeInfo}>
++                        {globalize.translate('ButtonGotIt')}
++                    </Button>
++                </DialogActions>
++            </Dialog>
+             <CardMedia
+                 sx={{
+                     height: 200,
+diff --git a/src/apps/dashboard/features/sessions/components/TranscodingPipelineGraph.tsx b/src/apps/dashboard/features/sessions/components/TranscodingPipelineGraph.tsx
+new file mode 100644
+index 0000000000..f41f19ab3c
+--- /dev/null
++++ b/src/apps/dashboard/features/sessions/components/TranscodingPipelineGraph.tsx
+@@ -0,0 +1,191 @@
++import React from 'react';
++import Box from '@mui/material/Box';
++import Chip from '@mui/material/Chip';
++import Stack from '@mui/material/Stack';
++import Typography from '@mui/material/Typography';
++import globalize from 'lib/globalize';
++import {
++    asExtendedTranscodingInfo,
++    resolveFrameworkName,
++    resolveStageTypeName,
++    type TranscodingInfoExtensions,
++    type TranscodingPipelineStage
++} from '../types/transcodingPipeline';
++
++type TranscodingPipelineGraphProps = {
++    transcodingInfo: object | null | undefined;
++    streamSummary?: string;
++    reasonLines?: string[];
++};
++
++const formatBytes = (bytes: number): string => {
++    if (bytes >= 1e9) {
++        return `${(bytes / 1e9).toFixed(2)} GB`;
++    }
++
++    if (bytes >= 1e6) {
++        return `${(bytes / 1e6).toFixed(1)} MB`;
++    }
++
++    if (bytes >= 1e3) {
++        return `${Math.floor(bytes / 1e3)} KB`;
++    }
++
++    return `${bytes} B`;
++};
++
++const formatBuffer = (ticks: number): string => {
++    const seconds = ticks / 10_000_000;
++    if (seconds >= 60) {
++        return `${(seconds / 60).toFixed(1)} min`;
++    }
++
++    return `${seconds.toFixed(1)} s`;
++};
++
++const StageNode = ({ stage }: { stage: TranscodingPipelineStage }) => {
++    const framework = resolveFrameworkName(stage.Framework);
++    const isHardware = stage.IsHardware ?? framework !== 'Software';
++
++    return (
++        <Box
++            sx={{
++                minWidth: 120,
++                maxWidth: 160,
++                border: 1,
++                borderColor: isHardware ? 'warning.main' : 'divider',
++                borderRadius: 1,
++                px: 1,
++                py: 0.75,
++                backgroundColor: 'background.paper'
++            }}
++        >
++            <Typography variant='caption' color='text.secondary' display='block'>
++                {resolveStageTypeName(stage.Type)}
++                {stage.MediaType ? ` · ${stage.MediaType}` : ''}
++            </Typography>
++            <Typography variant='body2' fontWeight={600} noWrap title={stage.Name || undefined}>
++                {stage.Name || stage.Detail || resolveStageTypeName(stage.Type)}
++            </Typography>
++            {stage.Detail && stage.Detail !== stage.Name && (
++                <Typography variant='caption' color='text.secondary' display='block' noWrap>
++                    {stage.Detail}
++                </Typography>
++            )}
++            <Chip
++                size='small'
++                label={framework}
++                color={isHardware ? 'warning' : 'default'}
++                sx={{ mt: 0.5, height: 20, fontSize: '0.65rem' }}
++            />
++        </Box>
++    );
++};
++
++const MetricsRow = ({ info }: { info: TranscodingInfoExtensions }) => {
++    const items: string[] = [];
++
++    if (info.Speed != null) {
++        items.push(`${globalize.translate('LabelTranscodingSpeed')}: ${info.Speed.toFixed(2)}x`);
++    }
++
++    if (info.IsThrottled) {
++        items.push(globalize.translate('LabelTranscodingThrottled'));
++    }
++
++    if (info.BytesTranscoded != null) {
++        items.push(`${globalize.translate('LabelBytesTranscoded')}: ${formatBytes(info.BytesTranscoded)}`);
++    }
++
++    if (info.TranscodeBufferTicks != null && info.TranscodeBufferTicks > 0) {
++        items.push(`${globalize.translate('LabelTranscodeBuffer')}: ${formatBuffer(info.TranscodeBufferTicks)}`);
++    }
++
++    if (info.SubtitleDeliveryMethod != null && info.SubtitleDeliveryMethod !== '') {
++        items.push(`${globalize.translate('LabelSubtitleMethod')}: ${info.SubtitleDeliveryMethod}`);
++    }
++
++    if (info.TranscodeProtocol) {
++        items.push(`${globalize.translate('LabelTranscodeProtocol')}: ${info.TranscodeProtocol.toUpperCase()}`);
++    }
++
++    if (items.length === 0) {
++        return null;
++    }
++
++    return (
++        <Typography variant='body2' color='text.secondary' sx={{ whiteSpace: 'pre-wrap' }}>
++            {items.join(' · ')}
++        </Typography>
++    );
++};
++
++const TranscodingPipelineGraph = ({
++    transcodingInfo,
++    streamSummary,
++    reasonLines
++}: TranscodingPipelineGraphProps) => {
++    const info = asExtendedTranscodingInfo(transcodingInfo);
++    const stages = info?.Pipeline?.Stages?.filter(Boolean) || [];
++
++    return (
++        <Stack spacing={2}>
++            <Typography variant='body2' color='text.secondary'>
++                {globalize.translate('MediaIsBeingConverted')}
++            </Typography>
++
++            {streamSummary && (
++                <Typography variant='body2' sx={{ whiteSpace: 'pre-wrap' }}>
++                    {streamSummary}
++                </Typography>
++            )}
++
++            <MetricsRow info={info || {}} />
++
++            {stages.length > 0 && (
++                <Box>
++                    <Typography variant='subtitle2' gutterBottom>
++                        {globalize.translate('LabelTranscodingPipeline')}
++                    </Typography>
++                    <Stack
++                        direction='row'
++                        spacing={0.5}
++                        alignItems='center'
++                        sx={{
++                            overflowX: 'auto',
++                            pb: 1,
++                            maxWidth: '100%'
++                        }}
++                    >
++                        {stages.map((stage, index) => (
++                            <React.Fragment key={`${stage.Name}-${index}`}>
++                                {index > 0 && (
++                                    <Stack alignItems='center' sx={{ px: 0.25, minWidth: 36 }}>
++                                        <Typography variant='caption' color='text.secondary' sx={{ fontSize: '0.65rem' }} noWrap>
++                                            {stages[index - 1]?.EdgeLabel || ''}
++                                        </Typography>
++                                        <Typography color='text.secondary'>→</Typography>
++                                    </Stack>
++                                )}
++                                <StageNode stage={stage} />
++                            </React.Fragment>
++                        ))}
++                    </Stack>
++                </Box>
++            )}
++
++            {reasonLines && reasonLines.length > 0 && (
++                <Box>
++                    <Typography variant='subtitle2' gutterBottom>
++                        {globalize.translate('LabelReasonForTranscoding')}
++                    </Typography>
++                    <Typography variant='body2' sx={{ whiteSpace: 'pre-wrap' }}>
++                        {reasonLines.join('\n')}
++                    </Typography>
++                </Box>
++            )}
++        </Stack>
++    );
++};
++
++export default TranscodingPipelineGraph;
+diff --git a/src/apps/dashboard/features/sessions/types/transcodingPipeline.ts b/src/apps/dashboard/features/sessions/types/transcodingPipeline.ts
+new file mode 100644
+index 0000000000..0bb08cf31f
+--- /dev/null
++++ b/src/apps/dashboard/features/sessions/types/transcodingPipeline.ts
+@@ -0,0 +1,106 @@
++export type TranscodingPipelineStageType =
++    | 'Unknown'
++    | 'Decode'
++    | 'Scale'
++    | 'Deinterlace'
++    | 'ToneMap'
++    | 'Subtitle'
++    | 'Format'
++    | 'Encode'
++    | number;
++
++export type TranscodingHardwareFramework =
++    | 'Software'
++    | 'Qsv'
++    | 'Cuda'
++    | 'Vaapi'
++    | 'D3D11Va'
++    | 'VideoToolbox'
++    | 'Amf'
++    | 'OpenCl'
++    | 'Vulkan'
++    | 'Rkmpp'
++    | 'AudioToolbox'
++    | 'V4l2m2m'
++    | number;
++
++export interface TranscodingPipelineStage {
++    Type?: TranscodingPipelineStageType;
++    MediaType?: string | null;
++    Framework?: TranscodingHardwareFramework;
++    Name?: string | null;
++    Detail?: string | null;
++    IsHardware?: boolean;
++    EdgeLabel?: string | null;
++}
++
++export interface TranscodingPipelineInfo {
++    Stages?: TranscodingPipelineStage[] | null;
++}
++
++/** Extended TranscodingInfo fields not yet in @jellyfin/sdk. */
++export interface TranscodingInfoExtensions {
++    TranscodeProtocol?: string | null;
++    VideoBitrate?: number | null;
++    AudioBitrate?: number | null;
++    BytesTranscoded?: number | null;
++    Speed?: number | null;
++    TranscodePositionTicks?: number | null;
++    TranscodeBufferTicks?: number | null;
++    IsThrottled?: boolean;
++    SubtitleCodec?: string | null;
++    SubtitleDeliveryMethod?: string | number | null;
++    Pipeline?: TranscodingPipelineInfo | null;
++}
++
++const STAGE_TYPE_NAMES: Record<number, string> = {
++    0: 'Unknown',
++    1: 'Decode',
++    2: 'Scale',
++    3: 'Deinterlace',
++    4: 'ToneMap',
++    5: 'Subtitle',
++    6: 'Format',
++    7: 'Encode'
++};
++
++const FRAMEWORK_NAMES: Record<number, string> = {
++    0: 'Software',
++    1: 'Qsv',
++    2: 'Cuda',
++    3: 'Vaapi',
++    4: 'D3D11Va',
++    5: 'VideoToolbox',
++    6: 'Amf',
++    7: 'OpenCl',
++    8: 'Vulkan',
++    9: 'Rkmpp',
++    10: 'AudioToolbox',
++    11: 'V4l2m2m'
++};
++
++export const resolveStageTypeName = (type: TranscodingPipelineStageType | undefined): string => {
++    if (typeof type === 'number') {
++        return STAGE_TYPE_NAMES[type] || 'Unknown';
++    }
++
++    return type || 'Unknown';
++};
++
++export const resolveFrameworkName = (framework: TranscodingHardwareFramework | undefined): string => {
++    if (typeof framework === 'number') {
++        return FRAMEWORK_NAMES[framework] || 'Software';
++    }
++
++    return framework || 'Software';
++};
++
++export const asExtendedTranscodingInfo = (
++    info: object | null | undefined
++): TranscodingInfoExtensions | null => {
++    if (!info) {
++        return null;
++    }
++
++    return info as TranscodingInfoExtensions;
++};
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+index c18c3ebd40..b4e4eb25ae 100755
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -907,6 +907,13 @@
+     "LabelQsvDeviceHelp": "Specify the device for Intel QSV on a multi-GPU system. On Linux, this is the render node, e.g., /dev/dri/renderD128. On Windows, this is the device index starting from 0. Leave blank unless you know what you are doing.",
+     "LabelQuickConnectCode": "Quick Connect code",
+     "LabelReasonForTranscoding": "Reason for transcoding",
++    "LabelTranscodingPipeline": "Transcoding pipeline",
++    "LabelTranscodingSpeed": "Speed",
++    "LabelTranscodingThrottled": "Throttled",
++    "LabelBytesTranscoded": "Bytes transcoded",
++    "LabelTranscodeBuffer": "Buffer lead",
++    "LabelTranscodeProtocol": "Protocol",
++    "LabelSubtitleMethod": "Subtitle method",
+     "LabelRecord": "Record",
+     "LabelRecordingPath": "Default recording path",
+     "LabelRecordingPathHelp": "Specify the default location to save recordings. If left empty, the server's program data folder will be used.",

@@ -1,0 +1,1891 @@
+diff --git a/Emby.Server.Implementations/ApplicationHost.cs b/Emby.Server.Implementations/ApplicationHost.cs
+index 69e23bcb63..cf3216d57e 100644
+--- a/Emby.Server.Implementations/ApplicationHost.cs
++++ b/Emby.Server.Implementations/ApplicationHost.cs
+@@ -604,6 +604,7 @@ namespace Emby.Server.Implementations
+             serviceCollection.AddSingleton<IKeyframeManager, KeyframeManager>();
+ 
+             serviceCollection.AddSingleton<IAttachmentExtractor, MediaBrowser.MediaEncoding.Attachments.AttachmentExtractor>();
++            serviceCollection.AddSingleton<ITranscodingPipelineProbe, MediaBrowser.MediaEncoding.Transcoding.TranscodingPipelineProbe>();
+ 
+             serviceCollection.AddSingleton<ITranscodeManager, TranscodeManager>();
+             serviceCollection.AddScoped<MediaInfoHelper>();
+diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
+index 19823dff37..42a515d114 100644
+--- a/Emby.Server.Implementations/Session/SessionManager.cs
++++ b/Emby.Server.Implementations/Session/SessionManager.cs
+@@ -2021,12 +2021,13 @@ namespace Emby.Server.Implementations.Session
+ 
+             if (!userIsAdmin)
+             {
+-                // Don't report acceleration type for non-admin users.
++                // Don't report acceleration type or pipeline details for non-admin users.
+                 result = result.Select(r =>
+                 {
+                     if (r.TranscodingInfo is not null)
+                     {
+                         r.TranscodingInfo.HardwareAccelerationType = HardwareAccelerationType.none;
++                        r.TranscodingInfo.Pipeline = null;
+                     }
+ 
+                     return r;
+diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingJobInfo.cs b/MediaBrowser.Controller/MediaEncoding/EncodingJobInfo.cs
+index 314cd32903..6964d0476c 100644
+--- a/MediaBrowser.Controller/MediaEncoding/EncodingJobInfo.cs
++++ b/MediaBrowser.Controller/MediaEncoding/EncodingJobInfo.cs
+@@ -727,7 +727,7 @@ namespace MediaBrowser.Controller.MediaEncoding
+             return null;
+         }
+ 
+-        public virtual void ReportTranscodingProgress(TimeSpan? transcodingPosition, float? framerate, double? percentComplete, long? bytesTranscoded, int? bitRate)
++        public virtual void ReportTranscodingProgress(TimeSpan? transcodingPosition, float? framerate, double? percentComplete, long? bytesTranscoded, int? bitRate, float? speed = null)
+         {
+             Progress.Report(percentComplete.Value);
+         }
+diff --git a/MediaBrowser.Controller/MediaEncoding/ITranscodeManager.cs b/MediaBrowser.Controller/MediaEncoding/ITranscodeManager.cs
+index 09bc01f748..162ea408ca 100644
+--- a/MediaBrowser.Controller/MediaEncoding/ITranscodeManager.cs
++++ b/MediaBrowser.Controller/MediaEncoding/ITranscodeManager.cs
+@@ -52,6 +52,7 @@ public interface ITranscodeManager
+     /// <param name="percentComplete">The completion percentage of the transcode.</param>
+     /// <param name="bytesTranscoded">The number of bytes transcoded.</param>
+     /// <param name="bitRate">The bitrate of the transcoding job.</param>
++    /// <param name="speed">The realtime speed multiplier from ffmpeg (speed=).</param>
+     public void ReportTranscodingProgress(
+         TranscodingJob job,
+         StreamState state,
+@@ -59,7 +60,8 @@ public interface ITranscodeManager
+         float? framerate,
+         double? percentComplete,
+         long? bytesTranscoded,
+-        int? bitRate);
++        int? bitRate,
++        float? speed = null);
+ 
+     /// <summary>
+     /// Starts FFMpeg.
+diff --git a/MediaBrowser.Controller/MediaEncoding/ITranscodingPipelineProbe.cs b/MediaBrowser.Controller/MediaEncoding/ITranscodingPipelineProbe.cs
+new file mode 100644
+index 0000000000..ec9455d4f6
+--- /dev/null
++++ b/MediaBrowser.Controller/MediaEncoding/ITranscodingPipelineProbe.cs
+@@ -0,0 +1,32 @@
++using System.Threading;
++using System.Threading.Tasks;
++using MediaBrowser.Model.Session;
++
++namespace MediaBrowser.Controller.MediaEncoding;
++
++/// <summary>
++/// Probes and caches structured transcoding pipeline descriptions.
++/// </summary>
++public interface ITranscodingPipelineProbe
++{
++    /// <summary>
++    /// Gets a cached pipeline for a play session, if available.
++    /// </summary>
++    /// <param name="playSessionId">Play session id.</param>
++    /// <returns>Cached pipeline, or null.</returns>
++    TranscodingPipelineInfo? GetCachedPipeline(string? playSessionId);
++
++    /// <summary>
++    /// Starts an asynchronous probe for the given play session using the live ffmpeg arguments.
++    /// </summary>
++    /// <param name="playSessionId">Play session id.</param>
++    /// <param name="commandLineArguments">FFmpeg arguments used for the live transcode.</param>
++    /// <param name="cancellationToken">Cancellation token.</param>
++    void BeginProbe(string? playSessionId, string commandLineArguments, CancellationToken cancellationToken = default);
++
++    /// <summary>
++    /// Removes a cached pipeline when the job ends.
++    /// </summary>
++    /// <param name="playSessionId">Play session id.</param>
++    void Evict(string? playSessionId);
++}
+diff --git a/MediaBrowser.Controller/MediaEncoding/JobLogger.cs b/MediaBrowser.Controller/MediaEncoding/JobLogger.cs
+index 2702e3bc09..4e1e6ea388 100644
+--- a/MediaBrowser.Controller/MediaEncoding/JobLogger.cs
++++ b/MediaBrowser.Controller/MediaEncoding/JobLogger.cs
+@@ -66,6 +66,7 @@ namespace MediaBrowser.Controller.MediaEncoding
+             TimeSpan? transcodingPosition = null;
+             long? bytesTranscoded = null;
+             int? bitRate = null;
++            float? speed = null;
+ 
+             var parts = line.Split(' ');
+ 
+@@ -152,11 +153,20 @@ namespace MediaBrowser.Controller.MediaEncoding
+                         }
+                     }
+                 }
++                else if (part.StartsWith("speed=", StringComparison.OrdinalIgnoreCase))
++                {
++                    var speedText = part.Split('=', 2)[^1].TrimEnd('x', 'X');
++
++                    if (float.TryParse(speedText, CultureInfo.InvariantCulture, out var val))
++                    {
++                        speed = val;
++                    }
++                }
+             }
+ 
+-            if (framerate.HasValue || percent.HasValue)
++            if (framerate.HasValue || percent.HasValue || speed.HasValue)
+             {
+-                state.ReportTranscodingProgress(transcodingPosition, framerate, percent, bytesTranscoded, bitRate);
++                state.ReportTranscodingProgress(transcodingPosition, framerate, percent, bytesTranscoded, bitRate, speed);
+             }
+         }
+     }
+diff --git a/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs b/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
+index 56990d0b82..a5d13e823e 100644
+--- a/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
++++ b/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
+@@ -121,6 +121,16 @@ public sealed class TranscodingJob : IDisposable
+     /// </summary>
+     public int? BitRate { get; set; }
+ 
++    /// <summary>
++    /// Gets or sets the realtime speed multiplier from ffmpeg (speed=).
++    /// </summary>
++    public float? Speed { get; set; }
++
++    /// <summary>
++    /// Gets or sets the cached pipeline for this job.
++    /// </summary>
++    public Model.Session.TranscodingPipelineInfo? Pipeline { get; set; }
++
+     /// <summary>
+     /// Gets or sets transcoding position ticks.
+     /// </summary>
+diff --git a/MediaBrowser.Controller/MediaEncoding/TranscodingThrottler.cs b/MediaBrowser.Controller/MediaEncoding/TranscodingThrottler.cs
+index 1e7cd0b0a3..f06b4d94e5 100644
+--- a/MediaBrowser.Controller/MediaEncoding/TranscodingThrottler.cs
++++ b/MediaBrowser.Controller/MediaEncoding/TranscodingThrottler.cs
+@@ -38,6 +38,11 @@ public class TranscodingThrottler : IDisposable
+         _mediaEncoder = mediaEncoder;
+     }
+ 
++    /// <summary>
++    /// Gets a value indicating whether the encoder is currently paused by the throttler.
++    /// </summary>
++    public bool IsThrottled => _isPaused;
++
+     /// <summary>
+     /// Start timer.
+     /// </summary>
+diff --git a/MediaBrowser.Controller/Streaming/StreamState.cs b/MediaBrowser.Controller/Streaming/StreamState.cs
+index 195dda5fe8..829d1068fd 100644
+--- a/MediaBrowser.Controller/Streaming/StreamState.cs
++++ b/MediaBrowser.Controller/Streaming/StreamState.cs
+@@ -149,9 +149,9 @@ public class StreamState : EncodingJobInfo, IDisposable
+     }
+ 
+     /// <inheritdoc />
+-    public override void ReportTranscodingProgress(TimeSpan? transcodingPosition, float? framerate, double? percentComplete, long? bytesTranscoded, int? bitRate)
++    public override void ReportTranscodingProgress(TimeSpan? transcodingPosition, float? framerate, double? percentComplete, long? bytesTranscoded, int? bitRate, float? speed = null)
+     {
+-        _transcodeManager.ReportTranscodingProgress(TranscodingJob!, this, transcodingPosition, framerate, percentComplete, bytesTranscoded, bitRate);
++        _transcodeManager.ReportTranscodingProgress(TranscodingJob!, this, transcodingPosition, framerate, percentComplete, bytesTranscoded, bitRate, speed);
+     }
+ 
+     /// <summary>
+diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
+index defd855ec0..94af1b0f6c 100644
+--- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
++++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
+@@ -44,6 +44,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+     private readonly IMediaEncoder _mediaEncoder;
+     private readonly IMediaSourceManager _mediaSourceManager;
+     private readonly IAttachmentExtractor _attachmentExtractor;
++    private readonly ITranscodingPipelineProbe _pipelineProbe;
+ 
+     private readonly List<TranscodingJob> _activeTranscodingJobs = new();
+     private readonly AsyncKeyedLocker<string> _transcodingLocks = new(o =>
+@@ -67,6 +68,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+     /// <param name="mediaEncoder">The <see cref="IMediaEncoder"/>.</param>
+     /// <param name="mediaSourceManager">The <see cref="IMediaSourceManager"/>.</param>
+     /// <param name="attachmentExtractor">The <see cref="IAttachmentExtractor"/>.</param>
++    /// <param name="pipelineProbe">The <see cref="ITranscodingPipelineProbe"/>.</param>
+     public TranscodeManager(
+         ILoggerFactory loggerFactory,
+         IFileSystem fileSystem,
+@@ -77,7 +79,8 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+         EncodingHelper encodingHelper,
+         IMediaEncoder mediaEncoder,
+         IMediaSourceManager mediaSourceManager,
+-        IAttachmentExtractor attachmentExtractor)
++        IAttachmentExtractor attachmentExtractor,
++        ITranscodingPipelineProbe pipelineProbe)
+     {
+         _loggerFactory = loggerFactory;
+         _fileSystem = fileSystem;
+@@ -89,6 +92,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+         _mediaEncoder = mediaEncoder;
+         _mediaSourceManager = mediaSourceManager;
+         _attachmentExtractor = attachmentExtractor;
++        _pipelineProbe = pipelineProbe;
+ 
+         _logger = loggerFactory.CreateLogger<TranscodeManager>();
+         DeleteEncodedMediaCache();
+@@ -235,6 +239,8 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+ 
+         job.Stop();
+ 
++        _pipelineProbe.Evict(job.PlaySessionId);
++
+         if (delete(job.Path!))
+         {
+             await DeletePartialStreamFiles(job.Path!, job.Type, 0, 1500).ConfigureAwait(false);
+@@ -327,7 +333,8 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+         float? framerate,
+         double? percentComplete,
+         long? bytesTranscoded,
+-        int? bitRate)
++        int? bitRate,
++        float? speed = null)
+     {
+         var ticks = transcodingPosition?.Ticks;
+ 
+@@ -338,6 +345,10 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+             job.TranscodingPositionTicks = ticks;
+             job.BytesTranscoded = bytesTranscoded;
+             job.BitRate = bitRate;
++            if (speed.HasValue)
++            {
++                job.Speed = speed;
++            }
+         }
+ 
+         var deviceId = state.Request.DeviceId;
+@@ -348,6 +359,26 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+             var videoCodec = state.ActualOutputVideoCodec;
+             var hardwareAccelerationType = _serverConfigurationManager.GetEncodingOptions().HardwareAccelerationType;
+ 
++            long? bufferTicks = null;
++            if (job?.TranscodingPositionTicks is not null && job.DownloadPositionTicks is not null)
++            {
++                bufferTicks = Math.Max(0, job.TranscodingPositionTicks.Value - job.DownloadPositionTicks.Value);
++            }
++
++            var pipeline = job?.Pipeline
++                ?? _pipelineProbe.GetCachedPipeline(job?.PlaySessionId ?? state.Request.PlaySessionId);
++            if (pipeline is not null && job is not null)
++            {
++                job.Pipeline = pipeline;
++            }
++
++            var transcodeProtocol = job?.Type switch
++            {
++                TranscodingJobType.Hls => "hls",
++                TranscodingJobType.Dash => "dash",
++                _ => "http"
++            };
++
+             _sessionManager.ReportTranscodingInfo(deviceId, new TranscodingInfo
+             {
+                 Bitrate = bitRate ?? state.TotalOutputBitrate,
+@@ -362,7 +393,18 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+                 IsAudioDirect = EncodingHelper.IsCopyCodec(state.OutputAudioCodec),
+                 IsVideoDirect = EncodingHelper.IsCopyCodec(state.OutputVideoCodec),
+                 HardwareAccelerationType = hardwareAccelerationType,
+-                TranscodeReasons = state.TranscodeReasons
++                TranscodeReasons = state.TranscodeReasons,
++                TranscodeProtocol = transcodeProtocol,
++                VideoBitrate = state.OutputVideoBitrate,
++                AudioBitrate = state.OutputAudioBitrate,
++                BytesTranscoded = bytesTranscoded ?? job?.BytesTranscoded,
++                Speed = speed ?? job?.Speed,
++                TranscodePositionTicks = ticks ?? job?.TranscodingPositionTicks,
++                TranscodeBufferTicks = bufferTicks,
++                IsThrottled = job?.TranscodingThrottler?.IsThrottled == true,
++                SubtitleCodec = state.SubtitleStream?.Codec,
++                SubtitleDeliveryMethod = state.SubtitleStream is null ? null : state.SubtitleDeliveryMethod,
++                Pipeline = pipeline
+             });
+         }
+     }
+@@ -501,6 +543,12 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+         _logger.LogDebug("Launched FFmpeg process");
+         state.TranscodingJob = transcodingJob;
+ 
++        // Probe pipeline asynchronously; must not block playback start.
++        _pipelineProbe.BeginProbe(
++            state.Request.PlaySessionId,
++            commandLineArguments,
++            cancellationTokenSource.Token);
++
+         // Important - don't await the log task or we won't be able to kill FFmpeg when the user stops playback
+         _ = new JobLogger(_logger).StartStreamingLog(state, process.StandardError, logStream);
+ 
+@@ -656,6 +704,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+             _logger.LogError("FFmpeg exited with code {0}", process.ExitCode);
+         }
+ 
++        _pipelineProbe.Evict(job.PlaySessionId);
+         job.Dispose();
+     }
+ 
+diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodingPipelineClassifier.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodingPipelineClassifier.cs
+new file mode 100644
+index 0000000000..4b88cbfd40
+--- /dev/null
++++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodingPipelineClassifier.cs
+@@ -0,0 +1,284 @@
++using System;
++using MediaBrowser.Model.Session;
++
++namespace MediaBrowser.MediaEncoding.Transcoding;
++
++/// <summary>
++/// Maps ffmpeg filter/codec names to hardware frameworks and stage types.
++/// </summary>
++public static class TranscodingPipelineClassifier
++{
++    /// <summary>
++    /// Classifies the hardware framework from an ffmpeg filter or codec name.
++    /// </summary>
++    /// <param name="name">Filter or codec name.</param>
++    /// <returns>The hardware framework.</returns>
++    public static TranscodingHardwareFramework ClassifyFramework(string? name)
++    {
++        if (string.IsNullOrWhiteSpace(name))
++        {
++            return TranscodingHardwareFramework.Software;
++        }
++
++        var n = name.ToLowerInvariant();
++
++        if (n.Contains("_qsv", StringComparison.Ordinal) || n.StartsWith("qsv", StringComparison.Ordinal))
++        {
++            return TranscodingHardwareFramework.Qsv;
++        }
++
++        if (n.Contains("_nvenc", StringComparison.Ordinal)
++            || n.Contains("_cuda", StringComparison.Ordinal)
++            || n.Contains("_cuvid", StringComparison.Ordinal)
++            || n.Contains("_npp", StringComparison.Ordinal)
++            || n.Contains("cuda", StringComparison.Ordinal)
++            || n.Contains("nvenc", StringComparison.Ordinal)
++            || n.Contains("cuvid", StringComparison.Ordinal))
++        {
++            return TranscodingHardwareFramework.Cuda;
++        }
++
++        if (n.Contains("_vaapi", StringComparison.Ordinal) || n.Contains("vaapi", StringComparison.Ordinal))
++        {
++            return TranscodingHardwareFramework.Vaapi;
++        }
++
++        if (n.Contains("_d3d11va", StringComparison.Ordinal)
++            || n.Contains("d3d11va", StringComparison.Ordinal)
++            || n.Contains("_dxva2", StringComparison.Ordinal))
++        {
++            return TranscodingHardwareFramework.D3D11Va;
++        }
++
++        if (n.Contains("_videotoolbox", StringComparison.Ordinal)
++            || n.Contains("videotoolbox", StringComparison.Ordinal)
++            || n.Contains("_vt", StringComparison.Ordinal)
++            || n.EndsWith("_vt", StringComparison.Ordinal))
++        {
++            return TranscodingHardwareFramework.VideoToolbox;
++        }
++
++        if (n.Contains("_amf", StringComparison.Ordinal) || n.EndsWith("amf", StringComparison.Ordinal))
++        {
++            return TranscodingHardwareFramework.Amf;
++        }
++
++        if (n.Contains("_opencl", StringComparison.Ordinal) || n.Contains("opencl", StringComparison.Ordinal))
++        {
++            return TranscodingHardwareFramework.OpenCl;
++        }
++
++        if (n.Contains("_vulkan", StringComparison.Ordinal) || n.Contains("vulkan", StringComparison.Ordinal))
++        {
++            return TranscodingHardwareFramework.Vulkan;
++        }
++
++        if (n.Contains("_rkmpp", StringComparison.Ordinal)
++            || n.Contains("_rkrga", StringComparison.Ordinal)
++            || n.Contains("rkmpp", StringComparison.Ordinal)
++            || n.Contains("rkrga", StringComparison.Ordinal))
++        {
++            return TranscodingHardwareFramework.Rkmpp;
++        }
++
++        if (n.Contains("_v4l2m2m", StringComparison.Ordinal) || n.Contains("v4l2m2m", StringComparison.Ordinal))
++        {
++            return TranscodingHardwareFramework.V4l2m2m;
++        }
++
++        if (n.Contains("_at", StringComparison.Ordinal)
++            || n.Contains("audiotoolbox", StringComparison.Ordinal)
++            || n.EndsWith("_at", StringComparison.Ordinal))
++        {
++            // Avoid matching short tokens like "format" — require audiotoolbox or clear _at suffix on known codecs.
++            if (n.Contains("audiotoolbox", StringComparison.Ordinal)
++                || n.EndsWith("_at", StringComparison.Ordinal)
++                || n.Contains("aac_at", StringComparison.Ordinal)
++                || n.Contains("alac_at", StringComparison.Ordinal))
++            {
++                return TranscodingHardwareFramework.AudioToolbox;
++            }
++        }
++
++        return TranscodingHardwareFramework.Software;
++    }
++
++    /// <summary>
++    /// Infers the pipeline stage type from an ffmpeg filter or codec name.
++    /// </summary>
++    /// <param name="name">Filter or codec name.</param>
++    /// <param name="isDecoder">True when this is a decoder node.</param>
++    /// <param name="isEncoder">True when this is an encoder node.</param>
++    /// <returns>The stage type.</returns>
++    public static TranscodingPipelineStageType ClassifyStageType(string? name, bool isDecoder = false, bool isEncoder = false)
++    {
++        if (isDecoder)
++        {
++            return TranscodingPipelineStageType.Decode;
++        }
++
++        if (isEncoder)
++        {
++            return TranscodingPipelineStageType.Encode;
++        }
++
++        if (string.IsNullOrWhiteSpace(name))
++        {
++            return TranscodingPipelineStageType.Unknown;
++        }
++
++        var n = name.ToLowerInvariant();
++
++        // Strip Parsed_ prefix and numeric suffix common in ffmpeg graph names.
++        var filter = ExtractFilterBaseName(n);
++
++        if (filter.StartsWith("scale", StringComparison.Ordinal)
++            || filter.StartsWith("zscale", StringComparison.Ordinal)
++            || (filter.Contains("vpp_qsv", StringComparison.Ordinal) && filter.Contains("scale", StringComparison.Ordinal))
++            || filter.StartsWith("scale_", StringComparison.Ordinal))
++        {
++            // tonemap filters can contain "scale" in compound chains; prefer tone-map when clear.
++            if (filter.Contains("tonemap", StringComparison.Ordinal))
++            {
++                return TranscodingPipelineStageType.ToneMap;
++            }
++
++            return TranscodingPipelineStageType.Scale;
++        }
++
++        if (filter.Contains("tonemap", StringComparison.Ordinal)
++            || filter.Contains("tonemapx", StringComparison.Ordinal))
++        {
++            return TranscodingPipelineStageType.ToneMap;
++        }
++
++        if (filter.Contains("yadif", StringComparison.Ordinal)
++            || filter.Contains("bwdif", StringComparison.Ordinal)
++            || filter.Contains("deint", StringComparison.Ordinal)
++            || filter.Contains("w3fdif", StringComparison.Ordinal))
++        {
++            return TranscodingPipelineStageType.Deinterlace;
++        }
++
++        if (filter.Contains("overlay", StringComparison.Ordinal)
++            || filter.Contains("subtitles", StringComparison.Ordinal)
++            || filter.Contains("ass", StringComparison.Ordinal)
++            || filter.StartsWith("subtitle", StringComparison.Ordinal))
++        {
++            return TranscodingPipelineStageType.Subtitle;
++        }
++
++        if (filter.Equals("format", StringComparison.Ordinal)
++            || filter.StartsWith("format_", StringComparison.Ordinal)
++            || filter.Equals("hwupload", StringComparison.Ordinal)
++            || filter.Equals("hwdownload", StringComparison.Ordinal)
++            || filter.Equals("hwmap", StringComparison.Ordinal)
++            || filter.StartsWith("hwupload", StringComparison.Ordinal)
++            || filter.StartsWith("hwdownload", StringComparison.Ordinal))
++        {
++            return TranscodingPipelineStageType.Format;
++        }
++
++        return TranscodingPipelineStageType.Unknown;
++    }
++
++    /// <summary>
++    /// Extracts the base filter name from a graph node name like "Parsed_scale_cuda_0".
++    /// </summary>
++    /// <param name="name">Raw filter name.</param>
++    /// <returns>Base filter name.</returns>
++    public static string ExtractFilterBaseName(string name)
++    {
++        if (string.IsNullOrWhiteSpace(name))
++        {
++            return string.Empty;
++        }
++
++        var n = name;
++        if (n.StartsWith("Parsed_", StringComparison.OrdinalIgnoreCase))
++        {
++            n = n["Parsed_".Length..];
++        }
++
++        // Trim trailing _<digits>
++        var lastUnderscore = n.LastIndexOf('_');
++        if (lastUnderscore > 0 && lastUnderscore < n.Length - 1)
++        {
++            var suffix = n[(lastUnderscore + 1)..];
++            if (int.TryParse(suffix, out _))
++            {
++                n = n[..lastUnderscore];
++            }
++        }
++
++        return n;
++    }
++
++    /// <summary>
++    /// Builds a human-readable detail string for a stage.
++    /// </summary>
++    /// <param name="type">Stage type.</param>
++    /// <param name="name">Filter/codec name.</param>
++    /// <param name="mediaType">Media type.</param>
++    /// <returns>Detail string.</returns>
++    public static string? BuildDetail(TranscodingPipelineStageType type, string? name, string? mediaType)
++    {
++        return type switch
++        {
++            TranscodingPipelineStageType.Subtitle => "Burn-in",
++            TranscodingPipelineStageType.ToneMap => "Tone-map",
++            TranscodingPipelineStageType.Deinterlace => "Deinterlace",
++            TranscodingPipelineStageType.Scale => "Scale",
++            TranscodingPipelineStageType.Format => "Format",
++            TranscodingPipelineStageType.Decode => string.IsNullOrEmpty(name) ? "Decode" : name,
++            TranscodingPipelineStageType.Encode => string.IsNullOrEmpty(name) ? "Encode" : name,
++            _ => name
++        };
++    }
++
++    /// <summary>
++    /// Creates a pipeline stage from a filter/codec name.
++    /// </summary>
++    /// <param name="name">Filter or codec name.</param>
++    /// <param name="mediaType">Media type.</param>
++    /// <param name="isDecoder">Whether this is a decoder.</param>
++    /// <param name="isEncoder">Whether this is an encoder.</param>
++    /// <param name="edgeLabel">Optional edge label.</param>
++    /// <returns>The pipeline stage.</returns>
++    public static TranscodingPipelineStage CreateStage(
++        string name,
++        string? mediaType = "Video",
++        bool isDecoder = false,
++        bool isEncoder = false,
++        string? edgeLabel = null)
++    {
++        var type = ClassifyStageType(name, isDecoder, isEncoder);
++        var framework = ClassifyFramework(name);
++        var baseName = ExtractFilterBaseName(name);
++
++        string displayName;
++        if (isDecoder)
++        {
++            displayName = string.IsNullOrEmpty(baseName) ? "Decode" : $"Decode ({baseName})";
++        }
++        else if (isEncoder)
++        {
++            displayName = string.IsNullOrEmpty(baseName) ? "Encode" : $"Encode ({baseName})";
++        }
++        else
++        {
++            displayName = string.IsNullOrEmpty(baseName) ? name : baseName;
++        }
++
++        return new TranscodingPipelineStage
++        {
++            Type = type,
++            MediaType = mediaType,
++            Framework = framework,
++            Name = displayName,
++            Detail = BuildDetail(type, baseName, mediaType),
++            IsHardware = framework != TranscodingHardwareFramework.Software,
++            EdgeLabel = edgeLabel
++        };
++    }
++}
+diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodingPipelineGraphParser.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodingPipelineGraphParser.cs
+new file mode 100644
+index 0000000000..da01a4305f
+--- /dev/null
++++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodingPipelineGraphParser.cs
+@@ -0,0 +1,552 @@
++using System;
++using System.Collections.Generic;
++using System.Globalization;
++using System.Linq;
++using System.Text.Json;
++using System.Text.RegularExpressions;
++using MediaBrowser.Model.Session;
++
++namespace MediaBrowser.MediaEncoding.Transcoding;
++
++/// <summary>
++/// Parses ffmpeg pipeline graphs from -print_graphs JSON or command-line arguments.
++/// </summary>
++public static partial class TranscodingPipelineGraphParser
++{
++    /// <summary>
++    /// Parses an ffmpeg -print_graphs JSON document into ordered pipeline stages.
++    /// </summary>
++    /// <param name="json">Graph JSON.</param>
++    /// <returns>Pipeline info, or null if parsing fails.</returns>
++    public static TranscodingPipelineInfo? ParseGraphJson(string? json)
++    {
++        if (string.IsNullOrWhiteSpace(json))
++        {
++            return null;
++        }
++
++        try
++        {
++            using var doc = JsonDocument.Parse(json);
++            var root = doc.RootElement;
++            var stages = new List<TranscodingPipelineStage>();
++            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
++
++            // Walk decoders first.
++            CollectNamedNodes(root, "decoder", stages, seen, isDecoder: true, isEncoder: false);
++            CollectNamedNodes(root, "decoders", stages, seen, isDecoder: true, isEncoder: false);
++
++            // Walk filter graphs.
++            if (TryGetPropertyIgnoreCase(root, "graphs", out var graphs))
++            {
++                foreach (var graph in EnumerateArrayOrSelf(graphs))
++                {
++                    if (TryGetPropertyIgnoreCase(graph, "filters", out var filters))
++                    {
++                        foreach (var filter in EnumerateArrayOrSelf(filters))
++                        {
++                            AddFilterStage(filter, stages, seen);
++                        }
++                    }
++                    else
++                    {
++                        // Some writers nest under "graph" → "filters"
++                        if (TryGetPropertyIgnoreCase(graph, "graph", out var graphObj)
++                            && TryGetPropertyIgnoreCase(graphObj, "filters", out var nestedFilters))
++                        {
++                            foreach (var filter in EnumerateArrayOrSelf(nestedFilters))
++                            {
++                                AddFilterStage(filter, stages, seen);
++                            }
++                        }
++                    }
++                }
++            }
++
++            // Also accept a top-level filters array.
++            if (TryGetPropertyIgnoreCase(root, "filters", out var topFilters))
++            {
++                foreach (var filter in EnumerateArrayOrSelf(topFilters))
++                {
++                    AddFilterStage(filter, stages, seen);
++                }
++            }
++
++            CollectNamedNodes(root, "encoder", stages, seen, isDecoder: false, isEncoder: true);
++            CollectNamedNodes(root, "encoders", stages, seen, isDecoder: false, isEncoder: true);
++
++            // Also check inputstreams/outputstreams for codec names if no decoder/encoder found.
++            if (!stages.Any(s => s.Type == TranscodingPipelineStageType.Decode))
++            {
++                CollectStreamCodecs(root, "inputstreams", "inputstream", stages, seen, isDecoder: true);
++            }
++
++            if (!stages.Any(s => s.Type == TranscodingPipelineStageType.Encode))
++            {
++                CollectStreamCodecs(root, "outputstreams", "outputstream", stages, seen, isDecoder: false);
++            }
++
++            if (stages.Count == 0)
++            {
++                return null;
++            }
++
++            // Prefer forward order: Decode → filters → Encode; drop pure Unknown buffer filters when others exist.
++            stages = stages
++                .Where(s => s.Type != TranscodingPipelineStageType.Unknown
++                            || stages.All(x => x.Type == TranscodingPipelineStageType.Unknown))
++                .ToList();
++
++            return new TranscodingPipelineInfo { Stages = stages };
++        }
++        catch (JsonException)
++        {
++            return null;
++        }
++    }
++
++    /// <summary>
++    /// Best-effort parse of an ffmpeg command line into pipeline stages.
++    /// </summary>
++    /// <param name="commandLineArguments">FFmpeg arguments string.</param>
++    /// <returns>Pipeline info, or null if nothing useful found.</returns>
++    public static TranscodingPipelineInfo? ParseCommandLine(string? commandLineArguments)
++    {
++        if (string.IsNullOrWhiteSpace(commandLineArguments))
++        {
++            return null;
++        }
++
++        var stages = new List<TranscodingPipelineStage>();
++        var args = commandLineArguments;
++
++        // Hardware decode via -hwaccel.
++        var hwaccel = HwAccelRegex().Match(args);
++        if (hwaccel.Success)
++        {
++            var accel = hwaccel.Groups[1].Value;
++            stages.Add(TranscodingPipelineClassifier.CreateStage(
++                accel,
++                "Video",
++                isDecoder: true,
++                edgeLabel: null));
++        }
++
++        // Filter chains: -vf / -filter:v / -filter_complex
++        foreach (Match match in FilterRegex().Matches(args))
++        {
++            var chain = match.Groups[1].Value.Trim().Trim('"').Trim('\'');
++            foreach (var filterName in SplitFilterChain(chain))
++            {
++                var type = TranscodingPipelineClassifier.ClassifyStageType(filterName);
++                if (type == TranscodingPipelineStageType.Unknown
++                    && !filterName.Contains("scale", StringComparison.OrdinalIgnoreCase)
++                    && !filterName.Contains("format", StringComparison.OrdinalIgnoreCase)
++                    && !filterName.Contains("overlay", StringComparison.OrdinalIgnoreCase)
++                    && !filterName.Contains("tonemap", StringComparison.OrdinalIgnoreCase)
++                    && !filterName.Contains("yadif", StringComparison.OrdinalIgnoreCase)
++                    && !filterName.Contains("bwdif", StringComparison.OrdinalIgnoreCase)
++                    && !filterName.Contains("subtitles", StringComparison.OrdinalIgnoreCase)
++                    && !filterName.Contains("ass", StringComparison.OrdinalIgnoreCase)
++                    && !filterName.Contains("hwupload", StringComparison.OrdinalIgnoreCase)
++                    && !filterName.Contains("hwdownload", StringComparison.OrdinalIgnoreCase))
++                {
++                    continue;
++                }
++
++                stages.Add(TranscodingPipelineClassifier.CreateStage(filterName, "Video"));
++            }
++        }
++
++        // Video encoder: last -c:v / -vcodec wins for output.
++        var encoderMatches = VideoEncoderRegex().Matches(args);
++        if (encoderMatches.Count > 0)
++        {
++            var codec = encoderMatches[^1].Groups[1].Value;
++            if (!string.Equals(codec, "copy", StringComparison.OrdinalIgnoreCase))
++            {
++                stages.Add(TranscodingPipelineClassifier.CreateStage(codec, "Video", isEncoder: true));
++            }
++        }
++
++        // Audio encoder if not copy
++        var audioEncoder = AudioEncoderRegex().Match(args);
++        if (audioEncoder.Success)
++        {
++            var codec = audioEncoder.Groups[1].Value;
++            if (!string.Equals(codec, "copy", StringComparison.OrdinalIgnoreCase))
++            {
++                stages.Add(TranscodingPipelineClassifier.CreateStage(codec, "Audio", isEncoder: true));
++            }
++        }
++
++        // If we only found hardware decode via hwaccel name that isn't a codec, still keep it.
++        if (stages.Count == 0)
++        {
++            return null;
++        }
++
++        // Deduplicate consecutive identical names.
++        var deduped = new List<TranscodingPipelineStage>();
++        foreach (var stage in stages)
++        {
++            if (deduped.Count > 0
++                && string.Equals(deduped[^1].Name, stage.Name, StringComparison.OrdinalIgnoreCase)
++                && deduped[^1].Type == stage.Type)
++            {
++                continue;
++            }
++
++            deduped.Add(stage);
++        }
++
++        return new TranscodingPipelineInfo { Stages = deduped };
++    }
++
++    private static void CollectNamedNodes(
++        JsonElement root,
++        string propertyName,
++        List<TranscodingPipelineStage> stages,
++        HashSet<string> seen,
++        bool isDecoder,
++        bool isEncoder)
++    {
++        if (!TryGetPropertyIgnoreCase(root, propertyName, out var node))
++        {
++            return;
++        }
++
++        foreach (var element in EnumerateArrayOrSelf(node))
++        {
++            var name = GetStringProperty(element, "name")
++                       ?? GetStringProperty(element, "codec")
++                       ?? GetStringProperty(element, "codec_name")
++                       ?? GetStringProperty(element, "filter");
++            if (string.IsNullOrWhiteSpace(name))
++            {
++                continue;
++            }
++
++            var key = $"{(isDecoder ? "d" : isEncoder ? "e" : "f")}:{name}";
++            if (!seen.Add(key))
++            {
++                continue;
++            }
++
++            var mediaType = GetStringProperty(element, "media_type")
++                            ?? GetStringProperty(element, "type")
++                            ?? "Video";
++            if (string.Equals(mediaType, "video", StringComparison.OrdinalIgnoreCase))
++            {
++                mediaType = "Video";
++            }
++            else if (string.Equals(mediaType, "audio", StringComparison.OrdinalIgnoreCase))
++            {
++                mediaType = "Audio";
++            }
++
++            stages.Add(TranscodingPipelineClassifier.CreateStage(name, mediaType, isDecoder, isEncoder, BuildEdgeLabel(element)));
++        }
++    }
++
++    private static void CollectStreamCodecs(
++        JsonElement root,
++        string arrayName,
++        string elementName,
++        List<TranscodingPipelineStage> stages,
++        HashSet<string> seen,
++        bool isDecoder)
++    {
++        // Search recursively for arrays named arrayName
++        foreach (var arr in FindArraysNamed(root, arrayName))
++        {
++            foreach (var stream in EnumerateArrayOrSelf(arr))
++            {
++                var name = GetStringProperty(stream, "codec")
++                           ?? GetStringProperty(stream, "codec_name")
++                           ?? GetStringProperty(stream, "name");
++                if (string.IsNullOrWhiteSpace(name) || string.Equals(name, "copy", StringComparison.OrdinalIgnoreCase))
++                {
++                    continue;
++                }
++
++                var mediaType = GetStringProperty(stream, "media_type") ?? "Video";
++                var key = $"{(isDecoder ? "d" : "e")}:{name}";
++                if (!seen.Add(key))
++                {
++                    continue;
++                }
++
++                stages.Add(TranscodingPipelineClassifier.CreateStage(name, mediaType, isDecoder, !isDecoder));
++            }
++        }
++
++        // Also try singular objects under files
++        foreach (var arr in FindArraysNamed(root, elementName + "s"))
++        {
++            _ = arr;
++        }
++    }
++
++    private static void AddFilterStage(JsonElement filter, List<TranscodingPipelineStage> stages, HashSet<string> seen)
++    {
++        var name = GetStringProperty(filter, "filter")
++                   ?? GetStringProperty(filter, "name")
++                   ?? GetStringProperty(filter, "filter_name");
++        if (string.IsNullOrWhiteSpace(name))
++        {
++            return;
++        }
++
++        // Skip null/buffer/fifo plumbing filters.
++        var baseName = TranscodingPipelineClassifier.ExtractFilterBaseName(name);
++        if (baseName is "null" or "nullsrc" or "nullsink" or "buffer" or "buffersink" or "abuffer" or "abuffersink" or "fifo" or "afifo")
++        {
++            return;
++        }
++
++        var key = $"f:{name}";
++        if (!seen.Add(key))
++        {
++            return;
++        }
++
++        var mediaType = "Video";
++        if (baseName.StartsWith('a') && !baseName.StartsWith("ass", StringComparison.Ordinal))
++        {
++            mediaType = "Audio";
++        }
++
++        var edgeLabel = BuildEdgeLabel(filter);
++        if (edgeLabel is null && TryGetPropertyIgnoreCase(filter, "filter_outputs", out var outputs))
++        {
++            foreach (var output in EnumerateArrayOrSelf(outputs))
++            {
++                edgeLabel = BuildEdgeLabel(output);
++                if (edgeLabel is not null)
++                {
++                    break;
++                }
++            }
++        }
++        else if (edgeLabel is null && TryGetPropertyIgnoreCase(filter, "outputs", out var outs))
++        {
++            foreach (var output in EnumerateArrayOrSelf(outs))
++            {
++                edgeLabel = BuildEdgeLabel(output);
++                if (edgeLabel is not null)
++                {
++                    break;
++                }
++            }
++        }
++
++        stages.Add(TranscodingPipelineClassifier.CreateStage(name, mediaType, edgeLabel: edgeLabel));
++    }
++
++    private static string? BuildEdgeLabel(JsonElement element)
++    {
++        var format = GetStringProperty(element, "format")
++                     ?? GetStringProperty(element, "pix_fmt")
++                     ?? GetStringProperty(element, "pixel_format");
++
++        int? width = GetIntProperty(element, "width") ?? GetIntProperty(element, "w");
++        int? height = GetIntProperty(element, "height") ?? GetIntProperty(element, "h");
++
++        // Nested hw_frames_context may hold sw_format
++        if (format is null && TryGetPropertyIgnoreCase(element, "hw_frames_context", out var hw))
++        {
++            format = GetStringProperty(hw, "sw_format") ?? GetStringProperty(hw, "format");
++            width ??= GetIntProperty(hw, "width");
++            height ??= GetIntProperty(hw, "height");
++        }
++
++        if (format is null && width is null)
++        {
++            return null;
++        }
++
++        if (width is not null && height is not null)
++        {
++            return string.IsNullOrEmpty(format)
++                ? string.Create(CultureInfo.InvariantCulture, $"{width}x{height}")
++                : string.Create(CultureInfo.InvariantCulture, $"{format} {width}x{height}");
++        }
++
++        return format;
++    }
++
++    private static IEnumerable<string> SplitFilterChain(string chain)
++    {
++        // Split on ',' but respect [...labels...] and escaped commas roughly.
++        var parts = new List<string>();
++        var current = new System.Text.StringBuilder();
++        var bracketDepth = 0;
++
++        for (var i = 0; i < chain.Length; i++)
++        {
++            var c = chain[i];
++            if (c == '[')
++            {
++                bracketDepth++;
++                continue;
++            }
++
++            if (c == ']')
++            {
++                if (bracketDepth > 0)
++                {
++                    bracketDepth--;
++                }
++
++                continue;
++            }
++
++            if (c == ',' && bracketDepth == 0)
++            {
++                AddFilterPart(parts, current.ToString());
++                current.Clear();
++                continue;
++            }
++
++            if (c == ';' && bracketDepth == 0)
++            {
++                AddFilterPart(parts, current.ToString());
++                current.Clear();
++                continue;
++            }
++
++            current.Append(c);
++        }
++
++        AddFilterPart(parts, current.ToString());
++        return parts;
++    }
++
++    private static void AddFilterPart(List<string> parts, string raw)
++    {
++        var s = raw.Trim();
++        if (string.IsNullOrEmpty(s))
++        {
++            return;
++        }
++
++        // Take filter name before '=' options.
++        var eq = s.IndexOf('=', StringComparison.Ordinal);
++        var name = eq > 0 ? s[..eq] : s;
++        name = name.Trim();
++        if (!string.IsNullOrEmpty(name))
++        {
++            parts.Add(name);
++        }
++    }
++
++    private static IEnumerable<JsonElement> FindArraysNamed(JsonElement element, string name)
++    {
++        if (element.ValueKind == JsonValueKind.Object)
++        {
++            foreach (var prop in element.EnumerateObject())
++            {
++                if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase)
++                    && prop.Value.ValueKind == JsonValueKind.Array)
++                {
++                    yield return prop.Value;
++                }
++
++                foreach (var nested in FindArraysNamed(prop.Value, name))
++                {
++                    yield return nested;
++                }
++            }
++        }
++        else if (element.ValueKind == JsonValueKind.Array)
++        {
++            foreach (var item in element.EnumerateArray())
++            {
++                foreach (var nested in FindArraysNamed(item, name))
++                {
++                    yield return nested;
++                }
++            }
++        }
++    }
++
++    private static IEnumerable<JsonElement> EnumerateArrayOrSelf(JsonElement element)
++    {
++        if (element.ValueKind == JsonValueKind.Array)
++        {
++            foreach (var item in element.EnumerateArray())
++            {
++                yield return item;
++            }
++        }
++        else if (element.ValueKind == JsonValueKind.Object)
++        {
++            yield return element;
++        }
++    }
++
++    private static bool TryGetPropertyIgnoreCase(JsonElement element, string name, out JsonElement value)
++    {
++        if (element.ValueKind == JsonValueKind.Object)
++        {
++            foreach (var prop in element.EnumerateObject())
++            {
++                if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
++                {
++                    value = prop.Value;
++                    return true;
++                }
++            }
++        }
++
++        value = default;
++        return false;
++    }
++
++    private static string? GetStringProperty(JsonElement element, string name)
++    {
++        if (TryGetPropertyIgnoreCase(element, name, out var value))
++        {
++            return value.ValueKind switch
++            {
++                JsonValueKind.String => value.GetString(),
++                JsonValueKind.Number => value.ToString(),
++                _ => null
++            };
++        }
++
++        return null;
++    }
++
++    private static int? GetIntProperty(JsonElement element, string name)
++    {
++        if (TryGetPropertyIgnoreCase(element, name, out var value))
++        {
++            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var i))
++            {
++                return i;
++            }
++
++            if (value.ValueKind == JsonValueKind.String
++                && int.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
++            {
++                return parsed;
++            }
++        }
++
++        return null;
++    }
++
++    [GeneratedRegex(@"-hwaccel\s+(\S+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
++    private static partial Regex HwAccelRegex();
++
++    [GeneratedRegex(@"-(?:vf|filter:v|filter_complex)\s+(""(?:[^""]|\\"")*""|'(?:[^']|\\')*'|\S+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
++    private static partial Regex FilterRegex();
++
++    [GeneratedRegex(@"-(?:c:v|vcodec)(?::\d+)?\s+(\S+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
++    private static partial Regex VideoEncoderRegex();
++
++    [GeneratedRegex(@"-(?:c:a|acodec)(?::\d+)?\s+(\S+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
++    private static partial Regex AudioEncoderRegex();
++}
+diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodingPipelineProbe.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodingPipelineProbe.cs
+new file mode 100644
+index 0000000000..c271d3f7dd
+--- /dev/null
++++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodingPipelineProbe.cs
+@@ -0,0 +1,267 @@
++using System;
++using System.Collections.Concurrent;
++using System.Diagnostics;
++using System.Globalization;
++using System.IO;
++using System.Text;
++using System.Text.RegularExpressions;
++using System.Threading;
++using System.Threading.Tasks;
++using MediaBrowser.Common.Configuration;
++using MediaBrowser.Controller.MediaEncoding;
++using MediaBrowser.Model.Session;
++using Microsoft.Extensions.Logging;
++
++namespace MediaBrowser.MediaEncoding.Transcoding;
++
++/// <summary>
++/// Probes ffmpeg pipelines via -print_graphs (ffmpeg ≥ 8) or command-line fallback.
++/// </summary>
++public sealed partial class TranscodingPipelineProbe : ITranscodingPipelineProbe
++{
++    private static readonly Version MinPrintGraphsVersion = new(8, 0);
++
++    private readonly ILogger<TranscodingPipelineProbe> _logger;
++    private readonly IMediaEncoder _mediaEncoder;
++    private readonly IApplicationPaths _appPaths;
++    private readonly ConcurrentDictionary<string, TranscodingPipelineInfo> _cache = new(StringComparer.OrdinalIgnoreCase);
++    private readonly ConcurrentDictionary<string, byte> _inFlight = new(StringComparer.OrdinalIgnoreCase);
++
++    /// <summary>
++    /// Initializes a new instance of the <see cref="TranscodingPipelineProbe"/> class.
++    /// </summary>
++    /// <param name="logger">Logger.</param>
++    /// <param name="mediaEncoder">Media encoder.</param>
++    /// <param name="appPaths">Application paths.</param>
++    public TranscodingPipelineProbe(
++        ILogger<TranscodingPipelineProbe> logger,
++        IMediaEncoder mediaEncoder,
++        IApplicationPaths appPaths)
++    {
++        _logger = logger;
++        _mediaEncoder = mediaEncoder;
++        _appPaths = appPaths;
++    }
++
++    /// <inheritdoc />
++    public TranscodingPipelineInfo? GetCachedPipeline(string? playSessionId)
++    {
++        if (string.IsNullOrWhiteSpace(playSessionId))
++        {
++            return null;
++        }
++
++        return _cache.TryGetValue(playSessionId, out var pipeline) ? pipeline : null;
++    }
++
++    /// <inheritdoc />
++    public void BeginProbe(string? playSessionId, string commandLineArguments, CancellationToken cancellationToken = default)
++    {
++        if (string.IsNullOrWhiteSpace(playSessionId) || string.IsNullOrWhiteSpace(commandLineArguments))
++        {
++            return;
++        }
++
++        if (!_inFlight.TryAdd(playSessionId, 0))
++        {
++            return;
++        }
++
++        if (_cache.ContainsKey(playSessionId))
++        {
++            _inFlight.TryRemove(playSessionId, out _);
++            return;
++        }
++
++        _ = Task.Run(() => ProbeAsync(playSessionId, commandLineArguments, cancellationToken), CancellationToken.None);
++    }
++
++    /// <inheritdoc />
++    public void Evict(string? playSessionId)
++    {
++        if (string.IsNullOrWhiteSpace(playSessionId))
++        {
++            return;
++        }
++
++        _cache.TryRemove(playSessionId, out _);
++        _inFlight.TryRemove(playSessionId, out _);
++    }
++
++    private async Task ProbeAsync(string playSessionId, string commandLineArguments, CancellationToken cancellationToken)
++    {
++        try
++        {
++            TranscodingPipelineInfo? pipeline = null;
++
++            if (_mediaEncoder.EncoderVersion >= MinPrintGraphsVersion
++                && !string.IsNullOrEmpty(_mediaEncoder.EncoderPath))
++            {
++                pipeline = await RunPrintGraphsProbeAsync(commandLineArguments, cancellationToken).ConfigureAwait(false);
++            }
++
++            pipeline ??= TranscodingPipelineGraphParser.ParseCommandLine(commandLineArguments);
++
++            if (pipeline is not null)
++            {
++                _cache[playSessionId] = pipeline;
++                _logger.LogDebug(
++                    "Cached transcoding pipeline for PlaySessionId={PlaySessionId} with {StageCount} stages",
++                    playSessionId,
++                    pipeline.Stages.Count);
++            }
++        }
++        catch (Exception ex) when (ex is not OperationCanceledException)
++        {
++            _logger.LogDebug(ex, "Failed to probe transcoding pipeline for PlaySessionId={PlaySessionId}", playSessionId);
++
++            // Still try CLI fallback if graph probe threw.
++            try
++            {
++                var fallback = TranscodingPipelineGraphParser.ParseCommandLine(commandLineArguments);
++                if (fallback is not null)
++                {
++                    _cache[playSessionId] = fallback;
++                }
++            }
++            catch (Exception fallbackEx)
++            {
++                _logger.LogDebug(fallbackEx, "CLI pipeline fallback also failed for PlaySessionId={PlaySessionId}", playSessionId);
++            }
++        }
++        finally
++        {
++            _inFlight.TryRemove(playSessionId, out _);
++        }
++    }
++
++    private async Task<TranscodingPipelineInfo?> RunPrintGraphsProbeAsync(string commandLineArguments, CancellationToken cancellationToken)
++    {
++        var probeDir = Path.Combine(_appPaths.CachePath, "pipeline-probe", Guid.NewGuid().ToString("N"));
++        Directory.CreateDirectory(probeDir);
++
++        try
++        {
++            var graphPath = Path.Combine(probeDir, "graph.json");
++            var outputPath = Path.Combine(probeDir, "probe.null");
++            var args = BuildProbeArguments(commandLineArguments, graphPath, outputPath);
++
++            using var process = new Process
++            {
++                StartInfo = new ProcessStartInfo
++                {
++                    FileName = _mediaEncoder.EncoderPath,
++                    Arguments = args,
++                    WindowStyle = ProcessWindowStyle.Hidden,
++                    CreateNoWindow = true,
++                    UseShellExecute = false,
++                    RedirectStandardError = true,
++                    RedirectStandardOutput = true,
++                    ErrorDialog = false
++                },
++                EnableRaisingEvents = true
++            };
++
++            _logger.LogDebug("Pipeline probe: {FileName} {Arguments}", process.StartInfo.FileName, process.StartInfo.Arguments);
++
++            var stderr = new StringBuilder();
++            process.ErrorDataReceived += (_, e) =>
++            {
++                if (e.Data is not null)
++                {
++                    stderr.AppendLine(e.Data);
++                }
++            };
++
++            if (!process.Start())
++            {
++                return null;
++            }
++
++            process.BeginErrorReadLine();
++            // Drain stdout to avoid pipe stalls.
++            _ = process.StandardOutput.ReadToEndAsync(cancellationToken);
++
++            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
++            timeoutCts.CancelAfter(TimeSpan.FromSeconds(15));
++
++            try
++            {
++                await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
++            }
++            catch (OperationCanceledException)
++            {
++                try
++                {
++                    if (!process.HasExited)
++                    {
++                        process.Kill(entireProcessTree: true);
++                    }
++                }
++                catch
++                {
++                    // Ignore kill failures.
++                }
++
++                return TranscodingPipelineGraphParser.ParseCommandLine(commandLineArguments);
++            }
++
++            if (File.Exists(graphPath))
++            {
++                var json = await File.ReadAllTextAsync(graphPath, CancellationToken.None).ConfigureAwait(false);
++                var parsed = TranscodingPipelineGraphParser.ParseGraphJson(json);
++                if (parsed is not null)
++                {
++                    return parsed;
++                }
++            }
++
++            _logger.LogDebug(
++                "print_graphs probe produced no usable JSON (exit {ExitCode}). stderr: {Stderr}",
++                process.ExitCode,
++                stderr.ToString());
++
++            return null;
++        }
++        finally
++        {
++            try
++            {
++                if (Directory.Exists(probeDir))
++                {
++                    Directory.Delete(probeDir, recursive: true);
++                }
++            }
++            catch (Exception ex)
++            {
++                _logger.LogDebug(ex, "Failed to clean pipeline probe directory {ProbeDir}", probeDir);
++            }
++        }
++    }
++
++    /// <summary>
++    /// Builds ffmpeg args for a throwaway -t 0 graph probe.
++    /// </summary>
++    /// <param name="originalArgs">Live transcode arguments.</param>
++    /// <param name="graphPath">Path for -print_graphs_file.</param>
++    /// <param name="outputPath">Throwaway output path.</param>
++    /// <returns>Probe argument string.</returns>
++    public static string BuildProbeArguments(string originalArgs, string graphPath, string outputPath)
++    {
++        // Strip existing output path (last token that looks like a quoted/unquoted path after -y or trailing).
++        var args = originalArgs.Trim();
++
++        // Remove a trailing -y "path" or -y path or bare output path.
++        args = TrailingOutputRegex().Replace(args, string.Empty).Trim();
++
++        // Ensure we don't keep -progress / weird pipes.
++        var sb = new StringBuilder();
++        sb.Append(CultureInfo.InvariantCulture, $"-hide_banner -nostats -t 0 ");
++        sb.Append(args);
++        sb.Append(CultureInfo.InvariantCulture, $" -print_graphs -print_graphs_format json -print_graphs_file \"{graphPath}\" -f null \"{outputPath}\"");
++        return sb.ToString();
++    }
++
++    [GeneratedRegex("""(?:^|\s)-y\s+(?:"[^"]*"|'[^']*'|\S+)\s*$""", RegexOptions.CultureInvariant)]
++    private static partial Regex TrailingOutputRegex();
++}
+diff --git a/MediaBrowser.Model/Session/TranscodingHardwareFramework.cs b/MediaBrowser.Model/Session/TranscodingHardwareFramework.cs
+new file mode 100644
+index 0000000000..51bbfdc66e
+--- /dev/null
++++ b/MediaBrowser.Model/Session/TranscodingHardwareFramework.cs
+@@ -0,0 +1,67 @@
++namespace MediaBrowser.Model.Session;
++
++/// <summary>
++/// Hardware framework a transcoding stage runs on.
++/// </summary>
++public enum TranscodingHardwareFramework
++{
++    /// <summary>
++    /// Software (CPU) path.
++    /// </summary>
++    Software = 0,
++
++    /// <summary>
++    /// Intel Quick Sync Video.
++    /// </summary>
++    Qsv = 1,
++
++    /// <summary>
++    /// NVIDIA CUDA / NVENC / CUVID.
++    /// </summary>
++    Cuda = 2,
++
++    /// <summary>
++    /// VAAPI.
++    /// </summary>
++    Vaapi = 3,
++
++    /// <summary>
++    /// Direct3D 11 Video Acceleration.
++    /// </summary>
++    D3D11Va = 4,
++
++    /// <summary>
++    /// Apple VideoToolbox.
++    /// </summary>
++    VideoToolbox = 5,
++
++    /// <summary>
++    /// AMD AMF.
++    /// </summary>
++    Amf = 6,
++
++    /// <summary>
++    /// OpenCL filters.
++    /// </summary>
++    OpenCl = 7,
++
++    /// <summary>
++    /// Vulkan.
++    /// </summary>
++    Vulkan = 8,
++
++    /// <summary>
++    /// Rockchip MPP / RGA.
++    /// </summary>
++    Rkmpp = 9,
++
++    /// <summary>
++    /// Apple AudioToolbox.
++    /// </summary>
++    AudioToolbox = 10,
++
++    /// <summary>
++    /// Video4Linux2 M2M.
++    /// </summary>
++    V4l2m2m = 11
++}
+diff --git a/MediaBrowser.Model/Session/TranscodingInfo.cs b/MediaBrowser.Model/Session/TranscodingInfo.cs
+index 11e83844b0..fa55c7ef64 100644
+--- a/MediaBrowser.Model/Session/TranscodingInfo.cs
++++ b/MediaBrowser.Model/Session/TranscodingInfo.cs
+@@ -1,5 +1,6 @@
+ #nullable disable
+ 
++using MediaBrowser.Model.Dlna;
+ using MediaBrowser.Model.Entities;
+ 
+ namespace MediaBrowser.Model.Session;
+@@ -73,4 +74,59 @@ public class TranscodingInfo
+     /// Gets or sets the transcode reasons.
+     /// </summary>
+     public TranscodeReason TranscodeReasons { get; set; }
++
++    /// <summary>
++    /// Gets or sets the transport protocol used for the transcode ("hls", "dash", or "http").
++    /// </summary>
++    public string TranscodeProtocol { get; set; }
++
++    /// <summary>
++    /// Gets or sets the target video-only bitrate.
++    /// </summary>
++    public int? VideoBitrate { get; set; }
++
++    /// <summary>
++    /// Gets or sets the target audio-only bitrate.
++    /// </summary>
++    public int? AudioBitrate { get; set; }
++
++    /// <summary>
++    /// Gets or sets the number of bytes written so far.
++    /// </summary>
++    public long? BytesTranscoded { get; set; }
++
++    /// <summary>
++    /// Gets or sets the realtime speed multiplier from ffmpeg (speed=).
++    /// </summary>
++    public float? Speed { get; set; }
++
++    /// <summary>
++    /// Gets or sets how far the encoder has reached, in ticks.
++    /// </summary>
++    public long? TranscodePositionTicks { get; set; }
++
++    /// <summary>
++    /// Gets or sets how far the encoder leads the playback head, in ticks.
++    /// </summary>
++    public long? TranscodeBufferTicks { get; set; }
++
++    /// <summary>
++    /// Gets or sets a value indicating whether the encoder is paused to avoid running ahead.
++    /// </summary>
++    public bool IsThrottled { get; set; }
++
++    /// <summary>
++    /// Gets or sets the subtitle codec when subtitles are involved.
++    /// </summary>
++    public string SubtitleCodec { get; set; }
++
++    /// <summary>
++    /// Gets or sets the subtitle delivery method.
++    /// </summary>
++    public SubtitleDeliveryMethod? SubtitleDeliveryMethod { get; set; }
++
++    /// <summary>
++    /// Gets or sets the structured processing pipeline for this transcode.
++    /// </summary>
++    public TranscodingPipelineInfo Pipeline { get; set; }
+ }
+diff --git a/MediaBrowser.Model/Session/TranscodingPipelineInfo.cs b/MediaBrowser.Model/Session/TranscodingPipelineInfo.cs
+new file mode 100644
+index 0000000000..3d319196f9
+--- /dev/null
++++ b/MediaBrowser.Model/Session/TranscodingPipelineInfo.cs
+@@ -0,0 +1,14 @@
++using System.Collections.Generic;
++
++namespace MediaBrowser.Model.Session;
++
++/// <summary>
++/// Structured description of an active ffmpeg processing pipeline.
++/// </summary>
++public class TranscodingPipelineInfo
++{
++    /// <summary>
++    /// Gets or sets the ordered pipeline stages.
++    /// </summary>
++    public IReadOnlyList<TranscodingPipelineStage> Stages { get; set; } = [];
++}
+diff --git a/MediaBrowser.Model/Session/TranscodingPipelineStage.cs b/MediaBrowser.Model/Session/TranscodingPipelineStage.cs
+new file mode 100644
+index 0000000000..8335adfbf9
+--- /dev/null
++++ b/MediaBrowser.Model/Session/TranscodingPipelineStage.cs
+@@ -0,0 +1,42 @@
++namespace MediaBrowser.Model.Session;
++
++/// <summary>
++/// A single stage in an active transcoding pipeline.
++/// </summary>
++public class TranscodingPipelineStage
++{
++    /// <summary>
++    /// Gets or sets the stage type.
++    /// </summary>
++    public TranscodingPipelineStageType Type { get; set; }
++
++    /// <summary>
++    /// Gets or sets the media type ("Video" or "Audio").
++    /// </summary>
++    public string? MediaType { get; set; }
++
++    /// <summary>
++    /// Gets or sets the hardware framework this stage runs on.
++    /// </summary>
++    public TranscodingHardwareFramework Framework { get; set; }
++
++    /// <summary>
++    /// Gets or sets a short stage name (e.g. "scale_vt", "Decode (hevc)").
++    /// </summary>
++    public string? Name { get; set; }
++
++    /// <summary>
++    /// Gets or sets a human-readable detail (e.g. "H.265 (HEVC)", "Burn-in").
++    /// </summary>
++    public string? Detail { get; set; }
++
++    /// <summary>
++    /// Gets or sets a value indicating whether this stage runs on hardware.
++    /// </summary>
++    public bool IsHardware { get; set; }
++
++    /// <summary>
++    /// Gets or sets the edge label describing pad format/size after this stage (e.g. "nv12 3840x1636").
++    /// </summary>
++    public string? EdgeLabel { get; set; }
++}
+diff --git a/MediaBrowser.Model/Session/TranscodingPipelineStageType.cs b/MediaBrowser.Model/Session/TranscodingPipelineStageType.cs
+new file mode 100644
+index 0000000000..6e5295d48a
+--- /dev/null
++++ b/MediaBrowser.Model/Session/TranscodingPipelineStageType.cs
+@@ -0,0 +1,47 @@
++namespace MediaBrowser.Model.Session;
++
++/// <summary>
++/// Stage type within a transcoding pipeline.
++/// </summary>
++public enum TranscodingPipelineStageType
++{
++    /// <summary>
++    /// Unknown or unclassified stage.
++    /// </summary>
++    Unknown = 0,
++
++    /// <summary>
++    /// Video or audio decode.
++    /// </summary>
++    Decode = 1,
++
++    /// <summary>
++    /// Scaling / resize.
++    /// </summary>
++    Scale = 2,
++
++    /// <summary>
++    /// Deinterlace.
++    /// </summary>
++    Deinterlace = 3,
++
++    /// <summary>
++    /// Tone mapping / HDR→SDR.
++    /// </summary>
++    ToneMap = 4,
++
++    /// <summary>
++    /// Subtitle burn-in / overlay prep.
++    /// </summary>
++    Subtitle = 5,
++
++    /// <summary>
++    /// Pixel format conversion.
++    /// </summary>
++    Format = 6,
++
++    /// <summary>
++    /// Video or audio encode.
++    /// </summary>
++    Encode = 7
++}
+diff --git a/tests/Jellyfin.MediaEncoding.Tests/Transcoding/TranscodingPipelineClassifierTests.cs b/tests/Jellyfin.MediaEncoding.Tests/Transcoding/TranscodingPipelineClassifierTests.cs
+new file mode 100644
+index 0000000000..9691d2d3d4
+--- /dev/null
++++ b/tests/Jellyfin.MediaEncoding.Tests/Transcoding/TranscodingPipelineClassifierTests.cs
+@@ -0,0 +1,56 @@
++using MediaBrowser.MediaEncoding.Transcoding;
++using MediaBrowser.Model.Session;
++using Xunit;
++
++namespace Jellyfin.MediaEncoding.Tests.Transcoding;
++
++public class TranscodingPipelineClassifierTests
++{
++    [Theory]
++    [InlineData("hevc_qsv", TranscodingHardwareFramework.Qsv)]
++    [InlineData("h264_nvenc", TranscodingHardwareFramework.Cuda)]
++    [InlineData("scale_cuda", TranscodingHardwareFramework.Cuda)]
++    [InlineData("hevc_cuvid", TranscodingHardwareFramework.Cuda)]
++    [InlineData("scale_vaapi", TranscodingHardwareFramework.Vaapi)]
++    [InlineData("h264_amf", TranscodingHardwareFramework.Amf)]
++    [InlineData("scale_vt", TranscodingHardwareFramework.VideoToolbox)]
++    [InlineData("overlay_videotoolbox", TranscodingHardwareFramework.VideoToolbox)]
++    [InlineData("tonemap_opencl", TranscodingHardwareFramework.OpenCl)]
++    [InlineData("scale_vulkan", TranscodingHardwareFramework.Vulkan)]
++    [InlineData("h264_rkmpp", TranscodingHardwareFramework.Rkmpp)]
++    [InlineData("h264_v4l2m2m", TranscodingHardwareFramework.V4l2m2m)]
++    [InlineData("aac_at", TranscodingHardwareFramework.AudioToolbox)]
++    [InlineData("scale", TranscodingHardwareFramework.Software)]
++    [InlineData("libx264", TranscodingHardwareFramework.Software)]
++    public void ClassifyFramework_MapsKnownNames(string name, TranscodingHardwareFramework expected)
++    {
++        Assert.Equal(expected, TranscodingPipelineClassifier.ClassifyFramework(name));
++    }
++
++    [Theory]
++    [InlineData("scale_cuda", false, false, TranscodingPipelineStageType.Scale)]
++    [InlineData("tonemap_opencl", false, false, TranscodingPipelineStageType.ToneMap)]
++    [InlineData("yadif", false, false, TranscodingPipelineStageType.Deinterlace)]
++    [InlineData("bwdif_cuda", false, false, TranscodingPipelineStageType.Deinterlace)]
++    [InlineData("overlay_cuda", false, false, TranscodingPipelineStageType.Subtitle)]
++    [InlineData("subtitles", false, false, TranscodingPipelineStageType.Subtitle)]
++    [InlineData("format", false, false, TranscodingPipelineStageType.Format)]
++    [InlineData("hwupload_cuda", false, false, TranscodingPipelineStageType.Format)]
++    [InlineData("hevc", true, false, TranscodingPipelineStageType.Decode)]
++    [InlineData("h264_nvenc", false, true, TranscodingPipelineStageType.Encode)]
++    [InlineData("Parsed_scale_cuda_0", false, false, TranscodingPipelineStageType.Scale)]
++    public void ClassifyStageType_MapsKnownNames(
++        string name,
++        bool isDecoder,
++        bool isEncoder,
++        TranscodingPipelineStageType expected)
++    {
++        Assert.Equal(expected, TranscodingPipelineClassifier.ClassifyStageType(name, isDecoder, isEncoder));
++    }
++
++    [Fact]
++    public void ExtractFilterBaseName_StripsParsedPrefixAndIndex()
++    {
++        Assert.Equal("scale_cuda", TranscodingPipelineClassifier.ExtractFilterBaseName("Parsed_scale_cuda_0"));
++    }
++}
+diff --git a/tests/Jellyfin.MediaEncoding.Tests/Transcoding/TranscodingPipelineGraphParserTests.cs b/tests/Jellyfin.MediaEncoding.Tests/Transcoding/TranscodingPipelineGraphParserTests.cs
+new file mode 100644
+index 0000000000..2a05a1cf44
+--- /dev/null
++++ b/tests/Jellyfin.MediaEncoding.Tests/Transcoding/TranscodingPipelineGraphParserTests.cs
+@@ -0,0 +1,109 @@
++using System.Linq;
++using MediaBrowser.MediaEncoding.Transcoding;
++using MediaBrowser.Model.Session;
++using Xunit;
++
++namespace Jellyfin.MediaEncoding.Tests.Transcoding;
++
++public class TranscodingPipelineGraphParserTests
++{
++    [Fact]
++    public void ParseCommandLine_ExtractsHwaccelFiltersAndEncoder()
++    {
++        const string Args =
++            "-hwaccel cuda -i input.mkv -vf scale_cuda=1920:1080,tonemap_cuda,hwdownload,format=nv12 -c:v h264_nvenc -c:a aac -y output.mp4";
++
++        var pipeline = TranscodingPipelineGraphParser.ParseCommandLine(Args);
++
++        Assert.NotNull(pipeline);
++        Assert.Contains(pipeline!.Stages, s => s.Type == TranscodingPipelineStageType.Decode && s.IsHardware);
++        Assert.Contains(pipeline.Stages, s => s.Type == TranscodingPipelineStageType.Scale);
++        Assert.Contains(pipeline.Stages, s => s.Type == TranscodingPipelineStageType.ToneMap);
++        Assert.Contains(pipeline.Stages, s => s.Type == TranscodingPipelineStageType.Encode && s.Framework == TranscodingHardwareFramework.Cuda);
++        Assert.Contains(pipeline.Stages, s => s.MediaType == "Audio" && s.Type == TranscodingPipelineStageType.Encode);
++    }
++
++    [Fact]
++    public void ParseCommandLine_IgnoresCopyCodec()
++    {
++        const string Args = "-i input.mkv -c:v copy -c:a copy -y out.mkv";
++
++        var pipeline = TranscodingPipelineGraphParser.ParseCommandLine(Args);
++
++        Assert.Null(pipeline);
++    }
++
++    [Fact]
++    public void ParseGraphJson_BuildsOrderedStages()
++    {
++        const string Json = """
++            {
++              "graphs": [
++                {
++                  "filters": [
++                    {
++                      "filter": "scale_cuda",
++                      "name": "Parsed_scale_cuda_0",
++                      "filter_outputs": [
++                        { "format": "nv12", "width": 1920, "height": 1080 }
++                      ]
++                    },
++                    {
++                      "filter": "tonemap_cuda",
++                      "name": "Parsed_tonemap_cuda_1",
++                      "filter_outputs": [
++                        { "format": "nv12", "width": 1920, "height": 1080 }
++                      ]
++                    },
++                    {
++                      "filter": "overlay_cuda",
++                      "name": "Parsed_overlay_cuda_2"
++                    }
++                  ]
++                }
++              ],
++              "decoder": { "name": "hevc_cuvid", "media_type": "video" },
++              "encoder": { "name": "h264_nvenc", "media_type": "video" }
++            }
++            """;
++
++        var pipeline = TranscodingPipelineGraphParser.ParseGraphJson(Json);
++
++        Assert.NotNull(pipeline);
++        Assert.True(pipeline!.Stages.Count >= 4);
++        Assert.Equal(TranscodingPipelineStageType.Decode, pipeline.Stages[0].Type);
++        Assert.Contains(pipeline.Stages, s => s.Type == TranscodingPipelineStageType.Scale && s.EdgeLabel == "nv12 1920x1080");
++        Assert.Contains(pipeline.Stages, s => s.Type == TranscodingPipelineStageType.ToneMap);
++        Assert.Contains(pipeline.Stages, s => s.Type == TranscodingPipelineStageType.Subtitle);
++        Assert.Equal(TranscodingPipelineStageType.Encode, pipeline.Stages[^1].Type);
++        Assert.All(
++            pipeline.Stages.Where(s => s.Type is TranscodingPipelineStageType.Decode
++                or TranscodingPipelineStageType.Scale
++                or TranscodingPipelineStageType.ToneMap
++                or TranscodingPipelineStageType.Subtitle
++                or TranscodingPipelineStageType.Encode),
++            s => Assert.True(s.IsHardware));
++    }
++
++    [Fact]
++    public void ParseGraphJson_InvalidJson_ReturnsNull()
++    {
++        Assert.Null(TranscodingPipelineGraphParser.ParseGraphJson("{ not json"));
++    }
++
++    [Fact]
++    public void BuildProbeArguments_AppendsPrintGraphsAndNullOutput()
++    {
++        var args = TranscodingPipelineProbe.BuildProbeArguments(
++            "-i in.mkv -c:v libx264 -y \"/tmp/out.mp4\"",
++            "/tmp/graph.json",
++            "/tmp/probe.null");
++
++        Assert.Contains("-t 0", args, System.StringComparison.Ordinal);
++        Assert.Contains("-print_graphs", args, System.StringComparison.Ordinal);
++        Assert.Contains("-print_graphs_format json", args, System.StringComparison.Ordinal);
++        Assert.Contains("/tmp/graph.json", args, System.StringComparison.Ordinal);
++        Assert.Contains("-f null", args, System.StringComparison.Ordinal);
++        Assert.DoesNotContain("/tmp/out.mp4", args, System.StringComparison.Ordinal);
++    }
++}
