@@ -1,0 +1,195 @@
+# Fix favorites lost during playback progress saves (https://github.com/jellyfin/jellyfin/issues/14981).
+# Goes beyond upstream #15048 (cache-first GetUserData on 10.11.z only): also serializes
+# per-item SaveUserData and reloads IsFavorite/Rating from DB for PlaybackStart/Progress/Finished
+# so a stale progress snapshot cannot overwrite a concurrent favorite.
+#
+diff --git a/Emby.Server.Implementations/Library/UserDataManager.cs b/Emby.Server.Implementations/Library/UserDataManager.cs
+index 1281f1587f..e98bd2efd0 100644
+--- a/Emby.Server.Implementations/Library/UserDataManager.cs
++++ b/Emby.Server.Implementations/Library/UserDataManager.cs
+@@ -1,6 +1,7 @@
+ #pragma warning disable RS0030 // Do not use banned APIs
+ 
+ using System;
++using System.Collections.Concurrent;
+ using System.Collections.Generic;
+ using System.Globalization;
+ using System.Linq;
+@@ -28,6 +29,7 @@ namespace Emby.Server.Implementations.Library
+         private readonly IServerConfigurationManager _config;
+         private readonly IDbContextFactory<JellyfinDbContext> _repository;
+         private readonly FastConcurrentLru<string, UserItemData> _cache;
++        private readonly ConcurrentDictionary<string, object> _saveLocks = new(StringComparer.OrdinalIgnoreCase);
+ 
+         /// <summary>
+         /// Initializes a new instance of the <see cref="UserDataManager"/> class.
+@@ -56,31 +58,53 @@ namespace Emby.Server.Implementations.Library
+             cancellationToken.ThrowIfCancellationRequested();
+ 
+             var keys = item.GetUserDataKeys();
++            var cacheKey = GetCacheKey(user.InternalId, item.Id);
++            var saveLock = _saveLocks.GetOrAdd(cacheKey, static _ => new object());
+ 
+-            using var dbContext = _repository.CreateDbContext();
+-            using var transaction = dbContext.Database.BeginTransaction();
+-
+-            foreach (var key in keys)
++            lock (saveLock)
+             {
+-                userData.Key = key;
+-                var userDataEntry = Map(userData, user.Id, item.Id);
+-                if (dbContext.UserData.Any(f => f.ItemId == userDataEntry.ItemId && f.UserId == userDataEntry.UserId && f.CustomDataKey == userDataEntry.CustomDataKey))
++                using var dbContext = _repository.CreateDbContext();
++                using var transaction = dbContext.Database.BeginTransaction();
++
++                // Playback saves rewrite the whole userdata row. Concurrent favorite/like/rating
++                // updates must not be clobbered by a stale in-memory progress snapshot (see #14981).
++                if (IsPlaybackSaveReason(reason))
+                 {
+-                    dbContext.UserData.Attach(userDataEntry).State = EntityState.Modified;
++                    var existingPreferences = dbContext.UserData
++                        .AsNoTracking()
++                        .Where(e => e.ItemId == item.Id && e.UserId == user.Id)
++                        .Select(e => new { e.IsFavorite, e.Rating })
++                        .FirstOrDefault();
++
++                    if (existingPreferences is not null)
++                    {
++                        ApplyCommittedUserPreferences(
++                            userData,
++                            existingPreferences.IsFavorite,
++                            existingPreferences.Rating);
++                    }
+                 }
+-                else
++
++                foreach (var key in keys)
+                 {
+-                    dbContext.UserData.Add(userDataEntry);
++                    userData.Key = key;
++                    var userDataEntry = Map(userData, user.Id, item.Id);
++                    if (dbContext.UserData.Any(f => f.ItemId == userDataEntry.ItemId && f.UserId == userDataEntry.UserId && f.CustomDataKey == userDataEntry.CustomDataKey))
++                    {
++                        dbContext.UserData.Attach(userDataEntry).State = EntityState.Modified;
++                    }
++                    else
++                    {
++                        dbContext.UserData.Add(userDataEntry);
++                    }
+                 }
+-            }
+ 
+-            dbContext.SaveChanges();
+-            transaction.Commit();
++                dbContext.SaveChanges();
++                transaction.Commit();
+ 
+-            var userId = user.InternalId;
+-            var cacheKey = GetCacheKey(userId, item.Id);
+-            _cache.AddOrUpdate(cacheKey, userData);
+-            item.UserData = dbContext.UserData.Where(e => e.ItemId == item.Id).AsNoTracking().ToArray(); // rehydrate the cached userdata
++                _cache.AddOrUpdate(cacheKey, userData);
++                item.UserData = dbContext.UserData.Where(e => e.ItemId == item.Id).AsNoTracking().ToArray(); // rehydrate the cached userdata
++            }
+ 
+             UserDataSaved?.Invoke(this, new UserDataSaveEventArgs
+             {
+@@ -92,6 +116,31 @@ namespace Emby.Server.Implementations.Library
+             });
+         }
+ 
++        /// <summary>
++        /// Returns true when the save is driven by playback position bookkeeping rather than an
++        /// explicit userdata preference change.
++        /// </summary>
++        /// <param name="reason">The save reason.</param>
++        /// <returns>Whether preference fields should be reloaded from the committed row.</returns>
++        internal static bool IsPlaybackSaveReason(UserDataSaveReason reason)
++            => reason is UserDataSaveReason.PlaybackStart
++                or UserDataSaveReason.PlaybackProgress
++                or UserDataSaveReason.PlaybackFinished;
++
++        /// <summary>
++        /// Copies committed favorite/rating preferences onto a userdata object about to be
++        /// persisted from a playback save. <see cref="UserItemData.Likes"/> is derived from
++        /// <see cref="UserItemData.Rating"/>, so only Rating is restored.
++        /// </summary>
++        /// <param name="userData">The in-memory userdata being saved.</param>
++        /// <param name="isFavorite">Committed favorite flag.</param>
++        /// <param name="rating">Committed rating.</param>
++        internal static void ApplyCommittedUserPreferences(UserItemData userData, bool isFavorite, double? rating)
++        {
++            userData.IsFavorite = isFavorite;
++            userData.Rating = rating;
++        }
++
+         /// <inheritdoc />
+         public void SaveUserData(User user, BaseItem item, UpdateUserItemDataDto userDataDto, UserDataSaveReason reason)
+         {
+@@ -259,10 +308,14 @@ namespace Emby.Server.Implementations.Library
+         /// <inheritdoc />
+         public UserItemData? GetUserData(User user, BaseItem item)
+         {
+-            return item.UserData?.Where(e => e.UserId.Equals(user.Id)).Select(Map).FirstOrDefault() ?? new UserItemData()
+-            {
+-                Key = item.GetUserDataKeys()[0],
+-            };
++            var cacheKey = GetCacheKey(user.InternalId, item.Id);
++            return _cache.GetOrAdd(
++                cacheKey,
++                (k, i) => i.UserData?.Where(e => e.UserId.Equals(user.Id)).Select(Map).FirstOrDefault() ?? new UserItemData()
++                {
++                    Key = i.GetUserDataKeys()[0],
++                },
++                item);
+         }
+ 
+         /// <inheritdoc />
+diff --git a/tests/Jellyfin.Server.Implementations.Tests/Library/UserDataManagerTests.cs b/tests/Jellyfin.Server.Implementations.Tests/Library/UserDataManagerTests.cs
+new file mode 100644
+index 0000000000..dae22be09f
+--- /dev/null
++++ b/tests/Jellyfin.Server.Implementations.Tests/Library/UserDataManagerTests.cs
+@@ -0,0 +1,42 @@
++using Emby.Server.Implementations.Library;
++using MediaBrowser.Controller.Entities;
++using MediaBrowser.Model.Entities;
++using Xunit;
++
++namespace Jellyfin.Server.Implementations.Tests.Library;
++
++public class UserDataManagerTests
++{
++    [Theory]
++    [InlineData(UserDataSaveReason.PlaybackStart, true)]
++    [InlineData(UserDataSaveReason.PlaybackProgress, true)]
++    [InlineData(UserDataSaveReason.PlaybackFinished, true)]
++    [InlineData(UserDataSaveReason.UpdateUserRating, false)]
++    [InlineData(UserDataSaveReason.TogglePlayed, false)]
++    public void IsPlaybackSaveReason_IdentifiesPlaybackBookkeeping(UserDataSaveReason reason, bool expected)
++    {
++        Assert.Equal(expected, UserDataManager.IsPlaybackSaveReason(reason));
++    }
++
++    [Fact]
++    public void ApplyCommittedUserPreferences_OverwritesStaleFavoriteFromProgressSnapshot()
++    {
++        var staleProgressSnapshot = new UserItemData
++        {
++            Key = "item",
++            IsFavorite = false,
++            Rating = 1,
++            PlaybackPositionTicks = 1_000
++        };
++
++        UserDataManager.ApplyCommittedUserPreferences(
++            staleProgressSnapshot,
++            isFavorite: true,
++            rating: 10);
++
++        Assert.True(staleProgressSnapshot.IsFavorite);
++        Assert.Equal(10, staleProgressSnapshot.Rating);
++        Assert.True(staleProgressSnapshot.Likes);
++        Assert.Equal(1_000, staleProgressSnapshot.PlaybackPositionTicks);
++    }
++}
