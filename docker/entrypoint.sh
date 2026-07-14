@@ -77,6 +77,52 @@ sync_plugin_if_needed() {
 
 sync_plugin_if_needed
 
+sync_seerr_plugin_if_needed() {
+    local src_dir="/jellyfin-pgsql/plugin-seerr"
+    local dst_dir="/config/plugins/Seerr"
+    local plugin_file="Jellyfin.Plugin.Seerr.dll"
+    local src_file="${src_dir}/${plugin_file}"
+    local dst_file="${dst_dir}/${plugin_file}"
+
+    if [ ! -f "$src_file" ]; then
+        echo "[entrypoint] Seerr plugin source missing (${src_file}); skipping"
+        return 0
+    fi
+
+    local src_hash
+    src_hash=$(sha256sum "$src_file" | awk '{print $1}')
+
+    if [ ! -f "$dst_file" ]; then
+        echo "[entrypoint] Seerr plugin not present in /config, installing"
+        rm -rf "$dst_dir"
+        mkdir -p "$dst_dir"
+        cp -a "${src_dir}/." "$dst_dir/"
+    else
+        local dst_hash
+        dst_hash=$(sha256sum "$dst_file" | awk '{print $1}')
+
+        if [ "$src_hash" != "$dst_hash" ]; then
+            echo "[entrypoint] Seerr plugin hash changed, updating plugin files"
+            rm -rf "$dst_dir"
+            mkdir -p "$dst_dir"
+            cp -a "${src_dir}/." "$dst_dir/"
+        else
+            echo "[entrypoint] Seerr plugin hash unchanged, skipping plugin copy"
+        fi
+    fi
+
+    if [ -f "${src_dir}/meta.json" ]; then
+        cp -f "${src_dir}/meta.json" "${dst_dir}/meta.json"
+    fi
+
+    rm -f "${dst_dir}"/Jellyfin.Database.Implementations.* \
+          "${dst_dir}"/Jellyfin.CodeAnalysis.* \
+          "${dst_dir}"/Microsoft.EntityFrameworkCore.* \
+          "${dst_dir}"/Polly.*
+}
+
+sync_seerr_plugin_if_needed
+
 # Create database.xml if it doesn't exist
 if [ ! -f /config/config/database.xml ]; then
     mkdir -p /config/config

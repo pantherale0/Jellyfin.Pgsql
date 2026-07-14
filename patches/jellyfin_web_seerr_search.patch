@@ -1,0 +1,360 @@
+diff --git a/src/apps/stable/features/search/api/seerrTypes.ts b/src/apps/stable/features/search/api/seerrTypes.ts
+new file mode 100644
+index 0000000000..e39d4b4aed
+--- /dev/null
++++ b/src/apps/stable/features/search/api/seerrTypes.ts
+@@ -0,0 +1,32 @@
++export type SeerrMediaStatus =
++    | 'Unknown'
++    | 'Pending'
++    | 'Processing'
++    | 'PartiallyAvailable'
++    | 'Available'
++    | 'Deleted'
++    | number;
++
++export interface SeerrStatusResponse {
++    enabled: boolean;
++}
++
++export interface SeerrSearchItem {
++    mediaType: 'movie' | 'tv' | string;
++    mediaId: number;
++    title: string;
++    year?: number | null;
++    overview?: string | null;
++    posterUrl?: string | null;
++    status: SeerrMediaStatus;
++    canRequest: boolean;
++}
++
++export interface SeerrSearchResponse {
++    items: SeerrSearchItem[];
++}
++
++export interface SeerrRequestResponse {
++    requestId?: number | null;
++    message?: string;
++}
+diff --git a/src/apps/stable/features/search/api/useSeerrSearch.ts b/src/apps/stable/features/search/api/useSeerrSearch.ts
+new file mode 100644
+index 0000000000..c0d9b177f7
+--- /dev/null
++++ b/src/apps/stable/features/search/api/useSeerrSearch.ts
+@@ -0,0 +1,54 @@
++import { useQuery } from '@tanstack/react-query';
++import type { ApiClient } from 'jellyfin-apiclient';
++import { useApi } from 'hooks/useApi';
++import type { SeerrSearchResponse, SeerrStatusResponse } from './seerrTypes';
++
++const fetchSeerrStatus = async (apiClient: ApiClient): Promise<SeerrStatusResponse> => {
++    return apiClient.getJSON(apiClient.getUrl('Seerr/Status'));
++};
++
++const fetchSeerrSearch = async (
++    apiClient: ApiClient,
++    query: string
++): Promise<SeerrSearchResponse> => {
++    return apiClient.getJSON(apiClient.getUrl('Seerr/Search', { query }));
++};
++
++export const useSeerrStatus = () => {
++    const { __legacyApiClient__: apiClient } = useApi();
++
++    return useQuery({
++        queryKey: ['Seerr', 'Status'],
++        queryFn: () => fetchSeerrStatus(apiClient!),
++        enabled: !!apiClient,
++        staleTime: 60_000,
++        retry: false
++    });
++};
++
++export const useSeerrSearch = (searchTerm?: string) => {
++    const { __legacyApiClient__: apiClient } = useApi();
++    const { data: status } = useSeerrStatus();
++    const query = searchTerm?.trim();
++
++    return useQuery({
++        queryKey: ['Seerr', 'Search', query],
++        queryFn: () => fetchSeerrSearch(apiClient!, query!),
++        enabled: !!apiClient && !!status?.enabled && !!query,
++        retry: false
++    });
++};
++
++export const requestSeerrMedia = async (
++    apiClient: ApiClient,
++    mediaType: string,
++    mediaId: number
++) => {
++    return apiClient.ajax({
++        type: 'POST',
++        url: apiClient.getUrl('Seerr/Request'),
++        data: JSON.stringify({ mediaType, mediaId }),
++        contentType: 'application/json',
++        dataType: 'json'
++    });
++};
+diff --git a/src/apps/stable/features/search/components/SearchResults.tsx b/src/apps/stable/features/search/components/SearchResults.tsx
+index b96910fe80..ec20884a26 100644
+--- a/src/apps/stable/features/search/components/SearchResults.tsx
++++ b/src/apps/stable/features/search/components/SearchResults.tsx
+@@ -1,8 +1,10 @@
+ import React, { type FC } from 'react';
+ import { useSearchItems } from '../api/useSearchItems';
++import { useSeerrSearch } from '../api/useSeerrSearch';
+ import globalize from 'lib/globalize';
+ import Loading from 'components/loading/LoadingComponent';
+ import SearchResultsRow from './SearchResultsRow';
++import SeerrRequestResults from './SeerrRequestResults';
+ import { CardShape } from 'components/cardbuilder/utils/shape';
+ import { CollectionType } from '@jellyfin/sdk/lib/generated-client/models/collection-type';
+ import { Section } from '../types';
+@@ -22,11 +24,14 @@ const SearchResults: FC<SearchResultsProps> = ({
+     collectionType,
+     query
+ }) => {
+-    const { data, isPending } = useSearchItems(parentId, collectionType, query?.trim());
++    const trimmedQuery = query?.trim();
++    const { data, isPending } = useSearchItems(parentId, collectionType, trimmedQuery);
++    const { data: seerrData, isPending: isSeerrPending } = useSeerrSearch(trimmedQuery);
++    const seerrItems = (seerrData?.items || []).filter(item => item.canRequest);
+ 
+     if (isPending) return <Loading />;
+ 
+-    if (!data?.length) {
++    if (!data?.length && !seerrItems.length && !isSeerrPending) {
+         return (
+             <div className='noItemsMessage centerMessage'>
+                 {globalize.translate('SearchResultsEmpty', query)}
+@@ -63,7 +68,10 @@ const SearchResults: FC<SearchResultsProps> = ({
+ 
+     return (
+         <div className={'searchResults padded-top padded-bottom-page'}>
+-            {data.map((section, index) => renderSection(section, index))}
++            {data?.map((section, index) => renderSection(section, index))}
++            {!isSeerrPending && seerrItems.length > 0 && (
++                <SeerrRequestResults items={seerrItems} />
++            )}
+         </div>
+     );
+ };
+diff --git a/src/apps/stable/features/search/components/SeerrRequestResults.tsx b/src/apps/stable/features/search/components/SeerrRequestResults.tsx
+new file mode 100644
+index 0000000000..0ba8dc2b37
+--- /dev/null
++++ b/src/apps/stable/features/search/components/SeerrRequestResults.tsx
+@@ -0,0 +1,114 @@
++import React, { type FC, useCallback, useState } from 'react';
++import globalize from 'lib/globalize';
++import toast from 'components/toast/toast';
++import { useApi } from 'hooks/useApi';
++import { requestSeerrMedia } from '../api/useSeerrSearch';
++import type { SeerrSearchItem } from '../api/seerrTypes';
++import './seerrRequestResults.scss';
++
++interface SeerrRequestResultsProps {
++    items: SeerrSearchItem[];
++}
++
++const SeerrRequestResults: FC<SeerrRequestResultsProps> = ({ items }) => {
++    const { __legacyApiClient__: apiClient } = useApi();
++    const [requestedIds, setRequestedIds] = useState<Set<string>>(new Set());
++    const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
++
++    const onRequest = useCallback(async (item: SeerrSearchItem) => {
++        if (!apiClient) {
++            return;
++        }
++
++        const key = `${item.mediaType}:${item.mediaId}`;
++        setPendingIds(prev => new Set(prev).add(key));
++
++        try {
++            await requestSeerrMedia(apiClient, item.mediaType, item.mediaId);
++            setRequestedIds(prev => new Set(prev).add(key));
++            toast(globalize.translate('SeerrRequestSuccess', item.title));
++        } catch (err: unknown) {
++            let message = globalize.translate('SeerrRequestFailed');
++            const response = err as { responseText?: string; statusText?: string };
++            if (response?.responseText) {
++                try {
++                    const parsed = JSON.parse(response.responseText) as { message?: string };
++                    if (parsed.message) {
++                        message = parsed.message;
++                    }
++                } catch {
++                    // Keep default message.
++                }
++            }
++            toast(message);
++        } finally {
++            setPendingIds(prev => {
++                const next = new Set(prev);
++                next.delete(key);
++                return next;
++            });
++        }
++    }, [apiClient]);
++
++    if (!items.length) {
++        return null;
++    }
++
++    return (
++        <div className='seerrRequestResults padded-left padded-right verticalSection'>
++            <h2 className='sectionTitle sectionTitle-cards'>
++                {globalize.translate('HeaderSeerrRequests')}
++            </h2>
++            <div className='seerrRequestList'>
++                {items.map(item => {
++                    const key = `${item.mediaType}:${item.mediaId}`;
++                    const isRequested = requestedIds.has(key) || !item.canRequest;
++                    const isPending = pendingIds.has(key);
++                    const mediaLabel = item.mediaType === 'tv'
++                        ? globalize.translate('Series')
++                        : globalize.translate('Movie');
++                    const meta = [item.year, mediaLabel]
++                        .filter(Boolean)
++                        .join(' · ');
++
++                    return (
++                        <div className='seerrRequestCard' key={key}>
++                            <div className='seerrRequestPoster'>
++                                {item.posterUrl ? (
++                                    <img src={item.posterUrl} alt='' loading='lazy' />
++                                ) : (
++                                    <div className='seerrRequestPosterPlaceholder' />
++                                )}
++                            </div>
++                            <div className='seerrRequestBody'>
++                                <div className='seerrRequestTitle'>{item.title}</div>
++                                {meta && <div className='seerrRequestMeta secondaryText'>{meta}</div>}
++                                {item.overview && (
++                                    <div className='seerrRequestOverview secondaryText'>{item.overview}</div>
++                                )}
++                            </div>
++                            <div className='seerrRequestActions'>
++                                <button
++                                    type='button'
++                                    className='emby-button raised button-submit'
++                                    disabled={isRequested || isPending}
++                                    onClick={() => {
++                                        void onRequest(item);
++                                    }}
++                                >
++                                    {isRequested
++                                        ? globalize.translate('SeerrRequested')
++                                        : isPending
++                                            ? globalize.translate('SeerrRequesting')
++                                            : globalize.translate('ButtonRequest')}
++                                </button>
++                            </div>
++                        </div>
++                    );
++                })}
++            </div>
++        </div>
++    );
++};
++
++export default SeerrRequestResults;
+diff --git a/src/apps/stable/features/search/components/seerrRequestResults.scss b/src/apps/stable/features/search/components/seerrRequestResults.scss
+new file mode 100644
+index 0000000000..51e4abe985
+--- /dev/null
++++ b/src/apps/stable/features/search/components/seerrRequestResults.scss
+@@ -0,0 +1,75 @@
++.seerrRequestList {
++    display: flex;
++    flex-direction: column;
++    gap: 0.75rem;
++}
++
++.seerrRequestCard {
++    display: flex;
++    align-items: flex-start;
++    gap: 1rem;
++    padding: 0.75rem 0;
++}
++
++.seerrRequestPoster {
++    flex: 0 0 4.5rem;
++    width: 4.5rem;
++    height: 6.75rem;
++    overflow: hidden;
++    border-radius: 0.25rem;
++    background: rgba(255, 255, 255, 0.08);
++}
++
++.seerrRequestPoster img {
++    width: 100%;
++    height: 100%;
++    object-fit: cover;
++    display: block;
++}
++
++.seerrRequestPosterPlaceholder {
++    width: 100%;
++    height: 100%;
++}
++
++.seerrRequestBody {
++    flex: 1 1 auto;
++    min-width: 0;
++}
++
++.seerrRequestTitle {
++    font-weight: 600;
++    margin-bottom: 0.25rem;
++}
++
++.seerrRequestMeta {
++    font-size: 0.9em;
++    margin-bottom: 0.35rem;
++}
++
++.seerrRequestOverview {
++    font-size: 0.9em;
++    display: -webkit-box;
++    -webkit-line-clamp: 2;
++    -webkit-box-orient: vertical;
++    overflow: hidden;
++}
++
++.seerrRequestActions {
++    flex: 0 0 auto;
++    align-self: center;
++}
++
++@media (max-width: 600px) {
++    .seerrRequestCard {
++        flex-wrap: wrap;
++    }
++
++    .seerrRequestActions {
++        width: 100%;
++    }
++
++    .seerrRequestActions .emby-button {
++        width: 100%;
++    }
++}
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+index c18c3ebd40..557c232418 100755
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -1552,6 +1552,12 @@
+     "SearchForSubtitles": "Search for Subtitles",
+     "SearchResults": "Search Results",
+     "SearchResultsEmpty": "Sorry! No results found for \"{0}\"",
++    "SeerrRequestFailed": "Unable to submit request.",
++    "SeerrRequesting": "Requesting…",
++    "SeerrRequestSuccess": "Requested \"{0}\"",
++    "SeerrRequested": "Requested",
++    "HeaderSeerrRequests": "Request",
++    "ButtonRequest": "Request",
+     "Season": "Season",
+     "SecondarySubtitles": "Secondary Subtitles",
+     "SelectAdminUsername": "Please select a username for the admin account.",

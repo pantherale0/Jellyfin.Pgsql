@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(PluginTargetFramework)</TargetFramework>
+    <RootNamespace>Jellyfin.Plugin.Seerr</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Nullable>enable</Nullable>
+    <AnalysisMode>AllEnabledByDefault</AnalysisMode>
+    <CodeAnalysisRuleSet>../jellyfin.ruleset</CodeAnalysisRuleSet>
+    <NoWarn>$(NoWarn);CA1861;CA2007</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Needed for User entity via IUserManager; stripped from publish so the plugin
+         ALC does not load a private copy of host-shared types. -->
+    <ProjectReference Include="..\jellyfin\src\Jellyfin.Database\Jellyfin.Database.Implementations\Jellyfin.Database.Implementations.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinVersion)" PrivateAssets="all" />
+    <PackageReference Include="Jellyfin.Model" Version="$(JellyfinVersion)" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="$(MicrosoftPackageVersion)" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="$(MicrosoftPackageVersion)" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="$(MicrosoftPackageVersion)" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="$(MicrosoftPackageVersion)" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SerilogAnalyzer" Version="0.15.0" PrivateAssets="All" />
+    <PackageReference Include="StyleCop.Analyzers" Version="1.2.0-beta.556" PrivateAssets="All" />
+    <PackageReference Include="SmartAnalyzers.MultithreadingAnalyzer" Version="1.1.31" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="Configuration\configPage.html" />
+    <EmbeddedResource Include="Configuration\configPage.html" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="meta.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="StripSharedJellyfinAssembliesFromPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <_SharedJellyfinPublishFiles Include="$(PublishDir)Jellyfin.Database.Implementations.*" />
+      <_SharedJellyfinPublishFiles Include="$(PublishDir)Jellyfin.CodeAnalysis.*" />
+      <!-- Compile-time only via Database.Implementations; host already provides these. -->
+      <_SharedJellyfinPublishFiles Include="$(PublishDir)Microsoft.EntityFrameworkCore.*" />
+      <_SharedJellyfinPublishFiles Include="$(PublishDir)Polly.*" />
+    </ItemGroup>
+    <Delete Files="@(_SharedJellyfinPublishFiles)" TreatErrorsAsWarnings="true" />
+  </Target>
+
+</Project>
