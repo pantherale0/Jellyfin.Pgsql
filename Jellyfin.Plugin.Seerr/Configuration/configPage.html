@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Seerr</title>
+</head>
+<body>
+    <div id="SeerrConfigPage" data-role="page" class="page type-interior pluginConfigurationPage seerrConfigPage" data-require="emby-input,emby-button,emby-checkbox">
+        <div data-role="content">
+            <div class="content-primary">
+                <h1>Seerr</h1>
+                <p>
+                    Proxies media search and one-click requests to a Seerr instance.
+                    The API key stays on the Jellyfin server; requests are attributed to the
+                    Jellyfin user by matching username / jellyfinUsername in Seerr.
+                </p>
+                <form class="seerrConfigForm">
+                    <label class="checkboxContainer">
+                        <input is="emby-checkbox" type="checkbox" id="enabled" />
+                        <span>Enable Seerr request gateway</span>
+                    </label>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="url" id="seerrUrl" label="Seerr URL" placeholder="https://seerr.example.com" />
+                        <div class="fieldDescription">Base URL of your Seerr instance (no trailing slash required).</div>
+                    </div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="password" id="apiKey" label="API key" autocomplete="off" />
+                        <div class="fieldDescription">
+                            Seerr API key. The key user needs request rights and MANAGE_REQUESTS
+                            so Jellyfin can create requests on behalf of mapped users.
+                        </div>
+                    </div>
+                    <label class="checkboxContainer">
+                        <input is="emby-checkbox" type="checkbox" id="hideAvailable" />
+                        <span>Hide titles already available in Seerr from the Request section</span>
+                    </label>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="number" id="searchLimit" pattern="[0-9]*" required min="1" max="50" label="Search result limit" />
+                        <div class="fieldDescription">Maximum number of requestable titles to show in search (1–50).</div>
+                    </div>
+                    <div>
+                        <button is="emby-button" type="button" id="testConnection" class="raised block">
+                            <span>Test connection</span>
+                        </button>
+                    </div>
+                    <br />
+                    <div>
+                        <button is="emby-button" type="submit" class="raised button-submit block">
+                            <span>Save</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        <script type="text/javascript">
+            var SeerrPluginConfig = {
+                pluginId: 'a3f8c2e1-9b47-4d6a-8e2f-1c5d9a0b7e34'
+            };
+
+            document.querySelector('.seerrConfigPage')
+                .addEventListener('pageshow', function () {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(SeerrPluginConfig.pluginId).then(function (config) {
+                        document.querySelector('#enabled').checked = !!config.Enabled;
+                        document.querySelector('#seerrUrl').value = config.SeerrUrl || '';
+                        document.querySelector('#apiKey').value = config.ApiKey || '';
+                        document.querySelector('#hideAvailable').checked = config.HideAvailable !== false;
+                        var searchLimit = document.querySelector('#searchLimit');
+                        searchLimit.value = config.SearchLimit || 20;
+                        searchLimit.dispatchEvent(new Event('change', { bubbles: true, cancelable: false }));
+                        Dashboard.hideLoadingMsg();
+                    });
+                });
+
+            document.querySelector('.seerrConfigForm')
+                .addEventListener('submit', function (e) {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(SeerrPluginConfig.pluginId).then(function (config) {
+                        config.Enabled = document.querySelector('#enabled').checked;
+                        config.SeerrUrl = (document.querySelector('#seerrUrl').value || '').replace(/\/+$/, '');
+                        config.ApiKey = document.querySelector('#apiKey').value || '';
+                        config.HideAvailable = document.querySelector('#hideAvailable').checked;
+                        config.SearchLimit = parseInt(document.querySelector('#searchLimit').value, 10) || 20;
+                        ApiClient.updatePluginConfiguration(SeerrPluginConfig.pluginId, config)
+                            .then(Dashboard.processPluginConfigurationUpdateResult);
+                    });
+                    e.preventDefault();
+                    return false;
+                });
+
+            document.querySelector('#testConnection')
+                .addEventListener('click', function () {
+                    Dashboard.showLoadingMsg();
+                    var request = {
+                        url: ApiClient.getUrl('Seerr/Test'),
+                        type: 'POST',
+                        dataType: 'json',
+                        headers: { accept: 'application/json' }
+                    };
+                    ApiClient.fetch(request).then(function (result) {
+                        Dashboard.hideLoadingMsg();
+                        Dashboard.alert({
+                            title: 'Connection OK',
+                            message: result.message || ('Seerr ' + (result.version || '') + ' reached successfully.')
+                        });
+                    }, function (error) {
+                        Dashboard.hideLoadingMsg();
+                        var show = function (msg) {
+                            Dashboard.alert({ title: 'Connection failed', message: msg || 'Unable to reach Seerr.' });
+                        };
+                        if (error && error.text) {
+                            error.text().then(show, function () { show(error.statusText); });
+                        } else {
+                            show(error && error.statusText);
+                        }
+                    });
+                });
+        </script>
+    </div>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "category": "General",
+  "changelog": "Initial Seerr one-click request gateway",
+  "description": "Proxies authenticated Jellyfin search and request actions to a Seerr instance using a server-held API key. Maps users by Jellyfin username.",
+  "guid": "a3f8c2e1-9b47-4d6a-8e2f-1c5d9a0b7e34",
+  "name": "Seerr",
+  "overview": "One-click media requests via Seerr from Jellyfin search",
+  "owner": "jellyfin-pgsql",
+  "targetAbi": "12.0.0.0",
+  "timestamp": "2026-07-14T00:00:00.0000000Z",
+  "version": "1.0.0.0",
+  "status": "Active",
+  "autoUpdate": false,
+  "assemblies": [
+    "Jellyfin.Plugin.Seerr.dll"
+  ]
+}
