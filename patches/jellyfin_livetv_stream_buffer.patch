@@ -1,0 +1,938 @@
+# Vendored from https://github.com/jellyfin/jellyfin/pull/17128
+# Fix live TV stream buffer unbounded growth (rolling chunk files + LiveStreamKeepSeconds)
+#
+diff --git a/MediaBrowser.Model/Configuration/EncodingOptions.cs b/MediaBrowser.Model/Configuration/EncodingOptions.cs
+index 4d052d8012..0688546fe6 100644
+--- a/MediaBrowser.Model/Configuration/EncodingOptions.cs
++++ b/MediaBrowser.Model/Configuration/EncodingOptions.cs
+@@ -25,6 +25,7 @@ public class EncodingOptions
+         ThrottleDelaySeconds = 180;
+         EnableSegmentDeletion = false;
+         SegmentKeepSeconds = 720;
++        LiveStreamKeepSeconds = 300;
+         EncodingThreadCount = -1;
+         // This is a DRM device that is almost guaranteed to be there on every intel platform,
+         // plus it's the default one in ffmpeg if you don't specify anything
+@@ -125,6 +126,14 @@ public class EncodingOptions
+     /// </summary>
+     public int SegmentKeepSeconds { get; set; }
+ 
++    /// <summary>
++    /// Gets or sets the number of seconds of live stream content to retain as a rolling rewind buffer.
++    /// The raw capture is split into rolling chunk files and chunks outside the window are deleted,
++    /// bounding disk usage for long-running streams. Set to 0 to disable chunking and use a single
++    /// growing file instead (legacy behaviour).
++    /// </summary>
++    public int LiveStreamKeepSeconds { get; set; }
++
+     /// <summary>
+     /// Gets or sets the hardware acceleration type.
+     /// </summary>
+diff --git a/src/Jellyfin.LiveTv/TunerHosts/HdHomerun/HdHomerunUdpStream.cs b/src/Jellyfin.LiveTv/TunerHosts/HdHomerun/HdHomerunUdpStream.cs
+index 6c8cde62c9..c42577bd5c 100644
+--- a/src/Jellyfin.LiveTv/TunerHosts/HdHomerun/HdHomerunUdpStream.cs
++++ b/src/Jellyfin.LiveTv/TunerHosts/HdHomerun/HdHomerunUdpStream.cs
+@@ -80,7 +80,10 @@ namespace Jellyfin.LiveTv.TunerHosts.HdHomerun
+             // Temporary code to reduce PR size. This will be updated by a future network pr.
+             var localPort = GetUdpPortFromRange((49152, 65535));
+ 
+-            Directory.CreateDirectory(Path.GetDirectoryName(TempFilePath));
++            if (IsRollingChunkEnabled)
++            {
++                Directory.CreateDirectory(ChunkDirectory);
++            }
+ 
+             Logger.LogInformation("Opening HDHR UDP Live stream from {Host}", uri.Host);
+ 
+@@ -164,7 +167,7 @@ namespace Jellyfin.LiveTv.TunerHosts.HdHomerun
+             {
+                 try
+                 {
+-                    await CopyTo(udpClient, TempFilePath, openTaskCompletionSource, cancellationToken).ConfigureAwait(false);
++                    await CopyTo(udpClient, openTaskCompletionSource, cancellationToken).ConfigureAwait(false);
+                 }
+                 catch (Exception ex) when (ex is OperationCanceledException || ex is TimeoutException)
+                 {
+@@ -180,17 +183,19 @@ namespace Jellyfin.LiveTv.TunerHosts.HdHomerun
+                 EnableStreamSharing = false;
+             }
+ 
+-            await DeleteTempFiles(TempFilePath).ConfigureAwait(false);
++            await DeleteChunks().ConfigureAwait(false);
+         }
+ 
+-        private async Task CopyTo(UdpClient udpClient, string file, TaskCompletionSource<bool> openTaskCompletionSource, CancellationToken cancellationToken)
++        private async Task CopyTo(UdpClient udpClient, TaskCompletionSource<bool> openTaskCompletionSource, CancellationToken cancellationToken)
+         {
+-            var resolved = false;
++            bool resolved = false;
+ 
+-            var fileStream = new FileStream(file, FileMode.Create, FileAccess.Write, FileShare.Read);
+-            await using (fileStream.ConfigureAwait(false))
++            FileStream fileStream = OpenInitialChunk();
++            try
+             {
+-                while (true)
++                var chunkOpenedAt = DateTime.UtcNow;
++
++                while (!cancellationToken.IsCancellationRequested)
+                 {
+                     cancellationToken.ThrowIfCancellationRequested();
+                     var res = await udpClient.ReceiveAsync(cancellationToken)
+@@ -204,6 +209,13 @@ namespace Jellyfin.LiveTv.TunerHosts.HdHomerun
+                     if (read > 0)
+                     {
+                         await fileStream.WriteAsync(buffer.AsMemory(RtpHeaderBytes, read), cancellationToken).ConfigureAwait(false);
++
++                        if (ShouldRotateChunk(chunkOpenedAt))
++                        {
++                            var oldStream = fileStream;
++                            (fileStream, chunkOpenedAt) = RotateChunk();
++                            await oldStream.DisposeAsync().ConfigureAwait(false);
++                        }
+                     }
+ 
+                     if (!resolved)
+@@ -214,6 +226,10 @@ namespace Jellyfin.LiveTv.TunerHosts.HdHomerun
+                     }
+                 }
+             }
++            finally
++            {
++                await fileStream.DisposeAsync().ConfigureAwait(false);
++            }
+         }
+     }
+ }
+diff --git a/src/Jellyfin.LiveTv/TunerHosts/LiveStream.cs b/src/Jellyfin.LiveTv/TunerHosts/LiveStream.cs
+index 70d8afc5d0..439293f357 100644
+--- a/src/Jellyfin.LiveTv/TunerHosts/LiveStream.cs
++++ b/src/Jellyfin.LiveTv/TunerHosts/LiveStream.cs
+@@ -4,12 +4,14 @@
+ #pragma warning disable CS1591
+ 
+ using System;
++using System.Collections.Generic;
+ using System.Globalization;
+ using System.IO;
+ using System.Threading;
+ using System.Threading.Tasks;
+ using MediaBrowser.Common.Configuration;
+ using MediaBrowser.Controller.Library;
++using MediaBrowser.Model.Configuration;
+ using MediaBrowser.Model.Dto;
+ using MediaBrowser.Model.IO;
+ using MediaBrowser.Model.LiveTv;
+@@ -20,6 +22,12 @@ namespace Jellyfin.LiveTv.TunerHosts
+     public class LiveStream : ILiveStream
+     {
+         private readonly IConfigurationManager _configurationManager;
++        private readonly object _chunkLock = new();
++        private readonly List<string> _chunkPaths = new();
++        private readonly bool _isRollingChunkEnabled;
++        private readonly string _singleFilePath;
++        private int _nextChunkIndex;
++        private string _chunkDirectory = string.Empty;
+ 
+         public LiveStream(
+             MediaSourceInfo mediaSource,
+@@ -45,7 +53,9 @@ namespace Jellyfin.LiveTv.TunerHosts
+             StreamHelper = streamHelper;
+ 
+             ConsumerCount = 1;
+-            SetTempFilePath("ts");
++            _isRollingChunkEnabled = configurationManager.GetEncodingOptions().LiveStreamKeepSeconds > 0;
++            SetChunkDirectory();
++            _singleFilePath = Path.Combine(configurationManager.GetTranscodePath(), UniqueId + ".ts");
+         }
+ 
+         protected IFileSystem FileSystem { get; }
+@@ -56,7 +66,9 @@ namespace Jellyfin.LiveTv.TunerHosts
+ 
+         protected CancellationTokenSource LiveStreamCancellationTokenSource { get; } = new CancellationTokenSource();
+ 
+-        protected string TempFilePath { get; set; }
++        internal string ChunkDirectory => _chunkDirectory;
++
++        protected bool IsRollingChunkEnabled => _isRollingChunkEnabled;
+ 
+         public MediaSourceInfo OriginalMediaSource { get; set; }
+ 
+@@ -74,9 +86,9 @@ namespace Jellyfin.LiveTv.TunerHosts
+ 
+         public DateTime DateOpened { get; protected set; }
+ 
+-        protected void SetTempFilePath(string extension)
++        private void SetChunkDirectory()
+         {
+-            TempFilePath = Path.Combine(_configurationManager.GetTranscodePath(), UniqueId + "." + extension);
++            _chunkDirectory = Path.Combine(_configurationManager.GetTranscodePath(), UniqueId);
+         }
+ 
+         public virtual Task Open(CancellationToken openCancellationToken)
+@@ -96,23 +108,120 @@ namespace Jellyfin.LiveTv.TunerHosts
+ 
+         public Stream GetStream()
+         {
+-            var stream = new FileStream(
+-                TempFilePath,
+-                FileMode.Open,
+-                FileAccess.Read,
+-                FileShare.ReadWrite,
+-                IODefaults.FileStreamBufferSize,
+-                FileOptions.SequentialScan | FileOptions.Asynchronous);
++            lock (_chunkLock)
++            {
++                if (_chunkPaths.Count == 0)
++                {
++                    throw new InvalidOperationException("Live stream has not started yet.");
++                }
++            }
+ 
+-            bool seekFile = (DateTime.UtcNow - DateOpened).TotalSeconds > 10;
+-            if (seekFile)
++            if (!_isRollingChunkEnabled)
+             {
+-                TrySeek(stream, -20000);
++                return new FileStream(
++                    _singleFilePath,
++                    FileMode.Open,
++                    FileAccess.Read,
++                    FileShare.ReadWrite | FileShare.Delete,
++                    IODefaults.FileStreamBufferSize,
++                    FileOptions.Asynchronous);
++            }
++
++            bool seekToLiveEdge = (DateTime.UtcNow - DateOpened).TotalSeconds > 10;
++            return new RollingChunkStream(_chunkPaths, _chunkLock, Logger, seekToLiveEdge);
++        }
++
++        /// <summary>
++        /// Opens the first chunk file for writing. Must be called before <see cref="RotateChunk"/>.
++        /// </summary>
++        /// <returns>A <see cref="FileStream"/> open for writing to the first chunk.</returns>
++        protected FileStream OpenInitialChunk()
++        {
++            string path;
++            if (_isRollingChunkEnabled)
++            {
++                Directory.CreateDirectory(_chunkDirectory);
++                path = GetChunkPath(_nextChunkIndex++);
++            }
++            else
++            {
++                path = _singleFilePath;
++            }
++
++            // Create the file before making the path visible to readers.
++            var stream = OpenWriteStream(path);
++            lock (_chunkLock)
++            {
++                _chunkPaths.Add(path);
+             }
+ 
+             return stream;
+         }
+ 
++        /// <summary>
++        /// Returns true when the current chunk has been open long enough to rotate.
++        /// </summary>
++        /// <param name="chunkOpenedAt">The UTC time when the current chunk was opened.</param>
++        /// <returns><see langword="true"/> when the chunk should be rotated; otherwise <see langword="false"/>.</returns>
++        protected bool ShouldRotateChunk(DateTime chunkOpenedAt)
++        {
++            var options = _configurationManager.GetEncodingOptions();
++            if (options.LiveStreamKeepSeconds <= 0)
++            {
++                return false;
++            }
++
++            int chunkDurationSeconds = ComputeChunkDurationSeconds(options);
++            return (DateTime.UtcNow - chunkOpenedAt).TotalSeconds >= chunkDurationSeconds;
++        }
++
++        /// <summary>
++        /// Seals the current chunk, opens the next one, and deletes any chunk outside the keep window.
++        /// Returns the new write stream and the time the new chunk was opened.
++        /// </summary>
++        /// <returns>The new <see cref="FileStream"/> and the UTC time it was opened.</returns>
++        protected (FileStream NewStream, DateTime NewChunkTime) RotateChunk()
++        {
++            string newPath;
++            string toDelete = null;
++
++            lock (_chunkLock)
++            {
++                newPath = GetChunkPath(_nextChunkIndex++);
++
++                var options = _configurationManager.GetEncodingOptions();
++                int maxChunks = ComputeMaxChunks(options);
++
++                // +1 because we are about to add newPath but want the file to exist first.
++                if (_chunkPaths.Count + 1 > maxChunks)
++                {
++                    toDelete = _chunkPaths[0];
++                    _chunkPaths.RemoveAt(0);
++                }
++            }
++
++            if (toDelete is not null)
++            {
++                try
++                {
++                    FileSystem.DeleteFile(toDelete);
++                }
++                catch (Exception ex)
++                {
++                    Logger.LogDebug(ex, "Error deleting live stream chunk {Path}", toDelete);
++                }
++            }
++
++            // Create the file before making the path visible to readers.
++            var newStream = OpenWriteStream(newPath);
++            lock (_chunkLock)
++            {
++                _chunkPaths.Add(newPath);
++            }
++
++            return (newStream, DateTime.UtcNow);
++        }
++
+         /// <inheritdoc />
+         public void Dispose()
+         {
+@@ -128,49 +237,82 @@ namespace Jellyfin.LiveTv.TunerHosts
+             }
+         }
+ 
+-        protected async Task DeleteTempFiles(string path, int retryCount = 0)
++        protected async Task DeleteChunks(int retryCount = 0)
+         {
++            if (!_isRollingChunkEnabled)
++            {
++                if (retryCount == 0)
++                {
++                    Logger.LogInformation("Deleting live stream file {Path}", _singleFilePath);
++                }
++
++                try
++                {
++                    if (File.Exists(_singleFilePath))
++                    {
++                        File.Delete(_singleFilePath);
++                    }
++                }
++                catch (Exception ex)
++                {
++                    Logger.LogError(ex, "Error deleting live stream file {Path}", _singleFilePath);
++                    if (retryCount <= 40)
++                    {
++                        await Task.Delay(500).ConfigureAwait(false);
++                        await DeleteChunks(retryCount + 1).ConfigureAwait(false);
++                    }
++                }
++
++                return;
++            }
++
+             if (retryCount == 0)
+             {
+-                Logger.LogInformation("Deleting temp file {FilePath}", path);
++                Logger.LogInformation("Deleting live stream chunk directory {Directory}", _chunkDirectory);
+             }
+ 
+             try
+             {
+-                FileSystem.DeleteFile(path);
++                if (Directory.Exists(_chunkDirectory))
++                {
++                    Directory.Delete(_chunkDirectory, recursive: true);
++                }
+             }
+             catch (Exception ex)
+             {
+-                Logger.LogError(ex, "Error deleting file {FilePath}", path);
++                Logger.LogError(ex, "Error deleting chunk directory {Directory}", _chunkDirectory);
+                 if (retryCount <= 40)
+                 {
+                     await Task.Delay(500).ConfigureAwait(false);
+-                    await DeleteTempFiles(path, retryCount + 1).ConfigureAwait(false);
++                    await DeleteChunks(retryCount + 1).ConfigureAwait(false);
+                 }
+             }
+         }
+ 
+-        private void TrySeek(FileStream stream, long offset)
++        private string GetChunkPath(int index)
++            => Path.Combine(_chunkDirectory, $"chunk_{index.ToString(CultureInfo.InvariantCulture)}.ts");
++
++        private static FileStream OpenWriteStream(string path)
++            => new FileStream(
++                path,
++                FileMode.Create,
++                FileAccess.Write,
++                FileShare.ReadWrite | FileShare.Delete,
++                IODefaults.FileStreamBufferSize,
++                FileOptions.Asynchronous);
++
++        private static int ComputeChunkDurationSeconds(EncodingOptions options)
+         {
+-            if (!stream.CanSeek)
+-            {
+-                return;
+-            }
++            int keepSeconds = Math.Max(options.LiveStreamKeepSeconds, 60);
++            return Math.Max(keepSeconds / 4, 30);
++        }
+ 
+-            try
+-            {
+-                stream.Seek(offset, SeekOrigin.End);
+-            }
+-            catch (IOException)
+-            {
+-            }
+-            catch (ArgumentException)
+-            {
+-            }
+-            catch (Exception ex)
+-            {
+-                Logger.LogError(ex, "Error seeking stream");
+-            }
++        private static int ComputeMaxChunks(EncodingOptions options)
++        {
++            int keepSeconds = Math.Max(options.LiveStreamKeepSeconds, 60);
++            int chunkDuration = Math.Max(keepSeconds / 4, 30);
++            // +1 for the in-progress chunk being written
++            return (keepSeconds / chunkDuration) + 1;
+         }
+     }
+ }
+diff --git a/src/Jellyfin.LiveTv/TunerHosts/RollingChunkStream.cs b/src/Jellyfin.LiveTv/TunerHosts/RollingChunkStream.cs
+new file mode 100644
+index 0000000000..e9eed24dd5
+--- /dev/null
++++ b/src/Jellyfin.LiveTv/TunerHosts/RollingChunkStream.cs
+@@ -0,0 +1,211 @@
++#pragma warning disable CS1591
++
++using System;
++using System.Collections.Generic;
++using System.IO;
++using System.Threading;
++using System.Threading.Tasks;
++using MediaBrowser.Model.IO;
++using Microsoft.Extensions.Logging;
++
++namespace Jellyfin.LiveTv.TunerHosts;
++
++/// <summary>
++/// A sequential read stream that transparently advances through a list of rolling chunk
++/// files produced by a live stream capture. Chunk files are added to the shared chunk-paths list
++/// as they are sealed and a new chunk is opened; the oldest entries are removed when they fall
++/// outside the configured rewind window.
++/// </summary>
++internal sealed class RollingChunkStream : Stream
++{
++    private readonly List<string> _chunkPaths;
++    private readonly object _lock;
++    private readonly ILogger _logger;
++    private string _currentPath;
++    private FileStream _currentStream;
++    private bool _disposed;
++
++    public RollingChunkStream(List<string> chunkPaths, object chunkLock, ILogger logger, bool seekToLiveEdge)
++    {
++        _chunkPaths = chunkPaths;
++        _lock = chunkLock;
++        _logger = logger;
++
++        string initialPath;
++        lock (_lock)
++        {
++            initialPath = chunkPaths[^1];
++        }
++
++        _currentPath = initialPath;
++        _currentStream = OpenChunkStream(initialPath);
++
++        if (seekToLiveEdge)
++        {
++            TrySeekToLiveEdge(_currentStream);
++        }
++    }
++
++    public override bool CanRead => true;
++
++    public override bool CanSeek => false;
++
++    public override bool CanWrite => false;
++
++    public override long Length => throw new NotSupportedException();
++
++    public override long Position
++    {
++        get => throw new NotSupportedException();
++        set => throw new NotSupportedException();
++    }
++
++    public override void Flush()
++    {
++    }
++
++    public override int Read(byte[] buffer, int offset, int count)
++        => Read(buffer.AsSpan(offset, count));
++
++    public override int Read(Span<byte> buffer)
++    {
++        int read = _currentStream.Read(buffer);
++        if (read > 0)
++        {
++            return read;
++        }
++
++        if (TryAdvanceChunk())
++        {
++            return _currentStream.Read(buffer);
++        }
++
++        return 0;
++    }
++
++    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
++        => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
++
++    public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
++    {
++        int read = await _currentStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
++        if (read > 0)
++        {
++            return read;
++        }
++
++        if (TryAdvanceChunk())
++        {
++            return await _currentStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
++        }
++
++        return 0;
++    }
++
++    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
++
++    public override void SetLength(long value) => throw new NotSupportedException();
++
++    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
++
++    protected override void Dispose(bool disposing)
++    {
++        if (_disposed)
++        {
++            return;
++        }
++
++        if (disposing)
++        {
++            _currentStream.Dispose();
++        }
++
++        _disposed = true;
++        base.Dispose(disposing);
++    }
++
++    /// <summary>
++    /// Returns the next chunk path after <paramref name="fromPath"/>, or <see langword="null"/>
++    /// if at the live edge or no chunks are available.
++    /// </summary>
++    private string? GetNextChunkPath(string fromPath)
++    {
++        lock (_lock)
++        {
++            int idx = _chunkPaths.IndexOf(fromPath);
++
++            if (idx < 0)
++            {
++                if (_chunkPaths.Count > 0)
++                {
++                    _logger.LogWarning("Live stream reader fell behind the rewind window; skipping to oldest available chunk");
++                    return _chunkPaths[0];
++                }
++
++                return null;
++            }
++
++            // idx == Count - 1: at the live edge — no sealed chunk to advance to yet.
++            return idx < _chunkPaths.Count - 1 ? _chunkPaths[idx + 1] : null;
++        }
++    }
++
++    /// <summary>
++    /// Checks whether there is a sealed chunk after the current one and, if so, advances to it.
++    /// Returns true when the stream was advanced and data may now be available.
++    /// </summary>
++    private bool TryAdvanceChunk()
++    {
++        string? nextPath = GetNextChunkPath(_currentPath);
++        if (nextPath is null)
++        {
++            return false;
++        }
++
++        // Open the replacement before disposing the current stream so we never end up
++        // with a disposed stream and no valid replacement. If the target chunk was evicted
++        // in the window between selecting it and opening it (TOCTOU race), step forward to
++        // the new oldest available chunk and retry.
++        while (nextPath is not null)
++        {
++            try
++            {
++                FileStream next = OpenChunkStream(nextPath);
++                _currentStream.Dispose();
++                _currentPath = nextPath;
++                _currentStream = next;
++                return true;
++            }
++            catch (FileNotFoundException)
++            {
++                _logger.LogWarning(
++                    "Chunk {Path} was evicted before it could be opened; skipping to next available chunk",
++                    nextPath);
++                nextPath = GetNextChunkPath(nextPath);
++            }
++        }
++
++        return false;
++    }
++
++    private static FileStream OpenChunkStream(string path)
++        => new FileStream(
++            path,
++            FileMode.Open,
++            FileAccess.Read,
++            FileShare.ReadWrite | FileShare.Delete,
++            IODefaults.FileStreamBufferSize,
++            FileOptions.SequentialScan | FileOptions.Asynchronous);
++
++    private static void TrySeekToLiveEdge(FileStream stream)
++    {
++        try
++        {
++            stream.Seek(-20000, SeekOrigin.End);
++        }
++        catch (IOException)
++        {
++            // File is shorter than 20 KB — start from the beginning.
++        }
++    }
++}
+diff --git a/src/Jellyfin.LiveTv/TunerHosts/SharedHttpStream.cs b/src/Jellyfin.LiveTv/TunerHosts/SharedHttpStream.cs
+index 5ef04ad9e9..f46817b6c5 100644
+--- a/src/Jellyfin.LiveTv/TunerHosts/SharedHttpStream.cs
++++ b/src/Jellyfin.LiveTv/TunerHosts/SharedHttpStream.cs
+@@ -2,6 +2,7 @@
+ #pragma warning disable CS1591
+ 
+ using System;
++using System.Buffers;
+ using System.Globalization;
+ using System.IO;
+ using System.Net.Http;
+@@ -46,10 +47,12 @@ namespace Jellyfin.LiveTv.TunerHosts
+             LiveStreamCancellationTokenSource.Token.ThrowIfCancellationRequested();
+ 
+             var mediaSource = OriginalMediaSource;
+-
+             var url = mediaSource.Path;
+ 
+-            Directory.CreateDirectory(Path.GetDirectoryName(TempFilePath) ?? throw new InvalidOperationException("Path can't be a root directory."));
++            if (IsRollingChunkEnabled)
++            {
++                Directory.CreateDirectory(ChunkDirectory);
++            }
+ 
+             var typeName = GetType().Name;
+             Logger.LogInformation("Opening {StreamType} Live stream from {Url}", typeName, url);
+@@ -69,7 +72,7 @@ namespace Jellyfin.LiveTv.TunerHosts
+             var res = await taskCompletionSource.Task.ConfigureAwait(false);
+             if (!res)
+             {
+-                Logger.LogWarning("Zero bytes copied from stream {StreamType} to {FilePath} but no exception raised", GetType().Name, TempFilePath);
++                Logger.LogWarning("Zero bytes copied from stream {StreamType} to {Directory} but no exception raised", GetType().Name, ChunkDirectory);
+                 throw new EndOfStreamException(string.Format(CultureInfo.InvariantCulture, "Zero bytes copied from stream {0}", GetType().Name));
+             }
+         }
+@@ -81,55 +84,72 @@ namespace Jellyfin.LiveTv.TunerHosts
+                 {
+                     try
+                     {
+-                        Logger.LogInformation("Beginning {StreamType} stream to {FilePath}", GetType().Name, TempFilePath);
++                        Logger.LogInformation("Beginning {StreamType} stream to {Directory}", GetType().Name, ChunkDirectory);
+                         using (response)
+                         {
+                             var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                             await using (stream.ConfigureAwait(false))
+                             {
+-                                var fileStream = new FileStream(
+-                                    TempFilePath,
+-                                    FileMode.Create,
+-                                    FileAccess.Write,
+-                                    FileShare.Read,
+-                                    IODefaults.FileStreamBufferSize,
+-                                    FileOptions.Asynchronous);
+-
+-                                await using (fileStream.ConfigureAwait(false))
++                                byte[] buffer = ArrayPool<byte>.Shared.Rent(IODefaults.CopyToBufferSize);
++                                try
++                                {
++                                    FileStream fileStream = OpenInitialChunk();
++                                    try
++                                    {
++                                        var chunkOpenedAt = DateTime.UtcNow;
++                                        bool resolved = false;
++                                        int read;
++
++                                        while ((read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) != 0)
++                                        {
++                                            cancellationToken.ThrowIfCancellationRequested();
++
++                                            await fileStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
++
++                                            if (!resolved)
++                                            {
++                                                resolved = true;
++                                                DateOpened = DateTime.UtcNow;
++                                                openTaskCompletionSource.TrySetResult(true);
++                                            }
++
++                                            if (ShouldRotateChunk(chunkOpenedAt))
++                                            {
++                                                var oldStream = fileStream;
++                                                (fileStream, chunkOpenedAt) = RotateChunk();
++                                                await oldStream.DisposeAsync().ConfigureAwait(false);
++                                            }
++                                        }
++                                    }
++                                    finally
++                                    {
++                                        await fileStream.DisposeAsync().ConfigureAwait(false);
++                                    }
++                                }
++                                finally
+                                 {
+-                                    await StreamHelper.CopyToAsync(
+-                                        stream,
+-                                        fileStream,
+-                                        IODefaults.CopyToBufferSize,
+-                                        () => Resolve(openTaskCompletionSource),
+-                                        cancellationToken).ConfigureAwait(false);
++                                    ArrayPool<byte>.Shared.Return(buffer);
+                                 }
+                             }
+                         }
+                     }
+                     catch (OperationCanceledException ex)
+                     {
+-                        Logger.LogInformation("Copying of {StreamType} to {FilePath} was canceled", GetType().Name, TempFilePath);
++                        Logger.LogInformation("Copying of {StreamType} to {Directory} was canceled", GetType().Name, ChunkDirectory);
+                         openTaskCompletionSource.TrySetException(ex);
+                     }
+                     catch (Exception ex)
+                     {
+-                        Logger.LogError(ex, "Error copying live stream {StreamType} to {FilePath}", GetType().Name, TempFilePath);
++                        Logger.LogError(ex, "Error copying live stream {StreamType} to {Directory}", GetType().Name, ChunkDirectory);
+                         openTaskCompletionSource.TrySetException(ex);
+                     }
+ 
+                     openTaskCompletionSource.TrySetResult(false);
+ 
+                     EnableStreamSharing = false;
+-                    await DeleteTempFiles(TempFilePath).ConfigureAwait(false);
++                    await DeleteChunks().ConfigureAwait(false);
+                 },
+                 CancellationToken.None);
+         }
+-
+-        private void Resolve(TaskCompletionSource<bool> openTaskCompletionSource)
+-        {
+-            DateOpened = DateTime.UtcNow;
+-            openTaskCompletionSource.TrySetResult(true);
+-        }
+     }
+ }
+diff --git a/tests/Jellyfin.LiveTv.Tests/TunerHosts/RollingChunkStreamTests.cs b/tests/Jellyfin.LiveTv.Tests/TunerHosts/RollingChunkStreamTests.cs
+new file mode 100644
+index 0000000000..ff81fe799e
+--- /dev/null
++++ b/tests/Jellyfin.LiveTv.Tests/TunerHosts/RollingChunkStreamTests.cs
+@@ -0,0 +1,171 @@
++using System;
++using System.Collections.Generic;
++using System.IO;
++using System.Text;
++using System.Threading.Tasks;
++using Jellyfin.LiveTv.TunerHosts;
++using Microsoft.Extensions.Logging;
++using Moq;
++using Xunit;
++
++namespace Jellyfin.LiveTv.Tests.TunerHosts;
++
++public sealed class RollingChunkStreamTests : IDisposable
++{
++    private readonly string _tempDir;
++    private readonly ILogger _logger = Mock.Of<ILogger>();
++
++    public RollingChunkStreamTests()
++    {
++        _tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
++        Directory.CreateDirectory(_tempDir);
++    }
++
++    public void Dispose()
++    {
++        if (Directory.Exists(_tempDir))
++        {
++            Directory.Delete(_tempDir, recursive: true);
++        }
++    }
++
++    private string WriteChunk(string name, byte[] content)
++    {
++        var path = Path.Combine(_tempDir, name);
++        File.WriteAllBytes(path, content);
++        return path;
++    }
++
++    [Fact]
++    public async Task ReadAsync_ReturnsBytesFromInitialChunk()
++    {
++        var data = Encoding.UTF8.GetBytes("hello world");
++        var path = WriteChunk("chunk_0.ts", data);
++        var chunkPaths = new List<string> { path };
++
++        using var stream = new RollingChunkStream(chunkPaths, new object(), _logger, seekToLiveEdge: false);
++
++        var buffer = new byte[data.Length];
++        int read = await stream.ReadAsync(buffer, TestContext.Current.CancellationToken);
++
++        Assert.Equal(data.Length, read);
++        Assert.Equal(data, buffer[..read]);
++    }
++
++    [Fact]
++    public async Task ReadAsync_ReturnsZero_AtLiveEdge()
++    {
++        var data = Encoding.UTF8.GetBytes("live data");
++        var path = WriteChunk("chunk_0.ts", data);
++        var chunkPaths = new List<string> { path };
++
++        using var stream = new RollingChunkStream(chunkPaths, new object(), _logger, seekToLiveEdge: false);
++
++        // Drain the only (live-edge) chunk.
++        var buf = new byte[data.Length];
++        await stream.ReadExactlyAsync(buf, TestContext.Current.CancellationToken);
++
++        // At EOF with no newer chunk in the list — must return 0.
++        int read = await stream.ReadAsync(buf, TestContext.Current.CancellationToken);
++        Assert.Equal(0, read);
++    }
++
++    [Fact]
++    public async Task ReadAsync_AdvancesToSealedChunk_WhenCurrentExhausted()
++    {
++        var data0 = Encoding.UTF8.GetBytes("sealed chunk data");
++        var data1 = Encoding.UTF8.GetBytes("live chunk data");
++        var path0 = WriteChunk("chunk_0.ts", data0);
++        var path1 = WriteChunk("chunk_1.ts", data1);
++
++        var chunkLock = new object();
++        // Start with only chunk_0 so the stream anchors there.
++        var chunkPaths = new List<string> { path0 };
++
++        using var stream = new RollingChunkStream(chunkPaths, chunkLock, _logger, seekToLiveEdge: false);
++
++        // Drain chunk_0.
++        var buf0 = new byte[data0.Length];
++        int r0 = await stream.ReadAsync(buf0, TestContext.Current.CancellationToken);
++        Assert.Equal(data0, buf0[..r0]);
++
++        // Writer seals chunk_0 by adding chunk_1.
++        lock (chunkLock)
++        {
++            chunkPaths.Add(path1);
++        }
++
++        // Next read: EOF on chunk_0 and chunk_1 now exists → advance.
++        var buf1 = new byte[data1.Length];
++        int r1 = await stream.ReadAsync(buf1, TestContext.Current.CancellationToken);
++        Assert.Equal(data1, buf1[..r1]);
++    }
++
++    [Fact]
++    public async Task ReadAsync_SkipsToOldestAvailableChunk_WhenCurrentChunkEvicted()
++    {
++        var dataEvicted = Encoding.UTF8.GetBytes("evicted");
++        var data1 = Encoding.UTF8.GetBytes("oldest kept chunk");
++        var data2 = Encoding.UTF8.GetBytes("live edge chunk");
++        var path0 = WriteChunk("chunk_0.ts", dataEvicted);
++        var path1 = WriteChunk("chunk_1.ts", data1);
++        var path2 = WriteChunk("chunk_2.ts", data2);
++
++        var chunkLock = new object();
++        var chunkPaths = new List<string> { path0 };
++
++        using var stream = new RollingChunkStream(chunkPaths, chunkLock, _logger, seekToLiveEdge: false);
++
++        // Drain chunk_0 (file still on disk, but will be evicted from the list).
++        var evictedBuf = new byte[dataEvicted.Length];
++        int r0 = await stream.ReadAsync(evictedBuf, TestContext.Current.CancellationToken);
++        Assert.Equal(dataEvicted.Length, r0);
++
++        // Writer rotated past the keep window: add chunk_1 and chunk_2, evict chunk_0.
++        lock (chunkLock)
++        {
++            chunkPaths.Add(path1);
++            chunkPaths.Add(path2);
++            chunkPaths.RemoveAt(0); // list is now [path1, path2]
++        }
++
++        // Next read: EOF on chunk_0, not in list → skip to oldest available (path1).
++        var buf1 = new byte[data1.Length];
++        int r1 = await stream.ReadAsync(buf1, TestContext.Current.CancellationToken);
++        Assert.Equal(data1, buf1[..r1]);
++    }
++
++    [Fact]
++    public async Task ReadAsync_SeeksNearEnd_WhenSeekToLiveEdgeRequested()
++    {
++        // Build a file larger than the 20 KB seek-back window so we can verify
++        // the stream starts from near the end rather than the beginning.
++        const int seekBackBytes = 20000;
++        const int sentinelLength = 8;
++        var prefix = new byte[seekBackBytes]; // zeros
++        var sentinel = Encoding.UTF8.GetBytes("SENTINEL");
++        var fileBytes = new byte[prefix.Length + sentinel.Length];
++        prefix.CopyTo(fileBytes, 0);
++        sentinel.CopyTo(fileBytes, prefix.Length);
++
++        var path = WriteChunk("chunk_0.ts", fileBytes);
++        var chunkPaths = new List<string> { path };
++
++        using var stream = new RollingChunkStream(chunkPaths, new object(), _logger, seekToLiveEdge: true);
++
++        // The stream should be positioned at end - 20000, so the sentinel is reachable.
++        var buffer = new byte[fileBytes.Length];
++        int totalRead = 0;
++        int read;
++        while ((read = await stream.ReadAsync(buffer.AsMemory(totalRead), TestContext.Current.CancellationToken)) > 0)
++        {
++            totalRead += read;
++        }
++
++        // The prefix bytes before the seek point should NOT be in the buffer;
++        // only the sentinel (and possibly a few bytes of the prefix straddling the
++        // seek point) should appear.
++        Assert.Contains(sentinel, buffer[..totalRead]);
++        Assert.True(totalRead <= seekBackBytes + sentinelLength);
++    }
++}
