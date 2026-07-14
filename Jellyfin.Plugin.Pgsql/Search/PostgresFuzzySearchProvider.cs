@@ -23,8 +23,9 @@ using Microsoft.EntityFrameworkCore;
 namespace Jellyfin.Plugin.Pgsql.Search;
 
 /// <summary>
-/// PostgreSQL-backed internal search provider using <c>pg_trgm</c> for typo-tolerant
-/// title matching and <see cref="ItemValue"/> genre/tag lookups on the same search term.
+/// PostgreSQL-backed internal search provider using Levenshtein token matching for
+/// typo-tolerant titles and genre/tag lookups on both <see cref="ItemValue"/> rows and
+/// the denormalized Genres/Tags columns.
 /// </summary>
 public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
 {
@@ -36,18 +37,23 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
 
     private const int DefaultSearchLimit = 100;
     private const int MaxSearchLimit = 300;
+    private const string LikeEscapeChar = "\\";
 
+    // Title literal matches stay on top. Genre/tag exact must beat fuzzy title noise so
+    // "Action" returns Action films instead of losing to weak trigram title hits.
     private const float ExactMatchScore = 100f;
     private const float PrefixMatchScore = 80f;
     private const float WordPrefixMatchScore = 75f;
-    private const float TitleHighTrigramScore = 65f;
-    private const float TitleTrigramScore = 55f;
-    private const float ContainsMatchScore = 50f;
-    private const float GenreExactScore = 45f;
-    private const float GenrePrefixScore = 38f;
-    private const float GenreContainsScore = 35f;
+    private const float GenreExactScore = 72f;
+    private const float ContainsMatchScore = 68f;
+    private const float GenreContainsScore = 64f;
+    private const float TitleFuzzyScore = 55f;
 
-    private const float HighTrigramSimilarity = 0.5f;
+    /// <summary>
+    /// Strong trigram similarity floor used only as a secondary fuzzy gate for longer terms.
+    /// Default pg_trgm 0.3 is too loose and drowns genre results / invents junk for short typos.
+    /// </summary>
+    private const float StrongTrigramSimilarity = 0.45f;
 
     private static readonly Guid PlaceholderId = Guid.Parse("00000000-0000-0000-0000-000000000001");
 
@@ -122,8 +128,8 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
         }
 
         var cleanPrefix = cleanSearchTerm + " ";
-        var likeOriginal = $"%{rawSearchTerm}%";
-        var allowMetadataTrigram = cleanSearchTerm.Length >= 4;
+        var likeRaw = "%" + EscapeLikeLiteral(rawSearchTerm) + "%";
+        var maxEditDistance = cleanSearchTerm.Length <= 4 ? 1 : 2;
         var limit = Math.Clamp(query.Limit ?? DefaultSearchLimit, 1, MaxSearchLimit);
         var startIndex = Math.Max(query.StartIndex ?? 0, 0);
 
@@ -135,19 +141,27 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
                 .Where(e => e.Id != PlaceholderId)
                 .Where(e => !e.IsVirtualItem)
                 .Where(e =>
+                    // Literal title matches
                     e.CleanName!.Contains(cleanSearchTerm)
-                    || (e.OriginalTitle != null && EF.Functions.ILike(e.OriginalTitle, likeOriginal))
-                    || EF.Functions.TrigramsAreSimilar(e.CleanName!, cleanSearchTerm)
-                    || EF.Functions.TrigramsAreWordSimilar(cleanSearchTerm, e.CleanName!)
-                    || (e.OriginalTitle != null && (
-                        EF.Functions.TrigramsAreSimilar(e.OriginalTitle.ToLower(), cleanSearchTerm)
-                        || EF.Functions.TrigramsAreWordSimilar(cleanSearchTerm, e.OriginalTitle.ToLower())))
+                    || (e.OriginalTitle != null && EF.Functions.ILike(e.OriginalTitle, likeRaw, LikeEscapeChar))
+                    // Typo-tolerant titles (token Levenshtein: gme→game, batmn→batman)
+                    || PgSearchDbFunctions.TokenLevenshteinMatch(e.CleanName, cleanSearchTerm, maxEditDistance)
+                    || (e.OriginalTitle != null
+                        && PgSearchDbFunctions.TokenLevenshteinMatch(
+                            e.OriginalTitle.ToLower(),
+                            cleanSearchTerm,
+                            maxEditDistance))
+                    // Strong trigram only — never the default 0.3 % operator
+                    || EF.Functions.TrigramsSimilarity(e.CleanName!, cleanSearchTerm) >= StrongTrigramSimilarity
+                    // Genres / tags via ItemValues
                     || e.ItemValues!.Any(ivm =>
                         (ivm.ItemValue.Type == ItemValueType.Genre || ivm.ItemValue.Type == ItemValueType.Tags)
                         && (ivm.ItemValue.CleanValue == cleanSearchTerm
                             || ivm.ItemValue.CleanValue.StartsWith(cleanSearchTerm)
-                            || ivm.ItemValue.CleanValue.Contains(cleanSearchTerm)
-                            || (allowMetadataTrigram && EF.Functions.TrigramsAreSimilar(ivm.ItemValue.CleanValue, cleanSearchTerm)))));
+                            || ivm.ItemValue.CleanValue.Contains(cleanSearchTerm)))
+                    // Genres / tags denormalized pipe columns (still written by BaseItemMapper)
+                    || (e.Genres != null && EF.Functions.ILike(e.Genres, likeRaw, LikeEscapeChar))
+                    || (e.Tags != null && EF.Functions.ILike(e.Tags, likeRaw, LikeEscapeChar)));
 
             dbQuery = ApplyTypeFilter(dbQuery, query.IncludeItemTypes, query.ExcludeItemTypes);
             dbQuery = ApplyMediaTypeFilter(dbQuery, query.MediaTypes);
@@ -164,7 +178,6 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
                 }
             }
 
-            // Score bands: title exact/prefix/trigram always beat genre/tag-only matches.
             var scored = dbQuery.Select(e => new
             {
                 e.Id,
@@ -172,26 +185,31 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
                     e.CleanName == cleanSearchTerm ? ExactMatchScore
                     : e.CleanName!.StartsWith(cleanSearchTerm) ? PrefixMatchScore
                     : e.CleanName!.Contains(cleanPrefix) ? WordPrefixMatchScore
-                    : EF.Functions.TrigramsSimilarity(e.CleanName!, cleanSearchTerm) >= HighTrigramSimilarity
-                        ? TitleHighTrigramScore
-                    : e.CleanName!.Contains(cleanSearchTerm)
-                        || (e.OriginalTitle != null && EF.Functions.ILike(e.OriginalTitle, likeOriginal))
-                            ? ContainsMatchScore
-                    : EF.Functions.TrigramsAreSimilar(e.CleanName!, cleanSearchTerm)
-                        || EF.Functions.TrigramsAreWordSimilar(cleanSearchTerm, e.CleanName!)
-                        || (e.OriginalTitle != null && (
-                            EF.Functions.TrigramsAreSimilar(e.OriginalTitle.ToLower(), cleanSearchTerm)
-                            || EF.Functions.TrigramsAreWordSimilar(cleanSearchTerm, e.OriginalTitle.ToLower())))
-                            ? TitleTrigramScore
                     : e.ItemValues!.Any(ivm =>
                         (ivm.ItemValue.Type == ItemValueType.Genre || ivm.ItemValue.Type == ItemValueType.Tags)
                         && ivm.ItemValue.CleanValue == cleanSearchTerm)
+                      || (e.Genres != null && (
+                          EF.Functions.ILike(e.Genres, cleanSearchTerm)
+                          || EF.Functions.ILike(e.Genres, cleanSearchTerm + "|%")
+                          || EF.Functions.ILike(e.Genres, "%|" + cleanSearchTerm)
+                          || EF.Functions.ILike(e.Genres, "%|" + cleanSearchTerm + "|%")))
+                      || (e.Tags != null && (
+                          EF.Functions.ILike(e.Tags, cleanSearchTerm)
+                          || EF.Functions.ILike(e.Tags, cleanSearchTerm + "|%")
+                          || EF.Functions.ILike(e.Tags, "%|" + cleanSearchTerm)
+                          || EF.Functions.ILike(e.Tags, "%|" + cleanSearchTerm + "|%")))
                             ? GenreExactScore
+                    : e.CleanName!.Contains(cleanSearchTerm)
+                        || (e.OriginalTitle != null && EF.Functions.ILike(e.OriginalTitle, likeRaw, LikeEscapeChar))
+                            ? ContainsMatchScore
                     : e.ItemValues!.Any(ivm =>
                         (ivm.ItemValue.Type == ItemValueType.Genre || ivm.ItemValue.Type == ItemValueType.Tags)
-                        && ivm.ItemValue.CleanValue.StartsWith(cleanSearchTerm))
-                            ? GenrePrefixScore
-                    : GenreContainsScore
+                        && (ivm.ItemValue.CleanValue.StartsWith(cleanSearchTerm)
+                            || ivm.ItemValue.CleanValue.Contains(cleanSearchTerm)))
+                      || (e.Genres != null && EF.Functions.ILike(e.Genres, likeRaw, LikeEscapeChar))
+                      || (e.Tags != null && EF.Functions.ILike(e.Tags, likeRaw, LikeEscapeChar))
+                            ? GenreContainsScore
+                    : TitleFuzzyScore
             });
 
             var rows = await scored
@@ -227,6 +245,19 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
 
         var cleaned = searchTerm.Trim().RemoveDiacritics().GetCleanValue();
         return string.IsNullOrEmpty(cleaned) ? string.Empty : cleaned;
+    }
+
+    /// <summary>
+    /// Escapes <c>%</c>, <c>_</c>, and <c>\</c> for use with EF <c>Like</c>/<c>ILike</c> escape clauses.
+    /// </summary>
+    /// <param name="value">Unescaped literal.</param>
+    /// <returns>Escaped literal.</returns>
+    public static string EscapeLikeLiteral(string value)
+    {
+        return value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("%", "\\%", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal);
     }
 
     private IQueryable<BaseItemEntity> ApplyTypeFilter(

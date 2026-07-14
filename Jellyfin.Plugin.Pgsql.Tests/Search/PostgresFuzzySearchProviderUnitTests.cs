@@ -53,6 +53,16 @@ public sealed class PostgresFuzzySearchProviderUnitTests
         Assert.Equal(3, PostgresFuzzySearchProvider.MinSearchTermLength);
     }
 
+    [Theory]
+    [InlineData("game", "game")]
+    [InlineData("100%", @"100\%")]
+    [InlineData(@"a\b", @"a\\b")]
+    [InlineData("a_b", @"a\_b")]
+    public void EscapeLikeLiteral_EscapesMetacharacters(string input, string expected)
+    {
+        Assert.Equal(expected, PostgresFuzzySearchProvider.EscapeLikeLiteral(input));
+    }
+
     private static PostgresFuzzySearchProvider CreateProviderWithoutDeps()
     {
         // CanSearch / NormalizeSearchTerm do not touch injected services.
