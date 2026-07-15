@@ -63,6 +63,18 @@ public sealed class PostgresFuzzySearchProviderUnitTests
         Assert.Equal(expected, PostgresFuzzySearchProvider.EscapeLikeLiteral(input));
     }
 
+    [Theory]
+    [InlineData(3, 1)]
+    [InlineData(5, 1)]
+    [InlineData(9, 1)]
+    [InlineData(10, 1)]
+    [InlineData(11, 2)]
+    [InlineData(20, 2)]
+    public void GetMaxEditDistance_TightensForCommonNeedleLengths(int length, int expected)
+    {
+        Assert.Equal(expected, PostgresFuzzySearchProvider.GetMaxEditDistance(length));
+    }
+
     private static PostgresFuzzySearchProvider CreateProviderWithoutDeps()
     {
         // CanSearch / NormalizeSearchTerm do not touch injected services.

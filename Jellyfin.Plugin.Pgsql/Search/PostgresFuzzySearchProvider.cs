@@ -53,13 +53,14 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
     /// Whole-string trigram floor. Multi-word titles score poorly against a single typed word,
     /// so this alone is not enough — prefer <see cref="WordTrigramSimilarity"/>.
     /// </summary>
-    private const float StrongTrigramSimilarity = 0.4f;
+    private const float StrongTrigramSimilarity = 0.5f;
 
     /// <summary>
     /// Word-trigram floor (pg_trgm word_similarity). Needle "dispicable" vs haystack
-    /// "despicable me" is ~0.64; keep this below that while rejecting unrelated noise.
+    /// "despicable me" is ~0.64; keep this below that while rejecting near-miss noise
+    /// like "backrooms" vs "bathrooms" (~0.50 against the full episode title).
     /// </summary>
-    private const float WordTrigramSimilarity = 0.45f;
+    private const float WordTrigramSimilarity = 0.55f;
 
     private static readonly Guid PlaceholderId = Guid.Parse("00000000-0000-0000-0000-000000000001");
 
@@ -164,9 +165,7 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
     {
         var cleanPrefix = cleanSearchTerm + " ";
         var likeClean = "%" + EscapeLikeLiteral(cleanSearchTerm) + "%";
-        var maxEditDistance = cleanSearchTerm.Length <= 4 ? 1
-            : cleanSearchTerm.Length <= 8 ? 2
-            : 3;
+        var maxEditDistance = GetMaxEditDistance(cleanSearchTerm.Length);
         var limit = Math.Clamp(query.Limit ?? DefaultSearchLimit, 1, MaxSearchLimit);
         var startIndex = Math.Max(query.StartIndex ?? 0, 0);
 
@@ -314,6 +313,15 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
             .Replace("%", "\\%", StringComparison.Ordinal)
             .Replace("_", "\\_", StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// Maximum token Levenshtein distance allowed for a cleaned search-term length.
+    /// Short and mid-length needles allow one edit; only longer needles allow two.
+    /// </summary>
+    /// <param name="cleanedTermLength">Length of the cleaned search term.</param>
+    /// <returns>Max edit distance.</returns>
+    public static int GetMaxEditDistance(int cleanedTermLength)
+        => cleanedTermLength <= 10 ? 1 : 2;
 
     private IQueryable<BaseItemEntity> ApplyTypeFilter(
         IQueryable<BaseItemEntity> query,
