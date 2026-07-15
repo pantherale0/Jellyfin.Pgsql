@@ -58,6 +58,23 @@ index 0000000000..eec7f3e103
 +};
 +
 +export default ReportsDrawerSection;
+diff --git a/src/apps/dashboard/components/table/TablePage.tsx b/src/apps/dashboard/components/table/TablePage.tsx
+index 800b758168..6cc5752f9c 100644
+--- a/src/apps/dashboard/components/table/TablePage.tsx
++++ b/src/apps/dashboard/components/table/TablePage.tsx
+@@ -72,11 +72,11 @@ const TablePage = <T extends MRT_RowData>({
+                                 </Typography>
+                             )}
+                         </Stack>
++                        {children}
+                         <MaterialReactTable table={table} />
+                     </>
+                 )}
+             </Box>
+-            {children}
+         </Page>
+     );
+ };
 diff --git a/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts b/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts
 new file mode 100644
 index 0000000000..50f97c9479
@@ -412,10 +429,10 @@ index e8411bdc27..425be2f9d6 100644
      { path: 'users', type: AppType.Dashboard },
 diff --git a/src/apps/dashboard/routes/reports/playback.tsx b/src/apps/dashboard/routes/reports/playback.tsx
 new file mode 100644
-index 0000000000..ed47fe6f97
+index 0000000000..dbafbf8768
 --- /dev/null
 +++ b/src/apps/dashboard/routes/reports/playback.tsx
-@@ -0,0 +1,198 @@
+@@ -0,0 +1,215 @@
 +import React, { useMemo } from 'react';
 +import Alert from '@mui/material/Alert';
 +import Box from '@mui/material/Box';
@@ -504,7 +521,9 @@ index 0000000000..ed47fe6f97
 +        {
 +            id: 'User',
 +            header: globalize.translate('LabelUser'),
-+            size: 220,
++            size: 240,
++            minSize: 180,
++            grow: true,
 +            Cell: ({ row }) => {
 +                const user = users[row.original.userId];
 +
@@ -525,7 +544,9 @@ index 0000000000..ed47fe6f97
 +        ...mediaTypes.map(mediaType => ({
 +            id: mediaType,
 +            header: mediaType,
-+            size: 120,
++            size: 140,
++            minSize: 120,
++            grow: true,
 +            accessorFn: (row: PlaybackUserTableRow) => row.byMediaType[mediaType]?.totalTicks ?? 0,
 +            Cell: ({ row }: { row: { original: PlaybackUserTableRow } }) => {
 +                const stat = row.original.byMediaType[mediaType];
@@ -535,14 +556,18 @@ index 0000000000..ed47fe6f97
 +        {
 +            id: 'TotalWatchTime',
 +            header: globalize.translate('LabelWatchTime'),
-+            size: 120,
++            size: 140,
++            minSize: 120,
++            grow: true,
 +            accessorFn: row => row.totalTicks,
 +            Cell: ({ row }) => formatTicks(row.original.totalTicks)
 +        },
 +        {
 +            id: 'PlayCount',
 +            header: globalize.translate('LabelPlayCount'),
-+            size: 100,
++            size: 140,
++            minSize: 120,
++            grow: true,
 +            accessorKey: 'playCount'
 +        }
 +    ], [ mediaTypes, users ]);
@@ -554,10 +579,19 @@ index 0000000000..ed47fe6f97
 +        || usersError?.message
 +        || globalize.translate('PlaybackStatsLoadError');
 +
++    const useStickyTableShell = userRows.length > 25;
++
 +    const table = useMaterialReactTable<PlaybackUserTableRow>({
 +        ...(DEFAULT_TABLE_OPTIONS as Partial<MRT_TableOptions<PlaybackUserTableRow>>),
 +        columns,
 +        data: userRows,
++        layoutMode: 'grid',
++        enableColumnResizing: false,
++        enableStickyHeader: useStickyTableShell,
++        enableStickyFooter: useStickyTableShell,
++        muiTableContainerProps: useStickyTableShell
++            ? DEFAULT_TABLE_OPTIONS.muiTableContainerProps
++            : { sx: { maxHeight: 'none' } },
 +        initialState: {
 +            density: 'compact',
 +            sorting: [{ id: 'TotalWatchTime', desc: true }]
@@ -567,8 +601,8 @@ index 0000000000..ed47fe6f97
 +        },
 +        enableColumnFilters: false,
 +        enableGlobalFilter: true,
-+        enablePagination: userRows.length > 25,
-+        enableBottomToolbar: userRows.length > 25
++        enablePagination: useStickyTableShell,
++        enableBottomToolbar: useStickyTableShell
 +    });
 +
 +    if (isLoading) {
@@ -645,10 +679,10 @@ index 2c69784c58..2180c978c8 100644
                  )}
              </Box>
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index c18c3ebd40..0846375a9b 100755
+index 250a7a8d4f..6af511410e 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -512,6 +512,7 @@
+@@ -516,6 +516,7 @@
      "HeaderPlayAll": "Play All",
      "HeaderPlayback": "Media playback",
      "HeaderPlaybackError": "Playback Error",
@@ -656,7 +690,7 @@ index c18c3ebd40..0846375a9b 100755
      "HeaderPlayOn": "Play On",
      "HeaderPleaseSignIn": "Please sign in",
      "HeaderPortRanges": "Firewall and Proxy Settings",
-@@ -525,6 +526,7 @@
+@@ -529,6 +530,7 @@
      "HeaderRemoteControl": "Remote Control",
      "HeaderRemoveMediaFolder": "Remove Media Folder",
      "HeaderRemoveMediaLocation": "Remove Media Location",
@@ -664,7 +698,7 @@ index c18c3ebd40..0846375a9b 100755
      "HeaderRevisionHistory": "Revision History",
      "HeaderRunningTasks": "Running Tasks",
      "HeaderScenes": "Scenes",
-@@ -815,6 +817,7 @@
+@@ -823,6 +825,7 @@
      "LabelMediaSegmentProviders": "Media segment providers",
      "LabelMediaSegmentsType": "{0} Segments",
      "LabelLineup": "Lineup",
@@ -672,7 +706,7 @@ index c18c3ebd40..0846375a9b 100755
      "LabelLocalCustomCss": "Custom CSS code for styling which applies to this client only. You may want to disable server custom CSS code.",
      "LabelLocalHttpServerPortNumber": "Local HTTP port number",
      "LabelLocalHttpServerPortNumberHelp": "The TCP port number for the HTTP server.",
-@@ -887,6 +890,7 @@
+@@ -895,6 +898,7 @@
      "LabelPlayer": "Player",
      "LabelPlayerDimensions": "Player dimensions",
      "LabelPlaylist": "Playlist",
@@ -680,7 +714,7 @@ index c18c3ebd40..0846375a9b 100755
      "LabelPlayMethod": "Play method",
      "LabelPleaseRestart": "Changes will take effect after manually reloading the web client.",
      "LabelPostProcessor": "Post-processing application",
-@@ -1056,6 +1060,7 @@
+@@ -1071,6 +1075,7 @@
      "LabelVideoRange": "Video range",
      "LabelVideoResolution": "Video resolution",
      "LabelSelectPreferredTranscodeVideoCodec": "Preferred transcode video codec",
@@ -688,7 +722,7 @@ index c18c3ebd40..0846375a9b 100755
      "LabelWeb": "Web",
      "LabelWebVersion": "Web version",
      "LabelYear": "Year",
-@@ -1416,6 +1421,8 @@
+@@ -1431,6 +1436,8 @@
      "PlaybackErrorNoCompatibleStream": "This client isn't compatible with the media and the server isn't sending a compatible media format.",
      "PlaybackErrorPlaceHolder": "This is a placeholder for physical media that Jellyfin cannot play. Please insert the disc to play.",
      "PlaybackRate": "Playback Speed",
@@ -697,7 +731,7 @@ index c18c3ebd40..0846375a9b 100755
      "PlayCount": "Play count",
      "Played": "Played",
      "PlayFromBeginning": "Play from beginning",
-@@ -1651,6 +1658,7 @@
+@@ -1672,6 +1679,7 @@
      "TabNfoSettings": "NFO Settings",
      "TabOther": "Other",
      "TabParentalControl": "Parental Control",
