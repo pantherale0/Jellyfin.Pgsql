@@ -8,7 +8,6 @@ using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Database.Implementations.Entities;
-using Jellyfin.Plugin.Pgsql.Taste.Entities;
 using MediaBrowser.Controller.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -74,7 +73,7 @@ public sealed class UserTasteProfileBuilder
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        var playbackUserIds = await context.Set<PlaybackActivity>().AsNoTracking()
+        var playbackUserIds = await context.PlaybackActivity.AsNoTracking()
             .Where(p => p.DatePlayed >= cutoff)
             .Select(p => p.UserId)
             .Distinct()
@@ -223,13 +222,13 @@ public sealed class UserTasteProfileBuilder
             payload.RatingP75 = Percentile(ratingSamples, 0.75f);
         }
 
-        var entity = await context.Set<UserTasteProfile>()
+        var entity = await context.UserTasteProfiles
             .FirstOrDefaultAsync(p => p.UserId == userId, cancellationToken)
             .ConfigureAwait(false);
         if (entity is null)
         {
             entity = new UserTasteProfile { UserId = userId };
-            context.Set<UserTasteProfile>().Add(entity);
+            context.UserTasteProfiles.Add(entity);
         }
 
         entity.FeaturesJson = JsonSerializer.Serialize(payload, JsonOptions);
@@ -328,7 +327,7 @@ public sealed class UserTasteProfileBuilder
             signals[row.ItemId] = signals.GetValueOrDefault(row.ItemId) + weight;
         }
 
-        var playbackRows = await context.Set<PlaybackActivity>().AsNoTracking()
+        var playbackRows = await context.PlaybackActivity.AsNoTracking()
             .Where(p => p.UserId == userId && p.DatePlayed >= cutoff && p.PlayedTicks > 0)
             .Join(
                 context.BaseItems.AsNoTracking().Where(i => i.Type == movieType),

@@ -3,7 +3,7 @@ using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations;
-using Jellyfin.Plugin.Pgsql.Taste.Entities;
+using Jellyfin.Database.Implementations.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
@@ -63,7 +63,7 @@ public sealed class UserTasteProfileStore
             var context = await _dbProvider.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
             await using (context.ConfigureAwait(false))
             {
-                var row = await context.Set<UserTasteProfile>().AsNoTracking()
+                var row = await context.UserTasteProfiles.AsNoTracking()
                     .FirstOrDefaultAsync(p => p.UserId == userId, cancellationToken)
                     .ConfigureAwait(false);
 

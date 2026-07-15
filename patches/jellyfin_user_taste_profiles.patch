@@ -1,0 +1,128 @@
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/TasteModelEvalRun.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/TasteModelEvalRun.cs
+new file mode 100644
+index 0000000000..4d14bb3f0a
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/TasteModelEvalRun.cs
+@@ -0,0 +1,64 @@
++using System;
++
++namespace Jellyfin.Database.Implementations.Entities;
++
++/// <summary>
++/// Offline evaluation metrics for a shadow taste-model training run.
++/// </summary>
++public class TasteModelEvalRun
++{
++    /// <summary>
++    /// Gets or sets the evaluation run identifier.
++    /// </summary>
++    public Guid Id { get; set; }
++
++    /// <summary>
++    /// Gets or sets when the run finished (UTC).
++    /// </summary>
++    public DateTime CreatedAt { get; set; }
++
++    /// <summary>
++    /// Gets or sets training duration in milliseconds.
++    /// </summary>
++    public long TrainDurationMs { get; set; }
++
++    /// <summary>
++    /// Gets or sets the number of positive training pairs.
++    /// </summary>
++    public int PositiveCount { get; set; }
++
++    /// <summary>
++    /// Gets or sets the number of negative training pairs.
++    /// </summary>
++    public int NegativeCount { get; set; }
++
++    /// <summary>
++    /// Gets or sets the holdout set size used for evaluation.
++    /// </summary>
++    public int HoldoutCount { get; set; }
++
++    /// <summary>
++    /// Gets or sets accuracy on the holdout set (0–1), or null when unevaluable.
++    /// </summary>
++    public double? Accuracy { get; set; }
++
++    /// <summary>
++    /// Gets or sets area under the ROC curve on the holdout set, or null when unevaluable.
++    /// </summary>
++    public double? Auc { get; set; }
++
++    /// <summary>
++    /// Gets or sets precision at 10 on the holdout ranking, or null when unevaluable.
++    /// </summary>
++    public double? PrecisionAt10 { get; set; }
++
++    /// <summary>
++    /// Gets or sets the saved model artifact relative path under the plugin data folder.
++    /// </summary>
++    public string? ModelPath { get; set; }
++
++    /// <summary>
++    /// Gets or sets an optional human-readable note (e.g. skip reason).
++    /// </summary>
++    public string? Notes { get; set; }
++}
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/UserTasteProfile.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/UserTasteProfile.cs
+new file mode 100644
+index 0000000000..2a4c8e1f01
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/UserTasteProfile.cs
+@@ -0,0 +1,29 @@
++using System;
++
++namespace Jellyfin.Database.Implementations.Entities;
++
++/// <summary>
++/// Persisted per-user taste feature profile used for suggestion re-ranking and shadow training.
++/// </summary>
++public class UserTasteProfile
++{
++    /// <summary>
++    /// Gets or sets the user identifier (primary key).
++    /// </summary>
++    public Guid UserId { get; set; }
++
++    /// <summary>
++    /// Gets or sets the serialized feature payload (JSON).
++    /// </summary>
++    public string FeaturesJson { get; set; } = "{}";
++
++    /// <summary>
++    /// Gets or sets how many positively weighted history signals contributed to the profile.
++    /// </summary>
++    public int SampleCount { get; set; }
++
++    /// <summary>
++    /// Gets or sets when the profile was last rebuilt (UTC).
++    /// </summary>
++    public DateTime UpdatedAt { get; set; }
++}
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
+index 1111111111..2222222222 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
+@@ -176,6 +176,16 @@ public class JellyfinDbContext(DbContextOptions<JellyfinDbContext> options, ILog
+     /// <summary>
+     /// Gets the <see cref="DbSet{TEntity}"/> containing the playback activity.
+     /// </summary>
+     public DbSet<PlaybackActivity> PlaybackActivity => Set<PlaybackActivity>();
++
++    /// <summary>
++    /// Gets the <see cref="DbSet{TEntity}"/> containing user taste profiles.
++    /// </summary>
++    public DbSet<UserTasteProfile> UserTasteProfiles => Set<UserTasteProfile>();
++
++    /// <summary>
++    /// Gets the <see cref="DbSet{TEntity}"/> containing shadow taste-model evaluation runs.
++    /// </summary>
++    public DbSet<TasteModelEvalRun> TasteModelEvalRuns => Set<TasteModelEvalRun>();
+ 
+     /*public DbSet<Artwork> Artwork => Set<Artwork>();
+ 
+     public DbSet<Book> Books => Set<Book>();

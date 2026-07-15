@@ -9,7 +9,6 @@ using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Database.Implementations.Entities;
-using Jellyfin.Plugin.Pgsql.Taste.Entities;
 using MediaBrowser.Controller.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -56,7 +55,7 @@ public sealed class TasteShadowNeuralTrainer
 
         var sw = Stopwatch.StartNew();
         var movieType = itemTypeLookup.BaseItemKindNames[BaseItemKind.Movie];
-        var profiles = await context.Set<UserTasteProfile>().AsNoTracking()
+        var profiles = await context.UserTasteProfiles.AsNoTracking()
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
         if (profiles.Count == 0)
@@ -191,7 +190,7 @@ public sealed class TasteShadowNeuralTrainer
             Notes = null
         };
 
-        context.Set<TasteModelEvalRun>().Add(run);
+        context.TasteModelEvalRuns.Add(run);
         await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
         if (_logger.IsEnabled(LogLevel.Information))
@@ -359,7 +358,7 @@ public sealed class TasteShadowNeuralTrainer
             HoldoutCount = 0,
             Notes = notes
         };
-        context.Set<TasteModelEvalRun>().Add(run);
+        context.TasteModelEvalRuns.Add(run);
         await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         return run;
     }
