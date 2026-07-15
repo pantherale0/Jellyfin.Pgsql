@@ -1,15 +1,21 @@
 diff --git a/Emby.Server.Implementations/ApplicationHost.cs b/Emby.Server.Implementations/ApplicationHost.cs
-index 69e23bcb63..8a002d4fff 100644
+index 69e23bcb63..0b3b6aa236 100644
 --- a/Emby.Server.Implementations/ApplicationHost.cs
 +++ b/Emby.Server.Implementations/ApplicationHost.cs
-@@ -722,8 +722,10 @@ namespace Emby.Server.Implementations
+@@ -722,8 +722,16 @@ namespace Emby.Server.Implementations
  
              Resolve<IMediaSourceManager>().AddParts(GetExports<IMediaSourceProvider>());
  
 -            Resolve<ISimilarItemsManager>().AddParts(GetExports<ISimilarItemsProvider>());
 -            Resolve<ISearchManager>().AddParts(GetExports<ISearchProvider>());
++            // Prefer the PostgreSQL franchise-first scorer when present, but keep core
++            // MovieSimilarItemsProvider as a fallback so Similar never goes empty if the
++            // plugin provider is missing or fails to construct.
 +            Resolve<ISimilarItemsManager>().AddParts(
-+                GetExports<ISimilarItemsProvider>().Where(p => p is not MovieSimilarItemsProvider));
++                GetExports<ISimilarItemsProvider>()
++                    .OrderBy(p => string.Equals(p.Name, "PostgreSQL Similarity", StringComparison.Ordinal)
++                        ? 0
++                        : 1));
 +            Resolve<ISearchManager>().AddParts(
 +                GetExports<ISearchProvider>().Where(p => p is not SqlSearchProvider));
          }

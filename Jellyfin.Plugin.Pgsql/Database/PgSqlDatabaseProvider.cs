@@ -58,6 +58,7 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             });
 
         PostgreSqlCompat.EnsureUuidAggregates(connectionBuilder.ToString(), _logger);
+        PostgreSqlCompat.EnsureSearchSqlHelpers(connectionBuilder.ToString(), _logger);
 
         var enableSensitiveDataLogging = GetCustomDatabaseOption(customOptions, "EnableSensitiveDataLogging", e => e.Equals(bool.TrueString, StringComparison.OrdinalIgnoreCase), () => false);
         if (enableSensitiveDataLogging)
@@ -150,6 +151,38 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
         {
             modelBuilder.HasDbFunction(tokenMatch)
                 .HasName("jellyfin_token_levenshtein_match");
+        }
+
+        // Map through the plugin's own MethodInfo so translation works across ALC boundaries
+        // (Npgsql EF.Functions.Trigrams*/ILike MethodInfo from a private plugin copy does not).
+        RegisterSearchDbFunction(
+            modelBuilder,
+            nameof(Jellyfin.Plugin.Pgsql.Search.PgSearchDbFunctions.WordSimilarity),
+            "word_similarity",
+            [typeof(string), typeof(string)]);
+        RegisterSearchDbFunction(
+            modelBuilder,
+            nameof(Jellyfin.Plugin.Pgsql.Search.PgSearchDbFunctions.TrigramSimilarity),
+            "similarity",
+            [typeof(string), typeof(string)]);
+        RegisterSearchDbFunction(
+            modelBuilder,
+            nameof(Jellyfin.Plugin.Pgsql.Search.PgSearchDbFunctions.ILike),
+            "jellyfin_ilike",
+            [typeof(string), typeof(string)]);
+    }
+
+    private static void RegisterSearchDbFunction(
+        ModelBuilder modelBuilder,
+        string methodName,
+        string sqlName,
+        Type[] parameterTypes)
+    {
+        var method = typeof(Jellyfin.Plugin.Pgsql.Search.PgSearchDbFunctions)
+            .GetMethod(methodName, parameterTypes);
+        if (method is not null)
+        {
+            modelBuilder.HasDbFunction(method).HasName(sqlName);
         }
     }
 

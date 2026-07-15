@@ -38,5 +38,5 @@ public sealed class PostgresMovieSimilarItemsProviderUnitTests
     }
 
     private static PostgresMovieSimilarItemsProvider CreateProviderWithoutDeps()
-        => new(null!, null!, null!, null!);
+        => new(null!, null!, null!, null!, null!);
 }

@@ -16,7 +16,7 @@ public static class MovieSimilarityWeights
     public const int SharedSignificantTokenWeight = 250;
 
     /// <summary>Minimum pg_trgm word_similarity to count as title-franchise related.</summary>
-    public const double TitleWordSimilarityFloor = 0.4;
+    public const float TitleWordSimilarityFloor = 0.4f;
 
     /// <summary>Genre overlap weight (matches core MovieSimilarItemsProvider).</summary>
     public const int GenreWeight = 10;

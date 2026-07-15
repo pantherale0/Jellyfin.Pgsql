@@ -6,6 +6,8 @@ namespace Jellyfin.Plugin.Pgsql.Search;
 /// <summary>
 /// PostgreSQL-mapped helpers for media search. CLR bodies are never executed;
 /// EF Core translates calls to SQL functions registered on the model.
+/// Prefer these over <c>EF.Functions.Trigrams*</c>/<c>ILike</c>: Npgsql's extension methods
+/// do not translate reliably when the plugin ALC and host EF assemblies differ.
 /// </summary>
 public static class PgSearchDbFunctions
 {
@@ -21,5 +23,35 @@ public static class PgSearchDbFunctions
     /// <returns>True when a fuzzy token match exists.</returns>
     [DbFunction("jellyfin_token_levenshtein_match")]
     public static bool TokenLevenshteinMatch(string? haystack, string needle, int maxDistance)
+        => throw new InvalidOperationException("This method is for EF Core SQL translation only.");
+
+    /// <summary>
+    /// pg_trgm <c>word_similarity(source, target)</c>.
+    /// </summary>
+    /// <param name="source">Needle / query fragment.</param>
+    /// <param name="target">Haystack title or value.</param>
+    /// <returns>Similarity in 0–1.</returns>
+    [DbFunction("word_similarity")]
+    public static double WordSimilarity(string source, string? target)
+        => throw new InvalidOperationException("This method is for EF Core SQL translation only.");
+
+    /// <summary>
+    /// pg_trgm <c>similarity(source, target)</c>.
+    /// </summary>
+    /// <param name="source">Haystack.</param>
+    /// <param name="target">Needle.</param>
+    /// <returns>Similarity in 0–1.</returns>
+    [DbFunction("similarity")]
+    public static double TrigramSimilarity(string? source, string target)
+        => throw new InvalidOperationException("This method is for EF Core SQL translation only.");
+
+    /// <summary>
+    /// Case-insensitive LIKE with backslash escape (<c>jellyfin_ilike</c>).
+    /// </summary>
+    /// <param name="haystack">Text to match.</param>
+    /// <param name="pattern">LIKE pattern (may include <c>%</c>/<c>_</c>).</param>
+    /// <returns>True when the pattern matches.</returns>
+    [DbFunction("jellyfin_ilike")]
+    public static bool ILike(string? haystack, string pattern)
         => throw new InvalidOperationException("This method is for EF Core SQL translation only.");
 }

@@ -99,7 +99,9 @@ public static partial class FranchiseTitleHelper
     /// <returns>Franchise score contribution, or 0 when below the floor.</returns>
     public static int FranchiseScoreFromWordSimilarity(double wordSimilarity)
     {
-        if (wordSimilarity < MovieSimilarityWeights.TitleWordSimilarityFloor)
+        // Compare as float to match the SQL floor (pg_trgm / EF float) and avoid
+        // double rounding surprises around 0.4 (0.4d < 0.4f when promoted).
+        if ((float)wordSimilarity < MovieSimilarityWeights.TitleWordSimilarityFloor)
         {
             return 0;
         }
