@@ -354,7 +354,7 @@ public sealed class PostgresMovieSimilarItemsProvider :
             return;
         }
 
-        var featuresByItem = await LoadCandidateTasteFeaturesAsync(context, candidateIds, cancellationToken)
+        var featuresByItem = await TasteCandidateFeatureLoader.LoadAsync(context, candidateIds, cancellationToken)
             .ConfigureAwait(false);
         foreach (var scoreMap in result.Values)
         {
@@ -372,70 +372,6 @@ public sealed class PostgresMovieSimilarItemsProvider :
                 }
             }
         }
-    }
-
-    private static async Task<Dictionary<Guid, TasteCandidateFeatures>> LoadCandidateTasteFeaturesAsync(
-        JellyfinDbContext context,
-        List<Guid> candidateIds,
-        CancellationToken cancellationToken)
-    {
-        var valueRows = await context.ItemValuesMap.AsNoTracking()
-            .Where(m => candidateIds.Contains(m.ItemId)
-                && (m.ItemValue.Type == ItemValueType.Genre
-                    || m.ItemValue.Type == ItemValueType.Tags
-                    || m.ItemValue.Type == ItemValueType.Studios))
-            .Select(m => new { m.ItemId, m.ItemValue.Type, m.ItemValue.CleanValue })
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        var peopleRows = await context.PeopleBaseItemMap.AsNoTracking()
-            .Where(m => candidateIds.Contains(m.ItemId) && ScoredPersonTypes.Contains(m.People.PersonType))
-            .Select(m => new { m.ItemId, m.PeopleId, m.People.PersonType })
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        var ratings = await context.BaseItems.AsNoTracking()
-            .Where(i => candidateIds.Contains(i.Id))
-            .Select(i => new { i.Id, i.CommunityRating })
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        var result = new Dictionary<Guid, TasteCandidateFeatures>();
-        foreach (var id in candidateIds)
-        {
-            var genres = valueRows
-                .Where(r => r.ItemId == id && r.Type == ItemValueType.Genre)
-                .Select(r => r.CleanValue)
-                .Where(v => !string.IsNullOrWhiteSpace(v))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            var tags = valueRows
-                .Where(r => r.ItemId == id && r.Type == ItemValueType.Tags)
-                .Select(r => r.CleanValue)
-                .Where(v => !string.IsNullOrWhiteSpace(v))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            var studios = valueRows
-                .Where(r => r.ItemId == id && r.Type == ItemValueType.Studios)
-                .Select(r => r.CleanValue)
-                .Where(v => !string.IsNullOrWhiteSpace(v))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            var directors = peopleRows
-                .Where(r => r.ItemId == id && r.PersonType == nameof(PersonKind.Director))
-                .Select(r => r.PeopleId)
-                .Distinct()
-                .ToList();
-            var actors = peopleRows
-                .Where(r => r.ItemId == id && r.PersonType != nameof(PersonKind.Director))
-                .Select(r => r.PeopleId)
-                .Distinct()
-                .ToList();
-            var rating = ratings.FirstOrDefault(r => r.Id == id)?.CommunityRating;
-            result[id] = new TasteCandidateFeatures(genres, tags, studios, directors, actors, rating);
-        }
-
-        return result;
     }
 
     private async Task ApplyCollectionScoresAsync(

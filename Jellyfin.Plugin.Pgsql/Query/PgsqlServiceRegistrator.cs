@@ -27,6 +27,8 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<UserTasteProfileStore>();
         serviceCollection.AddSingleton<UserTasteProfileBuilder>();
         serviceCollection.AddSingleton<TasteShadowNeuralTrainer>();
+        serviceCollection.AddSingleton<TastePersonaGenerator>();
+        serviceCollection.AddSingleton<TasteMatchService>();
 
         var coreRepositoryType = CoreItemRepositoryAccessor.FindCoreRepositoryType(serviceCollection);
         if (coreRepositoryType is null)
