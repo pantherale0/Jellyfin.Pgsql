@@ -8,6 +8,7 @@ using Jellyfin.Database.Implementations;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Extensions;
 using Jellyfin.Plugin.Pgsql.Search;
+using Jellyfin.Plugin.Pgsql.Taste;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
@@ -53,6 +54,7 @@ public sealed class PostgresMovieSimilarItemsProvider :
     private readonly IItemQueryHelpers _queryHelpers;
     private readonly IItemTypeLookup _itemTypeLookup;
     private readonly IServerConfigurationManager _serverConfigurationManager;
+    private readonly UserTasteProfileStore _tasteProfileStore;
     private readonly ILogger<PostgresMovieSimilarItemsProvider> _logger;
 
     /// <summary>
@@ -62,18 +64,21 @@ public sealed class PostgresMovieSimilarItemsProvider :
     /// <param name="queryHelpers">Shared item query helpers.</param>
     /// <param name="itemTypeLookup">Base item type name lookup.</param>
     /// <param name="serverConfigurationManager">Server configuration.</param>
+    /// <param name="tasteProfileStore">User taste profile cache.</param>
     /// <param name="logger">Logger.</param>
     public PostgresMovieSimilarItemsProvider(
         IDbContextFactory<JellyfinDbContext> dbProvider,
         IItemQueryHelpers queryHelpers,
         IItemTypeLookup itemTypeLookup,
         IServerConfigurationManager serverConfigurationManager,
+        UserTasteProfileStore tasteProfileStore,
         ILogger<PostgresMovieSimilarItemsProvider> logger)
     {
         _dbProvider = dbProvider;
         _queryHelpers = queryHelpers;
         _itemTypeLookup = itemTypeLookup;
         _serverConfigurationManager = serverConfigurationManager;
+        _tasteProfileStore = tasteProfileStore;
         _logger = logger;
     }
 
@@ -142,7 +147,11 @@ public sealed class PostgresMovieSimilarItemsProvider :
         await using (context.ConfigureAwait(false))
         {
             var sourceIds = sourceItems.Select(i => i.Id).ToList();
-            var perSourceScores = await ComputeBatchScoresAsync(sourceIds, context, cancellationToken)
+            var perSourceScores = await ComputeBatchScoresAsync(
+                    sourceIds,
+                    context,
+                    query.User?.Id,
+                    cancellationToken)
                 .ConfigureAwait(false);
 
             var allCandidateIds = new HashSet<Guid>();
@@ -255,15 +264,17 @@ public sealed class PostgresMovieSimilarItemsProvider :
     /// </summary>
     /// <param name="sourceIds">Source item IDs.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="userId">Optional user for taste re-ranking.</param>
     /// <returns>Per-source map of candidate ID → score.</returns>
     public async Task<Dictionary<Guid, Dictionary<Guid, int>>> ComputeBatchScoresAsync(
         IReadOnlyList<Guid> sourceIds,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? userId = null)
     {
         var context = await _dbProvider.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         await using (context.ConfigureAwait(false))
         {
-            return await ComputeBatchScoresAsync(sourceIds.ToList(), context, cancellationToken)
+            return await ComputeBatchScoresAsync(sourceIds.ToList(), context, userId, cancellationToken)
                 .ConfigureAwait(false);
         }
     }
@@ -271,6 +282,7 @@ public sealed class PostgresMovieSimilarItemsProvider :
     private async Task<Dictionary<Guid, Dictionary<Guid, int>>> ComputeBatchScoresAsync(
         List<Guid> sourceIds,
         JellyfinDbContext context,
+        Guid? userId,
         CancellationToken cancellationToken)
     {
         var result = new Dictionary<Guid, Dictionary<Guid, int>>();
@@ -293,6 +305,9 @@ public sealed class PostgresMovieSimilarItemsProvider :
         await TryApplyScorePhaseAsync(
             "people",
             () => ApplyPersonScoresAsync(sourceIds, context, result, cancellationToken)).ConfigureAwait(false);
+        await TryApplyScorePhaseAsync(
+            "taste",
+            () => ApplyTasteScoresAsync(userId, context, result, cancellationToken)).ConfigureAwait(false);
 
         foreach (var sourceId in sourceIds)
         {
@@ -302,6 +317,122 @@ public sealed class PostgresMovieSimilarItemsProvider :
             {
                 result.Remove(sourceId);
             }
+        }
+
+        return result;
+    }
+
+    private async Task ApplyTasteScoresAsync(
+        Guid? userId,
+        JellyfinDbContext context,
+        Dictionary<Guid, Dictionary<Guid, int>> result,
+        CancellationToken cancellationToken)
+    {
+        if (userId is null)
+        {
+            return;
+        }
+
+        var options = TasteOptions.Current;
+        if (!options.EnableTasteProfiles)
+        {
+            return;
+        }
+
+        // UseNeuralForServing stays gated off: shadow models do not affect live ranking in this pass.
+        _ = options.UseNeuralForServing;
+
+        var profile = await _tasteProfileStore.TryGetAsync(userId.Value, cancellationToken).ConfigureAwait(false);
+        if (profile is null)
+        {
+            return;
+        }
+
+        var candidateIds = result.Values.SelectMany(m => m.Keys).Distinct().ToList();
+        if (candidateIds.Count == 0)
+        {
+            return;
+        }
+
+        var featuresByItem = await LoadCandidateTasteFeaturesAsync(context, candidateIds, cancellationToken)
+            .ConfigureAwait(false);
+        foreach (var scoreMap in result.Values)
+        {
+            foreach (var candidateId in scoreMap.Keys.ToList())
+            {
+                if (!featuresByItem.TryGetValue(candidateId, out var features))
+                {
+                    continue;
+                }
+
+                var bonus = LinearTasteScorer.ComputeBonus(profile.Value.Payload, features, options.MaxTasteBonus);
+                if (bonus > 0)
+                {
+                    scoreMap[candidateId] = scoreMap[candidateId] + bonus;
+                }
+            }
+        }
+    }
+
+    private static async Task<Dictionary<Guid, TasteCandidateFeatures>> LoadCandidateTasteFeaturesAsync(
+        JellyfinDbContext context,
+        List<Guid> candidateIds,
+        CancellationToken cancellationToken)
+    {
+        var valueRows = await context.ItemValuesMap.AsNoTracking()
+            .Where(m => candidateIds.Contains(m.ItemId)
+                && (m.ItemValue.Type == ItemValueType.Genre
+                    || m.ItemValue.Type == ItemValueType.Tags
+                    || m.ItemValue.Type == ItemValueType.Studios))
+            .Select(m => new { m.ItemId, m.ItemValue.Type, m.ItemValue.CleanValue })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var peopleRows = await context.PeopleBaseItemMap.AsNoTracking()
+            .Where(m => candidateIds.Contains(m.ItemId) && ScoredPersonTypes.Contains(m.People.PersonType))
+            .Select(m => new { m.ItemId, m.PeopleId, m.People.PersonType })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var ratings = await context.BaseItems.AsNoTracking()
+            .Where(i => candidateIds.Contains(i.Id))
+            .Select(i => new { i.Id, i.CommunityRating })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var result = new Dictionary<Guid, TasteCandidateFeatures>();
+        foreach (var id in candidateIds)
+        {
+            var genres = valueRows
+                .Where(r => r.ItemId == id && r.Type == ItemValueType.Genre)
+                .Select(r => r.CleanValue)
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var tags = valueRows
+                .Where(r => r.ItemId == id && r.Type == ItemValueType.Tags)
+                .Select(r => r.CleanValue)
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var studios = valueRows
+                .Where(r => r.ItemId == id && r.Type == ItemValueType.Studios)
+                .Select(r => r.CleanValue)
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var directors = peopleRows
+                .Where(r => r.ItemId == id && r.PersonType == nameof(PersonKind.Director))
+                .Select(r => r.PeopleId)
+                .Distinct()
+                .ToList();
+            var actors = peopleRows
+                .Where(r => r.ItemId == id && r.PersonType != nameof(PersonKind.Director))
+                .Select(r => r.PeopleId)
+                .Distinct()
+                .ToList();
+            var rating = ratings.FirstOrDefault(r => r.Id == id)?.CommunityRating;
+            result[id] = new TasteCandidateFeatures(genres, tags, studios, directors, actors, rating);
         }
 
         return result;

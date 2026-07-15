@@ -11,9 +11,11 @@ using System.Threading.Tasks;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Database.Implementations.DbConfiguration;
 using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Plugin.Pgsql.Taste.Entities;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Configuration;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 
@@ -55,7 +57,8 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             .UseNpgsql(connectionBuilder.ToString(), pgSqlOptions =>
             {
                 pgSqlOptions.MigrationsAssembly(GetType().Assembly.FullName);
-            });
+            })
+            .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
 
         PostgreSqlCompat.EnsureUuidAggregates(connectionBuilder.ToString(), _logger);
         PostgreSqlCompat.EnsureSearchSqlHelpers(connectionBuilder.ToString(), _logger);
@@ -141,6 +144,20 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             entity.HasIndex(e => new { e.ItemId, e.DatePlayed });
             entity.HasIndex(e => e.DeviceId)
                 .HasFilter("\"DeviceId\" IS NOT NULL");
+        });
+
+        modelBuilder.Entity<UserTasteProfile>(entity =>
+        {
+            entity.ToTable("UserTasteProfiles");
+            entity.HasKey(e => e.UserId);
+            entity.Property(e => e.FeaturesJson).IsRequired();
+        });
+
+        modelBuilder.Entity<TasteModelEvalRun>(entity =>
+        {
+            entity.ToTable("TasteModelEvalRuns");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.CreatedAt);
         });
 
         var tokenMatch = typeof(Jellyfin.Plugin.Pgsql.Search.PgSearchDbFunctions)

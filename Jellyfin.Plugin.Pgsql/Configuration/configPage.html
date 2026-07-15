@@ -64,6 +64,27 @@
 
                 <div class="detailSection">
                     <div class="detailSectionHeader">
+                        <h3>User Taste Profiles (optional)</h3>
+                    </div>
+                    <div class="detailSectionContent">
+                        <p>
+                            Scheduled aggregation of favorites/plays into per-user taste profiles, used to re-rank
+                            movie More Like This and home recommendations. A shadow ML model can train for offline
+                            metrics without affecting live rankings until neural serving is enabled.
+                        </p>
+                        <ul>
+                            <li><strong>Pgsql_TASTE_ENABLED</strong> - Build and apply linear taste profiles (default: true)</li>
+                            <li><strong>Pgsql_TASTE_SHADOW_TRAIN</strong> - Train shadow model during the rebuild task (default: true)</li>
+                            <li><strong>Pgsql_TASTE_NEURAL_SERVE</strong> - Use neural scores in live ranking (default: false)</li>
+                            <li><strong>Pgsql_TASTE_LOOKBACK_DAYS</strong> - History window in days (default: 730)</li>
+                            <li><strong>Pgsql_TASTE_MIN_SAMPLES</strong> - Minimum positive signals per user (default: 3)</li>
+                            <li><strong>Pgsql_TASTE_MAX_BONUS</strong> - Cap for linear taste bonus (default: 180)</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="detailSection">
+                    <div class="detailSectionHeader">
                         <h3>Runtime Stats</h3>
                     </div>
                     <div class="detailSectionContent">

@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Plugin.Pgsql.PlaybackReportingImport;
+using Jellyfin.Plugin.Pgsql.Taste;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Controller.Plugins;
@@ -23,6 +24,10 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
     /// <inheritdoc/>
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
+        serviceCollection.AddSingleton<UserTasteProfileStore>();
+        serviceCollection.AddSingleton<UserTasteProfileBuilder>();
+        serviceCollection.AddSingleton<TasteShadowNeuralTrainer>();
+
         var coreRepositoryType = CoreItemRepositoryAccessor.FindCoreRepositoryType(serviceCollection);
         if (coreRepositoryType is null)
         {

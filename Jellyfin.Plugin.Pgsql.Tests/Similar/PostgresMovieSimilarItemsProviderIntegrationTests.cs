@@ -6,6 +6,7 @@ using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Plugin.Pgsql.Similar;
+using Jellyfin.Plugin.Pgsql.Taste;
 using Jellyfin.Plugin.Pgsql.Tests.Infrastructure;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Persistence;
@@ -125,12 +126,14 @@ public sealed class PostgresMovieSimilarItemsProviderIntegrationTests
         });
 
         var queryHelpers = new Mock<IItemQueryHelpers>(MockBehavior.Strict);
+        var tasteStore = new UserTasteProfileStore(factory, NullLogger<UserTasteProfileStore>.Instance);
 
         return new PostgresMovieSimilarItemsProvider(
             factory,
             queryHelpers.Object,
             itemTypeLookup.Object,
             config.Object,
+            tasteStore,
             NullLogger<PostgresMovieSimilarItemsProvider>.Instance);
     }
 
@@ -156,7 +159,10 @@ public sealed class PostgresMovieSimilarItemsProviderIntegrationTests
             .AnyAsync(lc => lc.ParentId == RaimiBoxSetId)
             .ConfigureAwait(false);
         var hasGenreMap = await dbContext.ItemValuesMap
-            .AnyAsync(m => m.ItemId == SpiderMan2002Id && m.ItemValueId == ActionGenreValueId)
+            .AnyAsync(m => m.ItemId == SpiderMan2002Id
+                && dbContext.ItemValues.Any(v => v.ItemValueId == m.ItemValueId
+                    && v.Type == ItemValueType.Genre
+                    && v.Value == "Action"))
             .ConfigureAwait(false);
 
         if (existingMovies == ids.Length && hasLinks && hasGenreMap)
@@ -169,17 +175,6 @@ public sealed class PostgresMovieSimilarItemsProviderIntegrationTests
             .ExecuteDeleteAsync()
             .ConfigureAwait(false);
         await dbContext.BaseItems.Where(i => ids.Contains(i.Id)).ExecuteDeleteAsync().ConfigureAwait(false);
-
-        var orphanValues = await dbContext.ItemValues
-            .Where(v => v.ItemValueId == ActionGenreValueId
-                && !dbContext.ItemValuesMap.Any(m => m.ItemValueId == v.ItemValueId))
-            .ToListAsync()
-            .ConfigureAwait(false);
-        if (orphanValues.Count > 0)
-        {
-            dbContext.ItemValues.RemoveRange(orphanValues);
-            await dbContext.SaveChangesAsync().ConfigureAwait(false);
-        }
 
         dbContext.BaseItems.AddRange(
             Movie(SpiderMan2002Id, "Spider-Man", "spider man", 2002, "Action|Adventure"),
@@ -199,20 +194,25 @@ public sealed class PostgresMovieSimilarItemsProviderIntegrationTests
                 IsVirtualItem = false,
             });
 
-        var actionGenre = new ItemValue
-        {
-            ItemValueId = ActionGenreValueId,
-            Type = ItemValueType.Genre,
-            Value = "Action",
-            CleanValue = "action",
-        };
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
 
-        if (!await dbContext.ItemValues.AnyAsync(v => v.ItemValueId == ActionGenreValueId).ConfigureAwait(false))
+        var actionGenre = await dbContext.ItemValues
+            .FirstOrDefaultAsync(v => v.Type == ItemValueType.Genre && v.Value == "Action")
+            .ConfigureAwait(false);
+        if (actionGenre is null)
         {
+            actionGenre = new ItemValue
+            {
+                ItemValueId = ActionGenreValueId,
+                Type = ItemValueType.Genre,
+                Value = "Action",
+                CleanValue = "action",
+            };
             dbContext.ItemValues.Add(actionGenre);
+            await dbContext.SaveChangesAsync().ConfigureAwait(false);
         }
 
-        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+        var actionGenreId = actionGenre.ItemValueId;
 
         Guid[] actionLinked =
         [
@@ -226,16 +226,16 @@ public sealed class PostgresMovieSimilarItemsProviderIntegrationTests
 
         foreach (var itemId in actionLinked)
         {
-            if (!await dbContext.ItemValuesMap.AnyAsync(m => m.ItemId == itemId && m.ItemValueId == ActionGenreValueId)
+            if (!await dbContext.ItemValuesMap.AnyAsync(m => m.ItemId == itemId && m.ItemValueId == actionGenreId)
                     .ConfigureAwait(false))
             {
                 var item = await dbContext.BaseItems.SingleAsync(i => i.Id == itemId).ConfigureAwait(false);
-                var value = await dbContext.ItemValues.SingleAsync(v => v.ItemValueId == ActionGenreValueId)
+                var value = await dbContext.ItemValues.SingleAsync(v => v.ItemValueId == actionGenreId)
                     .ConfigureAwait(false);
                 dbContext.ItemValuesMap.Add(new ItemValueMap
                 {
                     ItemId = itemId,
-                    ItemValueId = ActionGenreValueId,
+                    ItemValueId = actionGenreId,
                     Item = item,
                     ItemValue = value,
                 });

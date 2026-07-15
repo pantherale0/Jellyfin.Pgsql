@@ -5,6 +5,7 @@ using Jellyfin.Database.Implementations;
 using Jellyfin.Database.Implementations.Locking;
 using Jellyfin.Plugin.Pgsql.Database;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Jellyfin.Plugin.Pgsql.Tests.Infrastructure;
@@ -20,7 +21,8 @@ internal sealed class TestDbContextFactory : IDbContextFactory<JellyfinDbContext
         optionsBuilder.UseNpgsql(connectionString, npgsqlOptions =>
         {
             npgsqlOptions.MigrationsAssembly(typeof(PgSqlDatabaseProvider).Assembly.GetName().Name);
-        });
+        })
+        .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
 
         _provider = new PgSqlDatabaseProvider(null!, NullLogger<PgSqlDatabaseProvider>.Instance);
         // EnsureSearchSqlHelpers runs during PgSqlDatabaseProvider.Initialise in production;
