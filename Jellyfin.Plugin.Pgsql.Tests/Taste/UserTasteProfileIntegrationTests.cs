@@ -32,6 +32,8 @@ public sealed class UserTasteProfileIntegrationTests
     private static readonly Guid ComedyGenreId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-0000000000a2");
 
     private static readonly string MovieType = typeof(MediaBrowser.Controller.Entities.Movies.Movie).FullName!;
+    private static readonly string SeriesType = typeof(MediaBrowser.Controller.Entities.TV.Series).FullName!;
+    private static readonly string EpisodeType = typeof(MediaBrowser.Controller.Entities.TV.Episode).FullName!;
 
     private readonly PostgresDatabaseFixture _fixture;
 
@@ -55,6 +57,8 @@ public sealed class UserTasteProfileIntegrationTests
                 dbContext,
                 TasteUserId,
                 MovieType,
+                SeriesType,
+                EpisodeType,
                 DateTime.UtcNow.AddDays(-730),
                 minSamples: 3,
                 default)
@@ -152,6 +156,131 @@ public sealed class UserTasteProfileIntegrationTests
         Assert.Equal(first[SeedActionId][ActionComedyId], second[SeedActionId][ActionComedyId]);
         Assert.Equal(first[SeedActionId][ActionOnlyId], second[SeedActionId][ActionOnlyId]);
         Assert.True(first[SeedActionId][ActionComedyId] > first[SeedActionId][ActionOnlyId]);
+    }
+
+    [PostgresTestFact]
+    public async Task Rebuild_EpisodePlays_RollUpToSeries_WithBingeCap()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+
+        var seriesId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-000000000101");
+        var episodeIds = Enumerable.Range(0, 8)
+            .Select(i => Guid.Parse($"eeeeeeee-aaaa-bbbb-cccc-0000000001{i:D2}"))
+            .ToArray();
+        var favoriteSeriesId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-000000000120");
+        var seriesComedyGenreId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-0000000000b1");
+
+        Guid[] cleanupIds = [seriesId, favoriteSeriesId, .. episodeIds];
+        await dbContext.UserData.Where(u => u.UserId == TasteUserId).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.UserTasteProfiles.Where(p => p.UserId == TasteUserId).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.ItemValuesMap.Where(m => cleanupIds.Contains(m.ItemId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.BaseItems.Where(i => cleanupIds.Contains(i.Id)).ExecuteDeleteAsync().ConfigureAwait(false);
+
+        if (!await dbContext.Users.AnyAsync(u => u.Id == TasteUserId).ConfigureAwait(false))
+        {
+            dbContext.Users.Add(new User("taste-user", "default", "default") { Id = TasteUserId });
+        }
+
+        dbContext.BaseItems.Add(Series(seriesId, "Binge Show", "binge show", 2015));
+        dbContext.BaseItems.Add(Series(favoriteSeriesId, "Fav Show", "fav show", 2016));
+        foreach (var (episodeId, index) in episodeIds.Select((id, i) => (id, i)))
+        {
+            dbContext.BaseItems.Add(Episode(episodeId, seriesId, $"Ep {index + 1}", $"ep {index + 1}", 2015));
+        }
+
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        var comedyId = await EnsureGenreAsync(dbContext, seriesComedyGenreId, "Comedy", "comedy").ConfigureAwait(false);
+        await LinkGenreAsync(dbContext, seriesId, comedyId).ConfigureAwait(false);
+        await LinkGenreAsync(dbContext, favoriteSeriesId, comedyId).ConfigureAwait(false);
+
+        foreach (var episodeId in episodeIds)
+        {
+            dbContext.UserData.Add(Played(TasteUserId, episodeId));
+        }
+
+        dbContext.UserData.Add(Favorite(TasteUserId, favoriteSeriesId));
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        var builder = new UserTasteProfileBuilder(NullLogger<UserTasteProfileBuilder>.Instance);
+        var outcome = await builder.RebuildUserAsync(
+                dbContext,
+                TasteUserId,
+                MovieType,
+                SeriesType,
+                EpisodeType,
+                DateTime.UtcNow.AddDays(-730),
+                minSamples: 1,
+                default)
+            .ConfigureAwait(false);
+
+        Assert.True(outcome.Upserted);
+        Assert.Equal(0, outcome.MovieSignalCount);
+        Assert.Equal(2, outcome.SeriesSignalCount);
+        Assert.Equal(2, outcome.MediaSignalCount);
+
+        var profileRow = await dbContext.UserTasteProfiles
+            .AsNoTracking()
+            .SingleAsync(p => p.UserId == TasteUserId)
+            .ConfigureAwait(false);
+        var payload = UserTasteProfileBuilder.DeserializeFeatures(profileRow.FeaturesJson);
+        Assert.Contains(payload.Genres.Keys, k => k.Contains("comedy", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [PostgresTestFact]
+    public async Task Match_EpisodeId_ReturnsTierKeyedByEpisode_WhenSeriesMatches()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+        await SeedTasteCorpusAsync(dbContext).ConfigureAwait(false);
+
+        var seriesId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-000000000201");
+        var episodeWithSeries = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-000000000202");
+        var episodeWithoutSeries = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-000000000203");
+        var matchGenreId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-0000000000c1");
+
+        Guid[] cleanupIds = [seriesId, episodeWithSeries, episodeWithoutSeries];
+        await dbContext.ItemValuesMap.Where(m => cleanupIds.Contains(m.ItemId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.BaseItems.Where(i => cleanupIds.Contains(i.Id)).ExecuteDeleteAsync().ConfigureAwait(false);
+
+        dbContext.BaseItems.Add(Series(seriesId, "Comedy Series", "comedy series", 2018));
+        dbContext.BaseItems.Add(Episode(episodeWithSeries, seriesId, "E1", "e1", 2018));
+        dbContext.BaseItems.Add(Episode(episodeWithoutSeries, seriesId: null, "Orphan", "orphan", 2018));
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        var comedyId = await EnsureGenreAsync(dbContext, matchGenreId, "Comedy", "comedy").ConfigureAwait(false);
+        await LinkGenreAsync(dbContext, seriesId, comedyId).ConfigureAwait(false);
+
+        var builder = new UserTasteProfileBuilder(NullLogger<UserTasteProfileBuilder>.Instance);
+        await builder.RebuildUserAsync(
+                dbContext,
+                TasteUserId,
+                MovieType,
+                SeriesType,
+                EpisodeType,
+                DateTime.UtcNow.AddDays(-730),
+                minSamples: 3,
+                default)
+            .ConfigureAwait(false);
+
+        var tasteStore = new UserTasteProfileStore(factory, NullLogger<UserTasteProfileStore>.Instance);
+        tasteStore.InvalidateAll();
+        var matchService = new TasteMatchService(factory, tasteStore);
+
+        var matches = await matchService.MatchAsync(
+                TasteUserId,
+                [episodeWithSeries, episodeWithoutSeries, ComedyFavorite1Id],
+                default)
+            .ConfigureAwait(false);
+
+        Assert.Contains(matches, m => m.ItemId == episodeWithSeries);
+        Assert.DoesNotContain(matches, m => m.ItemId == episodeWithoutSeries);
+        Assert.Contains(matches, m => m.ItemId == ComedyFavorite1Id);
     }
 
     private static async Task SeedTasteCorpusAsync(JellyfinDbContext dbContext)
@@ -288,12 +417,57 @@ public sealed class UserTasteProfileIntegrationTests
             CommunityRating = 7.5f,
         };
 
+    private static BaseItemEntity Series(Guid id, string name, string clean, int year)
+        => new()
+        {
+            Id = id,
+            Type = SeriesType,
+            Name = name,
+            CleanName = clean,
+            ProductionYear = year,
+            SortName = clean,
+            IsFolder = true,
+            IsVirtualItem = false,
+            CommunityRating = 7.8f,
+        };
+
+    private static BaseItemEntity Episode(Guid id, Guid? seriesId, string name, string clean, int year)
+        => new()
+        {
+            Id = id,
+            Type = EpisodeType,
+            Name = name,
+            CleanName = clean,
+            ProductionYear = year,
+            SortName = clean,
+            SeriesId = seriesId,
+            IsFolder = false,
+            IsVirtualItem = false,
+            CommunityRating = 7.0f,
+        };
+
+    private static UserData Played(Guid userId, Guid itemId)
+        => new()
+        {
+            UserId = userId,
+            ItemId = itemId,
+            CustomDataKey = itemId.ToString("N"),
+            IsFavorite = false,
+            Played = true,
+            PlayCount = 1,
+            LastPlayedDate = DateTime.UtcNow.AddDays(-2),
+            Item = null!,
+            User = null!,
+        };
+
     private static Mock<IItemTypeLookup> CreateItemTypeLookup()
     {
         var itemTypeLookup = new Mock<IItemTypeLookup>();
         itemTypeLookup.SetupGet(l => l.BaseItemKindNames).Returns(new Dictionary<BaseItemKind, string>
         {
             [BaseItemKind.Movie] = MovieType,
+            [BaseItemKind.Series] = SeriesType,
+            [BaseItemKind.Episode] = EpisodeType,
             [BaseItemKind.Trailer] = typeof(MediaBrowser.Controller.Entities.Trailer).FullName!,
             [BaseItemKind.BoxSet] = typeof(MediaBrowser.Controller.Entities.Movies.BoxSet).FullName!,
         });
