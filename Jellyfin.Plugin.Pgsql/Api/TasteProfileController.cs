@@ -82,17 +82,18 @@ public sealed class TasteProfileController : ControllerBase
             }
 
             var payload = UserTasteProfileBuilder.DeserializeFeatures(row.FeaturesJson);
+            var genres = TopWeights(payload.Genres, 8);
+            var tags = TopWeights(payload.Tags, 8);
+            var studios = TopWeights(payload.Studios, 6);
+            var people = await ResolvePeopleAsync(context, payload, cancellationToken).ConfigureAwait(false);
+            var affinityHints = BuildAffinityHints(payload, tags, studios, people);
             var persona = _personaGenerator.Generate(
                 userId,
                 payload,
                 row.SampleCount,
                 row.UpdatedAt,
-                options.MinSamples);
-
-            var genres = TopWeights(payload.Genres, 8);
-            var tags = TopWeights(payload.Tags, 8);
-            var studios = TopWeights(payload.Studios, 6);
-            var people = await ResolvePeopleAsync(context, payload, cancellationToken).ConfigureAwait(false);
+                options.MinSamples,
+                affinityHints);
             var eval = await context.TasteModelEvalRuns.AsNoTracking()
                 .OrderByDescending(e => e.CreatedAt)
                 .Select(e => new { e.Auc, e.CreatedAt })
@@ -205,6 +206,52 @@ public sealed class TasteProfileController : ControllerBase
                 Weight = kvp.Value
             })
             .ToList();
+
+    private static TasteAffinityHints BuildAffinityHints(
+        UserTasteFeaturePayload payload,
+        List<TasteWeightDto> tags,
+        List<TasteWeightDto> studios,
+        List<TastePersonDto> people)
+    {
+        const float gate = 0.12f;
+        string? topTag = null;
+        if (tags.Count > 0 && tags[0].Weight >= gate)
+        {
+            topTag = tags[0].Label;
+        }
+        else
+        {
+            var rawTag = payload.Tags.OrderByDescending(t => t.Value).FirstOrDefault();
+            if (rawTag.Value >= gate)
+            {
+                topTag = CultureInfo.InvariantCulture.TextInfo.ToTitleCase(rawTag.Key);
+            }
+        }
+
+        string? topStudio = null;
+        if (studios.Count > 0 && studios[0].Weight >= gate)
+        {
+            topStudio = studios[0].Label;
+        }
+        else
+        {
+            var rawStudio = payload.Studios.OrderByDescending(t => t.Value).FirstOrDefault();
+            if (rawStudio.Value >= gate)
+            {
+                topStudio = CultureInfo.InvariantCulture.TextInfo.ToTitleCase(rawStudio.Key);
+            }
+        }
+
+        string? personName = null;
+        string? personRole = null;
+        if (people.Count > 0)
+        {
+            personName = people[0].Name;
+            personRole = people[0].Role;
+        }
+
+        return new TasteAffinityHints(topTag, topStudio, personName, personRole);
+    }
 
     private static async Task<List<TastePersonDto>> ResolvePeopleAsync(
         JellyfinDbContext context,
