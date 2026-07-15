@@ -1,0 +1,197 @@
+diff --git a/Jellyfin.Api/Controllers/UserLibraryController.cs b/Jellyfin.Api/Controllers/UserLibraryController.cs
+index 25f781e496..45dc71058e 100644
+--- a/Jellyfin.Api/Controllers/UserLibraryController.cs
++++ b/Jellyfin.Api/Controllers/UserLibraryController.cs
+@@ -573,7 +573,7 @@ public class UserLibraryController : BaseJellyfinApiController
+             var item = tuple.Item2[0];
+             var childCount = 0;
+ 
+-            if (tuple.Item1 is not null && (tuple.Item2.Count > 1 || tuple.Item1 is MusicAlbum))
++            if (tuple.Item1 is not null && (tuple.Item2.Count > 1 || tuple.Item1 is MusicAlbum or Series))
+             {
+                 item = tuple.Item1;
+                 childCount = tuple.Item2.Count;
+diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs
+index dc16c3b1b3..222234996d 100644
+--- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs
++++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs
+@@ -247,141 +247,60 @@ public sealed partial class BaseItemRepository
+         var allEpisodes = episodeQuery
+             .OrderByDescending(e => e.DateCreated)
+             .ThenByDescending(e => e.Id)
+-            .Select(e => new { e.Id, e.SeriesName, e.DateCreated, e.SeasonId, e.SeriesId })
++            .Select(e => new { e.Id, e.SeriesName, e.DateCreated, e.SeriesId })
+             .AsEnumerable();
+ 
+-        // Collect all season/series IDs we'll need to look up for count information
+-        var allSeasonIds = new HashSet<Guid>();
+-        var allSeriesIds = new HashSet<Guid>();
+-
+-        // Analysis data for each series: recent episode count, season IDs, and the most recent episode ID
++        // Analysis data for each series: series ID and the most recent episode ID (fallback)
+         var analysisData = new List<(
+-            int RecentEpisodeCount,
+-            List<Guid> SeasonIds,
+             Guid? FirstRecentSeriesId,
+             DateTime MaxDate,
+             Guid MostRecentEpisodeId)>();
+ 
+-        // Step 3: Analyze each series to identify recent additions within the time window
++        // Step 3: Analyze each series to identify the series for recent additions within the time window
+         foreach (var group in allEpisodes.GroupBy(e => e.SeriesName))
+         {
+             var episodes = group.ToList();
+             var mostRecentDate = episodes[0].DateCreated ?? DateTime.MinValue;
+             var recentCutoff = mostRecentDate.AddHours(-RecentAdditionWindowHours);
+ 
+-            // Find episodes added within the recent window
+-            var recentEpisodeCount = 0;
+-            var seasonIdSet = new HashSet<Guid>();
++            // Find the series for episodes added within the recent window
+             Guid? firstRecentSeriesId = null;
+ 
+             foreach (var ep in episodes)
+             {
+                 if (ep.DateCreated >= recentCutoff)
+                 {
+-                    recentEpisodeCount++;
+-                    if (ep.SeasonId.HasValue)
++                    firstRecentSeriesId ??= ep.SeriesId;
++                    if (firstRecentSeriesId.HasValue)
+                     {
+-                        seasonIdSet.Add(ep.SeasonId.Value);
++                        break;
+                     }
+-
+-                    firstRecentSeriesId ??= ep.SeriesId;
+                 }
+             }
+ 
+-            var seasonIds = seasonIdSet.ToList();
+-            analysisData.Add((recentEpisodeCount, seasonIds, firstRecentSeriesId, mostRecentDate, episodes[0].Id));
+-
+-            // Track all unique season/series IDs for batch lookups
+-            foreach (var sid in seasonIds)
+-            {
+-                allSeasonIds.Add(sid);
+-            }
+-
+-            if (firstRecentSeriesId.HasValue)
+-            {
+-                allSeriesIds.Add(firstRecentSeriesId.Value);
+-            }
++            analysisData.Add((firstRecentSeriesId, mostRecentDate, episodes[0].Id));
+         }
+ 
+-        // Step 4: Batch fetch counts - episodes per season and seasons per series
+-        // These counts help determine whether to show Season or Series as the container
+-        var episodeType = _itemTypeLookup.BaseItemKindNames[BaseItemKind.Episode];
+-        var seasonType = _itemTypeLookup.BaseItemKindNames[BaseItemKind.Season];
+-        var seasonEpisodeCounts = allSeasonIds.Count > 0
+-            ? context.BaseItems
+-                .AsNoTracking()
+-                .Where(e => e.SeasonId.HasValue && allSeasonIds.Contains(e.SeasonId.Value) && e.Type == episodeType)
+-                .GroupBy(e => e.SeasonId!.Value)
+-                .Select(g => new { SeasonId = g.Key, Count = g.Count() })
+-                .ToDictionary(x => x.SeasonId, x => x.Count)
+-            : [];
+-
+-        var seriesSeasonCounts = allSeriesIds.Count > 0
+-            ? context.BaseItems
+-                .AsNoTracking()
+-                .Where(e => e.SeriesId.HasValue && allSeriesIds.Contains(e.SeriesId.Value) && e.Type == seasonType)
+-                .GroupBy(e => e.SeriesId!.Value)
+-                .Select(g => new { SeriesId = g.Key, Count = g.Count() })
+-                .ToDictionary(x => x.SeriesId, x => x.Count)
+-            : [];
+-
+-        // Step 5: Apply the container selection logic for each series.
+-        // For each series, decide which entity best represents the recent additions:
+-        //   - 1 episode added → show the Episode itself
+-        //   - Multiple episodes in 1 season (multi-season series) → show the Season
+-        //   - Multiple episodes in 1 season (single-season series) → show the Series
+-        //   - Episodes across multiple seasons → show the Series
++        // Step 4: Always show the Series for recently added TV content.
++        // Fall back to the most recent episode only when SeriesId is missing.
+         var entitiesToFetch = new HashSet<Guid>();
+-        var seriesResults = new List<(Guid? SeasonId, Guid? SeriesId, DateTime MaxDate, Guid MostRecentEpisodeId)>(analysisData.Count);
++        var seriesResults = new List<(Guid? SeriesId, DateTime MaxDate, Guid MostRecentEpisodeId)>(analysisData.Count);
+ 
+-        foreach (var (recentEpisodeCount, seasonIds, firstRecentSeriesId, maxDate, mostRecentEpisodeId) in analysisData)
++        foreach (var (firstRecentSeriesId, maxDate, mostRecentEpisodeId) in analysisData)
+         {
+-            Guid? seasonId = null;
+-            Guid? seriesId = null;
+-
+-            if (seasonIds.Count == 1)
+-            {
+-                // All recent episodes are from a single season
+-                var sid = seasonIds[0];
+-                var totalEpisodes = seasonEpisodeCounts.GetValueOrDefault(sid, 0);
+-                var totalSeasonsInSeries = firstRecentSeriesId.HasValue
+-                    ? seriesSeasonCounts.GetValueOrDefault(firstRecentSeriesId.Value, 1)
+-                    : 1;
+-
+-                // Check if multiple episodes were added, or if all episodes in the season were added
+-                var hasMultipleOrAllEpisodes = recentEpisodeCount > 1 || recentEpisodeCount == totalEpisodes;
+-
+-                if (totalSeasonsInSeries > 1 && hasMultipleOrAllEpisodes)
+-                {
+-                    // Multi-season series with bulk additions: show the Season
+-                    seasonId = sid;
+-                    entitiesToFetch.Add(sid);
+-                }
+-                else if (hasMultipleOrAllEpisodes && firstRecentSeriesId.HasValue)
+-                {
+-                    // Single-season series with bulk additions: show the Series
+-                    seriesId = firstRecentSeriesId;
+-                    entitiesToFetch.Add(firstRecentSeriesId.Value);
+-                }
+-
+-                // Otherwise: single episode, will fall through to show the Episode
+-            }
+-            else if (seasonIds.Count > 1 && firstRecentSeriesId.HasValue)
++            if (firstRecentSeriesId.HasValue)
+             {
+-                // Recent episodes span multiple seasons: show the Series
+-                seriesId = firstRecentSeriesId;
+-                entitiesToFetch.Add(seriesId!.Value);
++                entitiesToFetch.Add(firstRecentSeriesId.Value);
+             }
+-
+-            if (seasonId is null && seriesId is null)
++            else
+             {
+                 entitiesToFetch.Add(mostRecentEpisodeId);
+             }
+ 
+-            seriesResults.Add((seasonId, seriesId, maxDate, mostRecentEpisodeId));
++            seriesResults.Add((firstRecentSeriesId, maxDate, mostRecentEpisodeId));
+         }
+ 
+-        // Step 6: Fetch the Season/Series entities we decided to return
++        // Step 5: Fetch the Series (or fallback Episode) entities we decided to return
+         var entities = entitiesToFetch.Count > 0
+             ? ApplyNavigations(
+                     context.BaseItems.AsNoTracking().Where(e => entitiesToFetch.Contains(e.Id)),
+@@ -390,17 +309,11 @@ public sealed partial class BaseItemRepository
+                 .ToDictionary(e => e.Id)
+             : [];
+ 
+-        // Step 7: Build final results, preferring Season > Series > Episode.
+-        // All needed entities are already fetched in step 6 with navigation properties.
++        // Step 6: Build final results, preferring Series > Episode.
++        // All needed entities are already fetched in step 5 with navigation properties.
+         var results = new List<(BaseItemEntity Entity, DateTime MaxDate)>(seriesResults.Count);
+-        foreach (var (seasonId, seriesId, maxDate, mostRecentEpisodeId) in seriesResults)
++        foreach (var (seriesId, maxDate, mostRecentEpisodeId) in seriesResults)
+         {
+-            if (seasonId.HasValue && entities.TryGetValue(seasonId.Value, out var seasonEntity))
+-            {
+-                results.Add((seasonEntity, maxDate));
+-                continue;
+-            }
+-
+             if (seriesId.HasValue && entities.TryGetValue(seriesId.Value, out var seriesEntity))
+             {
+                 results.Add((seriesEntity, maxDate));
