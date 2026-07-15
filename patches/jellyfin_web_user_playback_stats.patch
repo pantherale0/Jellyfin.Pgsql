@@ -432,7 +432,7 @@ new file mode 100644
 index 0000000000..dbafbf8768
 --- /dev/null
 +++ b/src/apps/dashboard/routes/reports/playback.tsx
-@@ -0,0 +1,215 @@
+@@ -0,0 +1,217 @@
 +import React, { useMemo } from 'react';
 +import Alert from '@mui/material/Alert';
 +import Box from '@mui/material/Box';
@@ -589,9 +589,11 @@ index 0000000000..dbafbf8768
 +        enableColumnResizing: false,
 +        enableStickyHeader: useStickyTableShell,
 +        enableStickyFooter: useStickyTableShell,
-+        muiTableContainerProps: useStickyTableShell
-+            ? DEFAULT_TABLE_OPTIONS.muiTableContainerProps
-+            : { sx: { maxHeight: 'none' } },
++        muiTableContainerProps: {
++            sx: {
++                maxHeight: useStickyTableShell ? 'calc(100% - 7rem)' : 'none'
++            }
++        },
 +        initialState: {
 +            density: 'compact',
 +            sorting: [{ id: 'TotalWatchTime', desc: true }]
