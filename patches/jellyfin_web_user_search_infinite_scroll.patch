@@ -175,7 +175,7 @@ index 5a23dcb63a..81e72ce47f 100644
              return sortSections(sections);
          },
 diff --git a/src/apps/stable/features/search/components/SearchResults.tsx b/src/apps/stable/features/search/components/SearchResults.tsx
-index ec20884a26..79f7e7590c 100644
+index af7ba3d52f..093f59760a 100644
 --- a/src/apps/stable/features/search/components/SearchResults.tsx
 +++ b/src/apps/stable/features/search/components/SearchResults.tsx
 @@ -1,4 +1,4 @@
@@ -183,8 +183,8 @@ index ec20884a26..79f7e7590c 100644
 +import React, { type FC, useEffect } from 'react';
  import { useSearchItems } from '../api/useSearchItems';
  import { useSeerrSearch } from '../api/useSeerrSearch';
- import globalize from 'lib/globalize';
-@@ -9,6 +9,7 @@ import { CardShape } from 'components/cardbuilder/utils/shape';
+ import { getSeerrSearchItems } from '../api/seerrTypes';
+@@ -10,6 +10,7 @@ import { CardShape } from 'components/cardbuilder/utils/shape';
  import { CollectionType } from '@jellyfin/sdk/lib/generated-client/models/collection-type';
  import { Section } from '../types';
  import { Link } from 'react-router-dom';
@@ -192,7 +192,7 @@ index ec20884a26..79f7e7590c 100644
  
  interface SearchResultsProps {
      parentId?: string;
-@@ -25,10 +26,49 @@ const SearchResults: FC<SearchResultsProps> = ({
+@@ -26,10 +27,49 @@ const SearchResults: FC<SearchResultsProps> = ({
      query
  }) => {
      const trimmedQuery = query?.trim();
@@ -205,7 +205,7 @@ index ec20884a26..79f7e7590c 100644
 +        isFetchingNextPage
 +    } = useSearchItems(parentId, collectionType, trimmedQuery);
      const { data: seerrData, isPending: isSeerrPending } = useSeerrSearch(trimmedQuery);
-     const seerrItems = (seerrData?.items || []).filter(item => item.canRequest);
+     const seerrItems = getSeerrSearchItems(seerrData).filter(item => item.canRequest);
  
 +    useEffect(() => {
 +        if (!userSettings.enableInfiniteScroll()) {
@@ -243,7 +243,7 @@ index ec20884a26..79f7e7590c 100644
      if (isPending) return <Loading />;
  
      if (!data?.length && !seerrItems.length && !isSeerrPending) {
-@@ -72,6 +112,7 @@ const SearchResults: FC<SearchResultsProps> = ({
+@@ -73,6 +113,7 @@ const SearchResults: FC<SearchResultsProps> = ({
              {!isSeerrPending && seerrItems.length > 0 && (
                  <SeerrRequestResults items={seerrItems} />
              )}
@@ -252,7 +252,7 @@ index ec20884a26..79f7e7590c 100644
      );
  };
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 26eaff192d..ec207a1695 100755
+index 6af511410e..2158b3b04a 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
 @@ -308,7 +308,7 @@

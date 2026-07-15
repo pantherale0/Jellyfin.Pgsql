@@ -20,6 +20,9 @@ public enum SeerrMediaStatus
     /// <summary>Fully available in the library.</summary>
     Available = 4,
 
+    /// <summary>Blocklisted in Seerr.</summary>
+    Blocklisted = 5,
+
     /// <summary>Marked deleted in Seerr.</summary>
-    Deleted = 5
+    Deleted = 6
 }

@@ -26,6 +26,7 @@ public sealed class PostgresFuzzySearchProviderIntegrationTests
     private static readonly Guid PunctuationTitleId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-000000000004");
     private static readonly Guid DespicableTitleId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-000000000005");
     private static readonly Guid AdventureGenreOnlyId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-000000000006");
+    private static readonly Guid BathroomEpisodeId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-000000000007");
     private static readonly Guid UnrelatedId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-000000000099");
 
     private readonly PostgresDatabaseFixture _fixture;
@@ -133,6 +134,7 @@ public sealed class PostgresFuzzySearchProviderIntegrationTests
         itemTypeLookup.SetupGet(l => l.BaseItemKindNames).Returns(new Dictionary<BaseItemKind, string>
         {
             [BaseItemKind.Movie] = "Movie",
+            [BaseItemKind.Episode] = "Episode",
         });
 
         var libraryManager = new Mock<ILibraryManager>(MockBehavior.Strict);
@@ -166,6 +168,23 @@ public sealed class PostgresFuzzySearchProviderIntegrationTests
     }
 
     [PostgresTestFact]
+    public async Task SearchAsync_DoesNotMatchNearMissBathroomForBackrooms()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+        await SeedSearchCorpusAsync(dbContext).ConfigureAwait(false);
+
+        var provider = CreateProvider(factory);
+        var results = await provider.SearchAsync(
+            new SearchProviderQuery { SearchTerm = "backrooms", EnableTotalRecordCount = false },
+            default).ConfigureAwait(false);
+
+        Assert.DoesNotContain(results.Items, r => r.ItemId == BathroomEpisodeId);
+    }
+
+    [PostgresTestFact]
     public async Task SearchAsync_MatchesGenreViaGenresColumn_WithoutTitleHit()
     {
         Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
@@ -193,7 +212,8 @@ public sealed class PostgresFuzzySearchProviderIntegrationTests
             PunctuationTitleId,
             UnrelatedId,
             DespicableTitleId,
-            AdventureGenreOnlyId
+            AdventureGenreOnlyId,
+            BathroomEpisodeId
         ];
         var existing = await dbContext.BaseItems
             .Where(i => ids.Contains(i.Id))
@@ -203,7 +223,8 @@ public sealed class PostgresFuzzySearchProviderIntegrationTests
 
         if (existing.Count == ids.Length
             && await dbContext.ItemValuesMap.AnyAsync(m => m.ItemId == FamilyGenreId).ConfigureAwait(false)
-            && await dbContext.BaseItems.AnyAsync(i => i.Id == DespicableTitleId && i.CleanName == "despicable me").ConfigureAwait(false))
+            && await dbContext.BaseItems.AnyAsync(i => i.Id == DespicableTitleId && i.CleanName == "despicable me").ConfigureAwait(false)
+            && await dbContext.BaseItems.AnyAsync(i => i.Id == BathroomEpisodeId && i.CleanName == "i have a thing about bathrooms").ConfigureAwait(false))
         {
             return;
         }
@@ -229,7 +250,8 @@ public sealed class PostgresFuzzySearchProviderIntegrationTests
             Movie(PunctuationTitleId, "Mr. Robot", "mr robot"),
             Movie(UnrelatedId, "Quantum Physics Lecture", "quantum physics lecture"),
             Movie(DespicableTitleId, "Despicable Me", "despicable me", genres: "Animation|Comedy|Family|Adventure"),
-            Movie(AdventureGenreOnlyId, "Lost in the Woods", "lost in the woods", genres: "Adventure|Drama"));
+            Movie(AdventureGenreOnlyId, "Lost in the Woods", "lost in the woods", genres: "Adventure|Drama"),
+            Episode(BathroomEpisodeId, "I Have a Thing About Bathrooms", "i have a thing about bathrooms"));
 
         var familyGenre = new ItemValue
         {
@@ -270,6 +292,19 @@ public sealed class PostgresFuzzySearchProviderIntegrationTests
             Name = name,
             CleanName = cleanName,
             Genres = genres,
+            MediaType = "Video",
+            IsVirtualItem = false,
+        };
+    }
+
+    private static BaseItemEntity Episode(Guid id, string name, string cleanName)
+    {
+        return new BaseItemEntity
+        {
+            Id = id,
+            Type = "Episode",
+            Name = name,
+            CleanName = cleanName,
             MediaType = "Video",
             IsVirtualItem = false,
         };

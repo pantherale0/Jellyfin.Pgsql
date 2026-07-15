@@ -1,23 +1,57 @@
 diff --git a/src/apps/stable/features/search/api/seerrTypes.ts b/src/apps/stable/features/search/api/seerrTypes.ts
 new file mode 100644
-index 0000000000..e39d4b4aed
+index 0000000000..98054162ce
 --- /dev/null
 +++ b/src/apps/stable/features/search/api/seerrTypes.ts
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,74 @@
 +export type SeerrMediaStatus =
 +    | 'Unknown'
 +    | 'Pending'
 +    | 'Processing'
 +    | 'PartiallyAvailable'
 +    | 'Available'
++    | 'Blocklisted'
 +    | 'Deleted'
 +    | number;
 +
++/** CamelCase fields preferred; PascalCase accepted for legacy Accept: application/json. */
 +export interface SeerrStatusResponse {
-+    enabled: boolean;
++    enabled?: boolean;
++    Enabled?: boolean;
 +}
 +
 +export interface SeerrSearchItem {
++    mediaType?: 'movie' | 'tv' | string;
++    MediaType?: string;
++    mediaId?: number;
++    MediaId?: number;
++    title?: string;
++    Title?: string;
++    year?: number | null;
++    Year?: number | null;
++    overview?: string | null;
++    Overview?: string | null;
++    posterUrl?: string | null;
++    PosterUrl?: string | null;
++    status?: SeerrMediaStatus;
++    Status?: SeerrMediaStatus;
++    canRequest?: boolean;
++    CanRequest?: boolean;
++}
++
++export interface SeerrSearchResponse {
++    items?: SeerrSearchItem[];
++    Items?: SeerrSearchItem[];
++}
++
++export interface SeerrRequestResponse {
++    requestId?: number | null;
++    RequestId?: number | null;
++    message?: string;
++    Message?: string;
++}
++
++export interface NormalizedSeerrSearchItem {
 +    mediaType: 'movie' | 'tv' | string;
 +    mediaId: number;
 +    title: string;
@@ -28,34 +62,55 @@ index 0000000000..e39d4b4aed
 +    canRequest: boolean;
 +}
 +
-+export interface SeerrSearchResponse {
-+    items: SeerrSearchItem[];
-+}
++export const isSeerrEnabled = (status?: SeerrStatusResponse | null): boolean =>
++    !!(status?.enabled ?? status?.Enabled);
 +
-+export interface SeerrRequestResponse {
-+    requestId?: number | null;
-+    message?: string;
-+}
++export const normalizeSeerrSearchItem = (item: SeerrSearchItem): NormalizedSeerrSearchItem => ({
++    mediaType: item.mediaType ?? item.MediaType ?? 'movie',
++    mediaId: item.mediaId ?? item.MediaId ?? 0,
++    title: item.title ?? item.Title ?? 'Untitled',
++    year: item.year ?? item.Year,
++    overview: item.overview ?? item.Overview,
++    posterUrl: item.posterUrl ?? item.PosterUrl,
++    status: item.status ?? item.Status ?? 'Unknown',
++    canRequest: !!(item.canRequest ?? item.CanRequest)
++});
++
++export const getSeerrSearchItems = (data?: SeerrSearchResponse | null): NormalizedSeerrSearchItem[] =>
++    (data?.items ?? data?.Items ?? []).map(normalizeSeerrSearchItem);
 diff --git a/src/apps/stable/features/search/api/useSeerrSearch.ts b/src/apps/stable/features/search/api/useSeerrSearch.ts
 new file mode 100644
-index 0000000000..c0d9b177f7
+index 0000000000..b8897135ae
 --- /dev/null
 +++ b/src/apps/stable/features/search/api/useSeerrSearch.ts
-@@ -0,0 +1,54 @@
+@@ -0,0 +1,68 @@
 +import { useQuery } from '@tanstack/react-query';
 +import type { ApiClient } from 'jellyfin-apiclient';
 +import { useApi } from 'hooks/useApi';
 +import type { SeerrSearchResponse, SeerrStatusResponse } from './seerrTypes';
++import { isSeerrEnabled } from './seerrTypes';
++
++const CamelCaseAccept = 'application/json; profile="CamelCase"';
 +
 +const fetchSeerrStatus = async (apiClient: ApiClient): Promise<SeerrStatusResponse> => {
-+    return apiClient.getJSON(apiClient.getUrl('Seerr/Status'));
++    return apiClient.ajax({
++        type: 'GET',
++        url: apiClient.getUrl('Seerr/Status'),
++        dataType: 'json',
++        headers: { accept: CamelCaseAccept }
++    });
 +};
 +
 +const fetchSeerrSearch = async (
 +    apiClient: ApiClient,
 +    query: string
 +): Promise<SeerrSearchResponse> => {
-+    return apiClient.getJSON(apiClient.getUrl('Seerr/Search', { query }));
++    return apiClient.ajax({
++        type: 'GET',
++        url: apiClient.getUrl('Seerr/Search', { query }),
++        dataType: 'json',
++        headers: { accept: CamelCaseAccept }
++    });
 +};
 +
 +export const useSeerrStatus = () => {
@@ -78,7 +133,7 @@ index 0000000000..c0d9b177f7
 +    return useQuery({
 +        queryKey: ['Seerr', 'Search', query],
 +        queryFn: () => fetchSeerrSearch(apiClient!, query!),
-+        enabled: !!apiClient && !!status?.enabled && !!query,
++        enabled: !!apiClient && isSeerrEnabled(status) && !!query,
 +        retry: false
 +    });
 +};
@@ -93,17 +148,19 @@ index 0000000000..c0d9b177f7
 +        url: apiClient.getUrl('Seerr/Request'),
 +        data: JSON.stringify({ mediaType, mediaId }),
 +        contentType: 'application/json',
-+        dataType: 'json'
++        dataType: 'json',
++        headers: { accept: CamelCaseAccept }
 +    });
 +};
 diff --git a/src/apps/stable/features/search/components/SearchResults.tsx b/src/apps/stable/features/search/components/SearchResults.tsx
-index b96910fe80..ec20884a26 100644
+index b96910fe80..af7ba3d52f 100644
 --- a/src/apps/stable/features/search/components/SearchResults.tsx
 +++ b/src/apps/stable/features/search/components/SearchResults.tsx
-@@ -1,8 +1,10 @@
+@@ -1,8 +1,11 @@
  import React, { type FC } from 'react';
  import { useSearchItems } from '../api/useSearchItems';
 +import { useSeerrSearch } from '../api/useSeerrSearch';
++import { getSeerrSearchItems } from '../api/seerrTypes';
  import globalize from 'lib/globalize';
  import Loading from 'components/loading/LoadingComponent';
  import SearchResultsRow from './SearchResultsRow';
@@ -111,7 +168,7 @@ index b96910fe80..ec20884a26 100644
  import { CardShape } from 'components/cardbuilder/utils/shape';
  import { CollectionType } from '@jellyfin/sdk/lib/generated-client/models/collection-type';
  import { Section } from '../types';
-@@ -22,11 +24,14 @@ const SearchResults: FC<SearchResultsProps> = ({
+@@ -22,11 +25,14 @@ const SearchResults: FC<SearchResultsProps> = ({
      collectionType,
      query
  }) => {
@@ -119,7 +176,7 @@ index b96910fe80..ec20884a26 100644
 +    const trimmedQuery = query?.trim();
 +    const { data, isPending } = useSearchItems(parentId, collectionType, trimmedQuery);
 +    const { data: seerrData, isPending: isSeerrPending } = useSeerrSearch(trimmedQuery);
-+    const seerrItems = (seerrData?.items || []).filter(item => item.canRequest);
++    const seerrItems = getSeerrSearchItems(seerrData).filter(item => item.canRequest);
  
      if (isPending) return <Loading />;
  
@@ -128,7 +185,7 @@ index b96910fe80..ec20884a26 100644
          return (
              <div className='noItemsMessage centerMessage'>
                  {globalize.translate('SearchResultsEmpty', query)}
-@@ -63,7 +68,10 @@ const SearchResults: FC<SearchResultsProps> = ({
+@@ -63,7 +69,10 @@ const SearchResults: FC<SearchResultsProps> = ({
  
      return (
          <div className={'searchResults padded-top padded-bottom-page'}>
@@ -142,20 +199,20 @@ index b96910fe80..ec20884a26 100644
  };
 diff --git a/src/apps/stable/features/search/components/SeerrRequestResults.tsx b/src/apps/stable/features/search/components/SeerrRequestResults.tsx
 new file mode 100644
-index 0000000000..0ba8dc2b37
+index 0000000000..1b74e5f5cb
 --- /dev/null
 +++ b/src/apps/stable/features/search/components/SeerrRequestResults.tsx
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,117 @@
 +import React, { type FC, useCallback, useState } from 'react';
 +import globalize from 'lib/globalize';
 +import toast from 'components/toast/toast';
 +import { useApi } from 'hooks/useApi';
 +import { requestSeerrMedia } from '../api/useSeerrSearch';
-+import type { SeerrSearchItem } from '../api/seerrTypes';
++import type { NormalizedSeerrSearchItem } from '../api/seerrTypes';
 +import './seerrRequestResults.scss';
 +
 +interface SeerrRequestResultsProps {
-+    items: SeerrSearchItem[];
++    items: NormalizedSeerrSearchItem[];
 +}
 +
 +const SeerrRequestResults: FC<SeerrRequestResultsProps> = ({ items }) => {
@@ -163,7 +220,7 @@ index 0000000000..0ba8dc2b37
 +    const [requestedIds, setRequestedIds] = useState<Set<string>>(new Set());
 +    const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
 +
-+    const onRequest = useCallback(async (item: SeerrSearchItem) => {
++    const onRequest = useCallback(async (item: NormalizedSeerrSearchItem) => {
 +        if (!apiClient) {
 +            return;
 +        }
@@ -180,9 +237,12 @@ index 0000000000..0ba8dc2b37
 +            const response = err as { responseText?: string; statusText?: string };
 +            if (response?.responseText) {
 +                try {
-+                    const parsed = JSON.parse(response.responseText) as { message?: string };
-+                    if (parsed.message) {
-+                        message = parsed.message;
++                    const parsed = JSON.parse(response.responseText) as {
++                        message?: string;
++                        Message?: string;
++                    };
++                    if (parsed.message || parsed.Message) {
++                        message = parsed.message || parsed.Message || message;
 +                    }
 +                } catch {
 +                    // Keep default message.
@@ -342,10 +402,10 @@ index 0000000000..51e4abe985
 +    }
 +}
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index c18c3ebd40..557c232418 100755
+index f6129d18a6..c8f97a8920 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -1552,6 +1552,12 @@
+@@ -1560,6 +1560,12 @@
      "SearchForSubtitles": "Search for Subtitles",
      "SearchResults": "Search Results",
      "SearchResultsEmpty": "Sorry! No results found for \"{0}\"",
