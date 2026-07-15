@@ -10,6 +10,7 @@ namespace Jellyfin.Plugin.Pgsql.Taste;
 
 /// <summary>
 /// Scores candidate items against a taste profile and assigns relative match tiers.
+/// Episode ids are scored using their Series features; tiers are returned for the original ids.
 /// </summary>
 public sealed class TasteMatchService
 {
@@ -60,13 +61,21 @@ public sealed class TasteMatchService
         var context = await _dbProvider.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         await using (context.ConfigureAwait(false))
         {
-            var features = await TasteCandidateFeatureLoader.LoadAsync(context, capped, cancellationToken)
+            var featureIdsByRequestId = await ResolveFeatureItemIdsAsync(context, capped, cancellationToken)
+                .ConfigureAwait(false);
+            var featureIds = featureIdsByRequestId.Values.Distinct().ToList();
+            var features = await TasteCandidateFeatureLoader.LoadAsync(context, featureIds, cancellationToken)
                 .ConfigureAwait(false);
             var options = TasteOptions.Current;
             var scored = new List<(Guid Id, int Score)>();
-            foreach (var id in capped)
+            foreach (var requestId in capped)
             {
-                if (!features.TryGetValue(id, out var candidate))
+                if (!featureIdsByRequestId.TryGetValue(requestId, out var featureId))
+                {
+                    continue;
+                }
+
+                if (!features.TryGetValue(featureId, out var candidate))
                 {
                     continue;
                 }
@@ -74,7 +83,7 @@ public sealed class TasteMatchService
                 var score = LinearTasteScorer.ComputeBonus(profile.Value.Payload, candidate, options.MaxTasteBonus);
                 if (score > 0)
                 {
-                    scored.Add((id, score));
+                    scored.Add((requestId, score));
                 }
             }
 
@@ -105,5 +114,52 @@ public sealed class TasteMatchService
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Maps request item ids to feature-bearing ids (SeriesId for episodes when present).
+    /// </summary>
+    /// <param name="context">Database context.</param>
+    /// <param name="itemIds">Request item ids.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Request id → feature item id.</returns>
+    public static async Task<Dictionary<Guid, Guid>> ResolveFeatureItemIdsAsync(
+        JellyfinDbContext context,
+        IReadOnlyList<Guid> itemIds,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (itemIds.Count == 0)
+        {
+            return [];
+        }
+
+        var idList = itemIds as List<Guid> ?? itemIds.ToList();
+        var rows = await context.BaseItems.AsNoTracking()
+            .Where(i => idList.Contains(i.Id))
+            .Select(i => new { i.Id, i.Type, i.SeriesId })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var map = new Dictionary<Guid, Guid>();
+        foreach (var row in rows)
+        {
+            if (row.SeriesId is Guid seriesId)
+            {
+                map[row.Id] = seriesId;
+                continue;
+            }
+
+            // Episodes without SeriesId cannot be scored against a series profile.
+            if (row.Type is not null
+                && row.Type.EndsWith("Episode", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            map[row.Id] = row.Id;
+        }
+
+        return map;
     }
 }

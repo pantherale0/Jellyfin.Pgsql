@@ -1,5 +1,5 @@
 diff --git a/src/apps/experimental/routes/legacyRoutes/user.ts b/src/apps/experimental/routes/legacyRoutes/user.ts
-index 2dd81a4..128809a 100644
+index 2dd81a4b65..128809a254 100644
 --- a/src/apps/experimental/routes/legacyRoutes/user.ts
 +++ b/src/apps/experimental/routes/legacyRoutes/user.ts
 @@ -37,6 +37,12 @@ export const LEGACY_USER_ROUTES: LegacyRoute[] = [
@@ -16,7 +16,7 @@ index 2dd81a4..128809a 100644
          path: 'mypreferencessubtitles',
          pageProps: {
 diff --git a/src/apps/stable/routes/legacyRoutes/user.ts b/src/apps/stable/routes/legacyRoutes/user.ts
-index 612572a..4aa6097 100644
+index 612572a865..4aa60979d4 100644
 --- a/src/apps/stable/routes/legacyRoutes/user.ts
 +++ b/src/apps/stable/routes/legacyRoutes/user.ts
 @@ -55,6 +55,12 @@ export const LEGACY_USER_ROUTES: LegacyRoute[] = [
@@ -33,7 +33,7 @@ index 612572a..4aa6097 100644
          path: 'mypreferencessubtitles',
          pageProps: {
 diff --git a/src/apps/stable/routes/user/settings/index.tsx b/src/apps/stable/routes/user/settings/index.tsx
-index 5739dca..ed5900e 100644
+index 5739dca4f8..ed5900e500 100644
 --- a/src/apps/stable/routes/user/settings/index.tsx
 +++ b/src/apps/stable/routes/user/settings/index.tsx
 @@ -181,6 +181,25 @@ const UserSettingsPage: FC = () => {
@@ -63,7 +63,7 @@ index 5739dca..ed5900e 100644
                              href={`#/mypreferencessubtitles?userId=${userId}`}
                              className='lnkSubtitlePreferences listItem-border'
 diff --git a/src/components/cardbuilder/Card/CardImageContainer.tsx b/src/components/cardbuilder/Card/CardImageContainer.tsx
-index 8701329..63d228c 100644
+index 8701329854..63d228c94c 100644
 --- a/src/components/cardbuilder/Card/CardImageContainer.tsx
 +++ b/src/components/cardbuilder/Card/CardImageContainer.tsx
 @@ -43,6 +43,7 @@ const CardImageContainer: FC<CardImageContainerProps> = ({
@@ -75,7 +75,7 @@ index 8701329..63d228c 100644
                              && indicator.getMissingIndicator()}
  
 diff --git a/src/components/cardbuilder/cardBuilder.js b/src/components/cardbuilder/cardBuilder.js
-index 659d9db..824a47b 100644
+index 659d9db65d..824a47ba7a 100644
 --- a/src/components/cardbuilder/cardBuilder.js
 +++ b/src/components/cardbuilder/cardBuilder.js
 @@ -897,6 +897,7 @@ function buildCard(index, item, apiClient, options) {
@@ -87,7 +87,7 @@ index 659d9db..824a47b 100644
          indicatorsHtml += indicators.getTimerIndicator(item);
  
 diff --git a/src/components/indicators/indicators.js b/src/components/indicators/indicators.js
-index e5f3d4c..49209b3 100644
+index e5f3d4c3bb..49209b32c1 100644
 --- a/src/components/indicators/indicators.js
 +++ b/src/components/indicators/indicators.js
 @@ -167,6 +167,16 @@ export function getMissingIndicator(item) {
@@ -116,7 +116,7 @@ index e5f3d4c..49209b3 100644
 +    getTasteIndicatorHtml: getTasteIndicatorHtml
  };
 diff --git a/src/components/indicators/indicators.scss b/src/components/indicators/indicators.scss
-index 60aa8b8..d2baae0 100644
+index 60aa8b8d9f..d2baae0954 100644
 --- a/src/components/indicators/indicators.scss
 +++ b/src/components/indicators/indicators.scss
 @@ -112,3 +112,37 @@
@@ -158,7 +158,7 @@ index 60aa8b8..d2baae0 100644
 +    }
 +}
 diff --git a/src/components/indicators/useIndicator.tsx b/src/components/indicators/useIndicator.tsx
-index db0974d..48962df 100644
+index db0974df40..48962dfcd5 100644
 --- a/src/components/indicators/useIndicator.tsx
 +++ b/src/components/indicators/useIndicator.tsx
 @@ -178,6 +178,26 @@ const useIndicator = (item: ItemDto) => {
@@ -199,7 +199,7 @@ index db0974d..48962df 100644
  };
  
 diff --git a/src/controllers/itemDetails/index.js b/src/controllers/itemDetails/index.js
-index 4913eda..b19c323 100755
+index 4913eda48f..e5c7d57778 100755
 --- a/src/controllers/itemDetails/index.js
 +++ b/src/controllers/itemDetails/index.js
 @@ -37,6 +37,7 @@ import { renderComponent } from 'utils/reactUtils';
@@ -255,7 +255,7 @@ index 4913eda..b19c323 100755
 +                imageLoader.lazyChildren(similarContent);
 +            };
 +
-+            if (item.Type === 'Movie' || item.Type === 'Trailer') {
++            if (item.Type === 'Movie' || item.Type === 'Trailer' || item.Type === 'Series') {
 +                const ids = result.Items.map((i) => i.Id);
 +                fetchTasteMatches(options.userId, ids).then(function (matchMap) {
 +                    applyTasteTiers(result.Items, matchMap);
@@ -268,7 +268,7 @@ index 4913eda..b19c323 100755
      }
  }
 diff --git a/src/controllers/movies/moviesrecommended.js b/src/controllers/movies/moviesrecommended.js
-index 2d350eb..462d8f5 100644
+index 2d350eb75e..462d8f5f28 100644
 --- a/src/controllers/movies/moviesrecommended.js
 +++ b/src/controllers/movies/moviesrecommended.js
 @@ -11,6 +11,7 @@ import globalize from 'lib/globalize';
@@ -308,9 +308,173 @@ index 2d350eb..462d8f5 100644
      });
  }
  
+diff --git a/src/controllers/shows/tvrecommended.js b/src/controllers/shows/tvrecommended.js
+index 0a084f5a73..73841ebe14 100644
+--- a/src/controllers/shows/tvrecommended.js
++++ b/src/controllers/shows/tvrecommended.js
+@@ -10,6 +10,7 @@ import globalize from 'lib/globalize';
+ import inputManager from 'scripts/inputManager';
+ import libraryMenu from 'scripts/libraryMenu';
+ import * as userSettings from 'scripts/settings/userSettings';
++import { applyTasteTiers, fetchTasteMatches } from 'scripts/tasteMatch';
+ import { LibraryTab } from 'types/libraryTab';
+ import Dashboard from 'utils/dashboard';
+ import Events from 'utils/events';
+@@ -119,22 +120,30 @@ function loadResume(view, userId, parentId) {
+ 
+         const allowBottomPadding = !enableScrollX();
+         const container = view.querySelector('#resumableItems');
+-        cardBuilder.buildCards(result.Items, {
+-            itemsContainer: container,
+-            preferThumb: true,
+-            inheritThumb: !userSettings.useEpisodeImagesInNextUpAndResume(),
+-            shape: getBackdropShape(enableScrollX()),
+-            scalable: true,
+-            overlayPlayButton: true,
+-            allowBottomPadding: allowBottomPadding,
+-            cardLayout: false,
+-            showTitle: true,
+-            showYear: true,
+-            centerText: true
++        const render = function () {
++            cardBuilder.buildCards(result.Items, {
++                itemsContainer: container,
++                preferThumb: true,
++                inheritThumb: !userSettings.useEpisodeImagesInNextUpAndResume(),
++                shape: getBackdropShape(enableScrollX()),
++                scalable: true,
++                overlayPlayButton: true,
++                allowBottomPadding: allowBottomPadding,
++                cardLayout: false,
++                showTitle: true,
++                showYear: true,
++                centerText: true
++            });
++            loading.hide();
++
++            autoFocuser.autoFocus(view);
++        };
++
++        const ids = result.Items.map((i) => i.Id);
++        fetchTasteMatches(userId, ids).then(function (matchMap) {
++            applyTasteTiers(result.Items, matchMap);
++            render();
+         });
+-        loading.hide();
+-
+-        autoFocuser.autoFocus(view);
+     });
+ }
+ 
+@@ -152,28 +161,36 @@ function loadLatest(view, userId, parentId) {
+         const section = view.querySelector('#latestItemsSection');
+         const allowBottomPadding = !enableScrollX();
+         const container = section.querySelector('#latestEpisodesItems');
+-        cardBuilder.buildCards(items, {
+-            parentContainer: section,
+-            itemsContainer: container,
+-            items: items,
+-            shape: 'backdrop',
+-            preferThumb: true,
+-            showTitle: true,
+-            showSeriesYear: true,
+-            showParentTitle: true,
+-            overlayText: false,
+-            cardLayout: false,
+-            allowBottomPadding: allowBottomPadding,
+-            showUnplayedIndicator: false,
+-            showChildCountIndicator: true,
+-            centerText: true,
+-            lazy: true,
+-            overlayPlayButton: true,
+-            lines: 2
++        const render = function () {
++            cardBuilder.buildCards(items, {
++                parentContainer: section,
++                itemsContainer: container,
++                items: items,
++                shape: 'backdrop',
++                preferThumb: true,
++                showTitle: true,
++                showSeriesYear: true,
++                showParentTitle: true,
++                overlayText: false,
++                cardLayout: false,
++                allowBottomPadding: allowBottomPadding,
++                showUnplayedIndicator: false,
++                showChildCountIndicator: true,
++                centerText: true,
++                lazy: true,
++                overlayPlayButton: true,
++                lines: 2
++            });
++            loading.hide();
++
++            autoFocuser.autoFocus(view);
++        };
++
++        const ids = items.map((i) => i.Id);
++        fetchTasteMatches(userId, ids).then(function (matchMap) {
++            applyTasteTiers(items, matchMap);
++            render();
+         });
+-        loading.hide();
+-
+-        autoFocuser.autoFocus(view);
+     });
+ }
+ 
+@@ -197,23 +214,31 @@ function loadNextUp(view, userId, parentId) {
+ 
+         const section = view.querySelector('#nextUpItemsSection');
+         const container = section.querySelector('#nextUpItems');
+-        cardBuilder.buildCards(result.Items, {
+-            parentContainer: section,
+-            itemsContainer: container,
+-            preferThumb: true,
+-            inheritThumb: !userSettings.useEpisodeImagesInNextUpAndResume(),
+-            shape: 'backdrop',
+-            scalable: true,
+-            showTitle: true,
+-            showParentTitle: true,
+-            overlayText: false,
+-            centerText: true,
+-            overlayPlayButton: true,
+-            cardLayout: false
++        const render = function () {
++            cardBuilder.buildCards(result.Items, {
++                parentContainer: section,
++                itemsContainer: container,
++                preferThumb: true,
++                inheritThumb: !userSettings.useEpisodeImagesInNextUpAndResume(),
++                shape: 'backdrop',
++                scalable: true,
++                showTitle: true,
++                showParentTitle: true,
++                overlayText: false,
++                centerText: true,
++                overlayPlayButton: true,
++                cardLayout: false
++            });
++            loading.hide();
++
++            autoFocuser.autoFocus(view);
++        };
++
++        const ids = result.Items.map((i) => i.Id);
++        fetchTasteMatches(userId, ids).then(function (matchMap) {
++            applyTasteTiers(result.Items, matchMap);
++            render();
+         });
+-        loading.hide();
+-
+-        autoFocuser.autoFocus(view);
+     });
+ }
+ 
 diff --git a/src/controllers/user/taste/index.html b/src/controllers/user/taste/index.html
 new file mode 100644
-index 0000000..dea05e8
+index 0000000000..dea05e8b3d
 --- /dev/null
 +++ b/src/controllers/user/taste/index.html
 @@ -0,0 +1,22 @@
@@ -338,7 +502,7 @@ index 0000000..dea05e8
 +</div>
 diff --git a/src/controllers/user/taste/index.js b/src/controllers/user/taste/index.js
 new file mode 100644
-index 0000000..9500912
+index 0000000000..9500912571
 --- /dev/null
 +++ b/src/controllers/user/taste/index.js
 @@ -0,0 +1,183 @@
@@ -527,7 +691,7 @@ index 0000000..9500912
 +}
 diff --git a/src/controllers/user/taste/taste.scss b/src/controllers/user/taste/taste.scss
 new file mode 100644
-index 0000000..fc49f80
+index 0000000000..fc49f8055e
 --- /dev/null
 +++ b/src/controllers/user/taste/taste.scss
 @@ -0,0 +1,110 @@
@@ -643,7 +807,7 @@ index 0000000..fc49f80
 +}
 diff --git a/src/scripts/tasteMatch.js b/src/scripts/tasteMatch.js
 new file mode 100644
-index 0000000..63f7bca
+index 0000000000..63f7bca665
 --- /dev/null
 +++ b/src/scripts/tasteMatch.js
 @@ -0,0 +1,58 @@

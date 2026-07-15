@@ -55,6 +55,8 @@ public sealed class TasteShadowNeuralTrainer
 
         var sw = Stopwatch.StartNew();
         var movieType = itemTypeLookup.BaseItemKindNames[BaseItemKind.Movie];
+        var seriesType = itemTypeLookup.BaseItemKindNames[BaseItemKind.Series];
+        var episodeType = itemTypeLookup.BaseItemKindNames[BaseItemKind.Episode];
         var profiles = await context.UserTasteProfiles.AsNoTracking()
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -69,16 +71,13 @@ public sealed class TasteShadowNeuralTrainer
         {
             cancellationToken.ThrowIfCancellationRequested();
             var payload = UserTasteProfileBuilder.DeserializeFeatures(profile.FeaturesJson);
-            var positiveIds = await context.UserData.AsNoTracking()
-                .Where(ud => ud.UserId == profile.UserId
-                    && (ud.IsFavorite || ud.Likes == true || ud.Played || ud.PlayCount > 0))
-                .Join(
-                    context.BaseItems.AsNoTracking().Where(i => i.Type == movieType),
-                    ud => ud.ItemId,
-                    i => i.Id,
-                    (ud, i) => i.Id)
-                .Distinct()
-                .ToListAsync(cancellationToken)
+            var positiveIds = await LoadPositiveMediaIdsAsync(
+                    context,
+                    profile.UserId,
+                    movieType,
+                    seriesType,
+                    episodeType,
+                    cancellationToken)
                 .ConfigureAwait(false);
 
             if (positiveIds.Count == 0)
@@ -87,13 +86,21 @@ public sealed class TasteShadowNeuralTrainer
             }
 
             var positiveSet = positiveIds.ToHashSet();
-            var negatives = await context.BaseItems.AsNoTracking()
+            var movieNegatives = await context.BaseItems.AsNoTracking()
                 .Where(i => i.Type == movieType && !positiveSet.Contains(i.Id))
                 .OrderBy(i => i.Id)
                 .Select(i => i.Id)
-                .Take(Math.Max(positiveIds.Count * 2, 10))
+                .Take(Math.Max(positiveIds.Count, 5))
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
+            var seriesNegatives = await context.BaseItems.AsNoTracking()
+                .Where(i => i.Type == seriesType && !positiveSet.Contains(i.Id))
+                .OrderBy(i => i.Id)
+                .Select(i => i.Id)
+                .Take(Math.Max(positiveIds.Count, 5))
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var negatives = movieNegatives.Concat(seriesNegatives).Distinct().ToList();
 
             var allIds = positiveIds.Concat(negatives).Distinct().ToList();
             var featuresByItem = await LoadCandidateFeaturesAsync(context, allIds, cancellationToken)
@@ -205,6 +212,53 @@ public sealed class TasteShadowNeuralTrainer
         }
 
         return run;
+    }
+
+    private static async Task<List<Guid>> LoadPositiveMediaIdsAsync(
+        JellyfinDbContext context,
+        Guid userId,
+        string movieType,
+        string seriesType,
+        string episodeType,
+        CancellationToken cancellationToken)
+    {
+        var movieIds = await context.UserData.AsNoTracking()
+            .Where(ud => ud.UserId == userId
+                && (ud.IsFavorite || ud.Likes == true || ud.Played || ud.PlayCount > 0))
+            .Join(
+                context.BaseItems.AsNoTracking().Where(i => i.Type == movieType),
+                ud => ud.ItemId,
+                i => i.Id,
+                (ud, i) => i.Id)
+            .Distinct()
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var seriesIds = await context.UserData.AsNoTracking()
+            .Where(ud => ud.UserId == userId
+                && (ud.IsFavorite || ud.Likes == true || ud.Played || ud.PlayCount > 0))
+            .Join(
+                context.BaseItems.AsNoTracking().Where(i => i.Type == seriesType),
+                ud => ud.ItemId,
+                i => i.Id,
+                (ud, i) => i.Id)
+            .Distinct()
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var episodeSeriesIds = await context.UserData.AsNoTracking()
+            .Where(ud => ud.UserId == userId && (ud.Played || ud.PlayCount > 0))
+            .Join(
+                context.BaseItems.AsNoTracking()
+                    .Where(i => i.Type == episodeType && i.SeriesId != null),
+                ud => ud.ItemId,
+                i => i.Id,
+                (ud, i) => i.SeriesId!.Value)
+            .Distinct()
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return movieIds.Concat(seriesIds).Concat(episodeSeriesIds).Distinct().ToList();
     }
 
     private static async Task<Dictionary<Guid, TasteCandidateFeatures>> LoadCandidateFeaturesAsync(
