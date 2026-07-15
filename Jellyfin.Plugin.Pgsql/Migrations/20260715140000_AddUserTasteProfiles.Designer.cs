@@ -1136,7 +1136,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.ToTable("PlaybackActivity");
                 });
 
-            modelBuilder.Entity("Jellyfin.Plugin.Pgsql.Taste.Entities.TasteModelEvalRun", b =>
+            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.TasteModelEvalRun", b =>
                 {
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
@@ -1178,7 +1178,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.ToTable("TasteModelEvalRuns");
                 });
 
-            modelBuilder.Entity("Jellyfin.Plugin.Pgsql.Taste.Entities.UserTasteProfile", b =>
+            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.UserTasteProfile", b =>
                 {
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");

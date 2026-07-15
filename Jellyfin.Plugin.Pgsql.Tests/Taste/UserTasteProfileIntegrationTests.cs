@@ -7,7 +7,6 @@ using Jellyfin.Database.Implementations;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Plugin.Pgsql.Similar;
 using Jellyfin.Plugin.Pgsql.Taste;
-using Jellyfin.Plugin.Pgsql.Taste.Entities;
 using Jellyfin.Plugin.Pgsql.Tests.Infrastructure;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Persistence;
@@ -62,7 +61,7 @@ public sealed class UserTasteProfileIntegrationTests
             .ConfigureAwait(false);
         Assert.True(wrote);
 
-        var profileRow = await dbContext.Set<UserTasteProfile>()
+        var profileRow = await dbContext.UserTasteProfiles
             .AsNoTracking()
             .SingleAsync(p => p.UserId == TasteUserId)
             .ConfigureAwait(false);
@@ -101,7 +100,7 @@ public sealed class UserTasteProfileIntegrationTests
         await SeedTasteCorpusAsync(dbContext).ConfigureAwait(false);
 
         var unknownUser = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-000000009999");
-        await dbContext.Set<UserTasteProfile>()
+        await dbContext.UserTasteProfiles
             .Where(p => p.UserId == unknownUser)
             .ExecuteDeleteAsync()
             .ConfigureAwait(false);
@@ -136,11 +135,11 @@ public sealed class UserTasteProfileIntegrationTests
 
         var trainer = new TasteShadowNeuralTrainer(NullLogger<TasteShadowNeuralTrainer>.Instance);
         var modelDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "pgsql-taste-tests", Guid.NewGuid().ToString("N"));
-        var beforeCount = await dbContext.Set<TasteModelEvalRun>().CountAsync().ConfigureAwait(false);
+        var beforeCount = await dbContext.TasteModelEvalRuns.CountAsync().ConfigureAwait(false);
         var run = await trainer.TrainAndEvaluateAsync(dbContext, itemTypeLookup.Object, modelDir, default)
             .ConfigureAwait(false);
         Assert.NotNull(run);
-        var afterCount = await dbContext.Set<TasteModelEvalRun>().CountAsync().ConfigureAwait(false);
+        var afterCount = await dbContext.TasteModelEvalRuns.CountAsync().ConfigureAwait(false);
         Assert.True(afterCount > beforeCount);
 
         var tasteStore = new UserTasteProfileStore(factory, NullLogger<UserTasteProfileStore>.Instance);
@@ -168,7 +167,7 @@ public sealed class UserTasteProfileIntegrationTests
         ];
 
         await dbContext.UserData.Where(u => u.UserId == TasteUserId).ExecuteDeleteAsync().ConfigureAwait(false);
-        await dbContext.Set<UserTasteProfile>().Where(p => p.UserId == TasteUserId).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.UserTasteProfiles.Where(p => p.UserId == TasteUserId).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.ItemValuesMap.Where(m => ids.Contains(m.ItemId)).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.BaseItems.Where(i => ids.Contains(i.Id)).ExecuteDeleteAsync().ConfigureAwait(false);
 
