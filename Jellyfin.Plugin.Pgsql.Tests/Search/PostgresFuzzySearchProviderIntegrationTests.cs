@@ -11,6 +11,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
 
@@ -23,6 +24,8 @@ public sealed class PostgresFuzzySearchProviderIntegrationTests
     private static readonly Guid TypoTitleId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-000000000002");
     private static readonly Guid FamilyGenreId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-000000000003");
     private static readonly Guid PunctuationTitleId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-000000000004");
+    private static readonly Guid DespicableTitleId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-000000000005");
+    private static readonly Guid AdventureGenreOnlyId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-000000000006");
     private static readonly Guid UnrelatedId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-000000000099");
 
     private readonly PostgresDatabaseFixture _fixture;
@@ -141,12 +144,57 @@ public sealed class PostgresFuzzySearchProviderIntegrationTests
             itemTypeLookup.Object,
             libraryManager.Object,
             userManager.Object,
-            queryHelpers.Object);
+            queryHelpers.Object,
+            NullLogger<PostgresFuzzySearchProvider>.Instance);
+    }
+
+    [PostgresTestFact]
+    public async Task SearchAsync_MatchesMultiWordTitleTypo_Dispicable()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+        await SeedSearchCorpusAsync(dbContext).ConfigureAwait(false);
+
+        var provider = CreateProvider(factory);
+        var results = await provider.SearchAsync(
+            new SearchProviderQuery { SearchTerm = "dispicable", EnableTotalRecordCount = false },
+            default).ConfigureAwait(false);
+
+        Assert.Contains(results.Items, r => r.ItemId == DespicableTitleId);
+    }
+
+    [PostgresTestFact]
+    public async Task SearchAsync_MatchesGenreViaGenresColumn_WithoutTitleHit()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+        await SeedSearchCorpusAsync(dbContext).ConfigureAwait(false);
+
+        var provider = CreateProvider(factory);
+        var results = await provider.SearchAsync(
+            new SearchProviderQuery { SearchTerm = "Adventure", EnableTotalRecordCount = false },
+            default).ConfigureAwait(false);
+
+        Assert.Contains(results.Items, r => r.ItemId == AdventureGenreOnlyId);
+        Assert.DoesNotContain(results.Items, r => r.ItemId == UnrelatedId);
     }
 
     private static async Task SeedSearchCorpusAsync(JellyfinDbContext dbContext)
     {
-        Guid[] ids = [ExactTitleId, TypoTitleId, FamilyGenreId, PunctuationTitleId, UnrelatedId];
+        Guid[] ids =
+        [
+            ExactTitleId,
+            TypoTitleId,
+            FamilyGenreId,
+            PunctuationTitleId,
+            UnrelatedId,
+            DespicableTitleId,
+            AdventureGenreOnlyId
+        ];
         var existing = await dbContext.BaseItems
             .Where(i => ids.Contains(i.Id))
             .Select(i => i.Id)
@@ -154,7 +202,8 @@ public sealed class PostgresFuzzySearchProviderIntegrationTests
             .ConfigureAwait(false);
 
         if (existing.Count == ids.Length
-            && await dbContext.ItemValuesMap.AnyAsync(m => m.ItemId == FamilyGenreId).ConfigureAwait(false))
+            && await dbContext.ItemValuesMap.AnyAsync(m => m.ItemId == FamilyGenreId).ConfigureAwait(false)
+            && await dbContext.BaseItems.AnyAsync(i => i.Id == DespicableTitleId && i.CleanName == "despicable me").ConfigureAwait(false))
         {
             return;
         }
@@ -176,9 +225,11 @@ public sealed class PostgresFuzzySearchProviderIntegrationTests
         dbContext.BaseItems.AddRange(
             Movie(ExactTitleId, "Family", "family"),
             Movie(TypoTitleId, "Batman", "batman"),
-            Movie(FamilyGenreId, "The Incredibles", "the incredibles"),
+            Movie(FamilyGenreId, "The Incredibles", "the incredibles", genres: "Animation|Family"),
             Movie(PunctuationTitleId, "Mr. Robot", "mr robot"),
-            Movie(UnrelatedId, "Quantum Physics Lecture", "quantum physics lecture"));
+            Movie(UnrelatedId, "Quantum Physics Lecture", "quantum physics lecture"),
+            Movie(DespicableTitleId, "Despicable Me", "despicable me", genres: "Animation|Comedy|Family|Adventure"),
+            Movie(AdventureGenreOnlyId, "Lost in the Woods", "lost in the woods", genres: "Adventure|Drama"));
 
         var familyGenre = new ItemValue
         {
@@ -210,7 +261,7 @@ public sealed class PostgresFuzzySearchProviderIntegrationTests
         }
     }
 
-    private static BaseItemEntity Movie(Guid id, string name, string cleanName)
+    private static BaseItemEntity Movie(Guid id, string name, string cleanName, string? genres = null)
     {
         return new BaseItemEntity
         {
@@ -218,6 +269,7 @@ public sealed class PostgresFuzzySearchProviderIntegrationTests
             Type = "Movie",
             Name = name,
             CleanName = cleanName,
+            Genres = genres,
             MediaType = "Video",
             IsVirtualItem = false,
         };
