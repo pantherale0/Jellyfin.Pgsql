@@ -87,7 +87,7 @@ public sealed class TastePersonaGenerator
             return new TastePersonaResult(
                 Code: "calibrating",
                 Title: "Still Calibrating",
-                Blurb: "Play and favorite a few movies, then run Rebuild user taste profiles.",
+                Blurb: "Keep watching and favoriting movies — your taste portrait fills in as Jellyfin learns what you like.",
                 Domain: null,
                 Stance: "calibrating",
                 Bar: null,

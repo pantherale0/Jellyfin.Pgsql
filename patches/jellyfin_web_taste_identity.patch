@@ -1,3 +1,20 @@
+diff --git a/src/apps/experimental/routes/legacyRoutes/user.ts b/src/apps/experimental/routes/legacyRoutes/user.ts
+index 2dd81a4..128809a 100644
+--- a/src/apps/experimental/routes/legacyRoutes/user.ts
++++ b/src/apps/experimental/routes/legacyRoutes/user.ts
+@@ -37,6 +37,12 @@ export const LEGACY_USER_ROUTES: LegacyRoute[] = [
+             controller: 'user/playback/index',
+             view: 'user/playback/index.html'
+         }
++    }, {
++        path: 'mypreferencestaste',
++        pageProps: {
++            controller: 'user/taste/index',
++            view: 'user/taste/index.html'
++        }
+     }, {
+         path: 'mypreferencessubtitles',
+         pageProps: {
 diff --git a/src/apps/stable/routes/legacyRoutes/user.ts b/src/apps/stable/routes/legacyRoutes/user.ts
 index 612572a..4aa6097 100644
 --- a/src/apps/stable/routes/legacyRoutes/user.ts
@@ -293,19 +310,16 @@ index 2d350eb..462d8f5 100644
  
 diff --git a/src/controllers/user/taste/index.html b/src/controllers/user/taste/index.html
 new file mode 100644
-index 0000000..b6d8ea7
+index 0000000..dea05e8
 --- /dev/null
 +++ b/src/controllers/user/taste/index.html
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,22 @@
 +<div id="tastePreferencesPage" data-role="page" class="page libraryPage userPreferencesPage noSecondaryNavPage" data-title="Taste" data-backbutton="true">
 +    <div class="padded-left padded-right padded-bottom-page padded-top tastePreferencesContent">
 +        <div class="tasteHero">
 +            <h1 class="tastePersonaTitle"></h1>
 +            <p class="tastePersonaBlurb secondaryText"></p>
 +            <p class="tasteUpdatedAt secondaryText hide"></p>
-+        </div>
-+        <div class="tasteColdStart hide">
-+            <p class="secondaryText">Play and favorite a few movies, then let Rebuild user taste profiles catch up. This page calibrates from your library activity.</p>
 +        </div>
 +        <div class="tasteCharts hide">
 +            <div class="verticalSection">
@@ -324,10 +338,10 @@ index 0000000..b6d8ea7
 +</div>
 diff --git a/src/controllers/user/taste/index.js b/src/controllers/user/taste/index.js
 new file mode 100644
-index 0000000..a74ac9b
+index 0000000..9500912
 --- /dev/null
 +++ b/src/controllers/user/taste/index.js
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,183 @@
 +import escapeHtml from 'escape-html';
 +
 +import './taste.scss';
@@ -454,7 +468,6 @@ index 0000000..a74ac9b
 +    const titleEl = view.querySelector('.tastePersonaTitle');
 +    const blurbEl = view.querySelector('.tastePersonaBlurb');
 +    const updatedEl = view.querySelector('.tasteUpdatedAt');
-+    const coldEl = view.querySelector('.tasteColdStart');
 +    const chartsEl = view.querySelector('.tasteCharts');
 +
 +    titleEl.textContent = profile.Persona?.Title || 'Still Calibrating';
@@ -469,12 +482,10 @@ index 0000000..a74ac9b
 +    }
 +
 +    if (!profile.HasProfile || !(profile.Genres?.length)) {
-+        coldEl.classList.remove('hide');
 +        chartsEl.classList.add('hide');
 +        return;
 +    }
 +
-+    coldEl.classList.add('hide');
 +    chartsEl.classList.remove('hide');
 +    view.querySelector('.tasteRadarHost').innerHTML = buildRadarSvg(profile.Genres.slice(0, 8));
 +    view.querySelector('.tasteSignalStrip').innerHTML = buildSignalStrip(profile);
@@ -516,10 +527,10 @@ index 0000000..a74ac9b
 +}
 diff --git a/src/controllers/user/taste/taste.scss b/src/controllers/user/taste/taste.scss
 new file mode 100644
-index 0000000..a04b9b1
+index 0000000..fc49f80
 --- /dev/null
 +++ b/src/controllers/user/taste/taste.scss
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,110 @@
 +.tasteHero {
 +    margin: 0 auto 1.75em;
 +    max-width: 46em;
@@ -542,11 +553,6 @@ index 0000000..a04b9b1
 +.tasteUpdatedAt {
 +    margin: 0.65em 0 0;
 +    font-size: 0.9em;
-+}
-+
-+.tasteColdStart {
-+    margin: 0 auto;
-+    max-width: 40em;
 +}
 +
 +.tasteCharts {
