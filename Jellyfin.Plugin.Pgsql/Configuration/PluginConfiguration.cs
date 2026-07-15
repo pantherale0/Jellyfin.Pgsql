@@ -60,4 +60,41 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Overridden by <c>Pgsql_PG_OPTIMIZE_NEXTUP</c>.
     /// </summary>
     public bool OptimizeNextUpQueries { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether user taste profiles are built and applied to movie suggestions.
+    /// Overridden by <c>Pgsql_TASTE_ENABLED</c>.
+    /// </summary>
+    public bool EnableTasteProfiles { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the scheduled task trains a shadow ML model for offline evaluation.
+    /// Overridden by <c>Pgsql_TASTE_SHADOW_TRAIN</c>.
+    /// </summary>
+    public bool EnableNeuralShadowTraining { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether neural model scores may affect live rankings.
+    /// Defaults to false so shadow training collects metrics without changing suggestions.
+    /// Overridden by <c>Pgsql_TASTE_NEURAL_SERVE</c>.
+    /// </summary>
+    public bool UseNeuralForServing { get; set; }
+
+    /// <summary>
+    /// Gets or sets how many days of watch/favorite history to include when building taste profiles.
+    /// Overridden by <c>Pgsql_TASTE_LOOKBACK_DAYS</c>.
+    /// </summary>
+    public int TasteLookbackDays { get; set; } = 730;
+
+    /// <summary>
+    /// Gets or sets the minimum positive history signals required before applying a taste bonus.
+    /// Overridden by <c>Pgsql_TASTE_MIN_SAMPLES</c>.
+    /// </summary>
+    public int TasteMinSamples { get; set; } = 3;
+
+    /// <summary>
+    /// Gets or sets the absolute maximum linear taste bonus applied during similarity re-ranking.
+    /// Overridden by <c>Pgsql_TASTE_MAX_BONUS</c>.
+    /// </summary>
+    public int MaxTasteBonus { get; set; } = 180;
 }

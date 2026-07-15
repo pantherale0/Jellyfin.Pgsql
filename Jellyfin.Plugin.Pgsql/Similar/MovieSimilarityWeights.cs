@@ -32,4 +32,9 @@ public static class MovieSimilarityWeights
 
     /// <summary>Actor / guest-star overlap weight.</summary>
     public const int ActorWeight = 15;
+
+    /// <summary>
+    /// Absolute cap for user-taste bonus so personalization cannot outrank franchise tiers.
+    /// </summary>
+    public const int MaxTasteBonus = 180;
 }

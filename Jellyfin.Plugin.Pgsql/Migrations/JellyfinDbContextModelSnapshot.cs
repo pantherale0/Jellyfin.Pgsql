@@ -1133,6 +1133,68 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.ToTable("PlaybackActivity");
                 });
 
+            modelBuilder.Entity("Jellyfin.Plugin.Pgsql.Taste.Entities.TasteModelEvalRun", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<double?>("Accuracy")
+                        .HasColumnType("double precision");
+
+                    b.Property<double?>("Auc")
+                        .HasColumnType("double precision");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("HoldoutCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ModelPath")
+                        .HasColumnType("text");
+
+                    b.Property<int>("NegativeCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("text");
+
+                    b.Property<int>("PositiveCount")
+                        .HasColumnType("integer");
+
+                    b.Property<double?>("PrecisionAt10")
+                        .HasColumnType("double precision");
+
+                    b.Property<long>("TrainDurationMs")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedAt");
+
+                    b.ToTable("TasteModelEvalRuns");
+                });
+
+            modelBuilder.Entity("Jellyfin.Plugin.Pgsql.Taste.Entities.UserTasteProfile", b =>
+                {
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("FeaturesJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("SampleCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("UserId");
+
+                    b.ToTable("UserTasteProfiles");
+                });
+
             modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.Preference", b =>
                 {
                     b.Property<int>("Id")
