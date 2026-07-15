@@ -1,10 +1,3 @@
-#pragma warning disable RS0030 // Do not use banned APIs
-#pragma warning disable CA1862 // Prefer StringComparison overloads — EF cannot translate them to SQL
-#pragma warning disable CA1304 // string.ToLower() — EF translates to SQL lower()
-#pragma warning disable CA1307 // string.Contains without StringComparison — required for EF translation
-#pragma warning disable CA1310 // string.StartsWith without StringComparison — required for EF translation
-#pragma warning disable CA1311 // culture-dependent ToLower — EF translates to SQL lower()
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -19,12 +12,20 @@ using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Model.Configuration;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+
+#pragma warning disable RS0030 // Do not use banned APIs
+#pragma warning disable CA1862 // Prefer StringComparison overloads — EF cannot translate them to SQL
+#pragma warning disable CA1304 // string.ToLower() — EF translates to SQL lower()
+#pragma warning disable CA1307 // string.Contains without StringComparison — required for EF translation
+#pragma warning disable CA1310 // string.StartsWith without StringComparison — required for EF translation
+#pragma warning disable CA1311 // culture-dependent ToLower — EF translates to SQL lower()
 
 namespace Jellyfin.Plugin.Pgsql.Search;
 
 /// <summary>
-/// PostgreSQL-backed internal search provider using Levenshtein token matching for
-/// typo-tolerant titles and genre/tag lookups on both <see cref="ItemValue"/> rows and
+/// PostgreSQL-backed internal search provider using token Levenshtein + word trigrams for
+/// typo-tolerant titles, and genre/tag lookups on both <see cref="ItemValue"/> rows and
 /// the denormalized Genres/Tags columns.
 /// </summary>
 public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
@@ -50,10 +51,16 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
     private const float TitleFuzzyScore = 55f;
 
     /// <summary>
-    /// Strong trigram similarity floor used only as a secondary fuzzy gate for longer terms.
-    /// Default pg_trgm 0.3 is too loose and drowns genre results / invents junk for short typos.
+    /// Whole-string trigram floor. Multi-word titles score poorly against a single typed word,
+    /// so this alone is not enough — prefer <see cref="WordTrigramSimilarity"/>.
     /// </summary>
-    private const float StrongTrigramSimilarity = 0.45f;
+    private const float StrongTrigramSimilarity = 0.4f;
+
+    /// <summary>
+    /// Word-trigram floor (pg_trgm word_similarity). Needle "dispicable" vs haystack
+    /// "despicable me" is ~0.64; keep this below that while rejecting unrelated noise.
+    /// </summary>
+    private const float WordTrigramSimilarity = 0.45f;
 
     private static readonly Guid PlaceholderId = Guid.Parse("00000000-0000-0000-0000-000000000001");
 
@@ -62,6 +69,7 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
     private readonly ILibraryManager _libraryManager;
     private readonly IUserManager _userManager;
     private readonly IItemQueryHelpers _queryHelpers;
+    private readonly ILogger<PostgresFuzzySearchProvider> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PostgresFuzzySearchProvider"/> class.
@@ -71,18 +79,21 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
     /// <param name="libraryManager">The library manager.</param>
     /// <param name="userManager">The user manager.</param>
     /// <param name="queryHelpers">The shared item query helpers.</param>
+    /// <param name="logger">The logger.</param>
     public PostgresFuzzySearchProvider(
         IDbContextFactory<JellyfinDbContext> dbProvider,
         IItemTypeLookup itemTypeLookup,
         ILibraryManager libraryManager,
         IUserManager userManager,
-        IItemQueryHelpers queryHelpers)
+        IItemQueryHelpers queryHelpers,
+        ILogger<PostgresFuzzySearchProvider> logger)
     {
         _dbProvider = dbProvider;
         _itemTypeLookup = itemTypeLookup;
         _libraryManager = libraryManager;
         _userManager = userManager;
         _queryHelpers = queryHelpers;
+        _logger = logger;
     }
 
     /// <inheritdoc/>
@@ -127,9 +138,36 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
             return SearchQueryResult.Empty;
         }
 
+        try
+        {
+            return await SearchCoreAsync(query, cleanSearchTerm, includeFuzzy: true, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Title-Contains path on ItemsController only helps literal title hits. If fuzzy
+            // SQL fails to translate/execute we must still return genre/tag literal matches.
+            _logger.LogWarning(
+                ex,
+                "Fuzzy operators failed for '{SearchTerm}'; retrying literal title/genre match only",
+                cleanSearchTerm);
+
+            return await SearchCoreAsync(query, cleanSearchTerm, includeFuzzy: false, cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
+    private async Task<SearchQueryResult> SearchCoreAsync(
+        SearchProviderQuery query,
+        string cleanSearchTerm,
+        bool includeFuzzy,
+        CancellationToken cancellationToken)
+    {
         var cleanPrefix = cleanSearchTerm + " ";
-        var likeRaw = "%" + EscapeLikeLiteral(rawSearchTerm) + "%";
-        var maxEditDistance = cleanSearchTerm.Length <= 4 ? 1 : 2;
+        var likeClean = "%" + EscapeLikeLiteral(cleanSearchTerm) + "%";
+        var maxEditDistance = cleanSearchTerm.Length <= 4 ? 1
+            : cleanSearchTerm.Length <= 8 ? 2
+            : 3;
         var limit = Math.Clamp(query.Limit ?? DefaultSearchLimit, 1, MaxSearchLimit);
         var startIndex = Math.Max(query.StartIndex ?? 0, 0);
 
@@ -139,29 +177,47 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
             var dbQuery = dbContext.BaseItems
                 .AsNoTracking()
                 .Where(e => e.Id != PlaceholderId)
-                .Where(e => !e.IsVirtualItem)
-                .Where(e =>
-                    // Literal title matches
+                .Where(e => !e.IsVirtualItem);
+
+            // Build the match filter without embedding a CLR bool into the expression tree —
+            // `includeFuzzy && sqlExpr` can still force EF to translate the fuzzy operators.
+            if (includeFuzzy)
+            {
+                dbQuery = dbQuery.Where(e =>
                     e.CleanName!.Contains(cleanSearchTerm)
-                    || (e.OriginalTitle != null && EF.Functions.ILike(e.OriginalTitle, likeRaw, LikeEscapeChar))
-                    // Typo-tolerant titles (token Levenshtein: gme→game, batmn→batman)
-                    || PgSearchDbFunctions.TokenLevenshteinMatch(e.CleanName, cleanSearchTerm, maxEditDistance)
-                    || (e.OriginalTitle != null
-                        && PgSearchDbFunctions.TokenLevenshteinMatch(
-                            e.OriginalTitle.ToLower(),
-                            cleanSearchTerm,
-                            maxEditDistance))
-                    // Strong trigram only — never the default 0.3 % operator
-                    || EF.Functions.TrigramsSimilarity(e.CleanName!, cleanSearchTerm) >= StrongTrigramSimilarity
-                    // Genres / tags via ItemValues
+                    || (e.OriginalTitle != null && EF.Functions.ILike(e.OriginalTitle, likeClean, LikeEscapeChar))
                     || e.ItemValues!.Any(ivm =>
                         (ivm.ItemValue.Type == ItemValueType.Genre || ivm.ItemValue.Type == ItemValueType.Tags)
                         && (ivm.ItemValue.CleanValue == cleanSearchTerm
                             || ivm.ItemValue.CleanValue.StartsWith(cleanSearchTerm)
                             || ivm.ItemValue.CleanValue.Contains(cleanSearchTerm)))
-                    // Genres / tags denormalized pipe columns (still written by BaseItemMapper)
-                    || (e.Genres != null && EF.Functions.ILike(e.Genres, likeRaw, LikeEscapeChar))
-                    || (e.Tags != null && EF.Functions.ILike(e.Tags, likeRaw, LikeEscapeChar)));
+                    || (e.Genres != null && EF.Functions.ILike(e.Genres, likeClean, LikeEscapeChar))
+                    || (e.Tags != null && EF.Functions.ILike(e.Tags, likeClean, LikeEscapeChar))
+                    || PgSearchDbFunctions.TokenLevenshteinMatch(e.CleanName, cleanSearchTerm, maxEditDistance)
+                    || (e.OriginalTitle != null
+                        && PgSearchDbFunctions.TokenLevenshteinMatch(e.OriginalTitle, cleanSearchTerm, maxEditDistance))
+                    || EF.Functions.TrigramsWordSimilarity(cleanSearchTerm, e.CleanName!) >= WordTrigramSimilarity
+                    || (e.OriginalTitle != null
+                        && EF.Functions.TrigramsWordSimilarity(cleanSearchTerm, e.OriginalTitle) >= WordTrigramSimilarity)
+                    || EF.Functions.TrigramsSimilarity(e.CleanName!, cleanSearchTerm) >= StrongTrigramSimilarity
+                    || e.ItemValues!.Any(ivm =>
+                        (ivm.ItemValue.Type == ItemValueType.Genre || ivm.ItemValue.Type == ItemValueType.Tags)
+                        && (PgSearchDbFunctions.TokenLevenshteinMatch(ivm.ItemValue.CleanValue, cleanSearchTerm, maxEditDistance)
+                            || EF.Functions.TrigramsWordSimilarity(cleanSearchTerm, ivm.ItemValue.CleanValue) >= WordTrigramSimilarity)));
+            }
+            else
+            {
+                dbQuery = dbQuery.Where(e =>
+                    e.CleanName!.Contains(cleanSearchTerm)
+                    || (e.OriginalTitle != null && EF.Functions.ILike(e.OriginalTitle, likeClean, LikeEscapeChar))
+                    || e.ItemValues!.Any(ivm =>
+                        (ivm.ItemValue.Type == ItemValueType.Genre || ivm.ItemValue.Type == ItemValueType.Tags)
+                        && (ivm.ItemValue.CleanValue == cleanSearchTerm
+                            || ivm.ItemValue.CleanValue.StartsWith(cleanSearchTerm)
+                            || ivm.ItemValue.CleanValue.Contains(cleanSearchTerm)))
+                    || (e.Genres != null && EF.Functions.ILike(e.Genres, likeClean, LikeEscapeChar))
+                    || (e.Tags != null && EF.Functions.ILike(e.Tags, likeClean, LikeEscapeChar)));
+            }
 
             dbQuery = ApplyTypeFilter(dbQuery, query.IncludeItemTypes, query.ExcludeItemTypes);
             dbQuery = ApplyMediaTypeFilter(dbQuery, query.MediaTypes);
@@ -200,14 +256,14 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
                           || EF.Functions.ILike(e.Tags, "%|" + cleanSearchTerm + "|%")))
                             ? GenreExactScore
                     : e.CleanName!.Contains(cleanSearchTerm)
-                        || (e.OriginalTitle != null && EF.Functions.ILike(e.OriginalTitle, likeRaw, LikeEscapeChar))
+                        || (e.OriginalTitle != null && EF.Functions.ILike(e.OriginalTitle, likeClean, LikeEscapeChar))
                             ? ContainsMatchScore
                     : e.ItemValues!.Any(ivm =>
                         (ivm.ItemValue.Type == ItemValueType.Genre || ivm.ItemValue.Type == ItemValueType.Tags)
                         && (ivm.ItemValue.CleanValue.StartsWith(cleanSearchTerm)
                             || ivm.ItemValue.CleanValue.Contains(cleanSearchTerm)))
-                      || (e.Genres != null && EF.Functions.ILike(e.Genres, likeRaw, LikeEscapeChar))
-                      || (e.Tags != null && EF.Functions.ILike(e.Tags, likeRaw, LikeEscapeChar))
+                      || (e.Genres != null && EF.Functions.ILike(e.Genres, likeClean, LikeEscapeChar))
+                      || (e.Tags != null && EF.Functions.ILike(e.Tags, likeClean, LikeEscapeChar))
                             ? GenreContainsScore
                     : TitleFuzzyScore
             });

@@ -66,6 +66,6 @@ public sealed class PostgresFuzzySearchProviderUnitTests
     private static PostgresFuzzySearchProvider CreateProviderWithoutDeps()
     {
         // CanSearch / NormalizeSearchTerm do not touch injected services.
-        return new PostgresFuzzySearchProvider(null!, null!, null!, null!, null!);
+        return new PostgresFuzzySearchProvider(null!, null!, null!, null!, null!, null!);
     }
 }
