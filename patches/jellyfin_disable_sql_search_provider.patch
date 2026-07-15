@@ -1,12 +1,15 @@
 diff --git a/Emby.Server.Implementations/ApplicationHost.cs b/Emby.Server.Implementations/ApplicationHost.cs
-index 69e23bcb63..3fc5ea3bcb 100644
+index 69e23bcb63..8a002d4fff 100644
 --- a/Emby.Server.Implementations/ApplicationHost.cs
 +++ b/Emby.Server.Implementations/ApplicationHost.cs
-@@ -723,7 +723,8 @@ namespace Emby.Server.Implementations
+@@ -722,8 +722,10 @@ namespace Emby.Server.Implementations
+ 
              Resolve<IMediaSourceManager>().AddParts(GetExports<IMediaSourceProvider>());
  
-             Resolve<ISimilarItemsManager>().AddParts(GetExports<ISimilarItemsProvider>());
+-            Resolve<ISimilarItemsManager>().AddParts(GetExports<ISimilarItemsProvider>());
 -            Resolve<ISearchManager>().AddParts(GetExports<ISearchProvider>());
++            Resolve<ISimilarItemsManager>().AddParts(
++                GetExports<ISimilarItemsProvider>().Where(p => p is not MovieSimilarItemsProvider));
 +            Resolve<ISearchManager>().AddParts(
 +                GetExports<ISearchProvider>().Where(p => p is not SqlSearchProvider));
          }
