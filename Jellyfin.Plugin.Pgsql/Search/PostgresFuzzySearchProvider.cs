@@ -38,7 +38,6 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
 
     private const int DefaultSearchLimit = 100;
     private const int MaxSearchLimit = 300;
-    private const string LikeEscapeChar = "\\";
 
     // Title literal matches stay on top. Genre/tag exact must beat fuzzy title noise so
     // "Action" returns Action films instead of losing to weak trigram title hits.
@@ -185,38 +184,38 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
             {
                 dbQuery = dbQuery.Where(e =>
                     e.CleanName!.Contains(cleanSearchTerm)
-                    || (e.OriginalTitle != null && EF.Functions.ILike(e.OriginalTitle, likeClean, LikeEscapeChar))
+                    || (e.OriginalTitle != null && PgSearchDbFunctions.ILike(e.OriginalTitle, likeClean))
                     || e.ItemValues!.Any(ivm =>
                         (ivm.ItemValue.Type == ItemValueType.Genre || ivm.ItemValue.Type == ItemValueType.Tags)
                         && (ivm.ItemValue.CleanValue == cleanSearchTerm
                             || ivm.ItemValue.CleanValue.StartsWith(cleanSearchTerm)
                             || ivm.ItemValue.CleanValue.Contains(cleanSearchTerm)))
-                    || (e.Genres != null && EF.Functions.ILike(e.Genres, likeClean, LikeEscapeChar))
-                    || (e.Tags != null && EF.Functions.ILike(e.Tags, likeClean, LikeEscapeChar))
+                    || (e.Genres != null && PgSearchDbFunctions.ILike(e.Genres, likeClean))
+                    || (e.Tags != null && PgSearchDbFunctions.ILike(e.Tags, likeClean))
                     || PgSearchDbFunctions.TokenLevenshteinMatch(e.CleanName, cleanSearchTerm, maxEditDistance)
                     || (e.OriginalTitle != null
                         && PgSearchDbFunctions.TokenLevenshteinMatch(e.OriginalTitle, cleanSearchTerm, maxEditDistance))
-                    || EF.Functions.TrigramsWordSimilarity(cleanSearchTerm, e.CleanName!) >= WordTrigramSimilarity
+                    || PgSearchDbFunctions.WordSimilarity(cleanSearchTerm, e.CleanName!) >= WordTrigramSimilarity
                     || (e.OriginalTitle != null
-                        && EF.Functions.TrigramsWordSimilarity(cleanSearchTerm, e.OriginalTitle) >= WordTrigramSimilarity)
-                    || EF.Functions.TrigramsSimilarity(e.CleanName!, cleanSearchTerm) >= StrongTrigramSimilarity
+                        && PgSearchDbFunctions.WordSimilarity(cleanSearchTerm, e.OriginalTitle) >= WordTrigramSimilarity)
+                    || PgSearchDbFunctions.TrigramSimilarity(e.CleanName!, cleanSearchTerm) >= StrongTrigramSimilarity
                     || e.ItemValues!.Any(ivm =>
                         (ivm.ItemValue.Type == ItemValueType.Genre || ivm.ItemValue.Type == ItemValueType.Tags)
                         && (PgSearchDbFunctions.TokenLevenshteinMatch(ivm.ItemValue.CleanValue, cleanSearchTerm, maxEditDistance)
-                            || EF.Functions.TrigramsWordSimilarity(cleanSearchTerm, ivm.ItemValue.CleanValue) >= WordTrigramSimilarity)));
+                            || PgSearchDbFunctions.WordSimilarity(cleanSearchTerm, ivm.ItemValue.CleanValue) >= WordTrigramSimilarity)));
             }
             else
             {
                 dbQuery = dbQuery.Where(e =>
                     e.CleanName!.Contains(cleanSearchTerm)
-                    || (e.OriginalTitle != null && EF.Functions.ILike(e.OriginalTitle, likeClean, LikeEscapeChar))
+                    || (e.OriginalTitle != null && PgSearchDbFunctions.ILike(e.OriginalTitle, likeClean))
                     || e.ItemValues!.Any(ivm =>
                         (ivm.ItemValue.Type == ItemValueType.Genre || ivm.ItemValue.Type == ItemValueType.Tags)
                         && (ivm.ItemValue.CleanValue == cleanSearchTerm
                             || ivm.ItemValue.CleanValue.StartsWith(cleanSearchTerm)
                             || ivm.ItemValue.CleanValue.Contains(cleanSearchTerm)))
-                    || (e.Genres != null && EF.Functions.ILike(e.Genres, likeClean, LikeEscapeChar))
-                    || (e.Tags != null && EF.Functions.ILike(e.Tags, likeClean, LikeEscapeChar)));
+                    || (e.Genres != null && PgSearchDbFunctions.ILike(e.Genres, likeClean))
+                    || (e.Tags != null && PgSearchDbFunctions.ILike(e.Tags, likeClean)));
             }
 
             dbQuery = ApplyTypeFilter(dbQuery, query.IncludeItemTypes, query.ExcludeItemTypes);
@@ -245,25 +244,25 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
                         (ivm.ItemValue.Type == ItemValueType.Genre || ivm.ItemValue.Type == ItemValueType.Tags)
                         && ivm.ItemValue.CleanValue == cleanSearchTerm)
                       || (e.Genres != null && (
-                          EF.Functions.ILike(e.Genres, cleanSearchTerm)
-                          || EF.Functions.ILike(e.Genres, cleanSearchTerm + "|%")
-                          || EF.Functions.ILike(e.Genres, "%|" + cleanSearchTerm)
-                          || EF.Functions.ILike(e.Genres, "%|" + cleanSearchTerm + "|%")))
+                          PgSearchDbFunctions.ILike(e.Genres, cleanSearchTerm)
+                          || PgSearchDbFunctions.ILike(e.Genres, cleanSearchTerm + "|%")
+                          || PgSearchDbFunctions.ILike(e.Genres, "%|" + cleanSearchTerm)
+                          || PgSearchDbFunctions.ILike(e.Genres, "%|" + cleanSearchTerm + "|%")))
                       || (e.Tags != null && (
-                          EF.Functions.ILike(e.Tags, cleanSearchTerm)
-                          || EF.Functions.ILike(e.Tags, cleanSearchTerm + "|%")
-                          || EF.Functions.ILike(e.Tags, "%|" + cleanSearchTerm)
-                          || EF.Functions.ILike(e.Tags, "%|" + cleanSearchTerm + "|%")))
+                          PgSearchDbFunctions.ILike(e.Tags, cleanSearchTerm)
+                          || PgSearchDbFunctions.ILike(e.Tags, cleanSearchTerm + "|%")
+                          || PgSearchDbFunctions.ILike(e.Tags, "%|" + cleanSearchTerm)
+                          || PgSearchDbFunctions.ILike(e.Tags, "%|" + cleanSearchTerm + "|%")))
                             ? GenreExactScore
                     : e.CleanName!.Contains(cleanSearchTerm)
-                        || (e.OriginalTitle != null && EF.Functions.ILike(e.OriginalTitle, likeClean, LikeEscapeChar))
+                        || (e.OriginalTitle != null && PgSearchDbFunctions.ILike(e.OriginalTitle, likeClean))
                             ? ContainsMatchScore
                     : e.ItemValues!.Any(ivm =>
                         (ivm.ItemValue.Type == ItemValueType.Genre || ivm.ItemValue.Type == ItemValueType.Tags)
                         && (ivm.ItemValue.CleanValue.StartsWith(cleanSearchTerm)
                             || ivm.ItemValue.CleanValue.Contains(cleanSearchTerm)))
-                      || (e.Genres != null && EF.Functions.ILike(e.Genres, likeClean, LikeEscapeChar))
-                      || (e.Tags != null && EF.Functions.ILike(e.Tags, likeClean, LikeEscapeChar))
+                      || (e.Genres != null && PgSearchDbFunctions.ILike(e.Genres, likeClean))
+                      || (e.Tags != null && PgSearchDbFunctions.ILike(e.Tags, likeClean))
                             ? GenreContainsScore
                     : TitleFuzzyScore
             });

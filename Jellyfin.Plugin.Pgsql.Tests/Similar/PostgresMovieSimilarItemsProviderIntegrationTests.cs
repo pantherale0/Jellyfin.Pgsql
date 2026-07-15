@@ -11,6 +11,7 @@ using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Model.Configuration;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
 using DbLinkedChildType = Jellyfin.Database.Implementations.Entities.LinkedChildType;
@@ -129,7 +130,8 @@ public sealed class PostgresMovieSimilarItemsProviderIntegrationTests
             factory,
             queryHelpers.Object,
             itemTypeLookup.Object,
-            config.Object);
+            config.Object,
+            NullLogger<PostgresMovieSimilarItemsProvider>.Instance);
     }
 
     private static async Task SeedFranchiseCorpusAsync(JellyfinDbContext dbContext)

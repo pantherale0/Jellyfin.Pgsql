@@ -23,6 +23,26 @@ internal sealed class TestDbContextFactory : IDbContextFactory<JellyfinDbContext
         });
 
         _provider = new PgSqlDatabaseProvider(null!, NullLogger<PgSqlDatabaseProvider>.Instance);
+        // EnsureSearchSqlHelpers runs during PgSqlDatabaseProvider.Initialise in production;
+        // invoke the same SQL here so mapped jellyfin_ilike exists before MigrateAsync.
+        using (var connection = new Npgsql.NpgsqlConnection(connectionString))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE EXTENSION IF NOT EXISTS pg_trgm;
+                CREATE OR REPLACE FUNCTION jellyfin_ilike(haystack text, pattern text)
+                RETURNS boolean
+                LANGUAGE sql
+                IMMUTABLE
+                PARALLEL SAFE
+                AS $func$
+                  SELECT coalesce(haystack, '') ILIKE pattern ESCAPE '\'
+                $func$;
+                """;
+            command.ExecuteNonQuery();
+        }
+
         _options = optionsBuilder.Options;
     }
 

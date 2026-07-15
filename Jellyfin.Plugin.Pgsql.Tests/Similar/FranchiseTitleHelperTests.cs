@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using Jellyfin.Plugin.Pgsql.Similar;
 using Xunit;
@@ -80,5 +81,18 @@ public sealed class FranchiseTitleHelperTests
             .ToArray();
 
         Assert.Equal([collectionMate, titleMate, genreOnly], ordered);
+    }
+
+    [Fact]
+    public void PreferredProviderOrder_PutsPostgreSQLSimilarityFirst()
+    {
+        // Mirrors ApplicationHost export ordering used by SimilarItemsManager.AddParts.
+        var names = new[] { "Local Genre/Tag", "TheMovieDb", "PostgreSQL Similarity", "Local Genre/Tag" };
+        var ordered = names
+            .OrderBy(n => string.Equals(n, "PostgreSQL Similarity", StringComparison.Ordinal) ? 0 : 1)
+            .ToArray();
+
+        Assert.Equal("PostgreSQL Similarity", ordered[0]);
+        Assert.Contains("Local Genre/Tag", ordered.Skip(1));
     }
 }

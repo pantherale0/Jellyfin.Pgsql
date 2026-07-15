@@ -7,6 +7,7 @@ using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Extensions;
+using Jellyfin.Plugin.Pgsql.Search;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
@@ -15,6 +16,7 @@ using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Model.Configuration;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using BaseItemDto = MediaBrowser.Controller.Entities.BaseItem;
 using DbLinkedChildType = Jellyfin.Database.Implementations.Entities.LinkedChildType;
 
@@ -51,6 +53,7 @@ public sealed class PostgresMovieSimilarItemsProvider :
     private readonly IItemQueryHelpers _queryHelpers;
     private readonly IItemTypeLookup _itemTypeLookup;
     private readonly IServerConfigurationManager _serverConfigurationManager;
+    private readonly ILogger<PostgresMovieSimilarItemsProvider> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PostgresMovieSimilarItemsProvider"/> class.
@@ -59,16 +62,19 @@ public sealed class PostgresMovieSimilarItemsProvider :
     /// <param name="queryHelpers">Shared item query helpers.</param>
     /// <param name="itemTypeLookup">Base item type name lookup.</param>
     /// <param name="serverConfigurationManager">Server configuration.</param>
+    /// <param name="logger">Logger.</param>
     public PostgresMovieSimilarItemsProvider(
         IDbContextFactory<JellyfinDbContext> dbProvider,
         IItemQueryHelpers queryHelpers,
         IItemTypeLookup itemTypeLookup,
-        IServerConfigurationManager serverConfigurationManager)
+        IServerConfigurationManager serverConfigurationManager,
+        ILogger<PostgresMovieSimilarItemsProvider> logger)
     {
         _dbProvider = dbProvider;
         _queryHelpers = queryHelpers;
         _itemTypeLookup = itemTypeLookup;
         _serverConfigurationManager = serverConfigurationManager;
+        _logger = logger;
     }
 
     /// <inheritdoc/>
@@ -273,10 +279,20 @@ public sealed class PostgresMovieSimilarItemsProvider :
             result[id] = [];
         }
 
-        await ApplyCollectionScoresAsync(sourceIds, context, result, cancellationToken).ConfigureAwait(false);
-        await ApplyTitleFranchiseScoresAsync(sourceIds, context, result, cancellationToken).ConfigureAwait(false);
-        await ApplyItemValueScoresAsync(sourceIds, context, result, cancellationToken).ConfigureAwait(false);
-        await ApplyPersonScoresAsync(sourceIds, context, result, cancellationToken).ConfigureAwait(false);
+        // Isolate each signal so a franchise/trigram failure cannot wipe genre/people results
+        // (which previously left More Like This empty when the stock movie provider was disabled).
+        await TryApplyScorePhaseAsync(
+            "collection",
+            () => ApplyCollectionScoresAsync(sourceIds, context, result, cancellationToken)).ConfigureAwait(false);
+        await TryApplyScorePhaseAsync(
+            "title-franchise",
+            () => ApplyTitleFranchiseScoresAsync(sourceIds, context, result, cancellationToken)).ConfigureAwait(false);
+        await TryApplyScorePhaseAsync(
+            "item-values",
+            () => ApplyItemValueScoresAsync(sourceIds, context, result, cancellationToken)).ConfigureAwait(false);
+        await TryApplyScorePhaseAsync(
+            "people",
+            () => ApplyPersonScoresAsync(sourceIds, context, result, cancellationToken)).ConfigureAwait(false);
 
         foreach (var sourceId in sourceIds)
         {
@@ -384,12 +400,12 @@ public sealed class PostgresMovieSimilarItemsProvider :
                     && e.CleanName != null
                     && !e.IsVirtualItem
                     && e.Id != source.Id
-                    && EF.Functions.TrigramsWordSimilarity(sourceName, e.CleanName)
-                        >= (float)MovieSimilarityWeights.TitleWordSimilarityFloor)
+                    && PgSearchDbFunctions.WordSimilarity(sourceName, e.CleanName)
+                        >= MovieSimilarityWeights.TitleWordSimilarityFloor)
                 .Select(e => new
                 {
                     e.Id,
-                    Similarity = EF.Functions.TrigramsWordSimilarity(sourceName, e.CleanName!)
+                    Similarity = PgSearchDbFunctions.WordSimilarity(sourceName, e.CleanName!)
                 })
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -551,5 +567,17 @@ public sealed class PostgresMovieSimilarItemsProvider :
         }
 
         scoreMap[candidateId] = Math.Max(current, weight);
+    }
+
+    private async Task TryApplyScorePhaseAsync(string phaseName, Func<Task> phase)
+    {
+        try
+        {
+            await phase().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Movie similarity scoring phase '{Phase}' failed; continuing with remaining signals", phaseName);
+        }
     }
 }

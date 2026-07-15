@@ -60,6 +60,19 @@ internal static class PostgreSqlCompat
         $compat$;
         """;
 
+    private const string EnsureSearchSqlHelpersSql = """
+        CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+        CREATE OR REPLACE FUNCTION jellyfin_ilike(haystack text, pattern text)
+        RETURNS boolean
+        LANGUAGE sql
+        IMMUTABLE
+        PARALLEL SAFE
+        AS $func$
+          SELECT coalesce(haystack, '') ILIKE pattern ESCAPE '\'
+        $func$;
+        """;
+
     public static void EnsureUuidAggregates(string connectionString, ILogger logger)
     {
         try
@@ -80,6 +93,35 @@ internal static class PostgreSqlCompat
             if (logger.IsEnabled(LogLevel.Warning))
             {
                 logger.LogWarning(ex, "Failed to ensure PostgreSQL uuid min/max aggregates");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Ensures ILIKE helper used by search/similar EF DbFunction mappings exists.
+    /// </summary>
+    /// <param name="connectionString">PostgreSQL connection string.</param>
+    /// <param name="logger">Logger.</param>
+    public static void EnsureSearchSqlHelpers(string connectionString, ILogger logger)
+    {
+        try
+        {
+            using var connection = new NpgsqlConnection(connectionString);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = EnsureSearchSqlHelpersSql;
+            command.ExecuteNonQuery();
+
+            if (logger.IsEnabled(LogLevel.Debug))
+            {
+                logger.LogDebug("Ensured PostgreSQL search SQL helpers (jellyfin_ilike, pg_trgm) are available");
+            }
+        }
+        catch (NpgsqlException ex)
+        {
+            if (logger.IsEnabled(LogLevel.Warning))
+            {
+                logger.LogWarning(ex, "Failed to ensure PostgreSQL search SQL helpers");
             }
         }
     }
