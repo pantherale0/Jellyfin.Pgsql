@@ -11,6 +11,8 @@ namespace Jellyfin.Plugin.Pgsql.Taste;
 /// </summary>
 public sealed class TastePersonaGenerator
 {
+    private const float AffinityWeightGate = 0.12f;
+
     private static readonly Dictionary<string, string[]> DomainPools = new(StringComparer.OrdinalIgnoreCase)
     {
         ["action"] = ["Action", "Pulse", "Spectacle", "Adrenaline", "Kinetic"],
@@ -74,13 +76,15 @@ public sealed class TastePersonaGenerator
     /// <param name="sampleCount">Positive sample count.</param>
     /// <param name="updatedAt">Profile update time (UTC).</param>
     /// <param name="minSamples">Minimum samples for a calibrated persona.</param>
+    /// <param name="affinityHints">Optional resolved affinity labels for the blurb.</param>
     /// <returns>Persona result.</returns>
     public TastePersonaResult Generate(
         Guid userId,
         UserTasteFeaturePayload? payload,
         int sampleCount,
         DateTime updatedAt,
-        int minSamples)
+        int minSamples,
+        TasteAffinityHints? affinityHints = null)
     {
         if (payload is null || sampleCount < minSamples || payload.Genres.Count == 0)
         {
@@ -141,7 +145,15 @@ public sealed class TastePersonaGenerator
             title = $"{title} — {Pick(RareEpithets, rng)}";
         }
 
-        var blurb = BuildBlurb(topGenres, payload, sampleCount, specialist);
+        var blurb = BuildBlurb(
+            domainKey,
+            barKey,
+            loyaltyKey,
+            specialist,
+            sampleCount,
+            payload,
+            affinityHints ?? new TasteAffinityHints(),
+            rng);
         var code = string.Create(
             CultureInfo.InvariantCulture,
             $"{domainKey}:{stanceKey}:{barKey ?? "none"}:{loyaltyKey ?? "none"}");
@@ -159,21 +171,119 @@ public sealed class TastePersonaGenerator
     }
 
     private static string BuildBlurb(
-        IReadOnlyList<KeyValuePair<string, float>> topGenres,
-        UserTasteFeaturePayload payload,
+        string domainKey,
+        string? barKey,
+        string? loyaltyKey,
+        bool specialist,
         int sampleCount,
-        bool specialist)
+        UserTasteFeaturePayload payload,
+        TasteAffinityHints hints,
+        Random rng)
     {
-        var genrePart = string.Join(
-            " + ",
-            topGenres.Take(2).Select(g => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(g.Key)));
-        var focusPart = specialist ? "Focused tastes" : "Broad tastes";
-        var ratingPart = payload.RatingP25 is float p25 && payload.RatingP75 is float p75
-            ? string.Create(CultureInfo.InvariantCulture, $" · ratings usually {p25:0.0}–{p75:0.0}")
-            : string.Empty;
-        return string.Create(
-            CultureInfo.InvariantCulture,
-            $"{focusPart} · heavy on {genrePart}{ratingPart} · {sampleCount} films shaping this");
+        var pack = TastePersonaVibePacks.ForDomain(domainKey);
+        var sentences = new List<string>(4);
+
+        var opener = Pick(pack.Openers, rng)
+            .Replace("{n}", sampleCount.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
+        sentences.Add(opener);
+
+        if (payload.RatingP25 is float p25 && payload.RatingP75 is float p75)
+        {
+            var ratingPool = barKey switch
+            {
+                "selective" => TastePersonaVibePacks.SelectiveRatingLines,
+                "wildcard" => TastePersonaVibePacks.WildcardRatingLines,
+                _ => TastePersonaVibePacks.EverymanRatingLines
+            };
+            var lo = p25.ToString("0.0", CultureInfo.InvariantCulture);
+            var hi = p75.ToString("0.0", CultureInfo.InvariantCulture);
+            sentences.Add(
+                Pick(ratingPool, rng)
+                    .Replace("{lo}", lo, StringComparison.Ordinal)
+                    .Replace("{hi}", hi, StringComparison.Ordinal));
+        }
+
+        var affinity = TryBuildAffinitySentence(payload, loyaltyKey, hints, rng);
+        if (affinity is not null)
+        {
+            sentences.Add(affinity);
+        }
+
+        if (rng.NextDouble() < 0.5)
+        {
+            var closerPool = specialist ? pack.CommitLines.Concat(pack.Closers).ToArray() : pack.Closers;
+            sentences.Add(Pick(closerPool, rng));
+        }
+        else if (specialist && sentences.Count < 3)
+        {
+            sentences.Add(Pick(pack.CommitLines, rng));
+        }
+
+        while (sentences.Count > 4)
+        {
+            sentences.RemoveAt(sentences.Count - 1);
+        }
+
+        return string.Join(' ', sentences);
+    }
+
+    private static string? TryBuildAffinitySentence(
+        UserTasteFeaturePayload payload,
+        string? loyaltyKey,
+        TasteAffinityHints hints,
+        Random rng)
+    {
+        var candidates = new List<(string Kind, string Value)>();
+
+        var tag = ResolveTopWeight(payload.Tags, hints.TopTag);
+        if (tag is not null)
+        {
+            candidates.Add(("tag", tag));
+        }
+
+        var studio = ResolveTopWeight(payload.Studios, hints.TopStudio);
+        if (studio is not null)
+        {
+            candidates.Add(("studio", studio));
+        }
+
+        if (loyaltyKey is not null
+            && !string.IsNullOrWhiteSpace(hints.TopPersonName))
+        {
+            candidates.Add(("person", hints.TopPersonName.Trim()));
+        }
+
+        if (candidates.Count == 0)
+        {
+            return null;
+        }
+
+        var pick = candidates[rng.Next(candidates.Count)];
+        if (pick.Kind == "person")
+        {
+            return Pick(TastePersonaVibePacks.PersonAffinityLines, rng)
+                .Replace("{name}", pick.Value, StringComparison.Ordinal);
+        }
+
+        var label = CultureInfo.InvariantCulture.TextInfo.ToTitleCase(pick.Value.ToLowerInvariant());
+        return Pick(TastePersonaVibePacks.TagStudioAffinityLines, rng)
+            .Replace("{label}", label, StringComparison.Ordinal);
+    }
+
+    private static string? ResolveTopWeight(Dictionary<string, float> weights, string? hintLabel)
+    {
+        if (!string.IsNullOrWhiteSpace(hintLabel))
+        {
+            return hintLabel.Trim();
+        }
+
+        if (weights.Count == 0)
+        {
+            return null;
+        }
+
+        var top = weights.OrderByDescending(kvp => kvp.Value).First();
+        return top.Value >= AffinityWeightGate ? top.Key : null;
     }
 
     private static string? ResolveBar(UserTasteFeaturePayload payload)
