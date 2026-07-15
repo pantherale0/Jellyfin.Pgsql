@@ -59,7 +59,7 @@ public sealed class UserTasteProfileIntegrationTests
                 minSamples: 3,
                 default)
             .ConfigureAwait(false);
-        Assert.True(wrote);
+        Assert.True(wrote.Upserted);
 
         var profileRow = await dbContext.UserTasteProfiles
             .AsNoTracking()

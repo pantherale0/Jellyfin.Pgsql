@@ -62,7 +62,7 @@ public sealed class UserTasteProfileBuilder
         var movieType = itemTypeLookup.BaseItemKindNames[BaseItemKind.Movie];
         var cutoff = DateTime.UtcNow.AddDays(-lookbackDays);
 
-        var userIds = await context.UserData.AsNoTracking()
+        var userDataUserIds = await context.UserData.AsNoTracking()
             .Where(ud => ud.IsFavorite
                 || ud.Likes == true
                 || ud.Played
@@ -80,6 +80,7 @@ public sealed class UserTasteProfileBuilder
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
+        var userIds = new List<Guid>(userDataUserIds);
         foreach (var id in playbackUserIds)
         {
             if (!userIds.Contains(id))
@@ -89,23 +90,51 @@ public sealed class UserTasteProfileBuilder
         }
 
         var upserted = 0;
+        var skippedNoMovieSignals = 0;
+        var skippedBelowMinSamples = 0;
+        var maxMovieSignalsSeen = 0;
         foreach (var userId in userIds)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var wrote = await RebuildUserAsync(context, userId, movieType, cutoff, minSamples, cancellationToken)
+            var outcome = await RebuildUserAsync(context, userId, movieType, cutoff, minSamples, cancellationToken)
                 .ConfigureAwait(false);
-            if (wrote)
+            maxMovieSignalsSeen = Math.Max(maxMovieSignalsSeen, outcome.MovieSignalCount);
+            if (outcome.Upserted)
             {
                 upserted++;
+                continue;
+            }
+
+            if (outcome.MovieSignalCount == 0)
+            {
+                skippedNoMovieSignals++;
+            }
+            else
+            {
+                skippedBelowMinSamples++;
             }
         }
 
         if (_logger.IsEnabled(LogLevel.Information))
         {
             _logger.LogInformation(
-                "Rebuilt {Count} user taste profiles (lookbackDays={LookbackDays})",
+                "Taste rebuild finished: upserted={Upserted}, candidates={Candidates} (userData={UserDataCandidates}, playbackActivity={PlaybackCandidates}), skippedNoMovieSignals={SkippedNoMovie}, skippedBelowMinSamples={SkippedBelowMin} (minSamples={MinSamples}), maxMovieSignalsSeen={MaxSignals}, lookbackDays={LookbackDays}, movieType={MovieType}",
                 upserted,
-                lookbackDays);
+                userIds.Count,
+                userDataUserIds.Count,
+                playbackUserIds.Count,
+                skippedNoMovieSignals,
+                skippedBelowMinSamples,
+                minSamples,
+                maxMovieSignalsSeen,
+                lookbackDays,
+                movieType);
+        }
+
+        if (upserted == 0)
+        {
+            await LogZeroUpsertDiagnosticsAsync(context, movieType, cutoff, minSamples, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         return upserted;
@@ -120,8 +149,8 @@ public sealed class UserTasteProfileBuilder
     /// <param name="cutoff">Earliest history date (UTC).</param>
     /// <param name="minSamples">Minimum samples to persist.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>True when a profile row was upserted.</returns>
-    public async Task<bool> RebuildUserAsync(
+    /// <returns>Whether a profile was written and how many movie signals were found.</returns>
+    public async Task<RebuildUserOutcome> RebuildUserAsync(
         JellyfinDbContext context,
         Guid userId,
         string movieType,
@@ -133,7 +162,7 @@ public sealed class UserTasteProfileBuilder
             .ConfigureAwait(false);
         if (signals.Count < minSamples)
         {
-            return false;
+            return new RebuildUserOutcome(false, signals.Count);
         }
 
         var itemIds = signals.Keys.ToList();
@@ -235,7 +264,7 @@ public sealed class UserTasteProfileBuilder
         entity.SampleCount = signals.Count;
         entity.UpdatedAt = DateTime.UtcNow;
         await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        return true;
+        return new RebuildUserOutcome(true, signals.Count);
     }
 
     /// <summary>
@@ -259,6 +288,73 @@ public sealed class UserTasteProfileBuilder
         {
             return new UserTasteFeaturePayload();
         }
+    }
+
+    private async Task LogZeroUpsertDiagnosticsAsync(
+        JellyfinDbContext context,
+        string movieType,
+        DateTime cutoff,
+        int minSamples,
+        CancellationToken cancellationToken)
+    {
+        var signalUserDataRows = await context.UserData.AsNoTracking()
+            .CountAsync(
+                ud => ud.IsFavorite
+                    || ud.Likes == true
+                    || ud.Played
+                    || ud.PlayCount > 0
+                    || (ud.LastPlayedDate != null && ud.LastPlayedDate >= cutoff),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        var movieLinkedUserDataRows = await context.UserData.AsNoTracking()
+            .Where(ud => ud.IsFavorite
+                || ud.Likes == true
+                || ud.Played
+                || ud.PlayCount > 0
+                || (ud.LastPlayedDate != null && ud.LastPlayedDate >= cutoff))
+            .Join(
+                context.BaseItems.AsNoTracking().Where(i => i.Type == movieType),
+                ud => ud.ItemId,
+                i => i.Id,
+                (ud, i) => ud)
+            .CountAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var playbackRows = await context.PlaybackActivity.AsNoTracking()
+            .CountAsync(p => p.DatePlayed >= cutoff, cancellationToken)
+            .ConfigureAwait(false);
+
+        var movieCount = await context.BaseItems.AsNoTracking()
+            .CountAsync(i => i.Type == movieType, cancellationToken)
+            .ConfigureAwait(false);
+
+        var linkedItemTypes = await context.UserData.AsNoTracking()
+            .Where(ud => ud.IsFavorite
+                || ud.Likes == true
+                || ud.Played
+                || ud.PlayCount > 0
+                || (ud.LastPlayedDate != null && ud.LastPlayedDate >= cutoff))
+            .Join(
+                context.BaseItems.AsNoTracking(),
+                ud => ud.ItemId,
+                i => i.Id,
+                (ud, i) => i.Type)
+            .Distinct()
+            .Take(10)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var linkedTypesSummary = string.Join(", ", linkedItemTypes);
+        _logger.LogWarning(
+            "No taste profiles written. Likely causes: no favorite/play history, history not linked to movie BaseItems, or fewer than {MinSamples} movie signals per user. Diagnostics: signalUserDataRows={SignalUserDataRows}, movieLinkedUserDataRows={MovieLinkedUserDataRows}, playbackActivityRowsInLookback={PlaybackRows}, moviesWithExpectedType={MovieCount}, expectedMovieType={MovieType}, userDataLinkedItemTypes=[{LinkedTypes}]",
+            minSamples,
+            signalUserDataRows,
+            movieLinkedUserDataRows,
+            playbackRows,
+            movieCount,
+            movieType,
+            linkedTypesSummary);
     }
 
     private static async Task<Dictionary<Guid, float>> LoadPositiveSignalsAsync(
