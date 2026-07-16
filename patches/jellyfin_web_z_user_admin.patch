@@ -146,10 +146,19 @@ index 425be2f9d6..5f77cd83cf 100644
      { path: 'users/:userId/:tab', page: 'users/edit', type: AppType.Dashboard }
  ];
 diff --git a/src/apps/dashboard/routes/users/index.tsx b/src/apps/dashboard/routes/users/index.tsx
-index 6d1adff6d7..63941ea749 100644
+index 6d1adff6d7..17708f4cac 100644
 --- a/src/apps/dashboard/routes/users/index.tsx
 +++ b/src/apps/dashboard/routes/users/index.tsx
-@@ -80,6 +80,11 @@ const UserProfiles = () => {
+@@ -17,6 +17,8 @@ import { useDeleteUser } from 'apps/dashboard/features/users/api/useDeleteUser';
+ import dom from 'utils/dom';
+ import { UserTab } from 'apps/dashboard/features/users/constants/userTab';
+ import Box from '@mui/material/Box';
++import Button from '@mui/material/Button';
++import Stack from '@mui/material/Stack';
+ import Tab from '@mui/material/Tab';
+ import Tabs from '@mui/material/Tabs';
+ import SSOMappings from 'apps/dashboard/features/users/components/SSOMappings';
+@@ -80,6 +82,11 @@ const UserProfiles = () => {
                  id: 'parentalcontrol',
                  icon: 'person'
              });
@@ -161,7 +170,7 @@ index 6d1adff6d7..63941ea749 100644
              menuItems.push({
                  name: globalize.translate('Delete'),
                  id: 'delete',
-@@ -104,6 +109,10 @@ const UserProfiles = () => {
+@@ -104,6 +111,10 @@ const UserProfiles = () => {
                                  navigate(`/dashboard/users/${userId}/${UserTab.ParentalControl}`);
                                  break;
  
@@ -172,50 +181,35 @@ index 6d1adff6d7..63941ea749 100644
                              case 'delete':
                                  confirmDeleteUser(userId, username);
                          }
-@@ -146,17 +155,30 @@ const UserProfiles = () => {
-             navigate('/dashboard/users/add');
-         };
- 
-+        const onMergeUsersClick = function() {
-+            navigate('/dashboard/users/merge');
-+        };
-+
-         page.addEventListener('click', onPageClick);
-         const btnAddUser = page.querySelector('#btnAddUser');
-         if (btnAddUser) {
-             btnAddUser.addEventListener('click', onAddUserClick);
-         }
- 
-+        const btnMergeUsers = page.querySelector('#btnMergeUsers');
-+        if (btnMergeUsers) {
-+            btnMergeUsers.addEventListener('click', onMergeUsersClick);
-+        }
-+
-         return () => {
-             page.removeEventListener('click', onPageClick);
-             if (btnAddUser) {
-                 btnAddUser.removeEventListener('click', onAddUserClick);
-             }
-+
-+            if (btnMergeUsers) {
-+                btnMergeUsers.removeEventListener('click', onMergeUsersClick);
-+            }
-         };
-     }, [navigate, deleteUser, location.state?.openSavedToast, activeTab]);
- 
-@@ -194,6 +216,15 @@ const UserProfiles = () => {
-                                 btnTitle='ButtonAddUser'
-                                 btnIcon='add'
-                             />
-+                            <button
-+                                is='emby-button'
-+                                type='button'
-+                                id='btnMergeUsers'
-+                                className='raised sectionTitleButton'
-+                                style={{ marginLeft: '0.5em' }}
-+                            >
-+                                <span>{globalize.translate('HeaderUserAdminMerge')}</span>
-+                            </button>
+@@ -186,14 +197,23 @@ const UserProfiles = () => {
+                 {activeTab === 'users' ? (
+                     <>
+                         <div className='verticalSection'>
+-                            <SectionTitleContainer
+-                                title={globalize.translate('HeaderUsers')}
+-                                isBtnVisible={true}
+-                                btnId='btnAddUser'
+-                                btnClassName='fab submit sectionTitleButton'
+-                                btnTitle='ButtonAddUser'
+-                                btnIcon='add'
+-                            />
++                            <Stack direction='row' alignItems='center' spacing={1} flexWrap='wrap'>
++                                <SectionTitleContainer
++                                    title={globalize.translate('HeaderUsers')}
++                                    isBtnVisible={true}
++                                    btnId='btnAddUser'
++                                    btnClassName='fab submit sectionTitleButton'
++                                    btnTitle='ButtonAddUser'
++                                    btnIcon='add'
++                                />
++                                <Button
++                                    variant='outlined'
++                                    size='small'
++                                    onClick={() => navigate('/dashboard/users/merge')}
++                                >
++                                    {globalize.translate('HeaderUserAdminMerge')}
++                                </Button>
++                            </Stack>
                          </div>
  
                          <div className='localUsers itemsContainer vertical-wrap'>
