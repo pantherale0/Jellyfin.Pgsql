@@ -1,3 +1,15 @@
+diff --git a/package.json b/package.json
+index cd70e50e0e..0ad5bb5170 100644
+--- a/package.json
++++ b/package.json
+@@ -90,6 +90,7 @@
+     "@jellyfin/ux-web": "1.0.0",
+     "@mui/icons-material": "6.5.0",
+     "@mui/material": "6.5.0",
++    "@mui/x-charts": "7.29.1",
+     "@mui/x-date-pickers": "7.29.4",
+     "@react-hook/resize-observer": "2.0.2",
+     "@tanstack/react-query": "5.91.2",
 diff --git a/src/apps/dashboard/components/drawer/AppDrawer.tsx b/src/apps/dashboard/components/drawer/AppDrawer.tsx
 index 1b03f58fe5..5c322415e6 100644
 --- a/src/apps/dashboard/components/drawer/AppDrawer.tsx
@@ -77,25 +89,94 @@ index 800b758168..6cc5752f9c 100644
  };
 diff --git a/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts b/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts
 new file mode 100644
-index 0000000000..50f97c9479
+index 0000000000..f11578b4e1
 --- /dev/null
 +++ b/src/apps/dashboard/features/playbackStatistics/api/playbackStatsApi.ts
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,217 @@
 +import type { Api } from '@jellyfin/sdk';
 +import type { AxiosRequestConfig } from 'axios';
 +
 +import type {
++    PlaybackDailyGroupBy,
++    PlaybackDailyRow,
++    PlaybackDimension,
++    PlaybackDimensionRow,
++    PlaybackHourlyRow,
++    PlaybackItemGroupBy,
++    PlaybackItemRow,
++    PlaybackOverviewResponse,
++    PlaybackRecentResponse,
++    PlaybackSessionBucketRow,
 +    PlaybackStatRow,
++    PlaybackStatsFilters,
 +    PlaybackSubGroupStatRow,
 +    PlaybackUserStatRow
 +} from '../types';
 +
-+const fetchJsonArray = async <T>(
++type FilterInput = Partial<PlaybackStatsFilters> & {
++    groupBy?: string;
++    limit?: number;
++    includeOther?: boolean;
++    dimension?: string;
++    startIndex?: number;
++};
++
++const appendFilters = (params: URLSearchParams, filters?: FilterInput) => {
++    if (!filters) {
++        return;
++    }
++
++    if (filters.startDate) {
++        params.set('startDate', filters.startDate);
++    }
++
++    if (filters.endDate) {
++        params.set('endDate', filters.endDate);
++    }
++
++    for (const userId of filters.userIds ?? []) {
++        params.append('userIds', userId);
++    }
++
++    for (const mediaType of filters.mediaTypes ?? []) {
++        params.append('mediaTypes', mediaType);
++    }
++
++    for (const client of filters.clients ?? []) {
++        params.append('clients', client);
++    }
++
++    for (const method of filters.playbackMethods ?? []) {
++        params.append('playbackMethods', method);
++    }
++
++    if (filters.groupBy) {
++        params.set('groupBy', filters.groupBy);
++    }
++
++    if (filters.limit != null) {
++        params.set('limit', String(filters.limit));
++    }
++
++    if (filters.includeOther != null) {
++        params.set('includeOther', String(filters.includeOther));
++    }
++
++    if (filters.dimension) {
++        params.set('dimension', filters.dimension);
++    }
++
++    if (filters.startIndex != null) {
++        params.set('startIndex', String(filters.startIndex));
++    }
++};
++
++const fetchJson = async <T>(
 +    api: Api,
 +    path: string,
 +    options?: AxiosRequestConfig
-+): Promise<T[]> => {
-+    const response = await api.axiosInstance.get<T[] | null>(path, {
++): Promise<T> => {
++    const response = await api.axiosInstance.get<T>(path, {
 +        ...options,
 +        baseURL: api.basePath,
 +        headers: {
@@ -103,16 +184,33 @@ index 0000000000..50f97c9479
 +            Authorization: api.authorizationHeader
 +        }
 +    });
-+    return Array.isArray(response.data) ? response.data : [];
++    return response.data;
++};
++
++const fetchJsonArray = async <T>(
++    api: Api,
++    path: string,
++    options?: AxiosRequestConfig
++): Promise<T[]> => {
++    const data = await fetchJson<T[] | null>(api, path, options);
++    return Array.isArray(data) ? data : [];
++};
++
++const withQuery = (path: string, filters?: FilterInput) => {
++    const params = new URLSearchParams();
++    appendFilters(params, filters);
++    const query = params.toString();
++    return query ? `${path}?${query}` : path;
 +};
 +
 +export const fetchUserPlaybackStats = (
 +    api: Api,
 +    userId: string,
++    filters?: Pick<PlaybackStatsFilters, 'startDate' | 'endDate'>,
 +    options?: AxiosRequestConfig
 +): Promise<PlaybackStatRow[]> => fetchJsonArray(
 +    api,
-+    `/Users/${userId}/PlaybackStats`,
++    withQuery(`/Users/${userId}/PlaybackStats`, filters),
 +    options
 +);
 +
@@ -120,45 +218,148 @@ index 0000000000..50f97c9479
 +    api: Api,
 +    userId: string,
 +    mediaType: string,
++    filters?: Pick<PlaybackStatsFilters, 'startDate' | 'endDate'>,
 +    options?: AxiosRequestConfig
 +): Promise<PlaybackSubGroupStatRow[]> => fetchJsonArray(
 +    api,
-+    `/Users/${userId}/PlaybackStats/${encodeURIComponent(mediaType)}`,
++    withQuery(`/Users/${userId}/PlaybackStats/${encodeURIComponent(mediaType)}`, filters),
++    options
++);
++
++export const fetchUserPlaybackOverview = (
++    api: Api,
++    userId: string,
++    filters?: Pick<PlaybackStatsFilters, 'startDate' | 'endDate'>,
++    options?: AxiosRequestConfig
++): Promise<PlaybackOverviewResponse> => fetchJson(
++    api,
++    withQuery(`/Users/${userId}/PlaybackStats/Overview`, filters),
++    options
++);
++
++export const fetchUserPlaybackHourly = (
++    api: Api,
++    userId: string,
++    filters?: Pick<PlaybackStatsFilters, 'startDate' | 'endDate'>,
++    options?: AxiosRequestConfig
++): Promise<PlaybackHourlyRow[]> => fetchJsonArray(
++    api,
++    withQuery(`/Users/${userId}/PlaybackStats/Hourly`, filters),
 +    options
 +);
 +
 +export const fetchServerPlaybackStats = (
 +    api: Api,
++    filters?: Partial<PlaybackStatsFilters>,
 +    options?: AxiosRequestConfig
-+): Promise<PlaybackStatRow[]> => fetchJsonArray(api, '/PlaybackStats', options);
++): Promise<PlaybackStatRow[]> => fetchJsonArray(api, withQuery('/PlaybackStats', filters), options);
 +
 +export const fetchServerPlaybackStatsByUser = (
 +    api: Api,
++    filters?: Partial<PlaybackStatsFilters>,
 +    options?: AxiosRequestConfig
-+): Promise<PlaybackUserStatRow[]> => fetchJsonArray(api, '/PlaybackStats/Users', options);
++): Promise<PlaybackUserStatRow[]> => fetchJsonArray(api, withQuery('/PlaybackStats/Users', filters), options);
++
++export const fetchPlaybackOverview = (
++    api: Api,
++    filters?: Partial<PlaybackStatsFilters>,
++    options?: AxiosRequestConfig
++): Promise<PlaybackOverviewResponse> => fetchJson(api, withQuery('/PlaybackStats/Overview', filters), options);
++
++export const fetchPlaybackDaily = (
++    api: Api,
++    filters?: Partial<PlaybackStatsFilters> & { groupBy?: PlaybackDailyGroupBy },
++    options?: AxiosRequestConfig
++): Promise<PlaybackDailyRow[]> => fetchJsonArray(api, withQuery('/PlaybackStats/Daily', filters), options);
++
++export const fetchPlaybackHourly = (
++    api: Api,
++    filters?: Partial<PlaybackStatsFilters>,
++    options?: AxiosRequestConfig
++): Promise<PlaybackHourlyRow[]> => fetchJsonArray(api, withQuery('/PlaybackStats/Hourly', filters), options);
++
++export const fetchPlaybackItems = (
++    api: Api,
++    filters?: Partial<PlaybackStatsFilters> & {
++        groupBy?: PlaybackItemGroupBy;
++        limit?: number;
++        includeOther?: boolean;
++    },
++    options?: AxiosRequestConfig
++): Promise<PlaybackItemRow[]> => fetchJsonArray(api, withQuery('/PlaybackStats/Items', filters), options);
++
++export const fetchPlaybackDimensions = (
++    api: Api,
++    dimension: PlaybackDimension,
++    filters?: Partial<PlaybackStatsFilters>,
++    options?: AxiosRequestConfig
++): Promise<PlaybackDimensionRow[]> => fetchJsonArray(
++    api,
++    withQuery('/PlaybackStats/Dimensions', { ...filters, dimension }),
++    options
++);
++
++export const fetchPlaybackSessions = (
++    api: Api,
++    filters?: Partial<PlaybackStatsFilters>,
++    options?: AxiosRequestConfig
++): Promise<PlaybackSessionBucketRow[]> => fetchJsonArray(api, withQuery('/PlaybackStats/Sessions', filters), options);
++
++export const fetchPlaybackRecent = (
++    api: Api,
++    filters?: Partial<PlaybackStatsFilters> & { startIndex?: number; limit?: number },
++    options?: AxiosRequestConfig
++): Promise<PlaybackRecentResponse> => fetchJson(api, withQuery('/PlaybackStats/Recent', filters), options);
 diff --git a/src/apps/dashboard/features/playbackStatistics/api/usePlaybackStats.ts b/src/apps/dashboard/features/playbackStatistics/api/usePlaybackStats.ts
 new file mode 100644
-index 0000000000..9c99c2741e
+index 0000000000..45ca8d6cdc
 --- /dev/null
 +++ b/src/apps/dashboard/features/playbackStatistics/api/usePlaybackStats.ts
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,217 @@
 +import { useQuery } from '@tanstack/react-query';
 +
 +import { useApi } from 'hooks/useApi';
 +
++import type {
++    PlaybackDailyGroupBy,
++    PlaybackDimension,
++    PlaybackItemGroupBy,
++    PlaybackStatsFilters
++} from '../types';
 +import {
++    fetchPlaybackDaily,
++    fetchPlaybackDimensions,
++    fetchPlaybackHourly,
++    fetchPlaybackItems,
++    fetchPlaybackOverview,
++    fetchPlaybackRecent,
++    fetchPlaybackSessions,
 +    fetchServerPlaybackStats,
 +    fetchServerPlaybackStatsByUser,
++    fetchUserPlaybackHourly,
++    fetchUserPlaybackOverview,
 +    fetchUserPlaybackStats,
 +    fetchUserPlaybackStatsByType
 +} from './playbackStatsApi';
 +
-+export const useUserPlaybackStats = (userId: string) => {
++const filterKey = (filters?: Partial<PlaybackStatsFilters>) => ({
++    startDate: filters?.startDate,
++    endDate: filters?.endDate,
++    userIds: filters?.userIds,
++    mediaTypes: filters?.mediaTypes,
++    clients: filters?.clients,
++    playbackMethods: filters?.playbackMethods
++});
++
++export const useUserPlaybackStats = (
++    userId: string,
++    filters?: Pick<PlaybackStatsFilters, 'startDate' | 'endDate'>
++) => {
 +    const { api } = useApi();
 +
 +    return useQuery({
-+        queryKey: [ 'PlaybackStats', 'user', userId ],
-+        queryFn: ({ signal }) => fetchUserPlaybackStats(api!, userId, { signal }),
++        queryKey: [ 'PlaybackStats', 'user', userId, filterKey(filters) ],
++        queryFn: ({ signal }) => fetchUserPlaybackStats(api!, userId, filters, { signal }),
 +        enabled: !!api && !!userId,
 +        refetchOnMount: false
 +    });
@@ -166,45 +367,1991 @@ index 0000000000..9c99c2741e
 +
 +export const useUserPlaybackStatsByType = (
 +    userId: string,
-+    mediaType: string | null
++    mediaType: string | null,
++    filters?: Pick<PlaybackStatsFilters, 'startDate' | 'endDate'>
 +) => {
 +    const { api } = useApi();
 +
 +    return useQuery({
-+        queryKey: [ 'PlaybackStats', 'user', userId, mediaType ],
-+        queryFn: ({ signal }) => fetchUserPlaybackStatsByType(api!, userId, mediaType!, { signal }),
++        queryKey: [ 'PlaybackStats', 'user', userId, mediaType, filterKey(filters) ],
++        queryFn: ({ signal }) => fetchUserPlaybackStatsByType(api!, userId, mediaType!, filters, { signal }),
 +        enabled: !!api && !!userId && !!mediaType,
 +        refetchOnMount: false
 +    });
 +};
 +
-+export const useServerPlaybackStats = () => {
++export const useUserPlaybackOverview = (
++    userId: string,
++    filters?: Pick<PlaybackStatsFilters, 'startDate' | 'endDate'>,
++    enabled = true
++) => {
 +    const { api } = useApi();
 +
 +    return useQuery({
-+        queryKey: [ 'PlaybackStats', 'server' ],
-+        queryFn: ({ signal }) => fetchServerPlaybackStats(api!, { signal }),
++        queryKey: [ 'PlaybackStats', 'user', userId, 'overview', filterKey(filters) ],
++        queryFn: ({ signal }) => fetchUserPlaybackOverview(api!, userId, filters, { signal }),
++        enabled: !!api && !!userId && enabled,
++        refetchOnMount: false
++    });
++};
++
++export const useUserPlaybackHourly = (
++    userId: string,
++    filters?: Pick<PlaybackStatsFilters, 'startDate' | 'endDate'>
++) => {
++    const { api } = useApi();
++
++    return useQuery({
++        queryKey: [ 'PlaybackStats', 'user', userId, 'hourly', filterKey(filters) ],
++        queryFn: ({ signal }) => fetchUserPlaybackHourly(api!, userId, filters, { signal }),
++        enabled: !!api && !!userId,
++        refetchOnMount: false
++    });
++};
++
++export const useServerPlaybackStats = (filters?: Partial<PlaybackStatsFilters>) => {
++    const { api } = useApi();
++
++    return useQuery({
++        queryKey: [ 'PlaybackStats', 'server', filterKey(filters) ],
++        queryFn: ({ signal }) => fetchServerPlaybackStats(api!, filters, { signal }),
 +        enabled: !!api,
 +        refetchOnMount: false
 +    });
 +};
 +
-+export const useServerPlaybackStatsByUser = () => {
++export const useServerPlaybackStatsByUser = (filters?: Partial<PlaybackStatsFilters>) => {
 +    const { api } = useApi();
 +
 +    return useQuery({
-+        queryKey: [ 'PlaybackStats', 'server', 'users' ],
-+        queryFn: ({ signal }) => fetchServerPlaybackStatsByUser(api!, { signal }),
++        queryKey: [ 'PlaybackStats', 'server', 'users', filterKey(filters) ],
++        queryFn: ({ signal }) => fetchServerPlaybackStatsByUser(api!, filters, { signal }),
 +        enabled: !!api,
 +        refetchOnMount: false
 +    });
++};
++
++export const usePlaybackOverview = (filters?: Partial<PlaybackStatsFilters>) => {
++    const { api } = useApi();
++
++    return useQuery({
++        queryKey: [ 'PlaybackStats', 'overview', filterKey(filters) ],
++        queryFn: ({ signal }) => fetchPlaybackOverview(api!, filters, { signal }),
++        enabled: !!api,
++        refetchOnMount: false
++    });
++};
++
++export const usePlaybackDaily = (
++    filters?: Partial<PlaybackStatsFilters> & { groupBy?: PlaybackDailyGroupBy }
++) => {
++    const { api } = useApi();
++
++    return useQuery({
++        queryKey: [ 'PlaybackStats', 'daily', filterKey(filters), filters?.groupBy ],
++        queryFn: ({ signal }) => fetchPlaybackDaily(api!, filters, { signal }),
++        enabled: !!api,
++        refetchOnMount: false
++    });
++};
++
++export const usePlaybackHourly = (filters?: Partial<PlaybackStatsFilters>) => {
++    const { api } = useApi();
++
++    return useQuery({
++        queryKey: [ 'PlaybackStats', 'hourly', filterKey(filters) ],
++        queryFn: ({ signal }) => fetchPlaybackHourly(api!, filters, { signal }),
++        enabled: !!api,
++        refetchOnMount: false
++    });
++};
++
++export const usePlaybackItems = (
++    filters?: Partial<PlaybackStatsFilters> & {
++        groupBy?: PlaybackItemGroupBy;
++        limit?: number;
++        includeOther?: boolean;
++    }
++) => {
++    const { api } = useApi();
++
++    return useQuery({
++        queryKey: [
++            'PlaybackStats',
++            'items',
++            filterKey(filters),
++            filters?.groupBy,
++            filters?.limit,
++            filters?.includeOther
++        ],
++        queryFn: ({ signal }) => fetchPlaybackItems(api!, filters, { signal }),
++        enabled: !!api,
++        refetchOnMount: false
++    });
++};
++
++export const usePlaybackDimensions = (
++    dimension: PlaybackDimension,
++    filters?: Partial<PlaybackStatsFilters>
++) => {
++    const { api } = useApi();
++
++    return useQuery({
++        queryKey: [ 'PlaybackStats', 'dimensions', dimension, filterKey(filters) ],
++        queryFn: ({ signal }) => fetchPlaybackDimensions(api!, dimension, filters, { signal }),
++        enabled: !!api,
++        refetchOnMount: false
++    });
++};
++
++export const usePlaybackSessions = (filters?: Partial<PlaybackStatsFilters>) => {
++    const { api } = useApi();
++
++    return useQuery({
++        queryKey: [ 'PlaybackStats', 'sessions', filterKey(filters) ],
++        queryFn: ({ signal }) => fetchPlaybackSessions(api!, filters, { signal }),
++        enabled: !!api,
++        refetchOnMount: false
++    });
++};
++
++export const usePlaybackRecent = (
++    filters?: Partial<PlaybackStatsFilters> & { startIndex?: number; limit?: number }
++) => {
++    const { api } = useApi();
++
++    return useQuery({
++        queryKey: [
++            'PlaybackStats',
++            'recent',
++            filterKey(filters),
++            filters?.startIndex,
++            filters?.limit
++        ],
++        queryFn: ({ signal }) => fetchPlaybackRecent(api!, filters, { signal }),
++        enabled: !!api,
++        refetchOnMount: false
++    });
++};
+diff --git a/src/apps/dashboard/features/playbackStatistics/components/KpiCard.tsx b/src/apps/dashboard/features/playbackStatistics/components/KpiCard.tsx
+new file mode 100644
+index 0000000000..e2a56fe145
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/components/KpiCard.tsx
+@@ -0,0 +1,49 @@
++import React from 'react';
++import Paper from '@mui/material/Paper';
++import Stack from '@mui/material/Stack';
++import Typography from '@mui/material/Typography';
++import TrendingDownIcon from '@mui/icons-material/TrendingDown';
++import TrendingFlatIcon from '@mui/icons-material/TrendingFlat';
++import TrendingUpIcon from '@mui/icons-material/TrendingUp';
++
++import { computeDelta, formatDeltaPercent } from '../utils/periodCompare';
++
++interface KpiCardProps {
++    label: string;
++    value: string;
++    current: number;
++    prior: number;
++    formatAbsolute?: (value: number) => string;
++}
++
++const KpiCard = ({ label, value, current, prior, formatAbsolute }: KpiCardProps) => {
++    const delta = computeDelta(current, prior);
++    const color = delta.direction === 'up'
++        ? 'success.main'
++        : delta.direction === 'down'
++            ? 'error.main'
++            : 'text.secondary';
++    const Icon = delta.direction === 'up'
++        ? TrendingUpIcon
++        : delta.direction === 'down'
++            ? TrendingDownIcon
++            : TrendingFlatIcon;
++
++    return (
++        <Paper sx={{ p: 2, flex: '1 1 160px', minWidth: 140 }}>
++            <Typography variant='body2' color='text.secondary' gutterBottom>
++                {label}
++            </Typography>
++            <Typography variant='h5' sx={{ mb: 0.5 }}>{value}</Typography>
++            <Stack direction='row' spacing={0.5} alignItems='center' sx={{ color }}>
++                <Icon fontSize='small' />
++                <Typography variant='caption' sx={{ color: 'inherit' }}>
++                    {formatDeltaPercent(delta)}
++                    {formatAbsolute ? ` (${formatAbsolute(delta.absolute)})` : ''}
++                </Typography>
++            </Stack>
++        </Paper>
++    );
++};
++
++export default KpiCard;
+diff --git a/src/apps/dashboard/features/playbackStatistics/components/PlaybackStatsFilters.tsx b/src/apps/dashboard/features/playbackStatistics/components/PlaybackStatsFilters.tsx
+new file mode 100644
+index 0000000000..55e122de2e
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/components/PlaybackStatsFilters.tsx
+@@ -0,0 +1,166 @@
++import React from 'react';
++import Box from '@mui/material/Box';
++import Button from '@mui/material/Button';
++import ButtonGroup from '@mui/material/ButtonGroup';
++import Checkbox from '@mui/material/Checkbox';
++import Chip from '@mui/material/Chip';
++import FormControlLabel from '@mui/material/FormControlLabel';
++import MenuItem from '@mui/material/MenuItem';
++import Paper from '@mui/material/Paper';
++import Stack from '@mui/material/Stack';
++import TextField from '@mui/material/TextField';
++import Typography from '@mui/material/Typography';
++import globalize from 'lib/globalize';
++
++import { usePlaybackStatsFilters } from '../context/PlaybackStatsFilterContext';
++import { dayCountInclusive } from '../utils/periodCompare';
++
++interface PlaybackStatsFiltersProps {
++    availableMediaTypes: string[];
++    availableClients: string[];
++    userOptions: Array<{ id: string; name: string }>;
++    onExport?: () => void;
++}
++
++const PlaybackStatsFiltersBar = ({
++    availableMediaTypes,
++    availableClients,
++    userOptions,
++    onExport
++}: PlaybackStatsFiltersProps) => {
++    const {
++        filters,
++        setPresetDays,
++        setDateRange,
++        setUserIds,
++        toggleMediaType,
++        toggleClient,
++        setActivityOnly,
++        setMetric,
++        clearFilters
++    } = usePlaybackStatsFilters();
++
++    const days = dayCountInclusive(filters.startDate, filters.endDate);
++
++    return (
++        <Paper sx={{ p: 2, mb: 2 }}>
++            <Stack spacing={2}>
++                <Stack
++                    direction={{ xs: 'column', md: 'row' }}
++                    spacing={2}
++                    alignItems={{ md: 'center' }}
++                    flexWrap='wrap'
++                    useFlexGap
++                >
++                    <ButtonGroup size='small' variant='outlined'>
++                        <Button onClick={() => setPresetDays(7)}>7d</Button>
++                        <Button onClick={() => setPresetDays(28)}>28d</Button>
++                        <Button onClick={() => setPresetDays(90)}>90d</Button>
++                    </ButtonGroup>
++
++                    <TextField
++                        label={globalize.translate('PlaybackStatsStartDate')}
++                        type='date'
++                        size='small'
++                        value={filters.startDate}
++                        onChange={event => setDateRange(event.target.value, filters.endDate)}
++                        InputLabelProps={{ shrink: true }}
++                    />
++                    <TextField
++                        label={globalize.translate('LabelEndDate')}
++                        type='date'
++                        size='small'
++                        value={filters.endDate}
++                        onChange={event => setDateRange(filters.startDate, event.target.value)}
++                        InputLabelProps={{ shrink: true }}
++                    />
++                    <Typography variant='body2' color='text.secondary'>
++                        {days} {globalize.translate('PlaybackStatsDays')}
++                    </Typography>
++
++                    <TextField
++                        select
++                        size='small'
++                        label={globalize.translate('PlaybackStatsMetric')}
++                        value={filters.metric}
++                        onChange={event => setMetric(event.target.value as 'PlayTime' | 'PlayCount')}
++                        sx={{ minWidth: 140 }}
++                    >
++                        <MenuItem value='PlayTime'>
++                            {globalize.translate('LabelWatchTime')}
++                        </MenuItem>
++                        <MenuItem value='PlayCount'>
++                            {globalize.translate('LabelPlayCount')}
++                        </MenuItem>
++                    </TextField>
++
++                    <TextField
++                        select
++                        size='small'
++                        label={globalize.translate('LabelUser')}
++                        value={filters.userIds[0] || ''}
++                        onChange={event => {
++                            const value = event.target.value;
++                            setUserIds(value ? [ value ] : []);
++                        }}
++                        sx={{ minWidth: 180 }}
++                    >
++                        <MenuItem value=''>
++                            {globalize.translate('All')}
++                        </MenuItem>
++                        {userOptions.map(user => (
++                            <MenuItem key={user.id} value={user.id}>{user.name}</MenuItem>
++                        ))}
++                    </TextField>
++
++                    <FormControlLabel
++                        control={(
++                            <Checkbox
++                                checked={filters.activityOnly}
++                                onChange={event => setActivityOnly(event.target.checked)}
++                            />
++                        )}
++                        label={globalize.translate('PlaybackStatsActivityOnly')}
++                    />
++
++                    <Box sx={{ flexGrow: 1 }} />
++                    <Button size='small' onClick={clearFilters}>
++                        {globalize.translate('PlaybackStatsClearFilters')}
++                    </Button>
++                    {onExport && (
++                        <Button size='small' variant='contained' onClick={onExport}>
++                            {globalize.translate('PlaybackStatsExportCsv')}
++                        </Button>
++                    )}
++                </Stack>
++
++                {(availableMediaTypes.length > 0 || availableClients.length > 0) && (
++                    <Stack direction='row' spacing={1} flexWrap='wrap' useFlexGap>
++                        {availableMediaTypes.map(mediaType => (
++                            <Chip
++                                key={mediaType}
++                                label={mediaType}
++                                size='small'
++                                color={filters.mediaTypes.includes(mediaType) ? 'primary' : 'default'}
++                                variant={filters.mediaTypes.includes(mediaType) ? 'filled' : 'outlined'}
++                                onClick={() => toggleMediaType(mediaType)}
++                            />
++                        ))}
++                        {availableClients.map(client => (
++                            <Chip
++                                key={client}
++                                label={client}
++                                size='small'
++                                color={filters.clients.includes(client) ? 'secondary' : 'default'}
++                                variant={filters.clients.includes(client) ? 'filled' : 'outlined'}
++                                onClick={() => toggleClient(client)}
++                            />
++                        ))}
++                    </Stack>
++                )}
++            </Stack>
++        </Paper>
++    );
++};
++
++export default PlaybackStatsFiltersBar;
+diff --git a/src/apps/dashboard/features/playbackStatistics/components/charts/CalendarHeatmap.tsx b/src/apps/dashboard/features/playbackStatistics/components/charts/CalendarHeatmap.tsx
+new file mode 100644
+index 0000000000..d23e9c9a58
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/components/charts/CalendarHeatmap.tsx
+@@ -0,0 +1,92 @@
++import React, { useMemo } from 'react';
++import Box from '@mui/material/Box';
++import Tooltip from '@mui/material/Tooltip';
++import Typography from '@mui/material/Typography';
++import { alpha, useTheme } from '@mui/material/styles';
++
++import type { PlaybackDailyRow } from '../../types';
++import { formatTicks } from '../../utils/formatTicks';
++
++interface CalendarHeatmapProps {
++    rows: PlaybackDailyRow[];
++    startDate: string;
++    endDate: string;
++    metric?: 'TotalTicks' | 'PlayCount';
++}
++
++const toUtcDate = (value: string) => new Date(`${value.slice(0, 10)}T00:00:00Z`);
++
++const CalendarHeatmap = ({
++    rows,
++    startDate,
++    endDate,
++    metric = 'TotalTicks'
++}: CalendarHeatmapProps) => {
++    const theme = useTheme();
++    const { days, max } = useMemo(() => {
++        const totals = new Map<string, number>();
++        for (const row of rows) {
++            const key = row.Date.slice(0, 10);
++            const value = metric === 'PlayCount' ? row.PlayCount : row.TotalTicks;
++            totals.set(key, (totals.get(key) ?? 0) + value);
++        }
++
++        const start = toUtcDate(startDate);
++        const end = toUtcDate(endDate);
++        const list: Array<{ date: string; value: number }> = [];
++        let localMax = 0;
++        for (let cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
++            const key = cursor.toISOString().slice(0, 10);
++            const value = totals.get(key) ?? 0;
++            localMax = Math.max(localMax, value);
++            list.push({ date: key, value });
++        }
++
++        return { days: list, max: localMax };
++    }, [ endDate, metric, rows, startDate ]);
++
++    const startDow = toUtcDate(startDate).getUTCDay();
++
++    return (
++        <Box>
++            <Typography variant='subtitle2' gutterBottom>
++                Activity calendar
++            </Typography>
++            <Box
++                sx={{
++                    display: 'grid',
++                    gridTemplateColumns: 'repeat(7, 16px)',
++                    gap: 0.5
++                }}
++            >
++                {Array.from({ length: startDow }, (_, i) => (
++                    <Box key={`pad-${i}`} />
++                ))}
++                {days.map(day => {
++                    const intensity = max > 0 ? day.value / max : 0;
++                    const bg = intensity === 0
++                        ? alpha(theme.palette.action.hover, 0.35)
++                        : alpha(theme.palette.secondary.main, 0.2 + intensity * 0.8);
++                    const title = metric === 'PlayCount'
++                        ? `${day.date}: ${day.value} plays`
++                        : `${day.date}: ${formatTicks(day.value)}`;
++
++                    return (
++                        <Tooltip key={day.date} title={title}>
++                            <Box
++                                sx={{
++                                    width: 16,
++                                    height: 16,
++                                    borderRadius: 0.5,
++                                    bgcolor: bg
++                                }}
++                            />
++                        </Tooltip>
++                    );
++                })}
++            </Box>
++        </Box>
++    );
++};
++
++export default CalendarHeatmap;
+diff --git a/src/apps/dashboard/features/playbackStatistics/components/charts/DayHourHeatmap.tsx b/src/apps/dashboard/features/playbackStatistics/components/charts/DayHourHeatmap.tsx
+new file mode 100644
+index 0000000000..719bf58dc3
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/components/charts/DayHourHeatmap.tsx
+@@ -0,0 +1,87 @@
++import React, { useMemo } from 'react';
++import Box from '@mui/material/Box';
++import Tooltip from '@mui/material/Tooltip';
++import Typography from '@mui/material/Typography';
++import { alpha, useTheme } from '@mui/material/styles';
++
++import type { PlaybackHourlyRow } from '../../types';
++import { formatTicks } from '../../utils/formatTicks';
++
++const DAY_LABELS = [ 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat' ];
++
++interface DayHourHeatmapProps {
++    rows: PlaybackHourlyRow[];
++    metric?: 'TotalTicks' | 'PlayCount';
++}
++
++const DayHourHeatmap = ({ rows, metric = 'TotalTicks' }: DayHourHeatmapProps) => {
++    const theme = useTheme();
++    const { grid, max } = useMemo(() => {
++        const map = new Map<string, number>();
++        let localMax = 0;
++        for (const row of rows) {
++            const value = metric === 'PlayCount' ? row.PlayCount : row.TotalTicks;
++            map.set(`${row.DayOfWeek}-${row.Hour}`, value);
++            localMax = Math.max(localMax, value);
++        }
++
++        return { grid: map, max: localMax };
++    }, [ metric, rows ]);
++
++    return (
++        <Box>
++            <Box
++                sx={{
++                    display: 'grid',
++                    gridTemplateColumns: '40px repeat(24, minmax(10px, 1fr))',
++                    gap: 0.4,
++                    alignItems: 'center'
++                }}
++            >
++                <Box />
++                {Array.from({ length: 24 }, (_, hour) => (
++                    <Typography
++                        key={`h-${hour}`}
++                        variant='caption'
++                        color='text.secondary'
++                        sx={{ textAlign: 'center', fontSize: '0.65rem' }}
++                    >
++                        {hour % 3 === 0 ? hour : ''}
++                    </Typography>
++                ))}
++                {DAY_LABELS.map((label, day) => (
++                    <React.Fragment key={label}>
++                        <Typography variant='caption' color='text.secondary'>
++                            {label}
++                        </Typography>
++                        {Array.from({ length: 24 }, (_, hour) => {
++                            const value = grid.get(`${day}-${hour}`) ?? 0;
++                            const intensity = max > 0 ? value / max : 0;
++                            const bg = intensity === 0
++                                ? alpha(theme.palette.action.hover, 0.35)
++                                : alpha(theme.palette.primary.main, 0.15 + intensity * 0.85);
++                            const title = metric === 'PlayCount'
++                                ? `${label} ${hour}:00 — ${value} plays`
++                                : `${label} ${hour}:00 — ${formatTicks(value)}`;
++
++                            return (
++                                <Tooltip key={`${day}-${hour}`} title={title}>
++                                    <Box
++                                        sx={{
++                                            aspectRatio: '1',
++                                            borderRadius: 0.5,
++                                            bgcolor: bg,
++                                            minHeight: 14
++                                        }}
++                                    />
++                                </Tooltip>
++                            );
++                        })}
++                    </React.Fragment>
++                ))}
++            </Box>
++        </Box>
++    );
++};
++
++export default DayHourHeatmap;
+diff --git a/src/apps/dashboard/features/playbackStatistics/components/charts/MixAreaChart.tsx b/src/apps/dashboard/features/playbackStatistics/components/charts/MixAreaChart.tsx
+new file mode 100644
+index 0000000000..599098080c
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/components/charts/MixAreaChart.tsx
+@@ -0,0 +1,94 @@
++import React, { useMemo } from 'react';
++import Box from '@mui/material/Box';
++import Typography from '@mui/material/Typography';
++import { useTheme } from '@mui/material/styles';
++import { LineChart } from '@mui/x-charts/LineChart';
++
++import type { PlaybackDailyRow } from '../../types';
++import { formatTicks, ticksToMinutes } from '../../utils/formatTicks';
++
++interface MixAreaChartProps {
++    rows: PlaybackDailyRow[];
++    metric?: 'PlayTime' | 'PlayCount';
++    activityOnly?: boolean;
++    height?: number;
++}
++
++const PALETTE = [ 'primary', 'secondary', 'success', 'warning', 'info', 'error' ] as const;
++
++const MixAreaChart = ({
++    rows,
++    metric = 'PlayTime',
++    activityOnly = true,
++    height = 320
++}: MixAreaChartProps) => {
++    const theme = useTheme();
++
++    const { dates, series } = useMemo(() => {
++        const mediaTypes = Array.from(new Set(rows.map(row => row.MediaType).filter(Boolean))) as string[];
++        const byDate = new Map<string, Map<string, number>>();
++
++        for (const row of rows) {
++            const date = row.Date.slice(0, 10);
++            const mediaType = row.MediaType || 'Unknown';
++            const value = metric === 'PlayCount' ? row.PlayCount : ticksToMinutes(row.TotalTicks);
++            if (!byDate.has(date)) {
++                byDate.set(date, new Map());
++            }
++
++            const dayMap = byDate.get(date)!;
++            dayMap.set(mediaType, (dayMap.get(mediaType) ?? 0) + value);
++        }
++
++        let dateKeys = Array.from(byDate.keys()).sort();
++        if (activityOnly) {
++            dateKeys = dateKeys.filter(date => {
++                const dayMap = byDate.get(date)!;
++                return Array.from(dayMap.values()).some(value => value > 0);
++            });
++        }
++
++        return {
++            dates: dateKeys,
++            series: mediaTypes.map((mediaType, index) => {
++                const colorKey = PALETTE[index % PALETTE.length];
++                return {
++                    id: mediaType,
++                    label: mediaType,
++                    data: dateKeys.map(date => byDate.get(date)?.get(mediaType) ?? 0),
++                    area: true,
++                    stack: 'total',
++                    color: theme.palette[colorKey].main,
++                    showMark: false
++                };
++            })
++        };
++    }, [ activityOnly, metric, rows, theme.palette ]);
++
++    if (dates.length === 0 || series.length === 0) {
++        return (
++            <Typography variant='body2' color='text.secondary'>
++                —
++            </Typography>
++        );
++    }
++
++    return (
++        <Box sx={{ width: '100%', height }}>
++            <LineChart
++                xAxis={[{ data: dates, scaleType: 'point' }]}
++                series={series.map(item => ({
++                    ...item,
++                    valueFormatter: (value: number | null) => (
++                        metric === 'PlayCount'
++                            ? String(value ?? 0)
++                            : formatTicks((value ?? 0) * 60 * 10_000_000)
++                    )
++                }))}
++                margin={{ left: 60, right: 16, top: 24, bottom: 40 }}
++            />
++        </Box>
++    );
++};
++
++export default MixAreaChart;
+diff --git a/src/apps/dashboard/features/playbackStatistics/components/charts/RankedBarList.tsx b/src/apps/dashboard/features/playbackStatistics/components/charts/RankedBarList.tsx
+new file mode 100644
+index 0000000000..9b6dee6ac5
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/components/charts/RankedBarList.tsx
+@@ -0,0 +1,90 @@
++import React, { useMemo } from 'react';
++import Box from '@mui/material/Box';
++import Stack from '@mui/material/Stack';
++import Typography from '@mui/material/Typography';
++import { useTheme } from '@mui/material/styles';
++import { BarChart } from '@mui/x-charts/BarChart';
++
++export interface RankedBarItem {
++    id: string;
++    label: string;
++    value: number;
++    secondaryLabel?: string;
++}
++
++interface RankedBarListProps {
++    items: RankedBarItem[];
++    height?: number;
++    valueFormatter?: (value: number) => string;
++    onItemClick?: (id: string) => void;
++    layout?: 'horizontal' | 'vertical';
++}
++
++const RankedBarList = ({
++    items,
++    height = 280,
++    valueFormatter,
++    onItemClick,
++    layout = 'horizontal'
++}: RankedBarListProps) => {
++    const theme = useTheme();
++    const chartItems = useMemo(() => items.slice(0, 12), [ items ]);
++
++    if (chartItems.length === 0) {
++        return (
++            <Typography variant='body2' color='text.secondary'>
++                —
++            </Typography>
++        );
++    }
++
++    return (
++        <Box sx={{ width: '100%', height }}>
++            <BarChart
++                layout={layout}
++                margin={{ left: layout === 'horizontal' ? 120 : 40, right: 16, top: 16, bottom: 40 }}
++                series={[{
++                    data: chartItems.map(item => item.value),
++                    color: theme.palette.primary.main,
++                    valueFormatter: valueFormatter
++                        ? (value: number | null) => valueFormatter(value ?? 0)
++                        : undefined
++                }]}
++                {...(layout === 'horizontal'
++                    ? {
++                        yAxis: [{
++                            data: chartItems.map(item => item.label),
++                            scaleType: 'band' as const,
++                            width: 110
++                        }]
++                    }
++                    : {
++                        xAxis: [{
++                            data: chartItems.map(item => item.label),
++                            scaleType: 'band' as const
++                        }]
++                    })}
++                onItemClick={onItemClick ? (_event, item) => {
++                    const row = chartItems[item.dataIndex];
++                    if (row) {
++                        onItemClick(row.id);
++                    }
++                } : undefined}
++                slotProps={{
++                    legend: { hidden: true }
++                }}
++            />
++            {chartItems.some(item => item.secondaryLabel) && (
++                <Stack spacing={0.5} sx={{ mt: 1 }}>
++                    {chartItems.map(item => (
++                        <Typography key={item.id} variant='caption' color='text.secondary'>
++                            {item.label}: {item.secondaryLabel}
++                        </Typography>
++                    ))}
++                </Stack>
++            )}
++        </Box>
++    );
++};
++
++export default RankedBarList;
+diff --git a/src/apps/dashboard/features/playbackStatistics/components/charts/StackedDailyChart.tsx b/src/apps/dashboard/features/playbackStatistics/components/charts/StackedDailyChart.tsx
+new file mode 100644
+index 0000000000..2f2a1ec436
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/components/charts/StackedDailyChart.tsx
+@@ -0,0 +1,105 @@
++import React, { useMemo } from 'react';
++import Box from '@mui/material/Box';
++import Typography from '@mui/material/Typography';
++import { useTheme } from '@mui/material/styles';
++import { BarChart } from '@mui/x-charts/BarChart';
++
++import type { PlaybackDailyRow } from '../../types';
++import { formatTicks, ticksToMinutes } from '../../utils/formatTicks';
++
++interface StackedDailyChartProps {
++    rows: PlaybackDailyRow[];
++    seriesKey: 'UserId' | 'MediaType';
++    labelResolver: (key: string) => string;
++    metric?: 'PlayTime' | 'PlayCount';
++    activityOnly?: boolean;
++    height?: number;
++    onSeriesClick?: (key: string) => void;
++}
++
++const PALETTE = [ 'primary', 'secondary', 'success', 'warning', 'info', 'error' ] as const;
++
++const StackedDailyChart = ({
++    rows,
++    seriesKey,
++    labelResolver,
++    metric = 'PlayTime',
++    activityOnly = true,
++    height = 360,
++    onSeriesClick
++}: StackedDailyChartProps) => {
++    const theme = useTheme();
++
++    const { dates, series } = useMemo(() => {
++        const keys = Array.from(new Set(
++            rows.map(row => (seriesKey === 'UserId' ? row.UserId : row.MediaType)).filter(Boolean)
++        )) as string[];
++        const byDate = new Map<string, Map<string, number>>();
++
++        for (const row of rows) {
++            const date = row.Date.slice(0, 10);
++            const key = (seriesKey === 'UserId' ? row.UserId : row.MediaType) || 'Unknown';
++            const value = metric === 'PlayCount' ? row.PlayCount : ticksToMinutes(row.TotalTicks);
++            if (!byDate.has(date)) {
++                byDate.set(date, new Map());
++            }
++
++            const dayMap = byDate.get(date)!;
++            dayMap.set(key, (dayMap.get(key) ?? 0) + value);
++        }
++
++        let dateKeys = Array.from(byDate.keys()).sort();
++        if (activityOnly) {
++            dateKeys = dateKeys.filter(date => {
++                const dayMap = byDate.get(date)!;
++                return Array.from(dayMap.values()).some(value => value > 0);
++            });
++        }
++
++        return {
++            dates: dateKeys,
++            series: keys.slice(0, 12).map((key, index) => {
++                const colorKey = PALETTE[index % PALETTE.length];
++                return {
++                    id: key,
++                    label: labelResolver(key),
++                    data: dateKeys.map(date => byDate.get(date)?.get(key) ?? 0),
++                    stack: 'total',
++                    color: theme.palette[colorKey].main,
++                    valueFormatter: (value: number | null) => (
++                        metric === 'PlayCount'
++                            ? String(value ?? 0)
++                            : formatTicks((value ?? 0) * 60 * 10_000_000)
++                    )
++                };
++            })
++        };
++    }, [ activityOnly, labelResolver, metric, rows, seriesKey, theme.palette ]);
++
++    if (dates.length === 0 || series.length === 0) {
++        return (
++            <Typography variant='body2' color='text.secondary'>
++                —
++            </Typography>
++        );
++    }
++
++    return (
++        <Box sx={{ width: '100%', height }}>
++            <BarChart
++                xAxis={[{ data: dates, scaleType: 'band' }]}
++                series={series}
++                margin={{ left: 60, right: 16, top: 24, bottom: 50 }}
++                onItemClick={onSeriesClick ? (_event, item) => {
++                    const selected = series.find(entry => entry.id === String(item.seriesId))
++                        ?? series[item.dataIndex];
++                    if (selected) {
++                        onSeriesClick(selected.id);
++                    }
++                } : undefined}
++            />
++        </Box>
++    );
++};
++
++export default StackedDailyChart;
+diff --git a/src/apps/dashboard/features/playbackStatistics/components/tabs/BreakdownTab.tsx b/src/apps/dashboard/features/playbackStatistics/components/tabs/BreakdownTab.tsx
+new file mode 100644
+index 0000000000..088a0e7af1
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/components/tabs/BreakdownTab.tsx
+@@ -0,0 +1,173 @@
++import React, { useMemo, useState } from 'react';
++import Alert from '@mui/material/Alert';
++import Box from '@mui/material/Box';
++import Checkbox from '@mui/material/Checkbox';
++import CircularProgress from '@mui/material/CircularProgress';
++import FormControlLabel from '@mui/material/FormControlLabel';
++import MenuItem from '@mui/material/MenuItem';
++import Paper from '@mui/material/Paper';
++import Stack from '@mui/material/Stack';
++import TextField from '@mui/material/TextField';
++import Typography from '@mui/material/Typography';
++import { PieChart } from '@mui/x-charts/PieChart';
++import { useTheme } from '@mui/material/styles';
++import globalize from 'lib/globalize';
++
++import { usePlaybackDimensions, usePlaybackItems } from '../../api/usePlaybackStats';
++import { usePlaybackStatsFilters } from '../../context/PlaybackStatsFilterContext';
++import type { PlaybackItemGroupBy } from '../../types';
++import { formatTicks } from '../../utils/formatTicks';
++import RankedBarList from '../charts/RankedBarList';
++
++const BreakdownTab = () => {
++    const theme = useTheme();
++    const { apiFilters, filters } = usePlaybackStatsFilters();
++    const [ groupBy, setGroupBy ] = useState<PlaybackItemGroupBy>('Item');
++    const [ limit, setLimit ] = useState(10);
++    const [ includeOther, setIncludeOther ] = useState(true);
++    const items = usePlaybackItems({ ...apiFilters, groupBy, limit, includeOther });
++    const genres = usePlaybackDimensions('Genre', apiFilters);
++
++    const byMediaType = useMemo(() => {
++        const map = new Map<string, typeof items.data>();
++        for (const row of items.data ?? []) {
++            const list = map.get(row.MediaType) ?? [];
++            list.push(row);
++            map.set(row.MediaType, list);
++        }
++
++        return Array.from(map.entries()).sort(([ a ], [ b ]) => a.localeCompare(b));
++    }, [ items.data ]);
++
++    if (items.isLoading || genres.isLoading) {
++        return (
++            <Box display='flex' justifyContent='center' py={6}>
++                <CircularProgress />
++            </Box>
++        );
++    }
++
++    if (items.isError) {
++        return <Alert severity='error'>{globalize.translate('PlaybackStatsLoadError')}</Alert>;
++    }
++
++    return (
++        <Stack spacing={2}>
++            <Stack direction='row' spacing={2} flexWrap='wrap' useFlexGap alignItems='center'>
++                <TextField
++                    select
++                    size='small'
++                    label={globalize.translate('PlaybackStatsGroupBy')}
++                    value={groupBy}
++                    onChange={event => setGroupBy(event.target.value as PlaybackItemGroupBy)}
++                    sx={{ minWidth: 160 }}
++                >
++                    <MenuItem value='Item'>{globalize.translate('PlaybackStatsByItem')}</MenuItem>
++                    <MenuItem value='Series'>{globalize.translate('PlaybackStatsBySeries')}</MenuItem>
++                </TextField>
++                <TextField
++                    select
++                    size='small'
++                    label={globalize.translate('PlaybackStatsItemLimit')}
++                    value={limit}
++                    onChange={event => setLimit(Number(event.target.value))}
++                    sx={{ minWidth: 120 }}
++                >
++                    {[ 5, 10, 15, 20 ].map(value => (
++                        <MenuItem key={value} value={value}>{value}</MenuItem>
++                    ))}
++                </TextField>
++                <FormControlLabel
++                    control={(
++                        <Checkbox
++                            checked={includeOther}
++                            onChange={event => setIncludeOther(event.target.checked)}
++                        />
++                    )}
++                    label={globalize.translate('PlaybackStatsIncludeOther')}
++                />
++            </Stack>
++
++            {byMediaType.length === 0 && (
++                <Alert severity='info'>{globalize.translate('PlaybackStatsEmpty')}</Alert>
++            )}
++
++            {byMediaType.map(([ mediaType, rows ]) => {
++                const playSlices = (rows ?? []).map((row, index) => ({
++                    id: index,
++                    value: row.PlayCount,
++                    label: row.ItemName
++                }));
++                const timeItems = (rows ?? []).map(row => ({
++                    id: row.ItemId || row.ItemName,
++                    label: row.ItemName,
++                    value: filters.metric === 'PlayCount' ? row.PlayCount : row.TotalTicks,
++                    secondaryLabel: `${row.PlayCount} · ${formatTicks(row.TotalTicks)}`
++                }));
++
++                return (
++                    <Paper key={mediaType} sx={{ p: 2 }}>
++                        <Typography variant='h6' gutterBottom>{mediaType}</Typography>
++                        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
++                            <Box sx={{ flex: 1 }}>
++                                <Typography variant='subtitle2' gutterBottom>
++                                    {globalize.translate('LabelPlayCount')}
++                                </Typography>
++                                {playSlices.filter(s => s.value > 0).length >= 3 ? (
++                                    <PieChart
++                                        series={[{ data: playSlices }]}
++                                        height={240}
++                                        colors={[
++                                            theme.palette.primary.main,
++                                            theme.palette.secondary.main,
++                                            theme.palette.warning.main,
++                                            theme.palette.info.main,
++                                            theme.palette.success.main
++                                        ]}
++                                    />
++                                ) : (
++                                    <RankedBarList
++                                        items={timeItems}
++                                        valueFormatter={filters.metric === 'PlayCount' ? String : formatTicks}
++                                        height={240}
++                                    />
++                                )}
++                            </Box>
++                            <Box sx={{ flex: 1 }}>
++                                <Typography variant='subtitle2' gutterBottom>
++                                    {globalize.translate('LabelWatchTime')}
++                                </Typography>
++                                <RankedBarList
++                                    items={(rows ?? []).map(row => ({
++                                        id: `${row.ItemId || row.ItemName}-time`,
++                                        label: row.ItemName,
++                                        value: row.TotalTicks
++                                    }))}
++                                    valueFormatter={formatTicks}
++                                    height={240}
++                                />
++                            </Box>
++                        </Stack>
++                    </Paper>
++                );
++            })}
++
++            <Paper sx={{ p: 2 }}>
++                <Typography variant='subtitle1' gutterBottom>
++                    {globalize.translate('Genre')}
++                </Typography>
++                <RankedBarList
++                    items={(genres.data ?? []).slice(0, 15).map(row => ({
++                        id: row.Key,
++                        label: row.Key || 'Unknown',
++                        value: filters.metric === 'PlayCount' ? row.PlayCount : row.TotalTicks
++                    }))}
++                    valueFormatter={filters.metric === 'PlayCount' ? String : formatTicks}
++                    height={320}
++                />
++            </Paper>
++        </Stack>
++    );
++};
++
++export default BreakdownTab;
+diff --git a/src/apps/dashboard/features/playbackStatistics/components/tabs/DeliveryTab.tsx b/src/apps/dashboard/features/playbackStatistics/components/tabs/DeliveryTab.tsx
+new file mode 100644
+index 0000000000..8a3cdb7a29
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/components/tabs/DeliveryTab.tsx
+@@ -0,0 +1,84 @@
++import React from 'react';
++import Alert from '@mui/material/Alert';
++import Box from '@mui/material/Box';
++import CircularProgress from '@mui/material/CircularProgress';
++import Paper from '@mui/material/Paper';
++import Stack from '@mui/material/Stack';
++import Typography from '@mui/material/Typography';
++import globalize from 'lib/globalize';
++
++import { usePlaybackDimensions } from '../../api/usePlaybackStats';
++import { usePlaybackStatsFilters } from '../../context/PlaybackStatsFilterContext';
++import { formatTicks } from '../../utils/formatTicks';
++import RankedBarList from '../charts/RankedBarList';
++
++const DeliveryTab = () => {
++    const { apiFilters, filters, toggleClient, togglePlaybackMethod } = usePlaybackStatsFilters();
++    const methods = usePlaybackDimensions('Method', apiFilters);
++    const clients = usePlaybackDimensions('Client', apiFilters);
++    const devices = usePlaybackDimensions('Device', apiFilters);
++
++    const isLoading = methods.isLoading || clients.isLoading || devices.isLoading;
++    const isError = methods.isError || clients.isError || devices.isError;
++
++    if (isLoading) {
++        return (
++            <Box display='flex' justifyContent='center' py={6}>
++                <CircularProgress />
++            </Box>
++        );
++    }
++
++    if (isError) {
++        return <Alert severity='error'>{globalize.translate('PlaybackStatsLoadError')}</Alert>;
++    }
++
++    const toItems = (rows: typeof methods.data) => (rows ?? []).map(row => ({
++        id: row.Key,
++        label: row.Key || 'Unknown',
++        value: filters.metric === 'PlayCount' ? row.PlayCount : row.TotalTicks,
++        secondaryLabel: `${row.PlayCount} · ${formatTicks(row.TotalTicks)}`
++    }));
++
++    return (
++        <Stack spacing={2}>
++            <Paper sx={{ p: 2 }}>
++                <Typography variant='subtitle1' gutterBottom>
++                    {globalize.translate('PlaybackStatsPlaybackMethod')}
++                </Typography>
++                <RankedBarList
++                    items={toItems(methods.data)}
++                    valueFormatter={filters.metric === 'PlayCount' ? String : formatTicks}
++                    onItemClick={togglePlaybackMethod}
++                    height={280}
++                />
++            </Paper>
++
++            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
++                <Paper sx={{ p: 2, flex: 1 }}>
++                    <Typography variant='subtitle1' gutterBottom>
++                        {globalize.translate('PlaybackStatsClients')}
++                    </Typography>
++                    <RankedBarList
++                        items={toItems(clients.data)}
++                        valueFormatter={filters.metric === 'PlayCount' ? String : formatTicks}
++                        onItemClick={toggleClient}
++                        height={300}
++                    />
++                </Paper>
++                <Paper sx={{ p: 2, flex: 1 }}>
++                    <Typography variant='subtitle1' gutterBottom>
++                        {globalize.translate('HeaderDevices')}
++                    </Typography>
++                    <RankedBarList
++                        items={toItems(devices.data)}
++                        valueFormatter={filters.metric === 'PlayCount' ? String : formatTicks}
++                        height={300}
++                    />
++                </Paper>
++            </Stack>
++        </Stack>
++    );
++};
++
++export default DeliveryTab;
+diff --git a/src/apps/dashboard/features/playbackStatistics/components/tabs/OverviewTab.tsx b/src/apps/dashboard/features/playbackStatistics/components/tabs/OverviewTab.tsx
+new file mode 100644
+index 0000000000..93774f3562
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/components/tabs/OverviewTab.tsx
+@@ -0,0 +1,175 @@
++import React, { useMemo } from 'react';
++import Alert from '@mui/material/Alert';
++import Box from '@mui/material/Box';
++import CircularProgress from '@mui/material/CircularProgress';
++import Paper from '@mui/material/Paper';
++import Stack from '@mui/material/Stack';
++import Typography from '@mui/material/Typography';
++import { PieChart } from '@mui/x-charts/PieChart';
++import { useTheme } from '@mui/material/styles';
++import globalize from 'lib/globalize';
++
++import {
++    usePlaybackDaily,
++    usePlaybackOverview,
++    useServerPlaybackStats,
++    useServerPlaybackStatsByUser
++} from '../../api/usePlaybackStats';
++import { usePlaybackStatsFilters } from '../../context/PlaybackStatsFilterContext';
++import { buildUserRows } from '../../utils/buildUserRows';
++import { formatTicks } from '../../utils/formatTicks';
++import CalendarHeatmap from '../charts/CalendarHeatmap';
++import MixAreaChart from '../charts/MixAreaChart';
++import RankedBarList from '../charts/RankedBarList';
++import KpiCard from '../KpiCard';
++
++interface OverviewTabProps {
++    userNameById: Record<string, string>;
++}
++
++const OverviewTab = ({ userNameById }: OverviewTabProps) => {
++    const theme = useTheme();
++    const { apiFilters, filters, toggleUserId } = usePlaybackStatsFilters();
++    const overview = usePlaybackOverview(apiFilters);
++    const mediaStats = useServerPlaybackStats(apiFilters);
++    const userStats = useServerPlaybackStatsByUser(apiFilters);
++    const daily = usePlaybackDaily({ ...apiFilters, groupBy: 'MediaType' });
++    const dailyForCalendar = usePlaybackDaily({ ...apiFilters, groupBy: 'None' });
++
++    const { userRows } = useMemo(() => buildUserRows(userStats.data), [ userStats.data ]);
++    const isLoading = overview.isLoading || mediaStats.isLoading || userStats.isLoading || daily.isLoading;
++    const isError = overview.isError || mediaStats.isError || userStats.isError || daily.isError;
++
++    if (isLoading) {
++        return (
++            <Box display='flex' justifyContent='center' py={6}>
++                <CircularProgress />
++            </Box>
++        );
++    }
++
++    if (isError || !overview.data) {
++        return <Alert severity='error'>{globalize.translate('PlaybackStatsLoadError')}</Alert>;
++    }
++
++    const { Current, Prior } = overview.data;
++    const pieData = (mediaStats.data ?? [])
++        .filter(row => row.TotalTicks > 0)
++        .map((row, index) => ({
++            id: index,
++            value: row.TotalTicks,
++            label: row.MediaType
++        }));
++
++    return (
++        <Stack spacing={2}>
++            <Stack direction='row' spacing={2} flexWrap='wrap' useFlexGap>
++                <KpiCard
++                    label={globalize.translate('LabelWatchTime')}
++                    value={formatTicks(Current.TotalTicks)}
++                    current={Current.TotalTicks}
++                    prior={Prior.TotalTicks}
++                    formatAbsolute={formatTicks}
++                />
++                <KpiCard
++                    label={globalize.translate('LabelPlayCount')}
++                    value={String(Current.PlayCount)}
++                    current={Current.PlayCount}
++                    prior={Prior.PlayCount}
++                />
++                <KpiCard
++                    label={globalize.translate('PlaybackStatsActiveUsers')}
++                    value={String(Current.ActiveUsers ?? 0)}
++                    current={Current.ActiveUsers ?? 0}
++                    prior={Prior.ActiveUsers ?? 0}
++                />
++                <KpiCard
++                    label={globalize.translate('PlaybackStatsAvgSession')}
++                    value={formatTicks(Current.AvgSessionTicks)}
++                    current={Current.AvgSessionTicks}
++                    prior={Prior.AvgSessionTicks}
++                    formatAbsolute={formatTicks}
++                />
++                <KpiCard
++                    label={globalize.translate('PlaybackStatsDirectPlay')}
++                    value={`${Current.DirectPlayPercent ?? 0}%`}
++                    current={Current.DirectPlayPercent ?? 0}
++                    prior={Prior.DirectPlayPercent ?? 0}
++                />
++            </Stack>
++
++            <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2}>
++                <Paper sx={{ p: 2, flex: 2 }}>
++                    <Typography variant='subtitle1' gutterBottom>
++                        {globalize.translate('PlaybackStatsMediaMix')}
++                    </Typography>
++                    <MixAreaChart
++                        rows={daily.data ?? []}
++                        metric={filters.metric}
++                        activityOnly={filters.activityOnly}
++                    />
++                </Paper>
++                <Paper sx={{ p: 2, flex: 1 }}>
++                    <Typography variant='subtitle1' gutterBottom>
++                        {globalize.translate('LabelMediaType')}
++                    </Typography>
++                    {pieData.length >= 3 ? (
++                        <PieChart
++                            series={[{
++                                data: pieData,
++                                valueFormatter: item => formatTicks(Number(item.value))
++                            }]}
++                            height={260}
++                            colors={[
++                                theme.palette.primary.main,
++                                theme.palette.secondary.main,
++                                theme.palette.success.main,
++                                theme.palette.warning.main,
++                                theme.palette.info.main
++                            ]}
++                        />
++                    ) : (
++                        <RankedBarList
++                            items={(mediaStats.data ?? []).map(row => ({
++                                id: row.MediaType,
++                                label: row.MediaType,
++                                value: row.TotalTicks,
++                                secondaryLabel: `${row.PlayCount} plays`
++                            }))}
++                            valueFormatter={formatTicks}
++                            height={260}
++                        />
++                    )}
++                </Paper>
++            </Stack>
++
++            <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2}>
++                <Paper sx={{ p: 2, flex: 2 }}>
++                    <Typography variant='subtitle1' gutterBottom>
++                        {globalize.translate('PlaybackStatsTopUsers')}
++                    </Typography>
++                    <RankedBarList
++                        items={userRows.slice(0, 10).map(row => ({
++                            id: row.userId,
++                            label: userNameById[row.userId] || row.userId.slice(0, 8),
++                            value: filters.metric === 'PlayCount' ? row.playCount : row.totalTicks
++                        }))}
++                        valueFormatter={filters.metric === 'PlayCount' ? String : formatTicks}
++                        onItemClick={toggleUserId}
++                        height={300}
++                    />
++                </Paper>
++                <Paper sx={{ p: 2, flex: 1 }}>
++                    <CalendarHeatmap
++                        rows={dailyForCalendar.data ?? []}
++                        startDate={filters.startDate}
++                        endDate={filters.endDate}
++                        metric={filters.metric === 'PlayCount' ? 'PlayCount' : 'TotalTicks'}
++                    />
++                </Paper>
++            </Stack>
++        </Stack>
++    );
++};
++
++export default OverviewTab;
+diff --git a/src/apps/dashboard/features/playbackStatistics/components/tabs/PatternsTab.tsx b/src/apps/dashboard/features/playbackStatistics/components/tabs/PatternsTab.tsx
+new file mode 100644
+index 0000000000..ebdcb31a91
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/components/tabs/PatternsTab.tsx
+@@ -0,0 +1,97 @@
++import React, { useMemo } from 'react';
++import Alert from '@mui/material/Alert';
++import Box from '@mui/material/Box';
++import CircularProgress from '@mui/material/CircularProgress';
++import Paper from '@mui/material/Paper';
++import Stack from '@mui/material/Stack';
++import Typography from '@mui/material/Typography';
++import globalize from 'lib/globalize';
++
++import { usePlaybackHourly, usePlaybackSessions } from '../../api/usePlaybackStats';
++import { usePlaybackStatsFilters } from '../../context/PlaybackStatsFilterContext';
++import { formatTicks } from '../../utils/formatTicks';
++import DayHourHeatmap from '../charts/DayHourHeatmap';
++import RankedBarList from '../charts/RankedBarList';
++
++const DAY_LABELS = [ 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat' ];
++
++const PatternsTab = () => {
++    const { apiFilters, filters } = usePlaybackStatsFilters();
++    const hourly = usePlaybackHourly(apiFilters);
++    const sessions = usePlaybackSessions(apiFilters);
++
++    const dayTotals = useMemo(() => {
++        const totals = Array.from({ length: 7 }, (_, day) => ({
++            id: String(day),
++            label: DAY_LABELS[day],
++            value: 0
++        }));
++
++        for (const row of hourly.data ?? []) {
++            const bucket = totals[row.DayOfWeek];
++            if (!bucket) {
++                continue;
++            }
++
++            bucket.value += filters.metric === 'PlayCount' ? row.PlayCount : row.TotalTicks;
++        }
++
++        return totals;
++    }, [ filters.metric, hourly.data ]);
++
++    if (hourly.isLoading || sessions.isLoading) {
++        return (
++            <Box display='flex' justifyContent='center' py={6}>
++                <CircularProgress />
++            </Box>
++        );
++    }
++
++    if (hourly.isError || sessions.isError) {
++        return <Alert severity='error'>{globalize.translate('PlaybackStatsLoadError')}</Alert>;
++    }
++
++    return (
++        <Stack spacing={2}>
++            <Paper sx={{ p: 2 }}>
++                <Typography variant='subtitle1' gutterBottom>
++                    {globalize.translate('PlaybackStatsHourlyHeatmap')}
++                </Typography>
++                <DayHourHeatmap
++                    rows={hourly.data ?? []}
++                    metric={filters.metric === 'PlayCount' ? 'PlayCount' : 'TotalTicks'}
++                />
++            </Paper>
++
++            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
++                <Paper sx={{ p: 2, flex: 1 }}>
++                    <Typography variant='subtitle1' gutterBottom>
++                        {globalize.translate('PlaybackStatsDayOfWeek')}
++                    </Typography>
++                    <RankedBarList
++                        items={dayTotals}
++                        valueFormatter={filters.metric === 'PlayCount' ? String : formatTicks}
++                        layout='vertical'
++                        height={280}
++                    />
++                </Paper>
++                <Paper sx={{ p: 2, flex: 1 }}>
++                    <Typography variant='subtitle1' gutterBottom>
++                        {globalize.translate('PlaybackStatsSessionLength')}
++                    </Typography>
++                    <RankedBarList
++                        items={(sessions.data ?? []).map(row => ({
++                            id: row.Bucket,
++                            label: row.Bucket,
++                            value: row.PlayCount
++                        }))}
++                        layout='vertical'
++                        height={280}
++                    />
++                </Paper>
++            </Stack>
++        </Stack>
++    );
++};
++
++export default PatternsTab;
+diff --git a/src/apps/dashboard/features/playbackStatistics/components/tabs/RecentTab.tsx b/src/apps/dashboard/features/playbackStatistics/components/tabs/RecentTab.tsx
+new file mode 100644
+index 0000000000..5ae0cebe3c
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/components/tabs/RecentTab.tsx
+@@ -0,0 +1,92 @@
++import React, { useState } from 'react';
++import Alert from '@mui/material/Alert';
++import Box from '@mui/material/Box';
++import CircularProgress from '@mui/material/CircularProgress';
++import Pagination from '@mui/material/Pagination';
++import Paper from '@mui/material/Paper';
++import Stack from '@mui/material/Stack';
++import Typography from '@mui/material/Typography';
++import globalize from 'lib/globalize';
++
++import UserAvatarButton from 'apps/dashboard/components/UserAvatarButton';
++import { usePlaybackRecent } from '../../api/usePlaybackStats';
++import { usePlaybackStatsFilters } from '../../context/PlaybackStatsFilterContext';
++import { formatTicks } from '../../utils/formatTicks';
++
++const PAGE_SIZE = 25;
++
++interface RecentTabProps {
++    usersById: Record<string, { Name?: string | null } | undefined>;
++}
++
++const RecentTab = ({ usersById }: RecentTabProps) => {
++    const { apiFilters } = usePlaybackStatsFilters();
++    const [ page, setPage ] = useState(1);
++    const recent = usePlaybackRecent({
++        ...apiFilters,
++        startIndex: (page - 1) * PAGE_SIZE,
++        limit: PAGE_SIZE
++    });
++
++    if (recent.isLoading) {
++        return (
++            <Box display='flex' justifyContent='center' py={6}>
++                <CircularProgress />
++            </Box>
++        );
++    }
++
++    if (recent.isError) {
++        return <Alert severity='error'>{globalize.translate('PlaybackStatsLoadError')}</Alert>;
++    }
++
++    const items = recent.data?.Items ?? [];
++    const total = recent.data?.TotalRecordCount ?? 0;
++    const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
++
++    if (items.length === 0) {
++        return <Alert severity='info'>{globalize.translate('PlaybackStatsEmpty')}</Alert>;
++    }
++
++    return (
++        <Stack spacing={2}>
++            {items.map(item => {
++                const user = usersById[item.UserId];
++                return (
++                    <Paper key={item.Id} sx={{ p: 2 }}>
++                        <Stack direction='row' spacing={2} alignItems='center'>
++                            <UserAvatarButton user={user as never} />
++                            <Box sx={{ flex: 1, minWidth: 0 }}>
++                                <Typography variant='subtitle1' noWrap>
++                                    {item.SeriesName ? `${item.SeriesName} — ${item.ItemName}` : item.ItemName}
++                                </Typography>
++                                <Typography variant='body2' color='text.secondary'>
++                                    {user?.Name || item.UserId}
++                                    {' · '}
++                                    {item.MediaType}
++                                    {' · '}
++                                    {formatTicks(item.PlayedTicks)}
++                                    {item.ClientName ? ` · ${item.ClientName}` : ''}
++                                    {item.PlaybackMethod ? ` · ${item.PlaybackMethod}` : ''}
++                                </Typography>
++                            </Box>
++                            <Typography variant='caption' color='text.secondary' sx={{ whiteSpace: 'nowrap' }}>
++                                {new Date(item.DatePlayed).toLocaleString()}
++                            </Typography>
++                        </Stack>
++                    </Paper>
++                );
++            })}
++            <Box display='flex' justifyContent='center'>
++                <Pagination
++                    count={pageCount}
++                    page={page}
++                    onChange={(_event, value) => setPage(value)}
++                    color='primary'
++                />
++            </Box>
++        </Stack>
++    );
++};
++
++export default RecentTab;
+diff --git a/src/apps/dashboard/features/playbackStatistics/components/tabs/TrendsTab.tsx b/src/apps/dashboard/features/playbackStatistics/components/tabs/TrendsTab.tsx
+new file mode 100644
+index 0000000000..82dbc7d6c7
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/components/tabs/TrendsTab.tsx
+@@ -0,0 +1,88 @@
++import React, { useMemo, useState } from 'react';
++import Alert from '@mui/material/Alert';
++import Box from '@mui/material/Box';
++import CircularProgress from '@mui/material/CircularProgress';
++import MenuItem from '@mui/material/MenuItem';
++import Paper from '@mui/material/Paper';
++import Stack from '@mui/material/Stack';
++import TextField from '@mui/material/TextField';
++import Typography from '@mui/material/Typography';
++import globalize from 'lib/globalize';
++
++import { usePlaybackDaily } from '../../api/usePlaybackStats';
++import { usePlaybackStatsFilters } from '../../context/PlaybackStatsFilterContext';
++import type { PlaybackDailyGroupBy } from '../../types';
++import MixAreaChart from '../charts/MixAreaChart';
++import StackedDailyChart from '../charts/StackedDailyChart';
++
++interface TrendsTabProps {
++    userNameById: Record<string, string>;
++}
++
++const TrendsTab = ({ userNameById }: TrendsTabProps) => {
++    const { apiFilters, filters, toggleUserId } = usePlaybackStatsFilters();
++    const [ groupBy, setGroupBy ] = useState<PlaybackDailyGroupBy>('User');
++    const daily = usePlaybackDaily({ ...apiFilters, groupBy });
++    const mix = usePlaybackDaily({ ...apiFilters, groupBy: 'MediaType' });
++
++    const labelResolver = useMemo(() => (
++        (key: string) => (groupBy === 'User' ? (userNameById[key] || key.slice(0, 8)) : key)
++    ), [ groupBy, userNameById ]);
++
++    if (daily.isLoading || mix.isLoading) {
++        return (
++            <Box display='flex' justifyContent='center' py={6}>
++                <CircularProgress />
++            </Box>
++        );
++    }
++
++    if (daily.isError) {
++        return <Alert severity='error'>{globalize.translate('PlaybackStatsLoadError')}</Alert>;
++    }
++
++    return (
++        <Stack spacing={2}>
++            <Stack direction='row' spacing={2} alignItems='center'>
++                <TextField
++                    select
++                    size='small'
++                    label={globalize.translate('PlaybackStatsGroupBy')}
++                    value={groupBy}
++                    onChange={event => setGroupBy(event.target.value as PlaybackDailyGroupBy)}
++                    sx={{ minWidth: 180 }}
++                >
++                    <MenuItem value='User'>{globalize.translate('LabelUser')}</MenuItem>
++                    <MenuItem value='MediaType'>{globalize.translate('LabelMediaType')}</MenuItem>
++                </TextField>
++            </Stack>
++
++            <Paper sx={{ p: 2 }}>
++                <Typography variant='subtitle1' gutterBottom>
++                    {globalize.translate('PlaybackStatsDailyTrend')}
++                </Typography>
++                <StackedDailyChart
++                    rows={daily.data ?? []}
++                    seriesKey={groupBy === 'User' ? 'UserId' : 'MediaType'}
++                    labelResolver={labelResolver}
++                    metric={filters.metric}
++                    activityOnly={filters.activityOnly}
++                    onSeriesClick={groupBy === 'User' ? toggleUserId : undefined}
++                />
++            </Paper>
++
++            <Paper sx={{ p: 2 }}>
++                <Typography variant='subtitle1' gutterBottom>
++                    {globalize.translate('PlaybackStatsMediaMix')}
++                </Typography>
++                <MixAreaChart
++                    rows={mix.data ?? []}
++                    metric={filters.metric}
++                    activityOnly={filters.activityOnly}
++                />
++            </Paper>
++        </Stack>
++    );
++};
++
++export default TrendsTab;
+diff --git a/src/apps/dashboard/features/playbackStatistics/components/tabs/UsersTab.tsx b/src/apps/dashboard/features/playbackStatistics/components/tabs/UsersTab.tsx
+new file mode 100644
+index 0000000000..e2e25db2ea
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/components/tabs/UsersTab.tsx
+@@ -0,0 +1,135 @@
++import React, { useMemo } from 'react';
++import Alert from '@mui/material/Alert';
++import Box from '@mui/material/Box';
++import CircularProgress from '@mui/material/CircularProgress';
++import Link from '@mui/material/Link';
++import Paper from '@mui/material/Paper';
++import Stack from '@mui/material/Stack';
++import Typography from '@mui/material/Typography';
++import { type MRT_ColumnDef, type MRT_TableOptions, useMaterialReactTable, MaterialReactTable } from 'material-react-table';
++import { Link as RouterLink } from 'react-router-dom';
++import globalize from 'lib/globalize';
++
++import UserAvatarButton from 'apps/dashboard/components/UserAvatarButton';
++import { DEFAULT_TABLE_OPTIONS } from 'apps/dashboard/components/table/TablePage';
++import { useServerPlaybackStatsByUser } from '../../api/usePlaybackStats';
++import { usePlaybackStatsFilters } from '../../context/PlaybackStatsFilterContext';
++import type { PlaybackUserTableRow } from '../../types';
++import { buildUserRows } from '../../utils/buildUserRows';
++import { formatTicks } from '../../utils/formatTicks';
++import RankedBarList from '../charts/RankedBarList';
++
++interface UsersTabProps {
++    usersById: Record<string, { Name?: string | null } | undefined>;
++}
++
++const UsersTab = ({ usersById }: UsersTabProps) => {
++    const { apiFilters, filters, toggleUserId } = usePlaybackStatsFilters();
++    const userStats = useServerPlaybackStatsByUser(apiFilters);
++    const { userRows, mediaTypes } = useMemo(() => buildUserRows(userStats.data), [ userStats.data ]);
++
++    const columns = useMemo<MRT_ColumnDef<PlaybackUserTableRow>[]>(() => [
++        {
++            id: 'User',
++            header: globalize.translate('LabelUser'),
++            size: 220,
++            Cell: ({ row }) => {
++                const user = usersById[row.original.userId];
++                return (
++                    <Stack direction='row' spacing={1} alignItems='center'>
++                        <UserAvatarButton user={user as never} />
++                        <Link
++                            component={RouterLink}
++                            to={`/dashboard/users/${row.original.userId}/playbackstats`}
++                            underline='hover'
++                            onClick={event => {
++                                if (event.metaKey || event.ctrlKey) {
++                                    return;
++                                }
++
++                                event.preventDefault();
++                                toggleUserId(row.original.userId);
++                            }}
++                        >
++                            {user?.Name || row.original.userId}
++                        </Link>
++                    </Stack>
++                );
++            }
++        },
++        ...mediaTypes.map(mediaType => ({
++            id: mediaType,
++            header: mediaType,
++            size: 120,
++            accessorFn: (row: PlaybackUserTableRow) => row.byMediaType[mediaType]?.totalTicks ?? 0,
++            Cell: ({ row }: { row: { original: PlaybackUserTableRow } }) => {
++                const stat = row.original.byMediaType[mediaType];
++                return stat ? formatTicks(stat.totalTicks) : '—';
++            }
++        })),
++        {
++            id: 'TotalWatchTime',
++            header: globalize.translate('LabelWatchTime'),
++            size: 130,
++            accessorFn: row => row.totalTicks,
++            Cell: ({ row }) => formatTicks(row.original.totalTicks)
++        },
++        {
++            id: 'PlayCount',
++            header: globalize.translate('LabelPlayCount'),
++            size: 110,
++            accessorKey: 'playCount'
++        }
++    ], [ mediaTypes, toggleUserId, usersById ]);
++
++    const table = useMaterialReactTable<PlaybackUserTableRow>({
++        ...(DEFAULT_TABLE_OPTIONS as Partial<MRT_TableOptions<PlaybackUserTableRow>>),
++        columns,
++        data: userRows,
++        layoutMode: 'grid',
++        enableColumnFilters: false,
++        enableGlobalFilter: true,
++        initialState: {
++            density: 'compact',
++            sorting: [{ id: 'TotalWatchTime', desc: true }]
++        },
++        state: { isLoading: userStats.isLoading }
++    });
++
++    if (userStats.isLoading) {
++        return (
++            <Box display='flex' justifyContent='center' py={6}>
++                <CircularProgress />
++            </Box>
++        );
++    }
++
++    if (userStats.isError) {
++        return <Alert severity='error'>{globalize.translate('PlaybackStatsLoadError')}</Alert>;
++    }
++
++    return (
++        <Stack spacing={2}>
++            <Paper sx={{ p: 2 }}>
++                <Typography variant='subtitle1' gutterBottom>
++                    {globalize.translate('PlaybackStatsTopUsers')}
++                </Typography>
++                <RankedBarList
++                    items={userRows.slice(0, 12).map(row => ({
++                        id: row.userId,
++                        label: usersById[row.userId]?.Name || row.userId.slice(0, 8),
++                        value: filters.metric === 'PlayCount' ? row.playCount : row.totalTicks
++                    }))}
++                    valueFormatter={filters.metric === 'PlayCount' ? String : formatTicks}
++                    onItemClick={toggleUserId}
++                    height={320}
++                />
++            </Paper>
++            <Paper sx={{ p: 1 }}>
++                <MaterialReactTable table={table} />
++            </Paper>
++        </Stack>
++    );
++};
++
++export default UsersTab;
+diff --git a/src/apps/dashboard/features/playbackStatistics/context/PlaybackStatsFilterContext.tsx b/src/apps/dashboard/features/playbackStatistics/context/PlaybackStatsFilterContext.tsx
+new file mode 100644
+index 0000000000..249a73d13f
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/context/PlaybackStatsFilterContext.tsx
+@@ -0,0 +1,196 @@
++import React, {
++    createContext,
++    useCallback,
++    useContext,
++    useMemo,
++    useState,
++    type ReactNode
++} from 'react';
++import { useSearchParams } from 'react-router-dom';
++
++import type { PlaybackMetric, PlaybackStatsFilters, PlaybackStatsTab } from '../types';
++import { defaultRange } from '../utils/periodCompare';
++
++interface PlaybackStatsFilterContextValue {
++    tab: PlaybackStatsTab;
++    setTab: (tab: PlaybackStatsTab) => void;
++    filters: PlaybackStatsFilters;
++    apiFilters: Omit<PlaybackStatsFilters, 'activityOnly' | 'metric'>;
++    setPresetDays: (days: number) => void;
++    setDateRange: (startDate: string, endDate: string) => void;
++    toggleUserId: (userId: string) => void;
++    setUserIds: (userIds: string[]) => void;
++    toggleMediaType: (mediaType: string) => void;
++    setMediaTypes: (mediaTypes: string[]) => void;
++    toggleClient: (client: string) => void;
++    togglePlaybackMethod: (method: string) => void;
++    setActivityOnly: (value: boolean) => void;
++    setMetric: (metric: PlaybackMetric) => void;
++    clearFilters: () => void;
++}
++
++const TAB_VALUES: PlaybackStatsTab[] = [
++    'overview',
++    'trends',
++    'users',
++    'breakdown',
++    'patterns',
++    'delivery',
++    'recent'
++];
++
++const PlaybackStatsFilterContext = createContext<PlaybackStatsFilterContextValue | null>(null);
++
++const parseList = (value: string | null): string[] => (
++    value ? value.split(',').map(part => part.trim()).filter(Boolean) : []
++);
++
++const isTab = (value: string | null): value is PlaybackStatsTab => (
++    !!value && TAB_VALUES.includes(value as PlaybackStatsTab)
++);
++
++export const PlaybackStatsFilterProvider = ({ children }: { children: ReactNode }) => {
++    const [ searchParams, setSearchParams ] = useSearchParams();
++    const defaults = useMemo(() => defaultRange(28), []);
++
++    const tab = isTab(searchParams.get('tab')) ? searchParams.get('tab') as PlaybackStatsTab : 'overview';
++    const [ activityOnly, setActivityOnlyState ] = useState(true);
++    const [ metric, setMetricState ] = useState<PlaybackMetric>(
++        searchParams.get('metric') === 'PlayCount' ? 'PlayCount' : 'PlayTime'
++    );
++
++    const filters: PlaybackStatsFilters = useMemo(() => ({
++        startDate: searchParams.get('start') || defaults.startDate,
++        endDate: searchParams.get('end') || defaults.endDate,
++        userIds: parseList(searchParams.get('users')),
++        mediaTypes: parseList(searchParams.get('mediaTypes')),
++        clients: parseList(searchParams.get('clients')),
++        playbackMethods: parseList(searchParams.get('methods')),
++        activityOnly,
++        metric
++    }), [ activityOnly, defaults.endDate, defaults.startDate, metric, searchParams ]);
++
++    const patchParams = useCallback((mutate: (params: URLSearchParams) => void) => {
++        setSearchParams(prev => {
++            const next = new URLSearchParams(prev);
++            mutate(next);
++            return next;
++        }, { replace: true });
++    }, [ setSearchParams ]);
++
++    const setTab = useCallback((next: PlaybackStatsTab) => {
++        patchParams(params => {
++            params.set('tab', next);
++        });
++    }, [ patchParams ]);
++
++    const setPresetDays = useCallback((days: number) => {
++        const range = defaultRange(days);
++        patchParams(params => {
++            params.set('start', range.startDate);
++            params.set('end', range.endDate);
++        });
++    }, [ patchParams ]);
++
++    const setDateRange = useCallback((startDate: string, endDate: string) => {
++        patchParams(params => {
++            params.set('start', startDate);
++            params.set('end', endDate);
++        });
++    }, [ patchParams ]);
++
++    const setListParam = useCallback((key: string, values: string[]) => {
++        patchParams(params => {
++            if (values.length === 0) {
++                params.delete(key);
++            } else {
++                params.set(key, values.join(','));
++            }
++        });
++    }, [ patchParams ]);
++
++    const toggleInList = useCallback((key: string, current: string[], value: string) => {
++        const next = current.includes(value)
++            ? current.filter(item => item !== value)
++            : [ ...current, value ];
++        setListParam(key, next);
++    }, [ setListParam ]);
++
++    const clearFilters = useCallback(() => {
++        const range = defaultRange(28);
++        setActivityOnlyState(true);
++        setMetricState('PlayTime');
++        setSearchParams(prev => {
++            const next = new URLSearchParams();
++            const currentTab = prev.get('tab');
++            if (currentTab) {
++                next.set('tab', currentTab);
++            }
++            next.set('start', range.startDate);
++            next.set('end', range.endDate);
++            return next;
++        }, { replace: true });
++    }, [ setSearchParams ]);
++
++    const apiFilters = useMemo(() => ({
++        startDate: filters.startDate,
++        endDate: filters.endDate,
++        userIds: filters.userIds,
++        mediaTypes: filters.mediaTypes,
++        clients: filters.clients,
++        playbackMethods: filters.playbackMethods
++    }), [ filters ]);
++
++    const value = useMemo<PlaybackStatsFilterContextValue>(() => ({
++        tab,
++        setTab,
++        filters,
++        apiFilters,
++        setPresetDays,
++        setDateRange,
++        toggleUserId: userId => toggleInList('users', filters.userIds, userId),
++        setUserIds: userIds => setListParam('users', userIds),
++        toggleMediaType: mediaType => toggleInList('mediaTypes', filters.mediaTypes, mediaType),
++        setMediaTypes: mediaTypes => setListParam('mediaTypes', mediaTypes),
++        toggleClient: client => toggleInList('clients', filters.clients, client),
++        togglePlaybackMethod: method => toggleInList('methods', filters.playbackMethods, method),
++        setActivityOnly: setActivityOnlyState,
++        setMetric: next => {
++            setMetricState(next);
++            patchParams(params => {
++                if (next === 'PlayTime') {
++                    params.delete('metric');
++                } else {
++                    params.set('metric', next);
++                }
++            });
++        },
++        clearFilters
++    }), [
++        apiFilters,
++        clearFilters,
++        filters,
++        patchParams,
++        setDateRange,
++        setListParam,
++        setPresetDays,
++        setTab,
++        tab,
++        toggleInList
++    ]);
++
++    return (
++        <PlaybackStatsFilterContext.Provider value={value}>
++            {children}
++        </PlaybackStatsFilterContext.Provider>
++    );
++};
++
++export const usePlaybackStatsFilters = (): PlaybackStatsFilterContextValue => {
++    const ctx = useContext(PlaybackStatsFilterContext);
++    if (!ctx) {
++        throw new Error('usePlaybackStatsFilters must be used within PlaybackStatsFilterProvider');
++    }
++
++    return ctx;
 +};
 diff --git a/src/apps/dashboard/features/playbackStatistics/types.ts b/src/apps/dashboard/features/playbackStatistics/types.ts
 new file mode 100644
-index 0000000000..179f4c7244
+index 0000000000..74e5bf195d
 --- /dev/null
 +++ b/src/apps/dashboard/features/playbackStatistics/types.ts
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,122 @@
 +export interface PlaybackStatRow {
 +    MediaType: string;
 +    TotalTicks: number;
@@ -230,15 +2377,185 @@ index 0000000000..179f4c7244
 +    playCount: number;
 +    byMediaType: Record<string, { totalTicks: number; playCount: number }>;
 +}
++
++export interface PlaybackPeriodTotals {
++    TotalTicks: number;
++    PlayCount: number;
++    ActiveUsers?: number;
++    AvgSessionTicks: number;
++    DirectPlayPercent?: number;
++}
++
++export interface PlaybackOverviewResponse {
++    StartDate: string;
++    EndDate: string;
++    Current: PlaybackPeriodTotals;
++    Prior: PlaybackPeriodTotals;
++}
++
++export interface PlaybackDailyRow {
++    Date: string;
++    UserId?: string;
++    MediaType?: string;
++    TotalTicks: number;
++    PlayCount: number;
++}
++
++export interface PlaybackHourlyRow {
++    DayOfWeek: number;
++    Hour: number;
++    TotalTicks: number;
++    PlayCount: number;
++}
++
++export interface PlaybackItemRow {
++    MediaType: string;
++    ItemId?: string | null;
++    ItemName: string;
++    TotalTicks: number;
++    PlayCount: number;
++    IsOther?: boolean;
++}
++
++export interface PlaybackDimensionRow {
++    Key: string;
++    TotalTicks: number;
++    PlayCount: number;
++}
++
++export interface PlaybackSessionBucketRow {
++    Bucket: string;
++    PlayCount: number;
++}
++
++export interface PlaybackRecentItem {
++    Id: string;
++    UserId: string;
++    ItemId: string;
++    ItemName: string;
++    SeriesId?: string | null;
++    SeriesName?: string | null;
++    MediaType: string;
++    PlayedTicks: number;
++    DatePlayed: string;
++    ItemSubGroup: string;
++    PlaybackMethod?: string | null;
++    ClientName?: string | null;
++    DeviceName?: string | null;
++}
++
++export interface PlaybackRecentResponse {
++    TotalRecordCount: number;
++    StartIndex: number;
++    Items: PlaybackRecentItem[];
++}
++
++export type PlaybackDailyGroupBy = 'User' | 'MediaType' | 'None';
++export type PlaybackItemGroupBy = 'Item' | 'Series';
++export type PlaybackDimension = 'Client' | 'Device' | 'Method' | 'Genre' | 'MediaType';
++export type PlaybackMetric = 'PlayTime' | 'PlayCount';
++
++export interface PlaybackStatsFilters {
++    startDate: string;
++    endDate: string;
++    userIds: string[];
++    mediaTypes: string[];
++    clients: string[];
++    playbackMethods: string[];
++    activityOnly: boolean;
++    metric: PlaybackMetric;
++}
++
++export type PlaybackStatsTab =
++    | 'overview'
++    | 'trends'
++    | 'users'
++    | 'breakdown'
++    | 'patterns'
++    | 'delivery'
++    | 'recent';
+diff --git a/src/apps/dashboard/features/playbackStatistics/utils/buildUserRows.ts b/src/apps/dashboard/features/playbackStatistics/utils/buildUserRows.ts
+new file mode 100644
+index 0000000000..4019ef1669
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/utils/buildUserRows.ts
+@@ -0,0 +1,33 @@
++import type { PlaybackUserStatRow, PlaybackUserTableRow } from '../types';
++
++export const buildUserRows = (
++    rows: PlaybackUserStatRow[] | null | undefined
++): { userRows: PlaybackUserTableRow[]; mediaTypes: string[] } => {
++    const mediaTypeSet = new Set<string>();
++    const byUser = new Map<string, PlaybackUserTableRow>();
++
++    for (const row of rows ?? []) {
++        mediaTypeSet.add(row.MediaType);
++
++        const existing = byUser.get(row.UserId) ?? {
++            userId: row.UserId,
++            totalTicks: 0,
++            playCount: 0,
++            byMediaType: {}
++        };
++
++        existing.totalTicks += row.TotalTicks;
++        existing.playCount += row.PlayCount;
++        existing.byMediaType[row.MediaType] = {
++            totalTicks: row.TotalTicks,
++            playCount: row.PlayCount
++        };
++
++        byUser.set(row.UserId, existing);
++    }
++
++    return {
++        userRows: Array.from(byUser.values()).sort((a, b) => b.totalTicks - a.totalTicks),
++        mediaTypes: Array.from(mediaTypeSet).sort()
++    };
++};
+diff --git a/src/apps/dashboard/features/playbackStatistics/utils/exportCsv.ts b/src/apps/dashboard/features/playbackStatistics/utils/exportCsv.ts
+new file mode 100644
+index 0000000000..ae7f035cdf
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/utils/exportCsv.ts
+@@ -0,0 +1,26 @@
++const escapeCell = (value: unknown): string => {
++    const text = value == null ? '' : String(value);
++    if (/[",\n\r]/.test(text)) {
++        return `"${text.replace(/"/g, '""')}"`;
++    }
++
++    return text;
++};
++
++export const exportCsv = (
++    filename: string,
++    headers: string[],
++    rows: Array<Array<string | number | null | undefined>>
++): void => {
++    const lines = [
++        headers.map(escapeCell).join(','),
++        ...rows.map(row => row.map(escapeCell).join(','))
++    ];
++    const blob = new Blob([ lines.join('\n') ], { type: 'text/csv;charset=utf-8' });
++    const url = URL.createObjectURL(blob);
++    const anchor = document.createElement('a');
++    anchor.href = url;
++    anchor.download = filename;
++    anchor.click();
++    URL.revokeObjectURL(url);
++};
 diff --git a/src/apps/dashboard/features/playbackStatistics/utils/formatTicks.ts b/src/apps/dashboard/features/playbackStatistics/utils/formatTicks.ts
 new file mode 100644
-index 0000000000..fb7a7ecf13
+index 0000000000..f263e83509
 --- /dev/null
 +++ b/src/apps/dashboard/features/playbackStatistics/utils/formatTicks.ts
-@@ -0,0 +1,19 @@
+@@ -0,0 +1,30 @@
 +const TICKS_PER_SECOND = 10_000_000;
 +
 +export const ticksToSeconds = (ticks: number): number => ticks / TICKS_PER_SECOND;
++
++export const ticksToMinutes = (ticks: number): number => ticksToSeconds(ticks) / 60;
 +
 +export const formatTicks = (ticks: number): string => {
 +    const totalSeconds = Math.floor(ticksToSeconds(ticks));
@@ -255,12 +2572,83 @@ index 0000000000..fb7a7ecf13
 +
 +    return `${totalSeconds}s`;
 +};
++
++export const formatTicksClock = (ticks: number): string => {
++    const totalSeconds = Math.max(0, Math.floor(ticksToSeconds(ticks)));
++    const hours = Math.floor(totalSeconds / 3600);
++    const minutes = Math.floor((totalSeconds % 3600) / 60);
++    const seconds = totalSeconds % 60;
++    const pad = (n: number) => n.toString().padStart(2, '0');
++    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
++};
+diff --git a/src/apps/dashboard/features/playbackStatistics/utils/periodCompare.ts b/src/apps/dashboard/features/playbackStatistics/utils/periodCompare.ts
+new file mode 100644
+index 0000000000..7fd030b6c8
+--- /dev/null
++++ b/src/apps/dashboard/features/playbackStatistics/utils/periodCompare.ts
+@@ -0,0 +1,56 @@
++export interface PeriodDelta {
++    absolute: number;
++    percent: number | null;
++    direction: 'up' | 'down' | 'flat';
++}
++
++export const computeDelta = (current: number, prior: number): PeriodDelta => {
++    const absolute = current - prior;
++    if (prior === 0) {
++        return {
++            absolute,
++            percent: current === 0 ? 0 : null,
++            direction: absolute > 0 ? 'up' : absolute < 0 ? 'down' : 'flat'
++        };
++    }
++
++    const percent = (absolute / prior) * 100;
++    return {
++        absolute,
++        percent,
++        direction: absolute > 0 ? 'up' : absolute < 0 ? 'down' : 'flat'
++    };
++};
++
++export const formatDeltaPercent = (delta: PeriodDelta): string => {
++    if (delta.percent == null) {
++        return delta.absolute > 0 ? 'new' : '—';
++    }
++
++    const sign = delta.percent > 0 ? '+' : '';
++    return `${sign}${delta.percent.toFixed(0)}%`;
++};
++
++export const toDateInputValue = (date: Date): string => {
++    const y = date.getUTCFullYear();
++    const m = String(date.getUTCMonth() + 1).padStart(2, '0');
++    const d = String(date.getUTCDate()).padStart(2, '0');
++    return `${y}-${m}-${d}`;
++};
++
++export const defaultRange = (days = 28): { startDate: string; endDate: string } => {
++    const end = new Date();
++    end.setUTCHours(0, 0, 0, 0);
++    const start = new Date(end);
++    start.setUTCDate(start.getUTCDate() - (days - 1));
++    return {
++        startDate: toDateInputValue(start),
++        endDate: toDateInputValue(end)
++    };
++};
++
++export const dayCountInclusive = (startDate: string, endDate: string): number => {
++    const start = new Date(`${startDate}T00:00:00Z`);
++    const end = new Date(`${endDate}T00:00:00Z`);
++    return Math.max(1, Math.round((end.getTime() - start.getTime()) / 86_400_000) + 1);
++};
 diff --git a/src/apps/dashboard/features/users/components/UserPlaybackStats.tsx b/src/apps/dashboard/features/users/components/UserPlaybackStats.tsx
 new file mode 100644
-index 0000000000..a543c08fea
+index 0000000000..e7a877719f
 --- /dev/null
 +++ b/src/apps/dashboard/features/users/components/UserPlaybackStats.tsx
-@@ -0,0 +1,142 @@
+@@ -0,0 +1,296 @@
 +import React, { useCallback, useMemo, useState } from 'react';
 +import Alert from '@mui/material/Alert';
 +import Box from '@mui/material/Box';
@@ -274,25 +2662,46 @@ index 0000000000..a543c08fea
 +import TableContainer from '@mui/material/TableContainer';
 +import TableHead from '@mui/material/TableHead';
 +import TableRow from '@mui/material/TableRow';
++import ToggleButton from '@mui/material/ToggleButton';
++import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 +import Typography from '@mui/material/Typography';
++import { PieChart } from '@mui/x-charts/PieChart';
++import { useTheme } from '@mui/material/styles';
 +import globalize from 'lib/globalize';
 +
-+import { useUserPlaybackStats, useUserPlaybackStatsByType } from 'apps/dashboard/features/playbackStatistics/api/usePlaybackStats';
++import {
++    useUserPlaybackHourly,
++    useUserPlaybackOverview,
++    useUserPlaybackStats,
++    useUserPlaybackStatsByType
++} from 'apps/dashboard/features/playbackStatistics/api/usePlaybackStats';
++import DayHourHeatmap from 'apps/dashboard/features/playbackStatistics/components/charts/DayHourHeatmap';
++import RankedBarList from 'apps/dashboard/features/playbackStatistics/components/charts/RankedBarList';
++import KpiCard from 'apps/dashboard/features/playbackStatistics/components/KpiCard';
 +import { formatTicks } from 'apps/dashboard/features/playbackStatistics/utils/formatTicks';
++import { defaultRange } from 'apps/dashboard/features/playbackStatistics/utils/periodCompare';
 +
 +interface UserPlaybackStatsProps {
 +    userId: string;
 +}
 +
++type RangeMode = '28d' | 'all';
++
 +const UserPlaybackStats = ({ userId }: UserPlaybackStatsProps) => {
-+    const { data: stats, isLoading, isError, error } = useUserPlaybackStats(userId);
++    const theme = useTheme();
++    const [ rangeMode, setRangeMode ] = useState<RangeMode>('28d');
 +    const [ expandedMediaType, setExpandedMediaType ] = useState<string | null>(null);
++    const range = useMemo(() => (rangeMode === '28d' ? defaultRange(28) : undefined), [ rangeMode ]);
++
++    const { data: stats, isLoading, isError, error } = useUserPlaybackStats(userId, range);
++    const overview = useUserPlaybackOverview(userId, range, rangeMode === '28d');
++    const hourly = useUserPlaybackHourly(userId, range);
 +    const {
 +        data: subGroupStats,
 +        isLoading: isSubGroupLoading,
 +        isError: isSubGroupError,
 +        error: subGroupError
-+    } = useUserPlaybackStatsByType(userId, expandedMediaType);
++    } = useUserPlaybackStatsByType(userId, expandedMediaType, range);
 +
 +    const totals = useMemo(() => (stats ?? []).reduce((acc, row) => ({
 +        totalTicks: acc.totalTicks + row.TotalTicks,
@@ -316,25 +2725,147 @@ index 0000000000..a543c08fea
 +    }
 +
 +    if ((stats?.length ?? 0) === 0) {
-+        return <Alert severity='info'>{globalize.translate('PlaybackStatsEmpty')}</Alert>;
++        return (
++            <Stack spacing={2}>
++                <ToggleButtonGroup
++                    exclusive
++                    size='small'
++                    value={rangeMode}
++                    onChange={(_event, value: RangeMode | null) => {
++                        if (value) {
++                            setRangeMode(value);
++                        }
++                    }}
++                >
++                    <ToggleButton value='28d'>{globalize.translate('PlaybackStatsLast28Days')}</ToggleButton>
++                    <ToggleButton value='all'>{globalize.translate('PlaybackStatsAllTime')}</ToggleButton>
++                </ToggleButtonGroup>
++                <Alert severity='info'>{globalize.translate('PlaybackStatsEmpty')}</Alert>
++            </Stack>
++        );
 +    }
++
++    const pieData = (stats ?? [])
++        .filter(row => row.TotalTicks > 0)
++        .map((row, index) => ({
++            id: index,
++            value: row.TotalTicks,
++            label: row.MediaType
++        }));
 +
 +    return (
 +        <Stack spacing={2}>
-+            <Stack direction='row' spacing={2}>
++            <ToggleButtonGroup
++                exclusive
++                size='small'
++                value={rangeMode}
++                onChange={(_event, value: RangeMode | null) => {
++                    if (value) {
++                        setRangeMode(value);
++                    }
++                }}
++            >
++                <ToggleButton value='28d'>{globalize.translate('PlaybackStatsLast28Days')}</ToggleButton>
++                <ToggleButton value='all'>{globalize.translate('PlaybackStatsAllTime')}</ToggleButton>
++            </ToggleButtonGroup>
++
++            {rangeMode === '28d' && overview.data ? (
++                <Stack direction='row' spacing={2} flexWrap='wrap' useFlexGap>
++                    <KpiCard
++                        label={globalize.translate('LabelWatchTime')}
++                        value={formatTicks(overview.data.Current.TotalTicks)}
++                        current={overview.data.Current.TotalTicks}
++                        prior={overview.data.Prior.TotalTicks}
++                        formatAbsolute={formatTicks}
++                    />
++                    <KpiCard
++                        label={globalize.translate('LabelPlayCount')}
++                        value={String(overview.data.Current.PlayCount)}
++                        current={overview.data.Current.PlayCount}
++                        prior={overview.data.Prior.PlayCount}
++                    />
++                    <KpiCard
++                        label={globalize.translate('PlaybackStatsAvgSession')}
++                        value={formatTicks(overview.data.Current.AvgSessionTicks)}
++                        current={overview.data.Current.AvgSessionTicks}
++                        prior={overview.data.Prior.AvgSessionTicks}
++                        formatAbsolute={formatTicks}
++                    />
++                </Stack>
++            ) : (
++                <Stack direction='row' spacing={2}>
++                    <Paper sx={{ p: 2, flex: 1 }}>
++                        <Typography variant='body2' color='text.secondary'>
++                            {globalize.translate('LabelWatchTime')}
++                        </Typography>
++                        <Typography variant='h5'>{formatTicks(totals.totalTicks)}</Typography>
++                    </Paper>
++                    <Paper sx={{ p: 2, flex: 1 }}>
++                        <Typography variant='body2' color='text.secondary'>
++                            {globalize.translate('LabelPlayCount')}
++                        </Typography>
++                        <Typography variant='h5'>{totals.playCount}</Typography>
++                    </Paper>
++                </Stack>
++            )}
++
++            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
 +                <Paper sx={{ p: 2, flex: 1 }}>
-+                    <Typography variant='body2' color='text.secondary'>
++                    <Typography variant='subtitle2' gutterBottom>
 +                        {globalize.translate('LabelWatchTime')}
 +                    </Typography>
-+                    <Typography variant='h5'>{formatTicks(totals.totalTicks)}</Typography>
++                    {pieData.length >= 3 ? (
++                        <PieChart
++                            series={[{
++                                data: pieData,
++                                valueFormatter: item => formatTicks(Number(item.value))
++                            }]}
++                            height={220}
++                            colors={[
++                                theme.palette.primary.main,
++                                theme.palette.secondary.main,
++                                theme.palette.success.main,
++                                theme.palette.warning.main
++                            ]}
++                        />
++                    ) : (
++                        <RankedBarList
++                            items={(stats ?? []).map(row => ({
++                                id: row.MediaType,
++                                label: row.MediaType,
++                                value: row.TotalTicks
++                            }))}
++                            valueFormatter={formatTicks}
++                            height={220}
++                        />
++                    )}
 +                </Paper>
 +                <Paper sx={{ p: 2, flex: 1 }}>
-+                    <Typography variant='body2' color='text.secondary'>
++                    <Typography variant='subtitle2' gutterBottom>
 +                        {globalize.translate('LabelPlayCount')}
 +                    </Typography>
-+                    <Typography variant='h5'>{totals.playCount}</Typography>
++                    <RankedBarList
++                        items={(stats ?? []).map(row => ({
++                            id: `${row.MediaType}-plays`,
++                            label: row.MediaType,
++                            value: row.PlayCount
++                        }))}
++                        layout='vertical'
++                        height={220}
++                    />
 +                </Paper>
 +            </Stack>
++
++            <Paper sx={{ p: 2 }}>
++                <Typography variant='subtitle2' gutterBottom>
++                    {globalize.translate('PlaybackStatsHourlyHeatmap')}
++                </Typography>
++                {hourly.isLoading ? (
++                    <CircularProgress size={24} />
++                ) : (
++                    <DayHourHeatmap rows={hourly.data ?? []} />
++                )}
++            </Paper>
 +
 +            <TableContainer component={Paper}>
 +                <Table size='small'>
@@ -370,24 +2901,35 @@ index 0000000000..a543c08fea
 +                                                    </Typography>
 +                                                )}
 +                                                {!isSubGroupLoading && !isSubGroupError && (subGroupStats?.length ?? 0) > 0 && (
-+                                                    <Table size='small'>
-+                                                        <TableHead>
-+                                                            <TableRow>
-+                                                                <TableCell>{globalize.translate('Genre')}</TableCell>
-+                                                                <TableCell align='right'>{globalize.translate('LabelPlayCount')}</TableCell>
-+                                                                <TableCell align='right'>{globalize.translate('LabelWatchTime')}</TableCell>
-+                                                            </TableRow>
-+                                                        </TableHead>
-+                                                        <TableBody>
-+                                                            {(subGroupStats ?? []).map(subRow => (
-+                                                                <TableRow key={subRow.SubGroup}>
-+                                                                    <TableCell>{subRow.SubGroup}</TableCell>
-+                                                                    <TableCell align='right'>{subRow.PlayCount}</TableCell>
-+                                                                    <TableCell align='right'>{formatTicks(subRow.TotalTicks)}</TableCell>
++                                                    <Stack spacing={2}>
++                                                        <RankedBarList
++                                                            items={(subGroupStats ?? []).map(subRow => ({
++                                                                id: subRow.SubGroup,
++                                                                label: subRow.SubGroup || 'Unknown',
++                                                                value: subRow.TotalTicks
++                                                            }))}
++                                                            valueFormatter={formatTicks}
++                                                            height={220}
++                                                        />
++                                                        <Table size='small'>
++                                                            <TableHead>
++                                                                <TableRow>
++                                                                    <TableCell>{globalize.translate('Genre')}</TableCell>
++                                                                    <TableCell align='right'>{globalize.translate('LabelPlayCount')}</TableCell>
++                                                                    <TableCell align='right'>{globalize.translate('LabelWatchTime')}</TableCell>
 +                                                                </TableRow>
-+                                                            ))}
-+                                                        </TableBody>
-+                                                    </Table>
++                                                            </TableHead>
++                                                            <TableBody>
++                                                                {(subGroupStats ?? []).map(subRow => (
++                                                                    <TableRow key={subRow.SubGroup}>
++                                                                        <TableCell>{subRow.SubGroup}</TableCell>
++                                                                        <TableCell align='right'>{subRow.PlayCount}</TableCell>
++                                                                        <TableCell align='right'>{formatTicks(subRow.TotalTicks)}</TableCell>
++                                                                    </TableRow>
++                                                                ))}
++                                                            </TableBody>
++                                                        </Table>
++                                                    </Stack>
 +                                                )}
 +                                            </Box>
 +                                        </Collapse>
@@ -429,225 +2971,166 @@ index e8411bdc27..425be2f9d6 100644
      { path: 'users', type: AppType.Dashboard },
 diff --git a/src/apps/dashboard/routes/reports/playback.tsx b/src/apps/dashboard/routes/reports/playback.tsx
 new file mode 100644
-index 0000000000..dbafbf8768
+index 0000000000..c5147adbee
 --- /dev/null
 +++ b/src/apps/dashboard/routes/reports/playback.tsx
-@@ -0,0 +1,217 @@
-+import React, { useMemo } from 'react';
-+import Alert from '@mui/material/Alert';
+@@ -0,0 +1,158 @@
++import React, { useCallback, useMemo } from 'react';
 +import Box from '@mui/material/Box';
-+import CircularProgress from '@mui/material/CircularProgress';
-+import Link from '@mui/material/Link';
-+import Paper from '@mui/material/Paper';
-+import Stack from '@mui/material/Stack';
++import Tab from '@mui/material/Tab';
++import Tabs from '@mui/material/Tabs';
 +import Typography from '@mui/material/Typography';
-+import { type MRT_ColumnDef, type MRT_TableOptions, useMaterialReactTable } from 'material-react-table';
-+import { Link as RouterLink } from 'react-router-dom';
++import Page from 'components/Page';
 +import { useUsersDetails } from 'hooks/useUsers';
 +import globalize from 'lib/globalize';
 +
-+import TablePage, { DEFAULT_TABLE_OPTIONS } from 'apps/dashboard/components/table/TablePage';
-+import UserAvatarButton from 'apps/dashboard/components/UserAvatarButton';
 +import {
-+    useServerPlaybackStats,
-+    useServerPlaybackStatsByUser
++    usePlaybackDaily,
++    usePlaybackDimensions,
++    usePlaybackRecent,
++    useServerPlaybackStats
 +} from 'apps/dashboard/features/playbackStatistics/api/usePlaybackStats';
-+import type { PlaybackUserStatRow, PlaybackUserTableRow } from 'apps/dashboard/features/playbackStatistics/types';
++import PlaybackStatsFiltersBar from 'apps/dashboard/features/playbackStatistics/components/PlaybackStatsFilters';
++import BreakdownTab from 'apps/dashboard/features/playbackStatistics/components/tabs/BreakdownTab';
++import DeliveryTab from 'apps/dashboard/features/playbackStatistics/components/tabs/DeliveryTab';
++import OverviewTab from 'apps/dashboard/features/playbackStatistics/components/tabs/OverviewTab';
++import PatternsTab from 'apps/dashboard/features/playbackStatistics/components/tabs/PatternsTab';
++import RecentTab from 'apps/dashboard/features/playbackStatistics/components/tabs/RecentTab';
++import TrendsTab from 'apps/dashboard/features/playbackStatistics/components/tabs/TrendsTab';
++import UsersTab from 'apps/dashboard/features/playbackStatistics/components/tabs/UsersTab';
++import {
++    PlaybackStatsFilterProvider,
++    usePlaybackStatsFilters
++} from 'apps/dashboard/features/playbackStatistics/context/PlaybackStatsFilterContext';
++import type { PlaybackStatsTab } from 'apps/dashboard/features/playbackStatistics/types';
++import { exportCsv } from 'apps/dashboard/features/playbackStatistics/utils/exportCsv';
 +import { formatTicks } from 'apps/dashboard/features/playbackStatistics/utils/formatTicks';
 +
-+const buildUserRows = (
-+    rows: PlaybackUserStatRow[] | null | undefined
-+): { userRows: PlaybackUserTableRow[]; mediaTypes: string[] } => {
-+    const mediaTypeSet = new Set<string>();
-+    const byUser = new Map<string, PlaybackUserTableRow>();
-+
-+    for (const row of rows ?? []) {
-+        mediaTypeSet.add(row.MediaType);
-+
-+        const existing = byUser.get(row.UserId) ?? {
-+            userId: row.UserId,
-+            totalTicks: 0,
-+            playCount: 0,
-+            byMediaType: {}
-+        };
-+
-+        existing.totalTicks += row.TotalTicks;
-+        existing.playCount += row.PlayCount;
-+        existing.byMediaType[row.MediaType] = {
-+            totalTicks: row.TotalTicks,
-+            playCount: row.PlayCount
-+        };
-+
-+        byUser.set(row.UserId, existing);
-+    }
-+
-+    return {
-+        userRows: Array.from(byUser.values()).sort((a, b) => b.totalTicks - a.totalTicks),
-+        mediaTypes: Array.from(mediaTypeSet).sort()
-+    };
++const TAB_LABELS: Record<PlaybackStatsTab, string> = {
++    overview: 'PlaybackStatsTabOverview',
++    trends: 'PlaybackStatsTabTrends',
++    users: 'PlaybackStatsTabUsers',
++    breakdown: 'PlaybackStatsTabBreakdown',
++    patterns: 'PlaybackStatsTabPatterns',
++    delivery: 'PlaybackStatsTabDelivery',
++    recent: 'PlaybackStatsTabRecent'
 +};
 +
-+export const Component = () => {
-+    const {
-+        data: serverStats,
-+        isLoading: isServerStatsLoading,
-+        isError: isServerStatsError,
-+        error: serverStatsError
-+    } = useServerPlaybackStats();
-+    const {
-+        data: userStats,
-+        isLoading: isUserStatsLoading,
-+        isError: isUserStatsError,
-+        error: userStatsError
-+    } = useServerPlaybackStatsByUser();
-+    const {
-+        usersById: users,
-+        isLoading: isUsersLoading,
-+        isError: isUsersError,
-+        error: usersError
-+    } = useUsersDetails();
++const PlaybackStatisticsContent = () => {
++    const { tab, setTab, apiFilters, filters } = usePlaybackStatsFilters();
++    const { usersById: users } = useUsersDetails();
++    const mediaStats = useServerPlaybackStats(apiFilters);
++    const clients = usePlaybackDimensions('Client', apiFilters);
++    const dailyExport = usePlaybackDaily({ ...apiFilters, groupBy: 'User' });
++    const recentExport = usePlaybackRecent({ ...apiFilters, startIndex: 0, limit: 200 });
 +
-+    const { userRows, mediaTypes } = useMemo(
-+        () => buildUserRows(userStats),
-+        [ userStats ]
++    const userNameById = useMemo(() => {
++        const map: Record<string, string> = {};
++        for (const [ id, user ] of Object.entries(users)) {
++            if (user?.Name) {
++                map[id] = user.Name;
++            }
++        }
++
++        return map;
++    }, [ users ]);
++
++    const userOptions = useMemo(
++        () => Object.entries(users)
++            .map(([ id, user ]) => ({ id, name: user?.Name || id }))
++            .sort((a, b) => a.name.localeCompare(b.name)),
++        [ users ]
 +    );
 +
-+    const serverTotals = useMemo(() => (serverStats ?? []).reduce((acc, row) => ({
-+        totalTicks: acc.totalTicks + row.TotalTicks,
-+        playCount: acc.playCount + row.PlayCount
-+    }), { totalTicks: 0, playCount: 0 }), [ serverStats ]);
++    const availableMediaTypes = useMemo(
++        () => (mediaStats.data ?? []).map(row => row.MediaType).sort(),
++        [ mediaStats.data ]
++    );
 +
-+    const columns = useMemo<MRT_ColumnDef<PlaybackUserTableRow>[]>(() => [
-+        {
-+            id: 'User',
-+            header: globalize.translate('LabelUser'),
-+            size: 240,
-+            minSize: 180,
-+            grow: true,
-+            Cell: ({ row }) => {
-+                const user = users[row.original.userId];
++    const availableClients = useMemo(
++        () => (clients.data ?? []).map(row => row.Key).filter(Boolean).sort(),
++        [ clients.data ]
++    );
 +
-+                return (
-+                    <Stack direction='row' spacing={1} alignItems='center'>
-+                        <UserAvatarButton user={user} />
-+                        <Link
-+                            component={RouterLink}
-+                            to={`/dashboard/users/${row.original.userId}/playbackstats`}
-+                            underline='hover'
-+                        >
-+                            {user?.Name || row.original.userId}
-+                        </Link>
-+                    </Stack>
-+                );
-+            }
-+        },
-+        ...mediaTypes.map(mediaType => ({
-+            id: mediaType,
-+            header: mediaType,
-+            size: 140,
-+            minSize: 120,
-+            grow: true,
-+            accessorFn: (row: PlaybackUserTableRow) => row.byMediaType[mediaType]?.totalTicks ?? 0,
-+            Cell: ({ row }: { row: { original: PlaybackUserTableRow } }) => {
-+                const stat = row.original.byMediaType[mediaType];
-+                return stat ? formatTicks(stat.totalTicks) : '—';
-+            }
-+        })),
-+        {
-+            id: 'TotalWatchTime',
-+            header: globalize.translate('LabelWatchTime'),
-+            size: 140,
-+            minSize: 120,
-+            grow: true,
-+            accessorFn: row => row.totalTicks,
-+            Cell: ({ row }) => formatTicks(row.original.totalTicks)
-+        },
-+        {
-+            id: 'PlayCount',
-+            header: globalize.translate('LabelPlayCount'),
-+            size: 140,
-+            minSize: 120,
-+            grow: true,
-+            accessorKey: 'playCount'
++    const onExport = useCallback(() => {
++        if (tab === 'recent') {
++            exportCsv(
++                `playback-recent-${filters.startDate}-${filters.endDate}.csv`,
++                [ 'Date', 'User', 'Item', 'Series', 'MediaType', 'Ticks', 'PlayMethod', 'Client', 'Device' ],
++                (recentExport.data?.Items ?? []).map(item => [
++                    item.DatePlayed,
++                    userNameById[item.UserId] || item.UserId,
++                    item.ItemName,
++                    item.SeriesName || '',
++                    item.MediaType,
++                    formatTicks(item.PlayedTicks),
++                    item.PlaybackMethod || '',
++                    item.ClientName || '',
++                    item.DeviceName || ''
++                ])
++            );
++            return;
 +        }
-+    ], [ mediaTypes, users ]);
 +
-+    const isLoading = isServerStatsLoading || isUserStatsLoading || isUsersLoading;
-+    const isError = isServerStatsError || isUserStatsError || isUsersError;
-+    const errorMessage = serverStatsError?.message
-+        || userStatsError?.message
-+        || usersError?.message
-+        || globalize.translate('PlaybackStatsLoadError');
-+
-+    const useStickyTableShell = userRows.length > 25;
-+
-+    const table = useMaterialReactTable<PlaybackUserTableRow>({
-+        ...(DEFAULT_TABLE_OPTIONS as Partial<MRT_TableOptions<PlaybackUserTableRow>>),
-+        columns,
-+        data: userRows,
-+        layoutMode: 'grid',
-+        enableColumnResizing: false,
-+        enableStickyHeader: useStickyTableShell,
-+        enableStickyFooter: useStickyTableShell,
-+        muiTableContainerProps: {
-+            sx: {
-+                maxHeight: useStickyTableShell ? 'calc(100% - 7rem)' : 'none'
-+            }
-+        },
-+        initialState: {
-+            density: 'compact',
-+            sorting: [{ id: 'TotalWatchTime', desc: true }]
-+        },
-+        state: {
-+            isLoading
-+        },
-+        enableColumnFilters: false,
-+        enableGlobalFilter: true,
-+        enablePagination: useStickyTableShell,
-+        enableBottomToolbar: useStickyTableShell
-+    });
-+
-+    if (isLoading) {
-+        return (
-+            <Box display='flex' justifyContent='center' py={8}>
-+                <CircularProgress />
-+            </Box>
++        exportCsv(
++            `playback-daily-${filters.startDate}-${filters.endDate}.csv`,
++            [ 'Date', 'User', 'Ticks', 'PlayCount' ],
++            (dailyExport.data ?? []).map(row => [
++                row.Date,
++                row.UserId ? (userNameById[row.UserId] || row.UserId) : '',
++                formatTicks(row.TotalTicks),
++                row.PlayCount
++            ])
 +        );
-+    }
++    }, [ dailyExport.data, filters.endDate, filters.startDate, recentExport.data?.Items, tab, userNameById ]);
 +
 +    return (
-+        <TablePage
++        <Page
 +            id='playbackStatisticsPage'
 +            title={globalize.translate('HeaderPlaybackStatistics')}
 +            className='mainAnimatedPage type-interior'
-+            table={table}
-+            isError={isError}
-+            errorMessage={errorMessage}
 +        >
-+            {!isError && (serverStats?.length ?? 0) === 0 && userRows.length === 0 && (
-+                <Alert severity='info' sx={{ mb: 2 }}>
-+                    {globalize.translate('PlaybackStatsEmpty')}
-+                </Alert>
-+            )}
-+            {!isError && (serverStats?.length ?? 0) > 0 && (
-+                <Stack direction='row' spacing={2} sx={{ mb: 2 }}>
-+                    <Paper sx={{ p: 2, flex: 1 }}>
-+                        <Typography variant='body2' color='text.secondary'>
-+                            {globalize.translate('LabelWatchTime')}
-+                        </Typography>
-+                        <Typography variant='h5'>{formatTicks(serverTotals.totalTicks)}</Typography>
-+                    </Paper>
-+                    <Paper sx={{ p: 2, flex: 1 }}>
-+                        <Typography variant='body2' color='text.secondary'>
-+                            {globalize.translate('LabelPlayCount')}
-+                        </Typography>
-+                        <Typography variant='h5'>{serverTotals.playCount}</Typography>
-+                    </Paper>
-+                </Stack>
-+            )}
-+        </TablePage>
++            <Box className='content-primary' sx={{ px: { xs: 1, md: 2 }, pb: 4 }}>
++                <Typography variant='h4' sx={{ mb: 2 }}>
++                    {globalize.translate('HeaderPlaybackStatistics')}
++                </Typography>
++
++                <PlaybackStatsFiltersBar
++                    availableMediaTypes={availableMediaTypes}
++                    availableClients={availableClients}
++                    userOptions={userOptions}
++                    onExport={onExport}
++                />
++
++                <Tabs
++                    value={tab}
++                    onChange={(_event, value: PlaybackStatsTab) => setTab(value)}
++                    variant='scrollable'
++                    scrollButtons='auto'
++                    sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
++                >
++                    {(Object.keys(TAB_LABELS) as PlaybackStatsTab[]).map(key => (
++                        <Tab key={key} value={key} label={globalize.translate(TAB_LABELS[key])} />
++                    ))}
++                </Tabs>
++
++                {tab === 'overview' && <OverviewTab userNameById={userNameById} />}
++                {tab === 'trends' && <TrendsTab userNameById={userNameById} />}
++                {tab === 'users' && <UsersTab usersById={users} />}
++                {tab === 'breakdown' && <BreakdownTab />}
++                {tab === 'patterns' && <PatternsTab />}
++                {tab === 'delivery' && <DeliveryTab />}
++                {tab === 'recent' && <RecentTab usersById={users} />}
++            </Box>
++        </Page>
 +    );
 +};
++
++export const Component = () => (
++    <PlaybackStatsFilterProvider>
++        <PlaybackStatisticsContent />
++    </PlaybackStatsFilterProvider>
++);
 +
 +Component.displayName = 'PlaybackStatisticsPage';
 diff --git a/src/apps/dashboard/routes/users/edit.tsx b/src/apps/dashboard/routes/users/edit.tsx
@@ -681,9 +3164,20 @@ index 2c69784c58..2180c978c8 100644
                  )}
              </Box>
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 250a7a8d4f..6af511410e 100755
+index 250a7a8d4f..af3226ca57 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
+@@ -33,8 +33,8 @@
+     "AllowSegmentDeletion": "Delete segments",
+     "AllowSegmentDeletionHelp": "Delete old segments after they have been downloaded by the client. This prevents having to store the entire transcoded file on disk. Turn this off if you experience playback issues.",
+     "AllowStreamSharingHelp": "Allow Jellyfin to duplicate the mpegts stream from tuner and share this duplicated stream to its clients. This is useful when the tuner has total stream count limit but may also cause playback issues.",
+-    "Alternate" : "Alternate",
+-    "AlternateDVD" : "Alternate DVD",
++    "Alternate": "Alternate",
++    "AlternateDVD": "Alternate DVD",
+     "AlwaysBurnInSubtitleWhenTranscoding": "Always burn in subtitle when transcoding",
+     "AlwaysBurnInSubtitleWhenTranscodingHelp": "Burn in all subtitles when transcoding is triggered. This ensures subtitle synchronization after transcoding at the cost of reduced transcoding speed.",
+     "LabelThrottleDelaySeconds": "Throttle after",
 @@ -516,6 +516,7 @@
      "HeaderPlayAll": "Play All",
      "HeaderPlayback": "Media playback",
@@ -700,6 +3194,15 @@ index 250a7a8d4f..6af511410e 100755
      "HeaderRevisionHistory": "Revision History",
      "HeaderRunningTasks": "Running Tasks",
      "HeaderScenes": "Scenes",
+@@ -727,7 +729,7 @@
+     "LabelDownMixAudioScale": "Audio boost when downmixing",
+     "LabelDownMixAudioScaleHelp": "Boost audio when downmixing. A value of one will preserve the original volume.",
+     "LabelStereoDownmixAlgorithm": "Stereo Downmix Algorithm",
+-    "LabelDuration" : "Duration",
++    "LabelDuration": "Duration",
+     "LabelDropImageHere": "Drop image here, or click to browse.",
+     "LabelDropLyricsHere": "Drop lyrics here, or click to browse.",
+     "LabelDroppedFrames": "Dropped frames",
 @@ -823,6 +825,7 @@
      "LabelMediaSegmentProviders": "Media segment providers",
      "LabelMediaSegmentsType": "{0} Segments",
@@ -733,6 +3236,24 @@ index 250a7a8d4f..6af511410e 100755
      "PlayCount": "Play count",
      "Played": "Played",
      "PlayFromBeginning": "Play from beginning",
+@@ -1512,7 +1519,7 @@
+     "RefreshDialogHelp": "Metadata is refreshed based on settings and internet services that are enabled in the Dashboard.",
+     "RefreshMetadata": "Refresh metadata",
+     "RefreshQueued": "Refresh queued.",
+-    "Regional" : "Regional",
++    "Regional": "Regional",
+     "ReleaseDate": "Release date",
+     "ReleaseGroup": "Release Group",
+     "RememberAudioSelections": "Set audio track based on previous item",
+@@ -1562,7 +1569,7 @@
+     "ScreenResolution": "Screen Resolution",
+     "Search": "Search",
+     "SearchForCollectionInternetMetadata": "Search the internet for artwork and metadata",
+-    "SearchForLyrics" : "Search for Lyrics",
++    "SearchForLyrics": "Search for Lyrics",
+     "SearchForMissingMetadata": "Search for missing metadata",
+     "SearchForSubtitles": "Search for Subtitles",
+     "SearchResults": "Search Results",
 @@ -1672,6 +1679,7 @@
      "TabNfoSettings": "NFO Settings",
      "TabOther": "Other",
@@ -741,3 +3262,41 @@ index 250a7a8d4f..6af511410e 100755
      "TabPlugins": "Plugins",
      "TabRepositories": "Repositories",
      "TabScheduledTasks": "Scheduled Tasks",
+@@ -1944,5 +1952,36 @@
+     "LabelProgressAndSpeed": "Progress / speed",
+     "LabelReasons": "Reasons",
+     "LabelPlayerSizes": "Player sizes",
+-    "LabelPlaybackQuality": "Frame dropped / corrupted"
++    "LabelPlaybackQuality": "Frame dropped / corrupted",
++    "PlaybackStatsActiveUsers": "Active users",
++    "PlaybackStatsActivityOnly": "Hide empty days",
++    "PlaybackStatsAllTime": "All time",
++    "PlaybackStatsClearFilters": "Clear filters",
++    "PlaybackStatsDays": "days",
++    "PlaybackStatsStartDate": "Start",
++    "PlaybackStatsAvgSession": "Avg session",
++    "PlaybackStatsByItem": "By item",
++    "PlaybackStatsBySeries": "By series",
++    "PlaybackStatsClients": "Clients",
++    "PlaybackStatsDailyTrend": "Daily playback",
++    "PlaybackStatsDayOfWeek": "Day of week",
++    "PlaybackStatsDirectPlay": "Direct play",
++    "PlaybackStatsExportCsv": "Export CSV",
++    "PlaybackStatsGroupBy": "Group by",
++    "PlaybackStatsHourlyHeatmap": "Hourly usage heatmap",
++    "PlaybackStatsIncludeOther": "Other",
++    "PlaybackStatsItemLimit": "# Items",
++    "PlaybackStatsLast28Days": "Last 28 days",
++    "PlaybackStatsMediaMix": "Media type mix",
++    "PlaybackStatsMetric": "Metric",
++    "PlaybackStatsPlaybackMethod": "Playback method",
++    "PlaybackStatsSessionLength": "Session length",
++    "PlaybackStatsTabBreakdown": "Breakdown",
++    "PlaybackStatsTabDelivery": "Delivery",
++    "PlaybackStatsTabOverview": "Overview",
++    "PlaybackStatsTabPatterns": "Patterns",
++    "PlaybackStatsTabRecent": "Recent",
++    "PlaybackStatsTabTrends": "Trends",
++    "PlaybackStatsTabUsers": "Users",
++    "PlaybackStatsTopUsers": "Top users"
+ }

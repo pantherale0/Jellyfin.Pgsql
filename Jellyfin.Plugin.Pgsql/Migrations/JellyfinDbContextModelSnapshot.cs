@@ -1118,6 +1118,12 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Property<long>("PlayedTicks")
                         .HasColumnType("bigint");
 
+                    b.Property<Guid?>("SeriesId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("SeriesName")
+                        .HasColumnType("text");
+
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
@@ -1127,6 +1133,9 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                         .HasFilter("\"DeviceId\" IS NOT NULL");
 
                     b.HasIndex("ItemId", "DatePlayed");
+
+                    b.HasIndex("SeriesId", "DatePlayed")
+                        .HasFilter("\"SeriesId\" IS NOT NULL");
 
                     b.HasIndex("UserId", "DatePlayed");
 
