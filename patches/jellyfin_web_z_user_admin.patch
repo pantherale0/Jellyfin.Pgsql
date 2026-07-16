@@ -1,0 +1,634 @@
+diff --git a/src/apps/dashboard/features/userAdmin/api/useUserAdmin.ts b/src/apps/dashboard/features/userAdmin/api/useUserAdmin.ts
+new file mode 100644
+index 0000000000..f622150e03
+--- /dev/null
++++ b/src/apps/dashboard/features/userAdmin/api/useUserAdmin.ts
+@@ -0,0 +1,38 @@
++import { useMutation } from '@tanstack/react-query';
++
++import { useApi } from 'hooks/useApi';
++
++import type { UserAdminMode } from '../types';
++import { executeUserTransfer, previewUserTransfer } from './userAdminApi';
++
++export const usePreviewUserTransfer = () => {
++    const { api } = useApi();
++
++    return useMutation({
++        mutationFn: ({
++            mode,
++            sourceUserId,
++            targetUserId
++        }: {
++            mode: UserAdminMode;
++            sourceUserId: string;
++            targetUserId: string;
++        }) => previewUserTransfer(api!, mode, sourceUserId, targetUserId)
++    });
++};
++
++export const useExecuteUserTransfer = () => {
++    const { api } = useApi();
++
++    return useMutation({
++        mutationFn: ({
++            mode,
++            sourceUserId,
++            targetUserId
++        }: {
++            mode: UserAdminMode;
++            sourceUserId: string;
++            targetUserId: string;
++        }) => executeUserTransfer(api!, mode, sourceUserId, targetUserId)
++    });
++};
+diff --git a/src/apps/dashboard/features/userAdmin/api/userAdminApi.ts b/src/apps/dashboard/features/userAdmin/api/userAdminApi.ts
+new file mode 100644
+index 0000000000..4532b4cad1
+--- /dev/null
++++ b/src/apps/dashboard/features/userAdmin/api/userAdminApi.ts
+@@ -0,0 +1,50 @@
++import type { Api } from '@jellyfin/sdk';
++import type { AxiosRequestConfig } from 'axios';
++
++import type { UserAdminMode, UserAdminTransferResponse } from '../types';
++
++const postTransfer = async (
++    api: Api,
++    path: string,
++    sourceUserId: string,
++    targetUserId: string,
++    options?: AxiosRequestConfig
++): Promise<UserAdminTransferResponse> => {
++    const response = await api.axiosInstance.post<UserAdminTransferResponse>(
++        path,
++        { sourceUserId, targetUserId },
++        {
++            ...options,
++            baseURL: api.basePath,
++            headers: {
++                ...options?.headers,
++                Authorization: api.authorizationHeader
++            }
++        }
++    );
++    return response.data;
++};
++
++const previewPath = (mode: UserAdminMode) =>
++    mode === 'merge' ? '/Pgsql/Admin/Users/Merge/Preview' : '/Pgsql/Admin/Users/MoveUserData/Preview';
++
++const executePath = (mode: UserAdminMode) =>
++    mode === 'merge' ? '/Pgsql/Admin/Users/Merge' : '/Pgsql/Admin/Users/MoveUserData';
++
++export const previewUserTransfer = (
++    api: Api,
++    mode: UserAdminMode,
++    sourceUserId: string,
++    targetUserId: string,
++    options?: AxiosRequestConfig
++): Promise<UserAdminTransferResponse> =>
++    postTransfer(api, previewPath(mode), sourceUserId, targetUserId, options);
++
++export const executeUserTransfer = (
++    api: Api,
++    mode: UserAdminMode,
++    sourceUserId: string,
++    targetUserId: string,
++    options?: AxiosRequestConfig
++): Promise<UserAdminTransferResponse> =>
++    postTransfer(api, executePath(mode), sourceUserId, targetUserId, options);
+diff --git a/src/apps/dashboard/features/userAdmin/types.ts b/src/apps/dashboard/features/userAdmin/types.ts
+new file mode 100644
+index 0000000000..6e315b821a
+--- /dev/null
++++ b/src/apps/dashboard/features/userAdmin/types.ts
+@@ -0,0 +1,30 @@
++export interface UserMergeCounts {
++    userDataMoved: number;
++    userDataMerged: number;
++    playbackActivityMoved: number;
++    displayPreferencesMoved: number;
++    displayPreferencesDropped: number;
++    itemDisplayPreferencesMoved: number;
++    itemDisplayPreferencesDropped: number;
++    customItemDisplayPreferencesMoved: number;
++    customItemDisplayPreferencesDropped: number;
++    devicesMoved: number;
++    devicesDeactivated: number;
++    permissionsDropped: number;
++    preferencesUnioned: number;
++    preferencesDropped: number;
++    accessSchedulesDropped: number;
++    imageInfosDropped: number;
++    activityLogsMoved: number;
++    tasteProfileSourceRemoved: boolean;
++    tasteProfileTargetRebuilt: boolean;
++    sourceUserDeleted: boolean;
++}
++
++export interface UserAdminTransferResponse {
++    isPreview: boolean;
++    counts: UserMergeCounts;
++    warning?: string | null;
++}
++
++export type UserAdminMode = 'merge' | 'moveUserData';
+diff --git a/src/apps/dashboard/routes/_asyncRoutes.ts b/src/apps/dashboard/routes/_asyncRoutes.ts
+index 425be2f9d6..5f77cd83cf 100644
+--- a/src/apps/dashboard/routes/_asyncRoutes.ts
++++ b/src/apps/dashboard/routes/_asyncRoutes.ts
+@@ -30,5 +30,6 @@ export const ASYNC_ADMIN_ROUTES: AsyncRoute[] = [
+     { path: 'tasks/:id', page: 'tasks/task', type: AppType.Dashboard },
+     { path: 'users', type: AppType.Dashboard },
+     { path: 'users/add', type: AppType.Dashboard },
++    { path: 'users/merge', type: AppType.Dashboard },
+     { path: 'users/:userId/:tab', page: 'users/edit', type: AppType.Dashboard }
+ ];
+diff --git a/src/apps/dashboard/routes/users/index.tsx b/src/apps/dashboard/routes/users/index.tsx
+index 6d1adff6d7..63941ea749 100644
+--- a/src/apps/dashboard/routes/users/index.tsx
++++ b/src/apps/dashboard/routes/users/index.tsx
+@@ -80,6 +80,11 @@ const UserProfiles = () => {
+                 id: 'parentalcontrol',
+                 icon: 'person'
+             });
++            menuItems.push({
++                name: globalize.translate('ButtonMergeUser'),
++                id: 'merge',
++                icon: 'merge_type'
++            });
+             menuItems.push({
+                 name: globalize.translate('Delete'),
+                 id: 'delete',
+@@ -104,6 +109,10 @@ const UserProfiles = () => {
+                                 navigate(`/dashboard/users/${userId}/${UserTab.ParentalControl}`);
+                                 break;
+ 
++                            case 'merge':
++                                navigate(`/dashboard/users/merge?source=${encodeURIComponent(userId)}`);
++                                break;
++
+                             case 'delete':
+                                 confirmDeleteUser(userId, username);
+                         }
+@@ -146,17 +155,30 @@ const UserProfiles = () => {
+             navigate('/dashboard/users/add');
+         };
+ 
++        const onMergeUsersClick = function() {
++            navigate('/dashboard/users/merge');
++        };
++
+         page.addEventListener('click', onPageClick);
+         const btnAddUser = page.querySelector('#btnAddUser');
+         if (btnAddUser) {
+             btnAddUser.addEventListener('click', onAddUserClick);
+         }
+ 
++        const btnMergeUsers = page.querySelector('#btnMergeUsers');
++        if (btnMergeUsers) {
++            btnMergeUsers.addEventListener('click', onMergeUsersClick);
++        }
++
+         return () => {
+             page.removeEventListener('click', onPageClick);
+             if (btnAddUser) {
+                 btnAddUser.removeEventListener('click', onAddUserClick);
+             }
++
++            if (btnMergeUsers) {
++                btnMergeUsers.removeEventListener('click', onMergeUsersClick);
++            }
+         };
+     }, [navigate, deleteUser, location.state?.openSavedToast, activeTab]);
+ 
+@@ -194,6 +216,15 @@ const UserProfiles = () => {
+                                 btnTitle='ButtonAddUser'
+                                 btnIcon='add'
+                             />
++                            <button
++                                is='emby-button'
++                                type='button'
++                                id='btnMergeUsers'
++                                className='raised sectionTitleButton'
++                                style={{ marginLeft: '0.5em' }}
++                            >
++                                <span>{globalize.translate('HeaderUserAdminMerge')}</span>
++                            </button>
+                         </div>
+ 
+                         <div className='localUsers itemsContainer vertical-wrap'>
+diff --git a/src/apps/dashboard/routes/users/merge.tsx b/src/apps/dashboard/routes/users/merge.tsx
+new file mode 100644
+index 0000000000..48c6a805a7
+--- /dev/null
++++ b/src/apps/dashboard/routes/users/merge.tsx
+@@ -0,0 +1,343 @@
++import Alert from '@mui/material/Alert';
++import Box from '@mui/material/Box';
++import Button from '@mui/material/Button';
++import FormControl from '@mui/material/FormControl';
++import FormControlLabel from '@mui/material/FormControlLabel';
++import InputLabel from '@mui/material/InputLabel';
++import MenuItem from '@mui/material/MenuItem';
++import Radio from '@mui/material/Radio';
++import RadioGroup from '@mui/material/RadioGroup';
++import Select from '@mui/material/Select';
++import Stack from '@mui/material/Stack';
++import Table from '@mui/material/Table';
++import TableBody from '@mui/material/TableBody';
++import TableCell from '@mui/material/TableCell';
++import TableHead from '@mui/material/TableHead';
++import TableRow from '@mui/material/TableRow';
++import TextField from '@mui/material/TextField';
++import Typography from '@mui/material/Typography';
++import React, { useCallback, useMemo, useState } from 'react';
++import { useNavigate, useSearchParams } from 'react-router-dom';
++
++import Page from 'components/Page';
++import Loading from 'components/loading/LoadingComponent';
++import {
++    useExecuteUserTransfer,
++    usePreviewUserTransfer
++} from 'apps/dashboard/features/userAdmin/api/useUserAdmin';
++import type {
++    UserAdminMode,
++    UserAdminTransferResponse,
++    UserMergeCounts
++} from 'apps/dashboard/features/userAdmin/types';
++import { QUERY_KEY, useUsers } from 'hooks/useUsers';
++import globalize from 'lib/globalize';
++import { queryClient } from 'utils/query/queryClient';
++
++const countRows = (counts: UserMergeCounts, mode: UserAdminMode): { label: string; value: string }[] => {
++    const rows = [
++        { label: globalize.translate('UserAdminCountUserDataMoved'), value: String(counts.userDataMoved) },
++        { label: globalize.translate('UserAdminCountUserDataMerged'), value: String(counts.userDataMerged) }
++    ];
++
++    if (mode === 'merge') {
++        rows.push(
++            { label: globalize.translate('UserAdminCountPlaybackActivity'), value: String(counts.playbackActivityMoved) },
++            { label: globalize.translate('UserAdminCountDisplayPreferencesMoved'), value: String(counts.displayPreferencesMoved) },
++            { label: globalize.translate('UserAdminCountDisplayPreferencesDropped'), value: String(counts.displayPreferencesDropped) },
++            { label: globalize.translate('UserAdminCountItemDisplayPreferencesMoved'), value: String(counts.itemDisplayPreferencesMoved) },
++            { label: globalize.translate('UserAdminCountItemDisplayPreferencesDropped'), value: String(counts.itemDisplayPreferencesDropped) },
++            { label: globalize.translate('UserAdminCountCustomItemDisplayPreferencesMoved'), value: String(counts.customItemDisplayPreferencesMoved) },
++            { label: globalize.translate('UserAdminCountCustomItemDisplayPreferencesDropped'), value: String(counts.customItemDisplayPreferencesDropped) },
++            { label: globalize.translate('UserAdminCountDevicesMoved'), value: String(counts.devicesMoved) },
++            { label: globalize.translate('UserAdminCountDevicesDeactivated'), value: String(counts.devicesDeactivated) },
++            { label: globalize.translate('UserAdminCountPermissionsDropped'), value: String(counts.permissionsDropped) },
++            { label: globalize.translate('UserAdminCountPreferencesUnioned'), value: String(counts.preferencesUnioned) },
++            { label: globalize.translate('UserAdminCountPreferencesDropped'), value: String(counts.preferencesDropped) },
++            { label: globalize.translate('UserAdminCountAccessSchedulesDropped'), value: String(counts.accessSchedulesDropped) },
++            { label: globalize.translate('UserAdminCountImageInfosDropped'), value: String(counts.imageInfosDropped) },
++            { label: globalize.translate('UserAdminCountActivityLogsMoved'), value: String(counts.activityLogsMoved) },
++            {
++                label: globalize.translate('UserAdminCountTasteProfileSourceRemoved'),
++                value: counts.tasteProfileSourceRemoved ? globalize.translate('Yes') : globalize.translate('No')
++            },
++            {
++                label: globalize.translate('UserAdminCountSourceUserDeleted'),
++                value: counts.sourceUserDeleted ? globalize.translate('Yes') : globalize.translate('No')
++            }
++        );
++    }
++
++    if (counts.tasteProfileTargetRebuilt) {
++        rows.push({
++            label: globalize.translate('UserAdminCountTasteProfileTargetRebuilt'),
++            value: globalize.translate('Yes')
++        });
++    }
++
++    return rows;
++};
++
++const UserMergePage = () => {
++    const navigate = useNavigate();
++    const [ searchParams ] = useSearchParams();
++    const initialSource = searchParams.get('source') || '';
++
++    const { data: users, isPending } = useUsers(undefined, { forceRefresh: true });
++    const previewMutation = usePreviewUserTransfer();
++    const executeMutation = useExecuteUserTransfer();
++
++    const [ mode, setMode ] = useState<UserAdminMode>('merge');
++    const [ sourceUserId, setSourceUserId ] = useState(initialSource);
++    const [ targetUserId, setTargetUserId ] = useState('');
++    const [ confirmName, setConfirmName ] = useState('');
++    const [ preview, setPreview ] = useState<UserAdminTransferResponse | null>(null);
++    const [ result, setResult ] = useState<UserAdminTransferResponse | null>(null);
++    const [ error, setError ] = useState<string | null>(null);
++
++    const sourceUser = useMemo(
++        () => users?.find(u => u.Id === sourceUserId),
++        [ users, sourceUserId ]
++    );
++    const targetUser = useMemo(
++        () => users?.find(u => u.Id === targetUserId),
++        [ users, targetUserId ]
++    );
++
++    const canPreview = !!sourceUserId && !!targetUserId && sourceUserId !== targetUserId;
++    const confirmMatches = !!sourceUser?.Name
++        && confirmName.trim().localeCompare(sourceUser.Name, undefined, { sensitivity: 'accent' }) === 0;
++    const canExecute = canPreview && confirmMatches && !!preview && !executeMutation.isPending;
++
++    const resetDownstream = useCallback(() => {
++        setPreview(null);
++        setResult(null);
++        setConfirmName('');
++        setError(null);
++    }, []);
++
++    const handlePreview = useCallback(() => {
++        if (!canPreview) {
++            return;
++        }
++
++        setError(null);
++        setResult(null);
++        previewMutation.mutate(
++            { mode, sourceUserId, targetUserId },
++            {
++                onSuccess: (data) => setPreview(data),
++                onError: (err: unknown) => {
++                    const message = (err as { response?: { data?: string } })?.response?.data
++                        || globalize.translate('UserAdminPreviewFailed');
++                    setError(typeof message === 'string' ? message : globalize.translate('UserAdminPreviewFailed'));
++                    setPreview(null);
++                }
++            }
++        );
++    }, [ canPreview, mode, previewMutation, sourceUserId, targetUserId ]);
++
++    const handleExecute = useCallback(() => {
++        if (!canExecute) {
++            return;
++        }
++
++        setError(null);
++        executeMutation.mutate(
++            { mode, sourceUserId, targetUserId },
++            {
++                onSuccess: (data) => {
++                    setResult(data);
++                    setPreview(null);
++                    void queryClient.invalidateQueries({ queryKey: [ QUERY_KEY ] });
++                },
++                onError: (err: unknown) => {
++                    const message = (err as { response?: { data?: string } })?.response?.data
++                        || globalize.translate('UserAdminExecuteFailed');
++                    setError(typeof message === 'string' ? message : globalize.translate('UserAdminExecuteFailed'));
++                }
++            }
++        );
++    }, [ canExecute, executeMutation, mode, sourceUserId, targetUserId ]);
++
++    if (isPending) {
++        return <Loading />;
++    }
++
++    const displayCounts = result?.counts || preview?.counts;
++
++    return (
++        <Page
++            id='userMergePage'
++            className='mainAnimatedPage type-interior'
++            title={globalize.translate('HeaderUserAdminMerge')}
++        >
++            <Box className='content-primary' sx={{ maxWidth: 720 }}>
++                <Stack spacing={3}>
++                    <Typography variant='body1'>
++                        {globalize.translate('UserAdminMergeHelp')}
++                    </Typography>
++
++                    <FormControl>
++                        <Typography variant='subtitle2' gutterBottom>
++                            {globalize.translate('UserAdminMode')}
++                        </Typography>
++                        <RadioGroup
++                            row
++                            value={mode}
++                            onChange={(e) => {
++                                setMode(e.target.value as UserAdminMode);
++                                resetDownstream();
++                            }}
++                        >
++                            <FormControlLabel
++                                value='merge'
++                                control={<Radio />}
++                                label={globalize.translate('UserAdminModeMerge')}
++                            />
++                            <FormControlLabel
++                                value='moveUserData'
++                                control={<Radio />}
++                                label={globalize.translate('UserAdminModeMoveUserData')}
++                            />
++                        </RadioGroup>
++                    </FormControl>
++
++                    <FormControl fullWidth>
++                        <InputLabel id='source-user-label'>
++                            {globalize.translate('UserAdminSourceUser')}
++                        </InputLabel>
++                        <Select
++                            labelId='source-user-label'
++                            label={globalize.translate('UserAdminSourceUser')}
++                            value={sourceUserId}
++                            onChange={(e) => {
++                                setSourceUserId(e.target.value);
++                                resetDownstream();
++                            }}
++                        >
++                            {(users || []).map(user => (
++                                <MenuItem key={user.Id} value={user.Id || ''} disabled={user.Id === targetUserId}>
++                                    {user.Name}
++                                </MenuItem>
++                            ))}
++                        </Select>
++                    </FormControl>
++
++                    <FormControl fullWidth>
++                        <InputLabel id='target-user-label'>
++                            {globalize.translate('UserAdminTargetUser')}
++                        </InputLabel>
++                        <Select
++                            labelId='target-user-label'
++                            label={globalize.translate('UserAdminTargetUser')}
++                            value={targetUserId}
++                            onChange={(e) => {
++                                setTargetUserId(e.target.value);
++                                resetDownstream();
++                            }}
++                        >
++                            {(users || []).map(user => (
++                                <MenuItem key={user.Id} value={user.Id || ''} disabled={user.Id === sourceUserId}>
++                                    {user.Name}
++                                </MenuItem>
++                            ))}
++                        </Select>
++                    </FormControl>
++
++                    {mode === 'merge' && (
++                        <Alert severity='warning'>
++                            {globalize.translate('UserAdminMergeWarning')}
++                        </Alert>
++                    )}
++
++                    <Stack direction='row' spacing={2}>
++                        <Button
++                            variant='outlined'
++                            disabled={!canPreview || previewMutation.isPending}
++                            onClick={handlePreview}
++                        >
++                            {globalize.translate('UserAdminPreview')}
++                        </Button>
++                        <Button variant='text' onClick={() => navigate('/dashboard/users')}>
++                            {globalize.translate('ButtonCancel')}
++                        </Button>
++                    </Stack>
++
++                    {error && <Alert severity='error'>{error}</Alert>}
++
++                    {displayCounts && (
++                        <Box>
++                            <Typography variant='h6' gutterBottom>
++                                {result
++                                    ? globalize.translate('UserAdminResult')
++                                    : globalize.translate('UserAdminPreviewResult')}
++                            </Typography>
++                            <Table size='small'>
++                                <TableHead>
++                                    <TableRow>
++                                        <TableCell>{globalize.translate('LabelType')}</TableCell>
++                                        <TableCell align='right'>{globalize.translate('UserAdminCount')}</TableCell>
++                                    </TableRow>
++                                </TableHead>
++                                <TableBody>
++                                    {countRows(displayCounts, mode).map(row => (
++                                        <TableRow key={row.label}>
++                                            <TableCell>{row.label}</TableCell>
++                                            <TableCell align='right'>{row.value}</TableCell>
++                                        </TableRow>
++                                    ))}
++                                </TableBody>
++                            </Table>
++                        </Box>
++                    )}
++
++                    {preview && !result && (
++                        <Stack spacing={2}>
++                            <TextField
++                                fullWidth
++                                label={globalize.translate('UserAdminConfirmUsername', sourceUser?.Name || '')}
++                                value={confirmName}
++                                onChange={(e) => setConfirmName(e.target.value)}
++                                helperText={globalize.translate(
++                                    'UserAdminConfirmHelp',
++                                    sourceUser?.Name || '',
++                                    targetUser?.Name || ''
++                                )}
++                            />
++                            <Button
++                                variant='contained'
++                                color='error'
++                                disabled={!canExecute}
++                                onClick={handleExecute}
++                            >
++                                {mode === 'merge'
++                                    ? globalize.translate('UserAdminConfirmMerge')
++                                    : globalize.translate('UserAdminConfirmMove')}
++                            </Button>
++                        </Stack>
++                    )}
++
++                    {result?.warning && (
++                        <Alert severity='info'>{result.warning}</Alert>
++                    )}
++
++                    {result && (
++                        <Button
++                            variant='contained'
++                            onClick={() => navigate(
++                                mode === 'merge'
++                                    ? `/dashboard/users/${targetUserId}/profile`
++                                    : '/dashboard/users'
++                            )}
++                        >
++                            {globalize.translate('ButtonOk')}
++                        </Button>
++                    )}
++                </Stack>
++            </Box>
++        </Page>
++    );
++};
++
++export default UserMergePage;
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+index 2158b3b04a..aced686010 100755
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -103,6 +103,7 @@
+     "ButtonAddServer": "Add Server",
+     "ButtonAddTunerDevice": "Add Tuner Device",
+     "ButtonAddUser": "Add User",
++    "ButtonMergeUser": "Merge user…",
+     "ButtonArrowLeft": "Left",
+     "ButtonArrowRight": "Right",
+     "ButtonAudioTracks": "Audio Tracks",
+@@ -580,6 +581,7 @@
+     "HeaderUploadLyrics": "Upload Lyrics",
+     "HeaderUploadSubtitle": "Upload Subtitle",
+     "HeaderUser": "User",
++    "HeaderUserAdminMerge": "Merge users",
+     "HeaderUsers": "Users",
+     "HeaderVideoAdvanced": "Video Advanced",
+     "HeaderVideoQuality": "Video Quality",
+@@ -1437,6 +1439,43 @@
+     "PlaybackErrorPlaceHolder": "This is a placeholder for physical media that Jellyfin cannot play. Please insert the disc to play.",
+     "PlaybackRate": "Playback Speed",
+     "PlaybackStatsEmpty": "No playback statistics recorded yet.",
++    "UserAdminConfirmHelp": "Type the source username to confirm moving data from {0} into {1}.",
++    "UserAdminConfirmMerge": "Merge and delete source user",
++    "UserAdminConfirmMove": "Move UserData",
++    "UserAdminConfirmUsername": "Type {0} to confirm",
++    "UserAdminCount": "Count",
++    "UserAdminCountAccessSchedulesDropped": "Access schedules dropped",
++    "UserAdminCountActivityLogsMoved": "Activity logs moved",
++    "UserAdminCountCustomItemDisplayPreferencesDropped": "Custom item display preferences dropped",
++    "UserAdminCountCustomItemDisplayPreferencesMoved": "Custom item display preferences moved",
++    "UserAdminCountDevicesDeactivated": "Duplicate devices deactivated",
++    "UserAdminCountDevicesMoved": "Devices moved",
++    "UserAdminCountDisplayPreferencesDropped": "Display preferences dropped",
++    "UserAdminCountDisplayPreferencesMoved": "Display preferences moved",
++    "UserAdminCountImageInfosDropped": "Profile images dropped",
++    "UserAdminCountItemDisplayPreferencesDropped": "Item display preferences dropped",
++    "UserAdminCountItemDisplayPreferencesMoved": "Item display preferences moved",
++    "UserAdminCountPermissionsDropped": "Permissions dropped",
++    "UserAdminCountPlaybackActivity": "Playback activity moved",
++    "UserAdminCountPreferencesDropped": "Preferences dropped",
++    "UserAdminCountPreferencesUnioned": "Preferences unioned",
++    "UserAdminCountSourceUserDeleted": "Source user will be deleted",
++    "UserAdminCountTasteProfileSourceRemoved": "Source taste profile removed",
++    "UserAdminCountTasteProfileTargetRebuilt": "Target taste profile rebuilt",
++    "UserAdminCountUserDataMerged": "UserData conflicts merged",
++    "UserAdminCountUserDataMoved": "UserData rows moved",
++    "UserAdminExecuteFailed": "The transfer failed.",
++    "UserAdminMergeHelp": "Move playback state between users, or fully merge one account into another. Preview the impact before confirming.",
++    "UserAdminMergeWarning": "Full merge deletes the source user after transferring their data. This cannot be undone.",
++    "UserAdminMode": "Operation",
++    "UserAdminModeMerge": "Full merge (delete source)",
++    "UserAdminModeMoveUserData": "Move UserData only",
++    "UserAdminPreview": "Preview",
++    "UserAdminPreviewFailed": "Preview failed.",
++    "UserAdminPreviewResult": "Preview",
++    "UserAdminResult": "Result",
++    "UserAdminSourceUser": "Source user",
++    "UserAdminTargetUser": "Target user",
+     "PlaybackStatsLoadError": "Failed to load playback statistics",
+     "PlayCount": "Play count",
+     "Played": "Played",
