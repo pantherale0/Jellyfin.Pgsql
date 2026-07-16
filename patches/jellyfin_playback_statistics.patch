@@ -1,5 +1,5 @@
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 19823dff37..ab2b5171c6 100644
+index 19823dff37..24c28555f1 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -11,6 +11,7 @@ using Jellyfin.Data;
@@ -44,7 +44,7 @@ index 19823dff37..ab2b5171c6 100644
          }
  
          /// <summary>
-@@ -1091,6 +1096,54 @@ namespace Emby.Server.Implementations.Session
+@@ -1091,6 +1096,69 @@ namespace Emby.Server.Implementations.Session
                  {
                      playedToCompletion = OnPlaybackStopped(user, libraryItem, info.PositionTicks, info.Failed);
                  }
@@ -77,6 +77,19 @@ index 19823dff37..ab2b5171c6 100644
 +                            }
 +                        }
 +
++                        Guid? seriesId = null;
++                        string seriesName = null;
++                        if (libraryItem is Episode episode)
++                        {
++                            var resolvedSeriesId = episode.SeriesId.IsEmpty() ? episode.FindSeriesId() : episode.SeriesId;
++                            seriesId = resolvedSeriesId.IsEmpty() ? null : resolvedSeriesId;
++                            seriesName = episode.FindSeriesName();
++                            if (string.IsNullOrWhiteSpace(seriesName))
++                            {
++                                seriesName = episode.SeriesName;
++                            }
++                        }
++
 +                        dbContext.PlaybackActivity.Add(new PlaybackActivity
 +                        {
 +                            Id = Guid.NewGuid(),
@@ -84,6 +97,8 @@ index 19823dff37..ab2b5171c6 100644
 +                            DeviceId = deviceId,
 +                            ItemId = info.ItemId,
 +                            ItemName = libraryItem.Name ?? string.Empty,
++                            SeriesId = seriesId,
++                            SeriesName = seriesName,
 +                            MediaType = libraryItem.GetType().Name,
 +                            PlayedTicks = info.PositionTicks.Value,
 +                            DatePlayed = DateTime.UtcNow,
@@ -99,7 +114,7 @@ index 19823dff37..ab2b5171c6 100644
              }
  
              if (!string.IsNullOrEmpty(info.LiveStreamId))
-@@ -1118,6 +1171,24 @@ namespace Emby.Server.Implementations.Session
+@@ -1118,6 +1186,24 @@ namespace Emby.Server.Implementations.Session
              EventHelper.QueueEventIfNotNull(PlaybackStopped, this, eventArgs, _logger);
          }
  
@@ -126,15 +141,16 @@ index 19823dff37..ab2b5171c6 100644
              if (playbackFailed)
 diff --git a/Jellyfin.Api/Controllers/PlaybackActivityController.cs b/Jellyfin.Api/Controllers/PlaybackActivityController.cs
 new file mode 100644
-index 0000000000..4efd473fb2
+index 0000000000..58f3b0ae88
 --- /dev/null
 +++ b/Jellyfin.Api/Controllers/PlaybackActivityController.cs
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,216 @@
 +using System;
 +using System.Linq;
 +using System.Threading;
 +using System.Threading.Tasks;
 +using Jellyfin.Database.Implementations;
++using Jellyfin.Database.Implementations.Entities;
 +using Microsoft.AspNetCore.Http;
 +using Microsoft.AspNetCore.Mvc;
 +using Microsoft.EntityFrameworkCore;
@@ -163,16 +179,20 @@ index 0000000000..4efd473fb2
 +    /// Gets playback statistics for a user, grouped by media type.
 +    /// </summary>
 +    /// <param name="userId">The user id.</param>
++    /// <param name="startDate">Optional inclusive start date (UTC).</param>
++    /// <param name="endDate">Optional inclusive end date (UTC).</param>
 +    /// <response code="200">Playback stats returned.</response>
 +    /// <returns>Playback stats grouped by media type.</returns>
 +    [HttpGet]
 +    [ProducesResponseType(StatusCodes.Status200OK)]
-+    public async Task<IActionResult> GetPlaybackStats([FromRoute] Guid userId)
++    public async Task<IActionResult> GetPlaybackStats(
++        [FromRoute] Guid userId,
++        [FromQuery] DateTime? startDate,
++        [FromQuery] DateTime? endDate)
 +    {
 +        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
 +
-+        var stats = await dbContext.PlaybackActivity
-+            .Where(p => p.UserId.Equals(userId))
++        var stats = await ApplyDateFilter(dbContext.PlaybackActivity.AsNoTracking().Where(p => p.UserId.Equals(userId)), startDate, endDate)
 +            .GroupBy(p => p.MediaType)
 +            .Select(g => new
 +            {
@@ -187,22 +207,97 @@ index 0000000000..4efd473fb2
 +    }
 +
 +    /// <summary>
++    /// Gets day-of-week and hour aggregates for a user.
++    /// </summary>
++    /// <param name="userId">The user id.</param>
++    /// <param name="startDate">Optional inclusive start date (UTC).</param>
++    /// <param name="endDate">Optional inclusive end date (UTC).</param>
++    /// <response code="200">Hourly stats returned.</response>
++    /// <returns>Hourly playback stats.</returns>
++    [HttpGet("Hourly")]
++    [ProducesResponseType(StatusCodes.Status200OK)]
++    public async Task<IActionResult> GetHourly(
++        [FromRoute] Guid userId,
++        [FromQuery] DateTime? startDate,
++        [FromQuery] DateTime? endDate)
++    {
++        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
++
++        var stats = await ApplyDateFilter(dbContext.PlaybackActivity.AsNoTracking().Where(p => p.UserId.Equals(userId)), startDate, endDate)
++            .GroupBy(p => new { DayOfWeek = (int)p.DatePlayed.DayOfWeek, Hour = p.DatePlayed.Hour })
++            .Select(g => new
++            {
++                DayOfWeek = g.Key.DayOfWeek,
++                Hour = g.Key.Hour,
++                TotalTicks = g.Sum(p => p.PlayedTicks),
++                PlayCount = g.Count()
++            })
++            .ToListAsync()
++            .ConfigureAwait(false);
++
++        return new OkObjectResult(stats);
++    }
++
++    /// <summary>
++    /// Gets overview KPIs for a user for the selected period and prior period.
++    /// </summary>
++    /// <param name="userId">The user id.</param>
++    /// <param name="startDate">Optional inclusive start date (UTC).</param>
++    /// <param name="endDate">Optional inclusive end date (UTC).</param>
++    /// <response code="200">Overview returned.</response>
++    /// <returns>User overview KPIs.</returns>
++    [HttpGet("Overview")]
++    [ProducesResponseType(StatusCodes.Status200OK)]
++    public async Task<IActionResult> GetOverview(
++        [FromRoute] Guid userId,
++        [FromQuery] DateTime? startDate,
++        [FromQuery] DateTime? endDate)
++    {
++        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
++        var endExclusive = endDate.HasValue
++            ? DateTime.SpecifyKind(endDate.Value.Date.AddDays(1), DateTimeKind.Utc)
++            : DateTime.UtcNow.Date.AddDays(1);
++        var start = startDate.HasValue
++            ? DateTime.SpecifyKind(startDate.Value.Date, DateTimeKind.Utc)
++            : endExclusive.AddDays(-28);
++        var duration = endExclusive - start;
++        var priorStart = start - duration;
++
++        var current = await AggregateUserPeriodAsync(dbContext, userId, start, endExclusive).ConfigureAwait(false);
++        var prior = await AggregateUserPeriodAsync(dbContext, userId, priorStart, start).ConfigureAwait(false);
++
++        return new OkObjectResult(new
++        {
++            StartDate = start,
++            EndDate = endExclusive.AddTicks(-1),
++            Current = current,
++            Prior = prior
++        });
++    }
++
++    /// <summary>
 +    /// Gets playback statistics for a user, filtered by media type.
 +    /// </summary>
 +    /// <param name="userId">The user id.</param>
 +    /// <param name="mediaType">The media type to filter by.</param>
++    /// <param name="startDate">Optional inclusive start date (UTC).</param>
++    /// <param name="endDate">Optional inclusive end date (UTC).</param>
 +    /// <response code="200">Playback stats returned.</response>
 +    /// <returns>Playback stats filtered by media type.</returns>
 +    [HttpGet("{mediaType}")]
 +    [ProducesResponseType(StatusCodes.Status200OK)]
 +    public async Task<IActionResult> GetPlaybackStatsByType(
 +        [FromRoute] Guid userId,
-+        [FromRoute] string mediaType)
++        [FromRoute] string mediaType,
++        [FromQuery] DateTime? startDate,
++        [FromQuery] DateTime? endDate)
 +    {
 +        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
 +
-+        var stats = await dbContext.PlaybackActivity
-+            .Where(p => p.UserId.Equals(userId) && p.MediaType == mediaType)
++        var stats = await ApplyDateFilter(
++                dbContext.PlaybackActivity.AsNoTracking().Where(p => p.UserId.Equals(userId) && p.MediaType == mediaType),
++                startDate,
++                endDate)
 +            .GroupBy(p => p.ItemSubGroup)
 +            .Select(g => new
 +            {
@@ -215,18 +310,70 @@ index 0000000000..4efd473fb2
 +
 +        return new OkObjectResult(stats);
 +    }
++
++    private static async Task<object> AggregateUserPeriodAsync(
++        JellyfinDbContext dbContext,
++        Guid userId,
++        DateTime start,
++        DateTime endExclusive)
++    {
++        var query = dbContext.PlaybackActivity.AsNoTracking()
++            .Where(p => p.UserId.Equals(userId) && p.DatePlayed >= start && p.DatePlayed < endExclusive);
++
++        var totals = await query
++            .GroupBy(_ => 1)
++            .Select(g => new
++            {
++                TotalTicks = g.Sum(p => p.PlayedTicks),
++                PlayCount = g.Count()
++            })
++            .FirstOrDefaultAsync()
++            .ConfigureAwait(false);
++
++        var playCount = totals?.PlayCount ?? 0;
++        var totalTicks = totals?.TotalTicks ?? 0L;
++
++        return new
++        {
++            TotalTicks = totalTicks,
++            PlayCount = playCount,
++            AvgSessionTicks = playCount > 0 ? totalTicks / playCount : 0L
++        };
++    }
++
++    private static IQueryable<PlaybackActivity> ApplyDateFilter(
++        IQueryable<PlaybackActivity> query,
++        DateTime? startDate,
++        DateTime? endDate)
++    {
++        if (startDate.HasValue)
++        {
++            var start = DateTime.SpecifyKind(startDate.Value.Date, DateTimeKind.Utc);
++            query = query.Where(p => p.DatePlayed >= start);
++        }
++
++        if (endDate.HasValue)
++        {
++            var endExclusive = DateTime.SpecifyKind(endDate.Value.Date.AddDays(1), DateTimeKind.Utc);
++            query = query.Where(p => p.DatePlayed < endExclusive);
++        }
++
++        return query;
++    }
 +}
 diff --git a/Jellyfin.Api/Controllers/ServerPlaybackStatsController.cs b/Jellyfin.Api/Controllers/ServerPlaybackStatsController.cs
 new file mode 100644
-index 0000000000..92d75b4823
+index 0000000000..cb3a13df24
 --- /dev/null
 +++ b/Jellyfin.Api/Controllers/ServerPlaybackStatsController.cs
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,699 @@
 +using System;
++using System.Collections.Generic;
 +using System.Linq;
 +using System.Threading;
 +using System.Threading.Tasks;
 +using Jellyfin.Database.Implementations;
++using Jellyfin.Database.Implementations.Entities;
 +using MediaBrowser.Common.Api;
 +using Microsoft.AspNetCore.Authorization;
 +using Microsoft.AspNetCore.Http;
@@ -243,6 +390,25 @@ index 0000000000..92d75b4823
 +[Authorize(Policy = Policies.RequiresElevation)]
 +public class ServerPlaybackStatsController : BaseJellyfinApiController
 +{
++    private static readonly long[] SessionBucketEdgesTicks =
++    [
++        5L * 60 * 10_000_000, // 5m
++        15L * 60 * 10_000_000, // 15m
++        30L * 60 * 10_000_000, // 30m
++        60L * 60 * 10_000_000, // 1h
++        2L * 60 * 60 * 10_000_000 // 2h
++    ];
++
++    private static readonly string[] SessionBucketLabels =
++    [
++        "0-5m",
++        "5-15m",
++        "15-30m",
++        "30-60m",
++        "1-2h",
++        "2h+"
++    ];
++
 +    private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
 +
 +    /// <summary>
@@ -257,15 +423,28 @@ index 0000000000..92d75b4823
 +    /// <summary>
 +    /// Gets server-wide playback statistics grouped by media type.
 +    /// </summary>
++    /// <param name="startDate">Optional inclusive start date (UTC).</param>
++    /// <param name="endDate">Optional inclusive end date (UTC).</param>
++    /// <param name="userIds">Optional user id filter.</param>
++    /// <param name="mediaTypes">Optional media type filter.</param>
++    /// <param name="clients">Optional client name filter.</param>
++    /// <param name="playbackMethods">Optional playback method filter.</param>
 +    /// <response code="200">Playback stats returned.</response>
 +    /// <returns>Playback stats grouped by media type.</returns>
 +    [HttpGet]
 +    [ProducesResponseType(StatusCodes.Status200OK)]
-+    public async Task<IActionResult> GetPlaybackStats()
++    public async Task<IActionResult> GetPlaybackStats(
++        [FromQuery] DateTime? startDate,
++        [FromQuery] DateTime? endDate,
++        [FromQuery] Guid[]? userIds,
++        [FromQuery] string[]? mediaTypes,
++        [FromQuery] string[]? clients,
++        [FromQuery] string[]? playbackMethods)
 +    {
 +        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
++        var query = ApplyFilters(dbContext.PlaybackActivity.AsNoTracking(), startDate, endDate, userIds, mediaTypes, clients, playbackMethods);
 +
-+        var stats = await dbContext.PlaybackActivity
++        var stats = await query
 +            .GroupBy(p => p.MediaType)
 +            .Select(g => new
 +            {
@@ -282,15 +461,28 @@ index 0000000000..92d75b4823
 +    /// <summary>
 +    /// Gets playback statistics per user, grouped by media type.
 +    /// </summary>
++    /// <param name="startDate">Optional inclusive start date (UTC).</param>
++    /// <param name="endDate">Optional inclusive end date (UTC).</param>
++    /// <param name="userIds">Optional user id filter.</param>
++    /// <param name="mediaTypes">Optional media type filter.</param>
++    /// <param name="clients">Optional client name filter.</param>
++    /// <param name="playbackMethods">Optional playback method filter.</param>
 +    /// <response code="200">Playback stats returned.</response>
 +    /// <returns>Playback stats grouped by user and media type.</returns>
 +    [HttpGet("Users")]
 +    [ProducesResponseType(StatusCodes.Status200OK)]
-+    public async Task<IActionResult> GetPlaybackStatsByUser()
++    public async Task<IActionResult> GetPlaybackStatsByUser(
++        [FromQuery] DateTime? startDate,
++        [FromQuery] DateTime? endDate,
++        [FromQuery] Guid[]? userIds,
++        [FromQuery] string[]? mediaTypes,
++        [FromQuery] string[]? clients,
++        [FromQuery] string[]? playbackMethods)
 +    {
 +        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
++        var query = ApplyFilters(dbContext.PlaybackActivity.AsNoTracking(), startDate, endDate, userIds, mediaTypes, clients, playbackMethods);
 +
-+        var stats = await dbContext.PlaybackActivity
++        var stats = await query
 +            .GroupBy(p => new { p.UserId, p.MediaType })
 +            .Select(g => new
 +            {
@@ -304,13 +496,582 @@ index 0000000000..92d75b4823
 +
 +        return new OkObjectResult(stats);
 +    }
++
++    /// <summary>
++    /// Gets overview KPIs for the selected period and the prior period of equal length.
++    /// </summary>
++    /// <param name="startDate">Inclusive start date (UTC).</param>
++    /// <param name="endDate">Inclusive end date (UTC).</param>
++    /// <param name="userIds">Optional user id filter.</param>
++    /// <param name="mediaTypes">Optional media type filter.</param>
++    /// <param name="clients">Optional client name filter.</param>
++    /// <param name="playbackMethods">Optional playback method filter.</param>
++    /// <response code="200">Overview returned.</response>
++    /// <returns>Overview KPIs.</returns>
++    [HttpGet("Overview")]
++    [ProducesResponseType(StatusCodes.Status200OK)]
++    public async Task<IActionResult> GetOverview(
++        [FromQuery] DateTime? startDate,
++        [FromQuery] DateTime? endDate,
++        [FromQuery] Guid[]? userIds,
++        [FromQuery] string[]? mediaTypes,
++        [FromQuery] string[]? clients,
++        [FromQuery] string[]? playbackMethods)
++    {
++        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
++        var (start, endExclusive) = NormalizeRange(startDate, endDate);
++        var duration = endExclusive - start;
++        var priorStart = start - duration;
++        var priorEnd = start;
++
++        var current = await AggregatePeriodAsync(
++                dbContext,
++                start,
++                endExclusive,
++                userIds,
++                mediaTypes,
++                clients,
++                playbackMethods)
++            .ConfigureAwait(false);
++        var prior = await AggregatePeriodAsync(
++                dbContext,
++                priorStart,
++                priorEnd,
++                userIds,
++                mediaTypes,
++                clients,
++                playbackMethods)
++            .ConfigureAwait(false);
++
++        return new OkObjectResult(new
++        {
++            StartDate = start,
++            EndDate = endExclusive.AddTicks(-1),
++            Current = current,
++            Prior = prior
++        });
++    }
++
++    /// <summary>
++    /// Gets daily playback aggregates.
++    /// </summary>
++    /// <param name="startDate">Optional inclusive start date (UTC).</param>
++    /// <param name="endDate">Optional inclusive end date (UTC).</param>
++    /// <param name="userIds">Optional user id filter.</param>
++    /// <param name="mediaTypes">Optional media type filter.</param>
++    /// <param name="clients">Optional client name filter.</param>
++    /// <param name="playbackMethods">Optional playback method filter.</param>
++    /// <param name="groupBy">Group by User, MediaType, or None.</param>
++    /// <response code="200">Daily stats returned.</response>
++    /// <returns>Daily playback stats.</returns>
++    [HttpGet("Daily")]
++    [ProducesResponseType(StatusCodes.Status200OK)]
++    public async Task<IActionResult> GetDaily(
++        [FromQuery] DateTime? startDate,
++        [FromQuery] DateTime? endDate,
++        [FromQuery] Guid[]? userIds,
++        [FromQuery] string[]? mediaTypes,
++        [FromQuery] string[]? clients,
++        [FromQuery] string[]? playbackMethods,
++        [FromQuery] string groupBy = "User")
++    {
++        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
++        var query = ApplyFilters(dbContext.PlaybackActivity.AsNoTracking(), startDate, endDate, userIds, mediaTypes, clients, playbackMethods);
++        var mode = (groupBy ?? "User").Trim();
++
++        if (string.Equals(mode, "MediaType", StringComparison.OrdinalIgnoreCase))
++        {
++            var byMediaType = await query
++                .GroupBy(p => new { Date = p.DatePlayed.Date, p.MediaType })
++                .Select(g => new
++                {
++                    Date = g.Key.Date,
++                    MediaType = g.Key.MediaType,
++                    TotalTicks = g.Sum(p => p.PlayedTicks),
++                    PlayCount = g.Count()
++                })
++                .OrderBy(r => r.Date)
++                .ToListAsync()
++                .ConfigureAwait(false);
++            return new OkObjectResult(byMediaType);
++        }
++
++        if (string.Equals(mode, "None", StringComparison.OrdinalIgnoreCase))
++        {
++            var byDate = await query
++                .GroupBy(p => p.DatePlayed.Date)
++                .Select(g => new
++                {
++                    Date = g.Key,
++                    TotalTicks = g.Sum(p => p.PlayedTicks),
++                    PlayCount = g.Count()
++                })
++                .OrderBy(r => r.Date)
++                .ToListAsync()
++                .ConfigureAwait(false);
++            return new OkObjectResult(byDate);
++        }
++
++        var byUser = await query
++            .GroupBy(p => new { Date = p.DatePlayed.Date, p.UserId })
++            .Select(g => new
++            {
++                Date = g.Key.Date,
++                UserId = g.Key.UserId,
++                TotalTicks = g.Sum(p => p.PlayedTicks),
++                PlayCount = g.Count()
++            })
++            .OrderBy(r => r.Date)
++            .ToListAsync()
++            .ConfigureAwait(false);
++        return new OkObjectResult(byUser);
++    }
++
++    /// <summary>
++    /// Gets day-of-week and hour aggregates for heatmaps.
++    /// </summary>
++    /// <param name="startDate">Optional inclusive start date (UTC).</param>
++    /// <param name="endDate">Optional inclusive end date (UTC).</param>
++    /// <param name="userIds">Optional user id filter.</param>
++    /// <param name="mediaTypes">Optional media type filter.</param>
++    /// <param name="clients">Optional client name filter.</param>
++    /// <param name="playbackMethods">Optional playback method filter.</param>
++    /// <response code="200">Hourly stats returned.</response>
++    /// <returns>Hourly playback stats.</returns>
++    [HttpGet("Hourly")]
++    [ProducesResponseType(StatusCodes.Status200OK)]
++    public async Task<IActionResult> GetHourly(
++        [FromQuery] DateTime? startDate,
++        [FromQuery] DateTime? endDate,
++        [FromQuery] Guid[]? userIds,
++        [FromQuery] string[]? mediaTypes,
++        [FromQuery] string[]? clients,
++        [FromQuery] string[]? playbackMethods)
++    {
++        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
++        var query = ApplyFilters(dbContext.PlaybackActivity.AsNoTracking(), startDate, endDate, userIds, mediaTypes, clients, playbackMethods);
++
++        var stats = await query
++            .GroupBy(p => new { DayOfWeek = (int)p.DatePlayed.DayOfWeek, Hour = p.DatePlayed.Hour })
++            .Select(g => new
++            {
++                DayOfWeek = g.Key.DayOfWeek,
++                Hour = g.Key.Hour,
++                TotalTicks = g.Sum(p => p.PlayedTicks),
++                PlayCount = g.Count()
++            })
++            .ToListAsync()
++            .ConfigureAwait(false);
++
++        return new OkObjectResult(stats);
++    }
++
++    /// <summary>
++    /// Gets top items or series breakdown.
++    /// </summary>
++    /// <param name="startDate">Optional inclusive start date (UTC).</param>
++    /// <param name="endDate">Optional inclusive end date (UTC).</param>
++    /// <param name="userIds">Optional user id filter.</param>
++    /// <param name="mediaTypes">Optional media type filter.</param>
++    /// <param name="clients">Optional client name filter.</param>
++    /// <param name="playbackMethods">Optional playback method filter.</param>
++    /// <param name="groupBy">Item or Series.</param>
++    /// <param name="limit">Max items per media type.</param>
++    /// <param name="includeOther">Whether to include an Other bucket.</param>
++    /// <response code="200">Item stats returned.</response>
++    /// <returns>Top item or series stats.</returns>
++    [HttpGet("Items")]
++    [ProducesResponseType(StatusCodes.Status200OK)]
++    public async Task<IActionResult> GetItems(
++        [FromQuery] DateTime? startDate,
++        [FromQuery] DateTime? endDate,
++        [FromQuery] Guid[]? userIds,
++        [FromQuery] string[]? mediaTypes,
++        [FromQuery] string[]? clients,
++        [FromQuery] string[]? playbackMethods,
++        [FromQuery] string groupBy = "Item",
++        [FromQuery] int limit = 10,
++        [FromQuery] bool includeOther = true)
++    {
++        limit = Math.Clamp(limit, 1, 50);
++        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
++        var query = ApplyFilters(dbContext.PlaybackActivity.AsNoTracking(), startDate, endDate, userIds, mediaTypes, clients, playbackMethods);
++        var bySeries = string.Equals(groupBy, "Series", StringComparison.OrdinalIgnoreCase);
++
++        List<ItemAggregateRow> aggregates;
++        if (bySeries)
++        {
++            aggregates = await query
++                .Where(p => p.SeriesName != null && p.SeriesName != string.Empty)
++                .GroupBy(p => new { p.MediaType, p.SeriesId, Name = p.SeriesName! })
++                .Select(g => new ItemAggregateRow
++                {
++                    MediaType = g.Key.MediaType,
++                    ItemId = g.Key.SeriesId,
++                    ItemName = g.Key.Name,
++                    TotalTicks = g.Sum(p => p.PlayedTicks),
++                    PlayCount = g.Count()
++                })
++                .ToListAsync()
++                .ConfigureAwait(false);
++        }
++        else
++        {
++            aggregates = await query
++                .GroupBy(p => new { p.MediaType, p.ItemId, p.ItemName })
++                .Select(g => new ItemAggregateRow
++                {
++                    MediaType = g.Key.MediaType,
++                    ItemId = g.Key.ItemId,
++                    ItemName = g.Key.ItemName,
++                    TotalTicks = g.Sum(p => p.PlayedTicks),
++                    PlayCount = g.Count()
++                })
++                .ToListAsync()
++                .ConfigureAwait(false);
++        }
++
++        var result = new List<object>();
++        foreach (var mediaGroup in aggregates.GroupBy(a => a.MediaType).OrderBy(g => g.Key))
++        {
++            var ordered = mediaGroup.OrderByDescending(a => a.TotalTicks).ToList();
++            var top = ordered.Take(limit).ToList();
++            foreach (var row in top)
++            {
++                result.Add(new
++                {
++                    row.MediaType,
++                    row.ItemId,
++                    row.ItemName,
++                    row.TotalTicks,
++                    row.PlayCount,
++                    IsOther = false
++                });
++            }
++
++            if (includeOther && ordered.Count > limit)
++            {
++                var other = ordered.Skip(limit).ToList();
++                result.Add(new
++                {
++                    MediaType = mediaGroup.Key,
++                    ItemId = (Guid?)null,
++                    ItemName = "Other",
++                    TotalTicks = other.Sum(r => r.TotalTicks),
++                    PlayCount = other.Sum(r => r.PlayCount),
++                    IsOther = true
++                });
++            }
++        }
++
++        return new OkObjectResult(result);
++    }
++
++    /// <summary>
++    /// Gets aggregates for a single dimension.
++    /// </summary>
++    /// <param name="dimension">Client, Device, Method, Genre, or MediaType.</param>
++    /// <param name="startDate">Optional inclusive start date (UTC).</param>
++    /// <param name="endDate">Optional inclusive end date (UTC).</param>
++    /// <param name="userIds">Optional user id filter.</param>
++    /// <param name="mediaTypes">Optional media type filter.</param>
++    /// <param name="clients">Optional client name filter.</param>
++    /// <param name="playbackMethods">Optional playback method filter.</param>
++    /// <response code="200">Dimension stats returned.</response>
++    /// <returns>Dimension aggregates.</returns>
++    [HttpGet("Dimensions")]
++    [ProducesResponseType(StatusCodes.Status200OK)]
++    public async Task<IActionResult> GetDimensions(
++        [FromQuery] string dimension,
++        [FromQuery] DateTime? startDate,
++        [FromQuery] DateTime? endDate,
++        [FromQuery] Guid[]? userIds,
++        [FromQuery] string[]? mediaTypes,
++        [FromQuery] string[]? clients,
++        [FromQuery] string[]? playbackMethods)
++    {
++        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
++        var query = ApplyFilters(dbContext.PlaybackActivity.AsNoTracking(), startDate, endDate, userIds, mediaTypes, clients, playbackMethods);
++        var key = (dimension ?? "MediaType").Trim().ToLowerInvariant();
++
++        var stats = key switch
++        {
++            "client" => await query
++                .GroupBy(p => p.ClientName ?? "Unknown")
++                .Select(g => new { Key = g.Key, TotalTicks = g.Sum(p => p.PlayedTicks), PlayCount = g.Count() })
++                .OrderByDescending(r => r.TotalTicks)
++                .ToListAsync()
++                .ConfigureAwait(false),
++            "device" => await query
++                .GroupBy(p => p.DeviceName ?? "Unknown")
++                .Select(g => new { Key = g.Key, TotalTicks = g.Sum(p => p.PlayedTicks), PlayCount = g.Count() })
++                .OrderByDescending(r => r.TotalTicks)
++                .ToListAsync()
++                .ConfigureAwait(false),
++            "method" => await query
++                .GroupBy(p => p.PlaybackMethod ?? "Unknown")
++                .Select(g => new { Key = g.Key, TotalTicks = g.Sum(p => p.PlayedTicks), PlayCount = g.Count() })
++                .OrderByDescending(r => r.TotalTicks)
++                .ToListAsync()
++                .ConfigureAwait(false),
++            "genre" => await query
++                .GroupBy(p => p.ItemSubGroup)
++                .Select(g => new { Key = g.Key, TotalTicks = g.Sum(p => p.PlayedTicks), PlayCount = g.Count() })
++                .OrderByDescending(r => r.TotalTicks)
++                .ToListAsync()
++                .ConfigureAwait(false),
++            _ => await query
++                .GroupBy(p => p.MediaType)
++                .Select(g => new { Key = g.Key, TotalTicks = g.Sum(p => p.PlayedTicks), PlayCount = g.Count() })
++                .OrderByDescending(r => r.TotalTicks)
++                .ToListAsync()
++                .ConfigureAwait(false)
++        };
++
++        return new OkObjectResult(stats);
++    }
++
++    /// <summary>
++    /// Gets a session-length histogram.
++    /// </summary>
++    /// <param name="startDate">Optional inclusive start date (UTC).</param>
++    /// <param name="endDate">Optional inclusive end date (UTC).</param>
++    /// <param name="userIds">Optional user id filter.</param>
++    /// <param name="mediaTypes">Optional media type filter.</param>
++    /// <param name="clients">Optional client name filter.</param>
++    /// <param name="playbackMethods">Optional playback method filter.</param>
++    /// <response code="200">Session histogram returned.</response>
++    /// <returns>Session length buckets.</returns>
++    [HttpGet("Sessions")]
++    [ProducesResponseType(StatusCodes.Status200OK)]
++    public async Task<IActionResult> GetSessions(
++        [FromQuery] DateTime? startDate,
++        [FromQuery] DateTime? endDate,
++        [FromQuery] Guid[]? userIds,
++        [FromQuery] string[]? mediaTypes,
++        [FromQuery] string[]? clients,
++        [FromQuery] string[]? playbackMethods)
++    {
++        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
++        var query = ApplyFilters(dbContext.PlaybackActivity.AsNoTracking(), startDate, endDate, userIds, mediaTypes, clients, playbackMethods);
++        var ticks = await query.Select(p => p.PlayedTicks).ToListAsync().ConfigureAwait(false);
++
++        var counts = new int[SessionBucketLabels.Length];
++        foreach (var value in ticks)
++        {
++            var index = SessionBucketEdgesTicks.Length;
++            for (var i = 0; i < SessionBucketEdgesTicks.Length; i++)
++            {
++                if (value < SessionBucketEdgesTicks[i])
++                {
++                    index = i;
++                    break;
++                }
++            }
++
++            counts[index]++;
++        }
++
++        var result = SessionBucketLabels.Select((label, i) => new
++        {
++            Bucket = label,
++            PlayCount = counts[i]
++        });
++
++        return new OkObjectResult(result);
++    }
++
++    /// <summary>
++    /// Gets recent playback activity rows.
++    /// </summary>
++    /// <param name="startDate">Optional inclusive start date (UTC).</param>
++    /// <param name="endDate">Optional inclusive end date (UTC).</param>
++    /// <param name="userIds">Optional user id filter.</param>
++    /// <param name="mediaTypes">Optional media type filter.</param>
++    /// <param name="clients">Optional client name filter.</param>
++    /// <param name="playbackMethods">Optional playback method filter.</param>
++    /// <param name="startIndex">Paging start index.</param>
++    /// <param name="limit">Page size.</param>
++    /// <response code="200">Recent activity returned.</response>
++    /// <returns>Recent playback rows.</returns>
++    [HttpGet("Recent")]
++    [ProducesResponseType(StatusCodes.Status200OK)]
++    public async Task<IActionResult> GetRecent(
++        [FromQuery] DateTime? startDate,
++        [FromQuery] DateTime? endDate,
++        [FromQuery] Guid[]? userIds,
++        [FromQuery] string[]? mediaTypes,
++        [FromQuery] string[]? clients,
++        [FromQuery] string[]? playbackMethods,
++        [FromQuery] int startIndex = 0,
++        [FromQuery] int limit = 50)
++    {
++        startIndex = Math.Max(0, startIndex);
++        limit = Math.Clamp(limit, 1, 200);
++
++        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
++        var query = ApplyFilters(dbContext.PlaybackActivity.AsNoTracking(), startDate, endDate, userIds, mediaTypes, clients, playbackMethods);
++        var total = await query.CountAsync().ConfigureAwait(false);
++        var items = await query
++            .OrderByDescending(p => p.DatePlayed)
++            .Skip(startIndex)
++            .Take(limit)
++            .Select(p => new
++            {
++                p.Id,
++                p.UserId,
++                p.ItemId,
++                p.ItemName,
++                p.SeriesId,
++                p.SeriesName,
++                p.MediaType,
++                p.PlayedTicks,
++                p.DatePlayed,
++                p.ItemSubGroup,
++                p.PlaybackMethod,
++                p.ClientName,
++                p.DeviceName
++            })
++            .ToListAsync()
++            .ConfigureAwait(false);
++
++        return new OkObjectResult(new
++        {
++            TotalRecordCount = total,
++            StartIndex = startIndex,
++            Items = items
++        });
++    }
++
++    private static async Task<object> AggregatePeriodAsync(
++        JellyfinDbContext dbContext,
++        DateTime start,
++        DateTime endExclusive,
++        Guid[]? userIds,
++        string[]? mediaTypes,
++        string[]? clients,
++        string[]? playbackMethods)
++    {
++        var query = ApplyFilters(
++            dbContext.PlaybackActivity.AsNoTracking(),
++            start,
++            endExclusive.AddTicks(-1),
++            userIds,
++            mediaTypes,
++            clients,
++            playbackMethods);
++
++        var totals = await query
++            .GroupBy(_ => 1)
++            .Select(g => new
++            {
++                TotalTicks = g.Sum(p => p.PlayedTicks),
++                PlayCount = g.Count(),
++                ActiveUsers = g.Select(p => p.UserId).Distinct().Count()
++            })
++            .FirstOrDefaultAsync()
++            .ConfigureAwait(false);
++
++        var directPlayCount = await query
++            .CountAsync(p => p.PlaybackMethod != null && p.PlaybackMethod.Contains("DirectPlay"))
++            .ConfigureAwait(false);
++
++        var playCount = totals?.PlayCount ?? 0;
++        var totalTicks = totals?.TotalTicks ?? 0L;
++        var activeUsers = totals?.ActiveUsers ?? 0;
++        var avgSessionTicks = playCount > 0 ? totalTicks / playCount : 0L;
++        var directPlayPercent = playCount > 0 ? Math.Round(100.0 * directPlayCount / playCount, 1) : 0.0;
++
++        return new
++        {
++            TotalTicks = totalTicks,
++            PlayCount = playCount,
++            ActiveUsers = activeUsers,
++            AvgSessionTicks = avgSessionTicks,
++            DirectPlayPercent = directPlayPercent
++        };
++    }
++
++    private static IQueryable<PlaybackActivity> ApplyFilters(
++        IQueryable<PlaybackActivity> query,
++        DateTime? startDate,
++        DateTime? endDate,
++        Guid[]? userIds,
++        string[]? mediaTypes,
++        string[]? clients,
++        string[]? playbackMethods)
++    {
++        if (startDate.HasValue)
++        {
++            var start = DateTime.SpecifyKind(startDate.Value.Date, DateTimeKind.Utc);
++            query = query.Where(p => p.DatePlayed >= start);
++        }
++
++        if (endDate.HasValue)
++        {
++            var endExclusive = DateTime.SpecifyKind(endDate.Value.Date.AddDays(1), DateTimeKind.Utc);
++            query = query.Where(p => p.DatePlayed < endExclusive);
++        }
++
++        if (userIds is { Length: > 0 })
++        {
++            query = query.Where(p => userIds.Contains(p.UserId));
++        }
++
++        if (mediaTypes is { Length: > 0 })
++        {
++            query = query.Where(p => mediaTypes.Contains(p.MediaType));
++        }
++
++        if (clients is { Length: > 0 })
++        {
++            query = query.Where(p => p.ClientName != null && clients.Contains(p.ClientName));
++        }
++
++        if (playbackMethods is { Length: > 0 })
++        {
++            query = query.Where(p => p.PlaybackMethod != null && playbackMethods.Contains(p.PlaybackMethod));
++        }
++
++        return query;
++    }
++
++    private static (DateTime Start, DateTime EndExclusive) NormalizeRange(DateTime? startDate, DateTime? endDate)
++    {
++        var endExclusive = endDate.HasValue
++            ? DateTime.SpecifyKind(endDate.Value.Date.AddDays(1), DateTimeKind.Utc)
++            : DateTime.UtcNow.Date.AddDays(1);
++        var start = startDate.HasValue
++            ? DateTime.SpecifyKind(startDate.Value.Date, DateTimeKind.Utc)
++            : endExclusive.AddDays(-28);
++
++        if (start >= endExclusive)
++        {
++            start = endExclusive.AddDays(-1);
++        }
++
++        return (start, endExclusive);
++    }
++
++    private sealed class ItemAggregateRow
++    {
++        public string MediaType { get; set; } = string.Empty;
++
++        public Guid? ItemId { get; set; }
++
++        public string ItemName { get; set; } = string.Empty;
++
++        public long TotalTicks { get; set; }
++
++        public int PlayCount { get; set; }
++    }
 +}
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivity.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivity.cs
 new file mode 100644
-index 0000000000..52ddc29fed
+index 0000000000..6eff326109
 --- /dev/null
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivity.cs
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,90 @@
 +using System;
 +using Jellyfin.Database.Implementations.Entities.Security;
 +
@@ -355,6 +1116,16 @@ index 0000000000..52ddc29fed
 +    /// Gets or sets the name of the item.
 +    /// </summary>
 +    public string ItemName { get; set; } = string.Empty;
++
++    /// <summary>
++    /// Gets or sets the series identifier when the item is an episode.
++    /// </summary>
++    public Guid? SeriesId { get; set; }
++
++    /// <summary>
++    /// Gets or sets the series name when the item is an episode.
++    /// </summary>
++    public string? SeriesName { get; set; }
 +
 +    /// <summary>
 +    /// Gets or sets the media type (Movie, Episode, Book, Music Video, etc).
