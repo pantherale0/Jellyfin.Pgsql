@@ -167,8 +167,9 @@ public sealed class UserTasteProfileIntegrationTests
         await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
 
         var seriesId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-000000000101");
+        // Use 110-117 so episode ids never collide with seriesId (...0101) or favoriteSeriesId (...0120).
         var episodeIds = Enumerable.Range(0, 8)
-            .Select(i => Guid.Parse($"eeeeeeee-aaaa-bbbb-cccc-0000000001{i:D2}"))
+            .Select(i => Guid.Parse($"eeeeeeee-aaaa-bbbb-cccc-00000000011{i}"))
             .ToArray();
         var favoriteSeriesId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-000000000120");
         var seriesComedyGenreId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-0000000000b1");
