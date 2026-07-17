@@ -178,6 +178,24 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
     }
 
     /// <inheritdoc/>
+    public void Remove(string key)
+    {
+        if (!CanUseRedis())
+        {
+            return;
+        }
+
+        try
+        {
+            _cache.Remove(key);
+        }
+        catch (Exception ex) when (IsTransientRedisFailure(ex))
+        {
+            ReportCacheFailure(ex, "remove");
+        }
+    }
+
+    /// <inheritdoc/>
     public void Dispose()
     {
         _cache.Dispose();

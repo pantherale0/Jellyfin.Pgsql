@@ -1,0 +1,66 @@
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/UserTasteRecommendation.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/UserTasteRecommendation.cs
+new file mode 100644
+index 0000000000..1111111111
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/UserTasteRecommendation.cs
+@@ -0,0 +1,44 @@
++using System;
++
++namespace Jellyfin.Database.Implementations.Entities;
++
++/// <summary>
++/// Precomputed taste recommendation row for the home For You feed.
++/// </summary>
++public class UserTasteRecommendation
++{
++    /// <summary>
++    /// Gets or sets the user identifier.
++    /// </summary>
++    public Guid UserId { get; set; }
++
++    /// <summary>
++    /// Gets or sets the item kind name (<c>Movie</c> or <c>Series</c>).
++    /// </summary>
++    public string ItemType { get; set; } = string.Empty;
++
++    /// <summary>
++    /// Gets or sets the 0-based display rank within the feed.
++    /// </summary>
++    public int Rank { get; set; }
++
++    /// <summary>
++    /// Gets or sets the recommended item identifier.
++    /// </summary>
++    public Guid ItemId { get; set; }
++
++    /// <summary>
++    /// Gets or sets the taste score at materialization time.
++    /// </summary>
++    public int Score { get; set; }
++
++    /// <summary>
++    /// Gets or sets the sparse badge tier (<c>high</c>, <c>mid</c>, or empty).
++    /// </summary>
++    public string Tier { get; set; } = string.Empty;
++
++    /// <summary>
++    /// Gets or sets when this feed row was written (UTC).
++    /// </summary>
++    public DateTime UpdatedAt { get; set; }
++}
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
+index 2222222222..3333333333 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
+@@ -188,6 +188,11 @@
+     /// </summary>
+     public DbSet<TasteModelEvalRun> TasteModelEvalRuns => Set<TasteModelEvalRun>();
+ 
++    /// <summary>
++    /// Gets the <see cref="DbSet{TEntity}"/> containing precomputed taste recommendations.
++    /// </summary>
++    public DbSet<UserTasteRecommendation> UserTasteRecommendations => Set<UserTasteRecommendation>();
++
+     /*public DbSet<Artwork> Artwork => Set<Artwork>();
+ 
+     public DbSet<Book> Books => Set<Book>();

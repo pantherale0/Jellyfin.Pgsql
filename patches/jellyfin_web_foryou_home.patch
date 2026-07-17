@@ -1,0 +1,341 @@
+diff --git a/src/components/homesections/sections/forYou.ts b/src/components/homesections/sections/forYou.ts
+new file mode 100644
+index 0000000000..1111111111
+--- /dev/null
++++ b/src/components/homesections/sections/forYou.ts
+@@ -0,0 +1,187 @@
++import type { BaseItemDto } from '@jellyfin/sdk/lib/generated-client/models/base-item-dto';
++import type { BaseItemDtoQueryResult } from '@jellyfin/sdk/lib/generated-client/models/base-item-dto-query-result';
++import { ImageType } from '@jellyfin/sdk/lib/generated-client/models/image-type';
++import { ItemFields } from '@jellyfin/sdk/lib/generated-client/models/item-fields';
++import type { ApiClient } from 'jellyfin-apiclient';
++
++import cardBuilder from 'components/cardbuilder/cardBuilder';
++import { getPortraitShape } from 'components/cardbuilder/utils/shape';
++import globalize from 'lib/globalize';
++
++import type { SectionContainerElement, SectionOptions } from './section';
++
++type ForYouItemType = 'Movie' | 'Series';
++
++type TasteRecItem = {
++    ItemId?: string
++    Tier?: string
++    Score?: number
++};
++
++type TasteRecResponse = {
++    Items?: TasteRecItem[]
++};
++
++type ItemWithTasteTier = BaseItemDto & { PgsqlTasteTier?: string };
++
++function emptyQueryResult(): BaseItemDtoQueryResult {
++    return {
++        Items: [],
++        TotalRecordCount: 0
++    };
++}
++
++function getFetchForYouFn(
++    apiClient: ApiClient,
++    includeItemTypes: ForYouItemType,
++    { enableOverflow }: SectionOptions
++) {
++    return async function (): Promise<BaseItemDtoQueryResult> {
++        const userId = apiClient.getCurrentUserId();
++        const limit = enableOverflow ? 24 : 16;
++        const url = apiClient.getUrl('Pgsql/Taste/Recommendations', {
++            userId,
++            includeItemTypes,
++            limit
++        });
++
++        try {
++            const result = await apiClient.getJSON(url) as TasteRecResponse;
++            const ranked = (result?.Items || []).filter((item) => item?.ItemId);
++            if (!ranked.length) {
++                return emptyQueryResult();
++            }
++
++            const ids = ranked.map((item) => item.ItemId as string);
++            const tierById = new Map(
++                ranked
++                    .filter((item) => item.ItemId && item.Tier)
++                    .map((item) => [item.ItemId as string, item.Tier as string])
++            );
++
++            const itemsResult = await apiClient.getItems(userId, {
++                Ids: ids.join(','),
++                Limit: ids.length,
++                Fields: [
++                    ItemFields.PrimaryImageAspectRatio,
++                    ItemFields.Path
++                ].join(','),
++                ImageTypeLimit: 1,
++                EnableImageTypes: [
++                    ImageType.Primary,
++                    ImageType.Backdrop,
++                    ImageType.Thumb
++                ].join(',')
++            }) as BaseItemDtoQueryResult;
++
++            const byId = new Map(
++                (itemsResult.Items || [])
++                    .filter((item): item is BaseItemDto & { Id: string } => !!item.Id)
++                    .map((item) => [item.Id, item as ItemWithTasteTier])
++            );
++
++            const ordered: ItemWithTasteTier[] = [];
++            for (const id of ids) {
++                const item = byId.get(id);
++                if (!item) {
++                    continue;
++                }
++
++                const tier = tierById.get(id);
++                if (tier) {
++                    item.PgsqlTasteTier = tier;
++                }
++
++                ordered.push(item);
++            }
++
++            return {
++                Items: ordered,
++                TotalRecordCount: ordered.length
++            };
++        } catch {
++            return emptyQueryResult();
++        }
++    };
++}
++
++function getForYouItemsHtmlFn({ enableOverflow }: SectionOptions) {
++    return function (items: BaseItemDto[]) {
++        return cardBuilder.getCardsHtml({
++            items,
++            shape: getPortraitShape(enableOverflow),
++            showUnplayedIndicator: false,
++            showChildCountIndicator: true,
++            context: 'home',
++            overlayText: false,
++            centerText: true,
++            overlayPlayButton: true,
++            allowBottomPadding: !enableOverflow,
++            cardLayout: false,
++            showTitle: true,
++            showYear: true,
++            lines: 2
++        });
++    };
++}
++
++function renderForYouRow(
++    elem: HTMLElement,
++    apiClient: ApiClient,
++    titleKey: string,
++    includeItemTypes: ForYouItemType,
++    options: SectionOptions
++) {
++    let html = '';
++
++    html += '<div class="sectionTitleContainer sectionTitleContainer-cards padded-left">';
++    html += '<h2 class="sectionTitle sectionTitle-cards">';
++    html += globalize.translate(titleKey);
++    html += '</h2>';
++    html += '</div>';
++
++    if (options.enableOverflow) {
++        html += '<div is="emby-scroller" class="padded-top-focusscale padded-bottom-focusscale" data-centerfocus="true">';
++        html += '<div is="emby-itemscontainer" class="itemsContainer scrollSlider focuscontainer-x" data-monitor="markplayed">';
++    } else {
++        html += '<div is="emby-itemscontainer" class="itemsContainer focuscontainer-x padded-left padded-right vertical-wrap" data-monitor="markplayed">';
++    }
++
++    if (options.enableOverflow) {
++        html += '</div>';
++    }
++
++    html += '</div>';
++
++    elem.innerHTML = html;
++
++    const itemsContainer: SectionContainerElement | null = elem.querySelector('.itemsContainer');
++    if (!itemsContainer) {
++        return;
++    }
++
++    itemsContainer.fetchData = getFetchForYouFn(apiClient, includeItemTypes, options);
++    itemsContainer.getItemsHtml = getForYouItemsHtmlFn(options);
++    itemsContainer.parentContainer = elem;
++}
++
++/**
++ * Loads For You Movies and For You Shows home rows.
++ */
++export function loadForYou(
++    elem: HTMLElement,
++    apiClient: ApiClient,
++    options: SectionOptions
++) {
++    elem.classList.remove('verticalSection');
++
++    const moviesFrag = document.createElement('div');
++    moviesFrag.classList.add('verticalSection', 'hide');
++    elem.appendChild(moviesFrag);
++    renderForYouRow(moviesFrag, apiClient, 'HeaderForYouMovies', 'Movie', options);
++
++    const showsFrag = document.createElement('div');
++    showsFrag.classList.add('verticalSection', 'hide');
++    elem.appendChild(showsFrag);
++    renderForYouRow(showsFrag, apiClient, 'HeaderForYouShows', 'Series', options);
++}
+diff --git a/src/constants/homeSectionType.ts b/src/constants/homeSectionType.ts
+index 2222222222..3333333333 100644
+--- a/src/constants/homeSectionType.ts
++++ b/src/constants/homeSectionType.ts
+@@ -10,13 +10,15 @@
+     LatestMedia = 'latestmedia',
+     NextUp = 'nextup',
+     LiveTv = 'livetv',
+-    ResumeBook = 'resumebook'
++    ResumeBook = 'resumebook',
++    ForYou = 'foryou'
+ }
+ 
+ // NOTE: This needs to match the server defaults
+ // https://github.com/jellyfin/jellyfin/blob/1b4394199a2f9883cd601bdb8c9d66015397aa52/Jellyfin.Api/Controllers/DisplayPreferencesController.cs#L120
+ export const DEFAULT_SECTIONS: HomeSectionType[] = [
+     HomeSectionType.SmallLibraryTiles,
+     HomeSectionType.Resume,
+     HomeSectionType.ResumeAudio,
+     HomeSectionType.ResumeBook,
++    HomeSectionType.ForYou,
+@@ -24,6 +26,5 @@
+     HomeSectionType.NextUp,
+     HomeSectionType.LatestMedia,
+     HomeSectionType.None,
+-    HomeSectionType.None,
+     HomeSectionType.None
+ ];
+diff --git a/src/components/homesections/homesections.js b/src/components/homesections/homesections.js
+index 2222222222..3333333333 100644
+--- a/src/components/homesections/homesections.js
++++ b/src/components/homesections/homesections.js
+@@ -7,6 +7,7 @@
+ import { queryClient } from 'utils/query/queryClient';
+ 
+ import { loadRecordings } from './sections/activeRecordings';
++import { loadForYou } from './sections/forYou';
+ import { loadLibraryButtons } from './sections/libraryButtons';
+ import { loadLibraryTiles } from './sections/libraryTiles';
+ import { loadLiveTV } from './sections/liveTv';
+@@ -145,6 +146,9 @@
+         case HomeSectionType.ActiveRecordings:
+             loadRecordings(elem, true, apiClient, options);
+             break;
++        case HomeSectionType.ForYou:
++            loadForYou(elem, apiClient, options);
++            break;
+         case HomeSectionType.LatestMedia:
+             loadRecentlyAdded(elem, apiClient, user, userViews, options);
+             break;
+diff --git a/src/components/homeScreenSettings/homeScreenSettings.template.html b/src/components/homeScreenSettings/homeScreenSettings.template.html
+index 2222222222..3333333333 100644
+--- a/src/components/homeScreenSettings/homeScreenSettings.template.html
++++ b/src/components/homeScreenSettings/homeScreenSettings.template.html
+@@ -21,6 +21,7 @@
+             <select is="emby-select" id="selectHomeSection1" label="{section1label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -35,6 +36,7 @@
+             <select is="emby-select" id="selectHomeSection2" label="{section2label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -49,6 +51,7 @@
+             <select is="emby-select" id="selectHomeSection3" label="{section3label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -63,6 +66,7 @@
+             <select is="emby-select" id="selectHomeSection4" label="{section4label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -77,6 +81,7 @@
+             <select is="emby-select" id="selectHomeSection5" label="{section5label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -91,6 +96,7 @@
+             <select is="emby-select" id="selectHomeSection6" label="{section6label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -105,6 +111,7 @@
+             <select is="emby-select" id="selectHomeSection7" label="{section7label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -119,6 +126,7 @@
+             <select is="emby-select" id="selectHomeSection8" label="{section8label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -133,6 +141,7 @@
+             <select is="emby-select" id="selectHomeSection9" label="{section9label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -147,6 +156,7 @@
+             <select is="emby-select" id="selectHomeSection10" label="{section10label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+index 2222222222..3333333333 100644
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -460,6 +460,9 @@
+     "HeaderFetcherSettings": "Fetcher Settings",
+     "HeaderFetchImages": "Fetch Images",
+     "HeaderForKids": "For Kids",
++    "HeaderForYou": "For You",
++    "HeaderForYouMovies": "For You Movies",
++    "HeaderForYouShows": "For You Shows",
+     "HeaderFrequentlyPlayed": "Frequently Played",
+     "HeaderGuestCast": "Guest Stars",
+     "HeaderGuideProviders": "TV Guide Data Providers",

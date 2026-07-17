@@ -55,6 +55,12 @@ internal sealed class MemoryQueryResultCache : IQueryResultCache, IDisposable
     }
 
     /// <inheritdoc/>
+    public void Remove(string key)
+    {
+        _cache.Remove(key);
+    }
+
+    /// <inheritdoc/>
     public void Dispose()
     {
         _cache.Dispose();

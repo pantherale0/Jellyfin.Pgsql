@@ -1,0 +1,45 @@
+diff --git a/Jellyfin.Api/Controllers/DisplayPreferencesController.cs b/Jellyfin.Api/Controllers/DisplayPreferencesController.cs
+index c1287fe3f4..d4f74d53aa 100644
+--- a/Jellyfin.Api/Controllers/DisplayPreferencesController.cs
++++ b/Jellyfin.Api/Controllers/DisplayPreferencesController.cs
+@@ -123,6 +123,7 @@ public class DisplayPreferencesController : BaseJellyfinApiController
+         HomeSectionType[] defaults =
+         {
+             HomeSectionType.SmallLibraryTiles,
+             HomeSectionType.Resume,
+             HomeSectionType.ResumeAudio,
+             HomeSectionType.ResumeBook,
++            HomeSectionType.ForYou,
+@@ -130,6 +131,7 @@ public class DisplayPreferencesController : BaseJellyfinApiController
+             HomeSectionType.NextUp,
+             HomeSectionType.LatestMedia,
+             HomeSectionType.None,
++            HomeSectionType.None,
+         };
+ 
+         if (!Guid.TryParse(displayPreferencesId, out var itemId))
+@@ -183,7 +185,7 @@ public class DisplayPreferencesController : BaseJellyfinApiController
+             var order = int.Parse(key.AsSpan().Slice("homesection".Length), CultureInfo.InvariantCulture);
+             if (!Enum.TryParse<HomeSectionType>(displayPreferences.CustomPrefs[key], true, out var type))
+             {
+-                type = order < 8 ? defaults[order] : HomeSectionType.None;
++                type = order >= 0 && order < defaults.Length ? defaults[order] : HomeSectionType.None;
+             }
+ 
+             displayPreferences.CustomPrefs.Remove(key);
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/HomeSectionType.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/HomeSectionType.cs
+index 6ba57e74d5..0b67cb1b0e 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/HomeSectionType.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/HomeSectionType.cs
+@@ -53,5 +53,10 @@ public enum HomeSectionType
+     /// <summary>
+     /// Continue Reading.
+     /// </summary>
+-    ResumeBook = 9
++    ResumeBook = 9,
++
++    /// <summary>
++    /// For You taste recommendations.
++    /// </summary>
++    ForYou = 10
+ }
