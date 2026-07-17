@@ -195,7 +195,7 @@ diff --git a/src/constants/homeSectionType.ts b/src/constants/homeSectionType.ts
 index 2222222222..3333333333 100644
 --- a/src/constants/homeSectionType.ts
 +++ b/src/constants/homeSectionType.ts
-@@ -10,13 +10,15 @@
+@@ -10,7 +10,8 @@
      LatestMedia = 'latestmedia',
      NextUp = 'nextup',
      LiveTv = 'livetv',
@@ -205,14 +205,12 @@ index 2222222222..3333333333 100644
  }
  
  // NOTE: This needs to match the server defaults
- // https://github.com/jellyfin/jellyfin/blob/1b4394199a2f9883cd601bdb8c9d66015397aa52/Jellyfin.Api/Controllers/DisplayPreferencesController.cs#L120
- export const DEFAULT_SECTIONS: HomeSectionType[] = [
-     HomeSectionType.SmallLibraryTiles,
+@@ -20,10 +21,10 @@
      HomeSectionType.Resume,
      HomeSectionType.ResumeAudio,
      HomeSectionType.ResumeBook,
 +    HomeSectionType.ForYou,
-@@ -24,6 +26,5 @@
+     HomeSectionType.LiveTv,
      HomeSectionType.NextUp,
      HomeSectionType.LatestMedia,
      HomeSectionType.None,
