@@ -9,7 +9,7 @@ namespace Jellyfin.Plugin.Pgsql.Taste;
 /// Layout: version(1) + count(int32 LE) + entries[guid(16) + score(int32 LE) + tier(byte)].
 /// Tier byte: 0=none, 1=high, 2=mid.
 /// </summary>
-internal static class TasteRecommendationPayload
+public static class TasteRecommendationPayload
 {
     private const byte Version = 1;
 
