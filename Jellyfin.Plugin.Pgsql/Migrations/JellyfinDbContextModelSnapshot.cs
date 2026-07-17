@@ -1204,6 +1204,38 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.ToTable("UserTasteProfiles");
                 });
 
+            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.UserTasteRecommendation", b =>
+                {
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ItemType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("Rank")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("ItemId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Score")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Tier")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("UserId", "ItemType", "Rank");
+
+                    b.HasIndex("UserId", "ItemType");
+
+                    b.ToTable("UserTasteRecommendations");
+                });
+
             modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.Preference", b =>
                 {
                     b.Property<int>("Id")

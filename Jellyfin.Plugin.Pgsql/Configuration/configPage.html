@@ -69,8 +69,10 @@
                     <div class="detailSectionContent">
                         <p>
                             Scheduled aggregation of favorites/plays into per-user taste profiles, used to re-rank
-                            movie More Like This and home recommendations. A shadow ML model can train for offline
-                            metrics without affecting live rankings until neural serving is enabled.
+                            movie More Like This and to materialize For You home feeds (separate
+                            <em>Rebuild user taste recommendations</em> task). Feed reads are cached via the plugin
+                            Redis/memory query cache. A shadow ML model can train for offline metrics without
+                            affecting live rankings until neural serving is enabled.
                         </p>
                         <ul>
                             <li><strong>Pgsql_TASTE_ENABLED</strong> - Build and apply linear taste profiles (default: true)</li>

@@ -35,12 +35,15 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
         var coreRepositoryType = CoreItemRepositoryAccessor.FindCoreRepositoryType(serviceCollection);
         if (coreRepositoryType is null)
         {
-            // Server layout changed; keep the core repository untouched.
+            // Server layout changed; keep the core repository untouched, but still wire taste feeds.
+            serviceCollection.AddSingleton<IQueryResultCache>(_ => new MemoryQueryResultCache());
+            serviceCollection.AddSingleton<TasteRecommendationService>();
             return;
         }
 
         serviceCollection.AddSingleton<QueryRuntimeStats>();
         serviceCollection.AddSingleton<IQueryResultCache>(CreateCache);
+        serviceCollection.AddSingleton<TasteRecommendationService>();
 
         serviceCollection.AddSingleton(sp => new CachedItemLoader(
             sp.GetRequiredService<IDbContextFactory<JellyfinDbContext>>(),

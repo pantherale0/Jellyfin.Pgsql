@@ -5,6 +5,7 @@ using System.Linq;
 using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Plugin.Pgsql.Taste;
 using Microsoft.AspNetCore.Authorization;
@@ -27,6 +28,7 @@ public sealed class TasteProfileController : ControllerBase
     private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
     private readonly TastePersonaGenerator _personaGenerator;
     private readonly TasteMatchService _matchService;
+    private readonly TasteRecommendationService _recommendationService;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TasteProfileController"/> class.
@@ -34,14 +36,17 @@ public sealed class TasteProfileController : ControllerBase
     /// <param name="dbProvider">Database context factory.</param>
     /// <param name="personaGenerator">Persona generator.</param>
     /// <param name="matchService">Match service.</param>
+    /// <param name="recommendationService">Recommendation feed service.</param>
     public TasteProfileController(
         IDbContextFactory<JellyfinDbContext> dbProvider,
         TastePersonaGenerator personaGenerator,
-        TasteMatchService matchService)
+        TasteMatchService matchService,
+        TasteRecommendationService recommendationService)
     {
         _dbProvider = dbProvider;
         _personaGenerator = personaGenerator;
         _matchService = matchService;
+        _recommendationService = recommendationService;
     }
 
     /// <summary>
@@ -156,6 +161,49 @@ public sealed class TasteProfileController : ControllerBase
         return Ok(new TasteMatchResponse
         {
             Matches = matches.Select(m => new TasteMatchItemDto
+            {
+                ItemId = m.ItemId,
+                Tier = m.Tier,
+                Score = m.Score
+            }).ToList()
+        });
+    }
+
+    /// <summary>
+    /// Gets taste-ranked unplayed recommendations for the home feed.
+    /// </summary>
+    /// <param name="userId">User id.</param>
+    /// <param name="includeItemTypes">Movie or Series.</param>
+    /// <param name="limit">Max items to return.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Ranked recommendation items.</returns>
+    [HttpGet("Recommendations")]
+    public async Task<ActionResult<TasteRecommendationsResponse>> GetRecommendations(
+        [FromQuery] Guid userId,
+        [FromQuery] string? includeItemTypes,
+        [FromQuery] int limit = TasteRecommendationService.DefaultLimit,
+        CancellationToken cancellationToken = default)
+    {
+        if (userId == Guid.Empty || !CanAccessUser(userId))
+        {
+            return Forbid();
+        }
+
+        if (!TasteOptions.Current.EnableTasteProfiles
+            || string.IsNullOrWhiteSpace(includeItemTypes)
+            || !Enum.TryParse<BaseItemKind>(includeItemTypes, ignoreCase: true, out var itemType)
+            || itemType is not (BaseItemKind.Movie or BaseItemKind.Series))
+        {
+            return Ok(new TasteRecommendationsResponse { Items = [] });
+        }
+
+        var items = await _recommendationService
+            .GetRecommendationsAsync(userId, itemType, limit, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Ok(new TasteRecommendationsResponse
+        {
+            Items = items.Select(m => new TasteMatchItemDto
             {
                 ItemId = m.ItemId,
                 Tier = m.Tier,

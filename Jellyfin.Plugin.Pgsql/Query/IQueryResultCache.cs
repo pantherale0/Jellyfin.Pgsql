@@ -6,7 +6,7 @@ namespace Jellyfin.Plugin.Pgsql.Query;
 /// A small key/value cache for query results, storing ordered item ID lists.
 /// Implementations must never throw from these methods; failures degrade to cache misses.
 /// </summary>
-internal interface IQueryResultCache
+public interface IQueryResultCache
 {
     /// <summary>
     /// Attempts to retrieve a cached ID list.
@@ -44,6 +44,12 @@ internal interface IQueryResultCache
     /// Clears all cached query results.
     /// </summary>
     void InvalidateAll();
+
+    /// <summary>
+    /// Removes a single cache entry.
+    /// </summary>
+    /// <param name="key">The cache key (without global prefix).</param>
+    void Remove(string key);
 }
 
 /// <summary>

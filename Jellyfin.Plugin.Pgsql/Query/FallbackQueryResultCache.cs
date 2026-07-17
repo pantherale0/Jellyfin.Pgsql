@@ -66,6 +66,13 @@ internal sealed class FallbackQueryResultCache : IQueryResultCache, IDisposable
     }
 
     /// <inheritdoc/>
+    public void Remove(string key)
+    {
+        _fallback.Remove(key);
+        _primary.Remove(key);
+    }
+
+    /// <inheritdoc/>
     public void Dispose()
     {
         if (_primary is IDisposable primaryDisposable)
