@@ -81,6 +81,47 @@ When adding plugin admin APIs + web clients:
 - **Requests:** System.Text.Json property matching is case-insensitive, so camelCase request bodies usually bind; still keep client/server names aligned.
 - **Multipart uploads:** do not force `Content-Type: application/json` on `FormData`; let the browser set the multipart boundary.
 
+### 7. API security guardrails (Jellyfin auth model)
+
+Jellyfin has **no fallback authorization policy**. An endpoint without `[Authorize]` (or a more specific policy) is **public**. `BaseJellyfinApiController` does **not** add auth. Always attribute every new controller/action intentionally.
+
+#### Auth attributes (pick the right one)
+
+| Intent | Server patches (`jellyfin/`) | Plugin controllers (`Jellyfin.Plugin.Pgsql/Api/`) |
+|---|---|---|
+| Any signed-in user | `[Authorize]` | `[Authorize]` |
+| Admin only | `[Authorize(Policy = Policies.RequiresElevation)]` | `[Authorize(Roles = "Administrator")]` |
+| Public (login/OIDC/etc.) | `[AllowAnonymous]` only when required; keep the surface minimal | Same; rarely needed |
+
+Use `MediaBrowser.Common.Api.Policies` / `Microsoft.AspNetCore.Authorization` as upstream controllers do. Do not invent a parallel auth scheme.
+
+#### User-scoped routes (IDOR prevention)
+
+Any route or query that takes a `userId` (or equivalent) must enforce **self or admin**:
+
+- **Server patches:** call `RequestHelpers.GetUserId(User, userId)` at the start of the action (throws `SecurityException` → 403 for other users). See `Users/{userId}/PlaybackStats` in `jellyfin_playback_statistics.patch`.
+- **Plugin:** compare `Jellyfin-UserId` claim to the requested id, or allow `User.IsInRole("Administrator")` (same pattern as `TasteProfileController.CanAccessUser` / Emby import session owner checks).
+
+Admin-wide aggregates belong on a separate elevated controller (e.g. `PlaybackStats` with `RequiresElevation`), not on an unauthenticated or weakly checked user route.
+
+#### Input, uploads, and error responses
+
+- Bound resource usage: request/multipart size limits, concurrent session caps, parameterized SQL (never load an entire imported table then filter in memory).
+- Bind ephemeral upload/import sessions to the creating admin (`CreatedByUserId`); reject other callers even if they are also admins.
+- Do not build OAuth `redirect_uri` from `Request.Host`; require a configured absolute URI (`JELLYFIN_SSO_OIDC_REDIRECT_URI`).
+- Never return IdP/token/userinfo response bodies to clients; log server-side and return generic errors.
+- User-influenced strings in HTML/content responses must be encoded or returned as `text/plain` (no raw OIDC `error_description` in HTML).
+- Do not expose filesystem paths, internal eval metrics, or other admin-only diagnostics on user-facing APIs.
+
+#### Checklist before shipping a new API
+
+1. Class or action has `[Authorize]` / elevation / `[AllowAnonymous]` by design.
+2. Every `userId` path is ownership-checked.
+3. Admin mutations stay behind elevation/Administrator.
+4. Uploads and heavy reads have size/concurrency/query bounds.
+5. Error payloads cannot leak secrets or enable XSS.
+6. Server changes live in `patches/`; submodule left clean.
+
 ## Project map
 
 | Path | Role |
