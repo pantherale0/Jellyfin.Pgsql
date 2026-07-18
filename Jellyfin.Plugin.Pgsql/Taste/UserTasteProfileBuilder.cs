@@ -83,14 +83,7 @@ public sealed class UserTasteProfileBuilder
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        var userIds = new List<Guid>(userDataUserIds);
-        foreach (var id in playbackUserIds)
-        {
-            if (!userIds.Contains(id))
-            {
-                userIds.Add(id);
-            }
-        }
+        var userIds = userDataUserIds.Union(playbackUserIds).ToList();
 
         var upserted = 0;
         var skippedNoSignals = 0;

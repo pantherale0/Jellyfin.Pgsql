@@ -1,4 +1,7 @@
 using System;
+using System.Data.Common;
+using System.IO;
+using System.Net.Sockets;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -30,7 +33,8 @@ public sealed class PostgresDatabaseFixture : IAsyncLifetime
             await dbContext.Database.MigrateAsync().ConfigureAwait(false);
             IsAvailable = true;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is DbException or InvalidOperationException or TimeoutException
+            or IOException or ArgumentException or SocketException)
         {
             InitializationError = ex.Message;
             IsAvailable = false;

@@ -52,7 +52,6 @@ public sealed class UserTasteProfileIntegrationTests
         await SeedTasteCorpusAsync(dbContext).ConfigureAwait(false);
 
         var builder = new UserTasteProfileBuilder(NullLogger<UserTasteProfileBuilder>.Instance);
-        var itemTypeLookup = CreateItemTypeLookup();
         var wrote = await builder.RebuildUserAsync(
                 dbContext,
                 TasteUserId,
@@ -80,18 +79,16 @@ public sealed class UserTasteProfileIntegrationTests
         var withoutUser = await provider.ComputeBatchScoresAsync([SeedActionId], default).ConfigureAwait(false);
         var withUser = await provider.ComputeBatchScoresAsync([SeedActionId], default, TasteUserId).ConfigureAwait(false);
 
-        Assert.True(withoutUser.ContainsKey(SeedActionId));
-        Assert.True(withUser.ContainsKey(SeedActionId));
-        var cold = withoutUser[SeedActionId];
-        var warm = withUser[SeedActionId];
+        Assert.True(withoutUser.TryGetValue(SeedActionId, out var cold));
+        Assert.True(withUser.TryGetValue(SeedActionId, out var warm));
 
-        Assert.True(cold.ContainsKey(ActionComedyId));
-        Assert.True(cold.ContainsKey(ActionOnlyId));
-        Assert.Equal(cold[ActionComedyId], cold[ActionOnlyId]);
+        Assert.True(cold.TryGetValue(ActionComedyId, out var coldComedy));
+        Assert.True(cold.TryGetValue(ActionOnlyId, out var coldOnly));
+        Assert.Equal(coldComedy, coldOnly);
 
         Assert.True(warm[ActionComedyId] > warm[ActionOnlyId], "Comedy-affine user should prefer Action+Comedy after taste bonus");
-        Assert.True(warm[ActionComedyId] > cold[ActionComedyId]);
-        Assert.True(warm[ActionComedyId] - cold[ActionComedyId] <= MovieSimilarityWeights.MaxTasteBonus);
+        Assert.True(warm[ActionComedyId] > coldComedy);
+        Assert.True(warm[ActionComedyId] - coldComedy <= MovieSimilarityWeights.MaxTasteBonus);
     }
 
     [PostgresTestFact]
@@ -138,7 +135,7 @@ public sealed class UserTasteProfileIntegrationTests
         await builder.RebuildAllAsync(dbContext, itemTypeLookup.Object, 730, 3, default).ConfigureAwait(false);
 
         var trainer = new TasteShadowNeuralTrainer(NullLogger<TasteShadowNeuralTrainer>.Instance);
-        var modelDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "pgsql-taste-tests", Guid.NewGuid().ToString("N"));
+        var modelDir = System.IO.Path.Join(System.IO.Path.GetTempPath(), "pgsql-taste-tests", Guid.NewGuid().ToString("N"));
         var beforeCount = await dbContext.TasteModelEvalRuns.CountAsync().ConfigureAwait(false);
         var run = await trainer.TrainAndEvaluateAsync(dbContext, itemTypeLookup.Object, modelDir, default)
             .ConfigureAwait(false);

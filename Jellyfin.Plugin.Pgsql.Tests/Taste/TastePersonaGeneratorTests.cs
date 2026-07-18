@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Jellyfin.Plugin.Pgsql.Taste;
 using Xunit;
 
@@ -145,17 +146,7 @@ public sealed class TastePersonaGeneratorTests
     }
 
     private static bool ContainsAny(string haystack, params string[] needles)
-    {
-        foreach (var needle in needles)
-        {
-            if (haystack.Contains(needle, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+        => needles.Where(needle => haystack.Contains(needle, StringComparison.OrdinalIgnoreCase)).Any();
 
     private static UserTasteFeaturePayload SpecialistHorrorPayload()
         => new()

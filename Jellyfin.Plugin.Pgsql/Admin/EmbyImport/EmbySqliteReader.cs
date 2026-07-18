@@ -42,24 +42,19 @@ public sealed class EmbySqliteReader
         var byId = users.ToDictionary(u => u.Id, u => u);
         foreach (var (userId, count) in counts)
         {
-            if (byId.TryGetValue(userId, out var existing))
-            {
-                byId[userId] = new EmbyUserInfo
+            byId[userId] = byId.TryGetValue(userId, out var existing)
+                ? new EmbyUserInfo
                 {
                     Id = existing.Id,
                     Name = existing.Name,
                     UserDataCount = count,
-                };
-            }
-            else
-            {
-                byId[userId] = new EmbyUserInfo
+                }
+                : new EmbyUserInfo
                 {
                     Id = userId,
                     Name = string.Format(CultureInfo.InvariantCulture, "Unknown (id={0})", userId),
                     UserDataCount = count,
                 };
-            }
         }
 
         return byId.Values

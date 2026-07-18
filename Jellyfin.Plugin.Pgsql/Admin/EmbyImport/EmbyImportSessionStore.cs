@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -35,7 +36,7 @@ public sealed partial class EmbyImportSessionStore
     {
         ArgumentNullException.ThrowIfNull(appPaths);
         _logger = logger;
-        _rootPath = Path.Combine(appPaths.DataPath, "pgsql-emby-import");
+        _rootPath = Path.Join(appPaths.DataPath, "pgsql-emby-import");
         Directory.CreateDirectory(_rootPath);
     }
 
@@ -69,11 +70,11 @@ public sealed partial class EmbyImportSessionStore
         }
 
         var sessionId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
-        var directory = Path.Combine(_rootPath, sessionId);
+        var directory = Path.Join(_rootPath, sessionId);
         Directory.CreateDirectory(directory);
 
-        var libraryPath = Path.Combine(directory, "library.db");
-        var usersPath = Path.Combine(directory, "users.db");
+        var libraryPath = Path.Join(directory, "library.db");
+        var usersPath = Path.Join(directory, "users.db");
 
         try
         {
@@ -223,14 +224,11 @@ public sealed partial class EmbyImportSessionStore
         lock (_cleanupLock)
         {
             var cutoff = DateTime.UtcNow - SessionTtl;
-            foreach (var pair in _sessions)
+            foreach (var pair in _sessions.Where(p => p.Value.CreatedUtc < cutoff))
             {
-                if (pair.Value.CreatedUtc < cutoff)
+                if (_sessions.TryRemove(pair.Key, out var expired))
                 {
-                    if (_sessions.TryRemove(pair.Key, out var expired))
-                    {
-                        DeleteDirectory(expired.DirectoryPath);
-                    }
+                    DeleteDirectory(expired.DirectoryPath);
                 }
             }
 

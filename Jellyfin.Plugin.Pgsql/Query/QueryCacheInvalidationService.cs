@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller.Library;
@@ -70,7 +71,7 @@ internal sealed class QueryCacheInvalidationService : IHostedService
                 _logger.LogDebug("Invalidated PostgreSQL query caches due to {Reason}", reason);
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException or IOException or TimeoutException)
         {
             _logger.LogWarning(ex, "Failed to invalidate PostgreSQL query caches after {Reason}", reason);
         }

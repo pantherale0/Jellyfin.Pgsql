@@ -220,14 +220,8 @@ public sealed class EmbyUserDataImportService
 
         var itemsNew = 0;
         var itemsMerged = 0;
-        foreach (var itemId in byItem.Keys)
+        foreach (var item in byItem.Keys.Select(_matcher.GetItem).OfType<BaseItem>())
         {
-            var item = _matcher.GetItem(itemId);
-            if (item is null)
-            {
-                continue;
-            }
-
             var existing = _userDataManager.GetUserData(targetUser, item);
             if (existing is null)
             {

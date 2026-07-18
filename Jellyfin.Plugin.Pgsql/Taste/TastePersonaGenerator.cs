@@ -310,9 +310,8 @@ public sealed class TastePersonaGenerator
         UserTasteFeaturePayload payload,
         List<KeyValuePair<string, float>> topGenres)
     {
-        foreach (var tag in payload.Tags.OrderByDescending(t => t.Value).Take(3))
+        foreach (var key in payload.Tags.OrderByDescending(t => t.Value).Take(3).Select(t => NormalizeGenreKey(t.Key)))
         {
-            var key = NormalizeGenreKey(tag.Key);
             if (MoodPools.ContainsKey(key) && !key.Equals("default", StringComparison.Ordinal))
             {
                 return key;
@@ -364,9 +363,8 @@ public sealed class TastePersonaGenerator
         }
 
         double entropy = 0;
-        foreach (var weight in genres.Values)
+        foreach (var p in genres.Values.Select(weight => weight / sum))
         {
-            var p = weight / sum;
             if (p > 0)
             {
                 entropy -= p * Math.Log(p + 1e-12, 2);

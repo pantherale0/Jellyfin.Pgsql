@@ -335,17 +335,12 @@ internal sealed class PgNextUpQuery
                 }
             }
 
-            if (includeSpecials && specialIdsByKey.TryGetValue(seriesKey, out var specialIds))
-            {
-                batch.Specials = specialIds
+            batch.Specials = includeSpecials && specialIdsByKey.TryGetValue(seriesKey, out var specialIds)
+                ? specialIds
                     .Where(itemsById.ContainsKey)
                     .Select(id => itemsById[id])
-                    .ToList();
-            }
-            else
-            {
-                batch.Specials = Array.Empty<BaseItem>();
-            }
+                    .ToList()
+                : Array.Empty<BaseItem>();
 
             if (includeWatchedForRewatching && rewatchByKey.TryGetValue(seriesKey, out var rewatch))
             {
