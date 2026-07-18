@@ -1,16 +1,84 @@
 diff --git a/src/apps/dashboard/features/embyImport/api/embyImportApi.ts b/src/apps/dashboard/features/embyImport/api/embyImportApi.ts
 new file mode 100644
-index 0000000000..972410c250
+index 0000000000..0c6fa26750
 --- /dev/null
 +++ b/src/apps/dashboard/features/embyImport/api/embyImportApi.ts
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,157 @@
 +import type { Api } from '@jellyfin/sdk';
 +import type { AxiosRequestConfig } from 'axios';
 +
 +import type {
++    EmbyImportCounts,
 +    EmbyImportResponse,
-+    EmbyImportUploadResponse
++    EmbyImportUploadResponse,
++    EmbyUserInfo
 +} from '../types';
++
++const camelCaseAccept =
++    'application/json; profile="CamelCase", application/json; profile=CamelCase, application/json';
++
++const jsonHeaders = (api: Api, options?: AxiosRequestConfig) => ({
++    ...options?.headers,
++    Accept: camelCaseAccept,
++    Authorization: api.authorizationHeader
++});
++
++const asRecord = (value: unknown): Record<string, unknown> | null =>
++    value && typeof value === 'object' ? value as Record<string, unknown> : null;
++
++const pick = <T>(obj: Record<string, unknown>, ...keys: string[]): T | undefined => {
++    for (const key of keys) {
++        if (obj[key] !== undefined && obj[key] !== null) {
++            return obj[key] as T;
++        }
++    }
++    return undefined;
++};
++
++const normalizeUser = (raw: unknown): EmbyUserInfo | null => {
++    const obj = asRecord(raw);
++    if (!obj) {
++        return null;
++    }
++
++    const id = pick<number>(obj, 'id', 'Id');
++    const name = pick<string>(obj, 'name', 'Name');
++    const userDataCount = pick<number>(obj, 'userDataCount', 'UserDataCount') ?? 0;
++    if (typeof id !== 'number' || typeof name !== 'string') {
++        return null;
++    }
++
++    return { id, name, userDataCount };
++};
++
++const normalizeUploadResponse = (raw: unknown): EmbyImportUploadResponse => {
++    const obj = asRecord(raw) || {};
++    const sessionId = pick<string>(obj, 'sessionId', 'SessionId') || '';
++    const usersRaw = pick<unknown[]>(obj, 'users', 'Users') || [];
++    const users = usersRaw.map(normalizeUser).filter((u): u is EmbyUserInfo => !!u);
++    return { sessionId, users };
++};
++
++const normalizeCounts = (raw: unknown): EmbyImportCounts => {
++    const obj = asRecord(raw) || {};
++    return {
++        matchedKeys: pick<number>(obj, 'matchedKeys', 'MatchedKeys') ?? 0,
++        unmatchedKeys: pick<number>(obj, 'unmatchedKeys', 'UnmatchedKeys') ?? 0,
++        matchedItems: pick<number>(obj, 'matchedItems', 'MatchedItems') ?? 0,
++        itemsNew: pick<number>(obj, 'itemsNew', 'ItemsNew') ?? 0,
++        itemsMerged: pick<number>(obj, 'itemsMerged', 'ItemsMerged') ?? 0,
++        sourceRows: pick<number>(obj, 'sourceRows', 'SourceRows') ?? 0
++    };
++};
++
++const normalizeImportResponse = (raw: unknown): EmbyImportResponse => {
++    const obj = asRecord(raw) || {};
++    return {
++        isPreview: !!pick<boolean>(obj, 'isPreview', 'IsPreview'),
++        counts: normalizeCounts(pick(obj, 'counts', 'Counts')),
++        warning: pick<string | null>(obj, 'warning', 'Warning') ?? null
++    };
++};
 +
 +export const uploadEmbyDatabases = async (
 +    api: Api,
@@ -22,19 +90,23 @@ index 0000000000..972410c250
 +    form.append('libraryDb', libraryDb);
 +    form.append('usersDb', usersDb);
 +
-+    const response = await api.axiosInstance.post<EmbyImportUploadResponse>(
++    const headers = {
++        ...jsonHeaders(api, options)
++    };
++    // Let the browser set multipart boundary; a JSON Content-Type breaks IFormFile binding.
++    delete (headers as Record<string, unknown>)['Content-Type'];
++    delete (headers as Record<string, unknown>)['content-type'];
++
++    const response = await api.axiosInstance.post(
 +        '/Pgsql/Admin/EmbyImport/Upload',
 +        form,
 +        {
 +            ...options,
 +            baseURL: api.basePath,
-+            headers: {
-+                ...options?.headers,
-+                Authorization: api.authorizationHeader
-+            }
++            headers
 +        }
 +    );
-+    return response.data;
++    return normalizeUploadResponse(response.data);
 +};
 +
 +export const previewEmbyImport = async (
@@ -44,19 +116,16 @@ index 0000000000..972410c250
 +    targetUserId: string,
 +    options?: AxiosRequestConfig
 +): Promise<EmbyImportResponse> => {
-+    const response = await api.axiosInstance.post<EmbyImportResponse>(
++    const response = await api.axiosInstance.post(
 +        '/Pgsql/Admin/EmbyImport/Preview',
 +        { sessionId, embyUserIds, targetUserId },
 +        {
 +            ...options,
 +            baseURL: api.basePath,
-+            headers: {
-+                ...options?.headers,
-+                Authorization: api.authorizationHeader
-+            }
++            headers: jsonHeaders(api, options)
 +        }
 +    );
-+    return response.data;
++    return normalizeImportResponse(response.data);
 +};
 +
 +export const executeEmbyImport = async (
@@ -66,19 +135,16 @@ index 0000000000..972410c250
 +    targetUserId: string,
 +    options?: AxiosRequestConfig
 +): Promise<EmbyImportResponse> => {
-+    const response = await api.axiosInstance.post<EmbyImportResponse>(
++    const response = await api.axiosInstance.post(
 +        '/Pgsql/Admin/EmbyImport/Execute',
 +        { sessionId, embyUserIds, targetUserId },
 +        {
 +            ...options,
 +            baseURL: api.basePath,
-+            headers: {
-+                ...options?.headers,
-+                Authorization: api.authorizationHeader
-+            }
++            headers: jsonHeaders(api, options)
 +        }
 +    );
-+    return response.data;
++    return normalizeImportResponse(response.data);
 +};
 +
 +export const discardEmbyImportSession = async (
@@ -91,10 +157,7 @@ index 0000000000..972410c250
 +        {
 +            ...options,
 +            baseURL: api.basePath,
-+            headers: {
-+                ...options?.headers,
-+                Authorization: api.authorizationHeader
-+            }
++            headers: jsonHeaders(api, options)
 +        }
 +    );
 +};
@@ -207,10 +270,10 @@ index 4f82b508b7..325219dd38 100644
  ];
 diff --git a/src/apps/dashboard/routes/users/import-emby.tsx b/src/apps/dashboard/routes/users/import-emby.tsx
 new file mode 100644
-index 0000000000..48d7a91764
+index 0000000000..5fec006c04
 --- /dev/null
 +++ b/src/apps/dashboard/routes/users/import-emby.tsx
-@@ -0,0 +1,399 @@
+@@ -0,0 +1,407 @@
 +import Alert from '@mui/material/Alert';
 +import Box from '@mui/material/Box';
 +import Button from '@mui/material/Button';
@@ -317,12 +380,18 @@ index 0000000000..48d7a91764
 +            { libraryDb: libraryFile, usersDb: usersFile },
 +            {
 +                onSuccess: (data) => {
++                    if (!data.sessionId) {
++                        setError(globalize.translate('EmbyImportUploadFailed'));
++                        return;
++                    }
++
 +                    if (sessionId) {
 +                        discardMutation.mutate(sessionId);
 +                    }
++
++                    resetAfterUpload();
 +                    setSessionId(data.sessionId);
 +                    setEmbyUsers(data.users || []);
-+                    resetAfterUpload();
 +                    setSelectedEmbyUserIds(
 +                        (data.users || [])
 +                            .filter(u => u.userDataCount > 0)
@@ -462,7 +531,9 @@ index 0000000000..48d7a91764
 +                            disabled={!canUpload}
 +                            onClick={handleUpload}
 +                        >
-+                            {globalize.translate('EmbyImportUpload')}
++                            {uploadMutation.isPending
++                                ? globalize.translate('EmbyImportUploading')
++                                : globalize.translate('EmbyImportUpload')}
 +                        </Button>
 +                    </Stack>
 +
@@ -629,7 +700,7 @@ index 17708f4cac..226df0303c 100644
                          </div>
  
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 53da82e789..b6ce55f728 100755
+index 53da82e789..93e701966a 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
 @@ -585,6 +585,7 @@
@@ -640,7 +711,7 @@ index 53da82e789..b6ce55f728 100755
      "HeaderUserAdminMerge": "Merge users",
      "HeaderUsers": "Users",
      "HeaderVideoAdvanced": "Video Advanced",
-@@ -1475,6 +1476,33 @@
+@@ -1475,6 +1476,34 @@
      "UserAdminModeMerge": "Full merge (delete source)",
      "UserAdminModeMoveUserData": "Move UserData only",
      "UserAdminPreview": "Preview",
@@ -668,6 +739,7 @@ index 53da82e789..b6ce55f728 100755
 +    "EmbyImportTargetUser": "Target Jellyfin user",
 +    "EmbyImportUpload": "Upload databases",
 +    "EmbyImportUploadFailed": "Upload failed.",
++    "EmbyImportUploading": "Uploading…",
 +    "EmbyImportUploadStep": "Upload Emby databases",
 +    "EmbyImportUserOption": "{0} ({1} rows)",
 +    "EmbyImportUsersSelected": "users.db: {0}",
