@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Plugin.Pgsql.Admin;
+using Jellyfin.Plugin.Pgsql.Admin.EmbyImport;
 using Jellyfin.Plugin.Pgsql.PlaybackReportingImport;
 using Jellyfin.Plugin.Pgsql.Taste;
 using MediaBrowser.Controller;
@@ -31,6 +32,10 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<TastePersonaGenerator>();
         serviceCollection.AddSingleton<TasteMatchService>();
         serviceCollection.AddSingleton<UserMergeService>();
+        serviceCollection.AddSingleton<EmbyImportSessionStore>();
+        serviceCollection.AddSingleton<EmbySqliteReader>();
+        serviceCollection.AddSingleton<EmbyUserDataMatcher>();
+        serviceCollection.AddSingleton<EmbyUserDataImportService>();
 
         var coreRepositoryType = CoreItemRepositoryAccessor.FindCoreRepositoryType(serviceCollection);
         if (coreRepositoryType is null)
