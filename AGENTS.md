@@ -64,6 +64,23 @@ Both submodules must track the **same** Jellyfin release (e.g. both at `v12.0-rc
 
 Auto-commits are never be allowed.
 
+### 6. Jellyfin API JSON casing (PascalCase by default)
+
+Jellyfin’s default JSON output is **PascalCase** (`SessionId`, `Users`). CamelCase is only used when the client sends:
+
+```http
+Accept: application/json; profile="CamelCase"
+```
+
+Raw `api.axiosInstance` calls from dashboard patches do **not** get this header automatically (unlike generated SDK methods). Reading `response.data.sessionId` against a PascalCase body silently yields `undefined` and looks like a no-op UI bug.
+
+When adding plugin admin APIs + web clients:
+
+- **Web:** always set `Accept: application/json; profile="CamelCase"` on custom axios calls (same pattern as Emby import / merge helpers).
+- **Plugin DTOs:** prefer `[JsonPropertyName("camelCaseName")]` on response properties so payloads stay camelCase even without the Accept profile.
+- **Requests:** System.Text.Json property matching is case-insensitive, so camelCase request bodies usually bind; still keep client/server names aligned.
+- **Multipart uploads:** do not force `Content-Type: application/json` on `FormData`; let the browser set the multipart boundary.
+
 ## Project map
 
 | Path | Role |
