@@ -224,12 +224,13 @@ public sealed partial class EmbyImportSessionStore
         lock (_cleanupLock)
         {
             var cutoff = DateTime.UtcNow - SessionTtl;
-            foreach (var pair in _sessions.Where(p => p.Value.CreatedUtc < cutoff))
+            foreach (var expired in _sessions
+                         .Where(p => p.Value.CreatedUtc < cutoff)
+                         .Select(p => p.Key)
+                         .Select(key => _sessions.TryRemove(key, out var session) ? session : null)
+                         .Where(session => session is not null))
             {
-                if (_sessions.TryRemove(pair.Key, out var expired))
-                {
-                    DeleteDirectory(expired.DirectoryPath);
-                }
+                DeleteDirectory(expired!.DirectoryPath);
             }
 
             if (!Directory.Exists(_rootPath))
