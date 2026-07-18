@@ -1,0 +1,690 @@
+diff --git a/src/apps/dashboard/components/drawer/sections/ReportsDrawerSection.tsx b/src/apps/dashboard/components/drawer/sections/ReportsDrawerSection.tsx
+index eec7f3e103..a9bc424f8c 100644
+--- a/src/apps/dashboard/components/drawer/sections/ReportsDrawerSection.tsx
++++ b/src/apps/dashboard/components/drawer/sections/ReportsDrawerSection.tsx
+@@ -1,4 +1,5 @@
+ import BarChart from '@mui/icons-material/BarChart';
++import Psychology from '@mui/icons-material/Psychology';
+ import List from '@mui/material/List';
+ import ListItem from '@mui/material/ListItem';
+ import ListItemIcon from '@mui/material/ListItemIcon';
+@@ -27,6 +28,14 @@ const ReportsDrawerSection = () => {
+                     <ListItemText primary={globalize.translate('HeaderPlaybackStatistics')} />
+                 </ListItemLink>
+             </ListItem>
++            <ListItem disablePadding>
++                <ListItemLink to='/dashboard/reports/taste'>
++                    <ListItemIcon>
++                        <Psychology />
++                    </ListItemIcon>
++                    <ListItemText primary={globalize.translate('HeaderTasteModels')} />
++                </ListItemLink>
++            </ListItem>
+         </List>
+     );
+ };
+diff --git a/src/apps/dashboard/features/tasteModels/api/tasteModelsApi.ts b/src/apps/dashboard/features/tasteModels/api/tasteModelsApi.ts
+new file mode 100644
+index 0000000000..7076d07e68
+--- /dev/null
++++ b/src/apps/dashboard/features/tasteModels/api/tasteModelsApi.ts
+@@ -0,0 +1,30 @@
++import type { Api } from '@jellyfin/sdk';
++import type { AxiosRequestConfig } from 'axios';
++
++import type { TasteShadowEvalResponse } from '../types';
++
++const fetchJson = async <T>(
++    api: Api,
++    path: string,
++    options?: AxiosRequestConfig
++): Promise<T> => {
++    const response = await api.axiosInstance.get<T>(path, {
++        ...options,
++        baseURL: api.basePath,
++        headers: {
++            ...options?.headers,
++            Authorization: api.authorizationHeader
++        }
++    });
++    return response.data;
++};
++
++export const fetchTasteShadowEval = (
++    api: Api,
++    limit = 50,
++    options?: AxiosRequestConfig
++): Promise<TasteShadowEvalResponse> => {
++    const params = new URLSearchParams();
++    params.set('limit', String(limit));
++    return fetchJson(api, `/Pgsql/Admin/Taste/ShadowEval?${params.toString()}`, options);
++};
+diff --git a/src/apps/dashboard/features/tasteModels/api/useTasteShadowEval.ts b/src/apps/dashboard/features/tasteModels/api/useTasteShadowEval.ts
+new file mode 100644
+index 0000000000..2e75d5ab61
+--- /dev/null
++++ b/src/apps/dashboard/features/tasteModels/api/useTasteShadowEval.ts
+@@ -0,0 +1,16 @@
++import { useQuery } from '@tanstack/react-query';
++
++import { useApi } from 'hooks/useApi';
++
++import { fetchTasteShadowEval } from './tasteModelsApi';
++
++export const useTasteShadowEval = (limit = 50) => {
++    const { api } = useApi();
++
++    return useQuery({
++        queryKey: [ 'TasteShadowEval', limit ],
++        queryFn: ({ signal }) => fetchTasteShadowEval(api!, limit, { signal }),
++        enabled: !!api,
++        refetchOnMount: false
++    });
++};
+diff --git a/src/apps/dashboard/features/tasteModels/components/TasteAucChart.tsx b/src/apps/dashboard/features/tasteModels/components/TasteAucChart.tsx
+new file mode 100644
+index 0000000000..ba24db6c2c
+--- /dev/null
++++ b/src/apps/dashboard/features/tasteModels/components/TasteAucChart.tsx
+@@ -0,0 +1,68 @@
++import React, { useMemo } from 'react';
++import Box from '@mui/material/Box';
++import Paper from '@mui/material/Paper';
++import Typography from '@mui/material/Typography';
++import { useTheme } from '@mui/material/styles';
++import { LineChart } from '@mui/x-charts/LineChart';
++
++import globalize from 'lib/globalize';
++
++import type { TasteModelEvalRun } from '../types';
++
++interface TasteAucChartProps {
++    runs: TasteModelEvalRun[];
++}
++
++const TasteAucChart = ({ runs }: TasteAucChartProps) => {
++    const theme = useTheme();
++
++    const { labels, values } = useMemo(() => {
++        const successful = runs
++            .filter(run => run.Succeeded && run.Auc != null)
++            .slice()
++            .reverse();
++
++        return {
++            labels: successful.map(run => {
++                const date = new Date(run.CreatedAt);
++                return Number.isNaN(date.getTime())
++                    ? run.CreatedAt
++                    : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
++            }),
++            values: successful.map(run => run.Auc as number)
++        };
++    }, [ runs ]);
++
++    return (
++        <Paper sx={{ p: 2 }}>
++            <Typography variant='subtitle2' gutterBottom>
++                {globalize.translate('TasteModelsAucTrend')}
++            </Typography>
++            {labels.length === 0 ? (
++                <Typography variant='body2' color='text.secondary'>
++                    {globalize.translate('TasteModelsNoSuccessfulRuns')}
++                </Typography>
++            ) : (
++                <Box sx={{ width: '100%', height: 280 }}>
++                    <LineChart
++                        xAxis={[{ data: labels, scaleType: 'point' }]}
++                        yAxis={[{ min: 0.5, max: 1 }]}
++                        series={[{
++                            id: 'auc',
++                            label: globalize.translate('TasteModelsLabelAuc'),
++                            data: values,
++                            color: theme.palette.primary.main,
++                            showMark: true,
++                            valueFormatter: (value: number | null) => (
++                                value == null ? '—' : value.toFixed(3)
++                            )
++                        }]}
++                        margin={{ left: 50, right: 16, top: 24, bottom: 40 }}
++                    />
++                </Box>
++            )}
++        </Paper>
++    );
++};
++
++export default TasteAucChart;
+diff --git a/src/apps/dashboard/features/tasteModels/components/TasteEvalHistoryTable.tsx b/src/apps/dashboard/features/tasteModels/components/TasteEvalHistoryTable.tsx
+new file mode 100644
+index 0000000000..bb0999b374
+--- /dev/null
++++ b/src/apps/dashboard/features/tasteModels/components/TasteEvalHistoryTable.tsx
+@@ -0,0 +1,102 @@
++import React from 'react';
++import Chip from '@mui/material/Chip';
++import Paper from '@mui/material/Paper';
++import Table from '@mui/material/Table';
++import TableBody from '@mui/material/TableBody';
++import TableCell from '@mui/material/TableCell';
++import TableContainer from '@mui/material/TableContainer';
++import TableHead from '@mui/material/TableHead';
++import TableRow from '@mui/material/TableRow';
++import Typography from '@mui/material/Typography';
++
++import globalize from 'lib/globalize';
++
++import type { TasteModelEvalRun } from '../types';
++import { formatDurationMs, formatMetric, formatPercent } from '../utils/aucQuality';
++
++interface TasteEvalHistoryTableProps {
++    runs: TasteModelEvalRun[];
++}
++
++const formatWhen = (value: string) => {
++    const date = new Date(value);
++    if (Number.isNaN(date.getTime())) {
++        return value;
++    }
++
++    return date.toLocaleString();
++};
++
++const TasteEvalHistoryTable = ({ runs }: TasteEvalHistoryTableProps) => {
++    return (
++        <Paper sx={{ p: 2 }}>
++            <Typography variant='subtitle2' gutterBottom>
++                {globalize.translate('TasteModelsHistory')}
++            </Typography>
++            {runs.length === 0 ? (
++                <Typography variant='body2' color='text.secondary'>
++                    {globalize.translate('TasteModelsNoRuns')}
++                </Typography>
++            ) : (
++                <TableContainer>
++                    <Table size='small'>
++                        <TableHead>
++                            <TableRow>
++                                <TableCell>{globalize.translate('TasteModelsColWhen')}</TableCell>
++                                <TableCell>{globalize.translate('TasteModelsColStatus')}</TableCell>
++                                <TableCell align='right'>{globalize.translate('TasteModelsLabelAuc')}</TableCell>
++                                <TableCell align='right'>{globalize.translate('TasteModelsLabelAccuracy')}</TableCell>
++                                <TableCell align='right'>{globalize.translate('TasteModelsLabelPrecisionAt10')}</TableCell>
++                                <TableCell align='right'>{globalize.translate('TasteModelsLabelTrainingPairs')}</TableCell>
++                                <TableCell align='right'>{globalize.translate('TasteModelsLabelHoldout')}</TableCell>
++                                <TableCell align='right'>{globalize.translate('TasteModelsLabelDuration')}</TableCell>
++                                <TableCell>{globalize.translate('TasteModelsColModel')}</TableCell>
++                            </TableRow>
++                        </TableHead>
++                        <TableBody>
++                            {runs.map(run => (
++                                <TableRow key={run.Id} hover>
++                                    <TableCell>{formatWhen(run.CreatedAt)}</TableCell>
++                                    <TableCell>
++                                        {run.Succeeded ? (
++                                            <Chip
++                                                size='small'
++                                                color='success'
++                                                label={globalize.translate('TasteModelsStatusSucceeded')}
++                                            />
++                                        ) : (
++                                            <Chip
++                                                size='small'
++                                                color='warning'
++                                                label={run.Notes || globalize.translate('TasteModelsStatusSkipped')}
++                                            />
++                                        )}
++                                    </TableCell>
++                                    <TableCell align='right'>{formatMetric(run.Auc)}</TableCell>
++                                    <TableCell align='right'>{formatPercent(run.Accuracy)}</TableCell>
++                                    <TableCell align='right'>{formatPercent(run.PrecisionAt10, 0)}</TableCell>
++                                    <TableCell align='right'>
++                                        {run.Succeeded ? `${run.PositiveCount} / ${run.NegativeCount}` : '—'}
++                                    </TableCell>
++                                    <TableCell align='right'>
++                                        {run.Succeeded ? run.HoldoutCount : '—'}
++                                    </TableCell>
++                                    <TableCell align='right'>
++                                        {formatDurationMs(run.TrainDurationMs)}
++                                    </TableCell>
++                                    <TableCell>
++                                        <Typography variant='body2' noWrap sx={{ maxWidth: 220 }}>
++                                            {run.ModelPath || '—'}
++                                        </Typography>
++                                    </TableCell>
++                                </TableRow>
++                            ))}
++                        </TableBody>
++                    </Table>
++                </TableContainer>
++            )}
++        </Paper>
++    );
++};
++
++export default TasteEvalHistoryTable;
+diff --git a/src/apps/dashboard/features/tasteModels/components/TasteKpiCards.tsx b/src/apps/dashboard/features/tasteModels/components/TasteKpiCards.tsx
+new file mode 100644
+index 0000000000..f0910a10ff
+--- /dev/null
++++ b/src/apps/dashboard/features/tasteModels/components/TasteKpiCards.tsx
+@@ -0,0 +1,137 @@
++import React, { useMemo } from 'react';
++import Chip from '@mui/material/Chip';
++import Paper from '@mui/material/Paper';
++import Stack from '@mui/material/Stack';
++import Typography from '@mui/material/Typography';
++
++import globalize from 'lib/globalize';
++
++import type { TasteModelEvalRun } from '../types';
++import {
++    formatDelta,
++    formatDurationMs,
++    formatMetric,
++    formatPercent,
++    getAucQualityBand
++} from '../utils/aucQuality';
++
++interface TasteKpiCardsProps {
++    latest: TasteModelEvalRun | null;
++    runs: TasteModelEvalRun[];
++}
++
++const QUALITY_LABEL: Record<string, string> = {
++    excellent: 'TasteModelsQualityExcellent',
++    good: 'TasteModelsQualityGood',
++    fair: 'TasteModelsQualityFair',
++    weak: 'TasteModelsQualityWeak',
++    unknown: 'TasteModelsQualityUnknown'
++};
++
++const QUALITY_COLOR: Record<string, 'success' | 'info' | 'warning' | 'error' | 'default'> = {
++    excellent: 'success',
++    good: 'info',
++    fair: 'warning',
++    weak: 'error',
++    unknown: 'default'
++};
++
++interface KpiProps {
++    label: string;
++    value: string;
++    hint?: string | null;
++}
++
++const Kpi = ({ label, value, hint }: KpiProps) => (
++    <Paper sx={{ p: 2, flex: '1 1 140px', minWidth: 130 }}>
++        <Typography variant='body2' color='text.secondary' gutterBottom>
++            {label}
++        </Typography>
++        <Typography variant='h5' sx={{ mb: 0.5 }}>{value}</Typography>
++        {hint ? (
++            <Typography variant='caption' color='text.secondary'>
++                {hint}
++            </Typography>
++        ) : null}
++    </Paper>
++);
++
++const TasteKpiCards = ({ latest, runs }: TasteKpiCardsProps) => {
++    const prior = useMemo(
++        () => runs.find(run => run.Succeeded && run.Id !== latest?.Id) ?? null,
++        [ latest?.Id, runs ]
++    );
++
++    if (!latest) {
++        return (
++            <Paper sx={{ p: 2 }}>
++                <Typography variant='body2' color='text.secondary'>
++                    {globalize.translate('TasteModelsNoRuns')}
++                </Typography>
++            </Paper>
++        );
++    }
++
++    if (!latest.Succeeded) {
++        return (
++            <Paper sx={{ p: 2 }}>
++                <Typography variant='subtitle2' gutterBottom>
++                    {globalize.translate('TasteModelsLatestSkipped')}
++                </Typography>
++                <Typography variant='body2' color='text.secondary'>
++                    {latest.Notes || globalize.translate('TasteModelsQualityUnknown')}
++                </Typography>
++            </Paper>
++        );
++    }
++
++    const band = getAucQualityBand(latest.Auc);
++    const aucDelta = formatDelta(latest.Auc, prior?.Auc);
++    const accDelta = formatDelta(latest.Accuracy, prior?.Accuracy);
++
++    return (
++        <Stack spacing={2}>
++            <Stack direction='row' spacing={1} alignItems='center' useFlexGap flexWrap='wrap'>
++                <Typography variant='subtitle1'>
++                    {globalize.translate('TasteModelsLatestRun')}
++                </Typography>
++                <Chip
++                    size='small'
++                    color={QUALITY_COLOR[band]}
++                    label={globalize.translate(QUALITY_LABEL[band])}
++                />
++            </Stack>
++            <Stack direction='row' spacing={2} useFlexGap flexWrap='wrap'>
++                <Kpi
++                    label={globalize.translate('TasteModelsLabelAuc')}
++                    value={formatMetric(latest.Auc)}
++                    hint={aucDelta ? globalize.translate('TasteModelsDeltaVsPrior', aucDelta) : null}
++                />
++                <Kpi
++                    label={globalize.translate('TasteModelsLabelAccuracy')}
++                    value={formatPercent(latest.Accuracy)}
++                    hint={accDelta ? globalize.translate('TasteModelsDeltaVsPrior', accDelta) : null}
++                />
++                <Kpi
++                    label={globalize.translate('TasteModelsLabelPrecisionAt10')}
++                    value={formatPercent(latest.PrecisionAt10, 0)}
++                />
++                <Kpi
++                    label={globalize.translate('TasteModelsLabelTrainingPairs')}
++                    value={`${latest.PositiveCount} / ${latest.NegativeCount}`}
++                    hint={globalize.translate('TasteModelsLabelPosNeg')}
++                />
++                <Kpi
++                    label={globalize.translate('TasteModelsLabelHoldout')}
++                    value={String(latest.HoldoutCount)}
++                />
++                <Kpi
++                    label={globalize.translate('TasteModelsLabelDuration')}
++                    value={formatDurationMs(latest.TrainDurationMs)}
++                />
++            </Stack>
++        </Stack>
++    );
++};
++
++export default TasteKpiCards;
+diff --git a/src/apps/dashboard/features/tasteModels/components/TasteStatusChips.tsx b/src/apps/dashboard/features/tasteModels/components/TasteStatusChips.tsx
+new file mode 100644
+index 0000000000..8f87f7c4f3
+--- /dev/null
++++ b/src/apps/dashboard/features/tasteModels/components/TasteStatusChips.tsx
+@@ -0,0 +1,46 @@
++import React from 'react';
++import Chip from '@mui/material/Chip';
++import Stack from '@mui/material/Stack';
++
++import globalize from 'lib/globalize';
++
++import type { TasteShadowEvalStatus } from '../types';
++
++interface TasteStatusChipsProps {
++    status: TasteShadowEvalStatus;
++}
++
++const TasteStatusChips = ({ status }: TasteStatusChipsProps) => {
++    return (
++        <Stack direction='row' spacing={1} useFlexGap flexWrap='wrap'>
++            <Chip
++                size='small'
++                color={status.TasteEnabled ? 'success' : 'default'}
++                label={globalize.translate(
++                    status.TasteEnabled ? 'TasteModelsStatusTasteOn' : 'TasteModelsStatusTasteOff'
++                )}
++            />
++            <Chip
++                size='small'
++                color={status.ShadowTrainingEnabled ? 'success' : 'default'}
++                label={globalize.translate(
++                    status.ShadowTrainingEnabled
++                        ? 'TasteModelsStatusShadowOn'
++                        : 'TasteModelsStatusShadowOff'
++                )}
++            />
++            <Chip
++                size='small'
++                color={status.NeuralServingEnabled ? 'warning' : 'default'}
++                variant={status.NeuralServingEnabled ? 'filled' : 'outlined'}
++                label={globalize.translate(
++                    status.NeuralServingEnabled
++                        ? 'TasteModelsStatusServingOn'
++                        : 'TasteModelsStatusServingOff'
++                )}
++            />
++        </Stack>
++    );
++};
++
++export default TasteStatusChips;
+diff --git a/src/apps/dashboard/features/tasteModels/types.ts b/src/apps/dashboard/features/tasteModels/types.ts
+new file mode 100644
+index 0000000000..75f49935be
+--- /dev/null
++++ b/src/apps/dashboard/features/tasteModels/types.ts
+@@ -0,0 +1,28 @@
++export interface TasteShadowEvalStatus {
++    TasteEnabled: boolean;
++    ShadowTrainingEnabled: boolean;
++    NeuralServingEnabled: boolean;
++}
++
++export interface TasteModelEvalRun {
++    Id: string;
++    CreatedAt: string;
++    TrainDurationMs: number;
++    PositiveCount: number;
++    NegativeCount: number;
++    HoldoutCount: number;
++    Accuracy: number | null;
++    Auc: number | null;
++    PrecisionAt10: number | null;
++    ModelPath: string | null;
++    Notes: string | null;
++    Succeeded: boolean;
++}
++
++export interface TasteShadowEvalResponse {
++    Status: TasteShadowEvalStatus;
++    Latest: TasteModelEvalRun | null;
++    Runs: TasteModelEvalRun[];
++}
++
++export type AucQualityBand = 'excellent' | 'good' | 'fair' | 'weak' | 'unknown';
+diff --git a/src/apps/dashboard/features/tasteModels/utils/aucQuality.ts b/src/apps/dashboard/features/tasteModels/utils/aucQuality.ts
+new file mode 100644
+index 0000000000..27e5c3d81e
+--- /dev/null
++++ b/src/apps/dashboard/features/tasteModels/utils/aucQuality.ts
+@@ -0,0 +1,59 @@
++import type { AucQualityBand } from '../types';
++
++export const getAucQualityBand = (auc: number | null | undefined): AucQualityBand => {
++    if (auc == null || Number.isNaN(auc)) {
++        return 'unknown';
++    }
++
++    if (auc >= 0.9) {
++        return 'excellent';
++    }
++
++    if (auc >= 0.8) {
++        return 'good';
++    }
++
++    if (auc >= 0.7) {
++        return 'fair';
++    }
++
++    return 'weak';
++};
++
++export const formatMetric = (value: number | null | undefined, digits = 3): string => {
++    if (value == null || Number.isNaN(value)) {
++        return '—';
++    }
++
++    return value.toFixed(digits);
++};
++
++export const formatPercent = (value: number | null | undefined, digits = 1): string => {
++    if (value == null || Number.isNaN(value)) {
++        return '—';
++    }
++
++    return `${(value * 100).toFixed(digits)}%`;
++};
++
++export const formatDurationMs = (ms: number | null | undefined): string => {
++    if (ms == null || Number.isNaN(ms) || ms < 0) {
++        return '—';
++    }
++
++    if (ms < 1000) {
++        return `${ms} ms`;
++    }
++
++    return `${(ms / 1000).toFixed(1)} s`;
++};
++
++export const formatDelta = (current: number | null | undefined, prior: number | null | undefined): string | null => {
++    if (current == null || prior == null || Number.isNaN(current) || Number.isNaN(prior)) {
++        return null;
++    }
++
++    const delta = current - prior;
++    const sign = delta > 0 ? '+' : '';
++    return `${sign}${delta.toFixed(3)}`;
++};
+diff --git a/src/apps/dashboard/routes/_asyncRoutes.ts b/src/apps/dashboard/routes/_asyncRoutes.ts
+index 5f77cd83cf..4f82b508b7 100644
+--- a/src/apps/dashboard/routes/_asyncRoutes.ts
++++ b/src/apps/dashboard/routes/_asyncRoutes.ts
+@@ -26,6 +26,7 @@ export const ASYNC_ADMIN_ROUTES: AsyncRoute[] = [
+     { path: 'plugins/:pluginId', page: 'plugins/plugin', type: AppType.Dashboard },
+     { path: 'plugins/repositories', type: AppType.Dashboard },
+     { path: 'reports/playback', type: AppType.Dashboard },
++    { path: 'reports/taste', type: AppType.Dashboard },
+     { path: 'tasks', type: AppType.Dashboard },
+     { path: 'tasks/:id', page: 'tasks/task', type: AppType.Dashboard },
+     { path: 'users', type: AppType.Dashboard },
+diff --git a/src/apps/dashboard/routes/reports/taste.tsx b/src/apps/dashboard/routes/reports/taste.tsx
+new file mode 100644
+index 0000000000..bbf9ecb40f
+--- /dev/null
++++ b/src/apps/dashboard/routes/reports/taste.tsx
+@@ -0,0 +1,62 @@
++import React from 'react';
++import Alert from '@mui/material/Alert';
++import Box from '@mui/material/Box';
++import CircularProgress from '@mui/material/CircularProgress';
++import Stack from '@mui/material/Stack';
++import Typography from '@mui/material/Typography';
++import Page from 'components/Page';
++import globalize from 'lib/globalize';
++
++import { useTasteShadowEval } from 'apps/dashboard/features/tasteModels/api/useTasteShadowEval';
++import TasteAucChart from 'apps/dashboard/features/tasteModels/components/TasteAucChart';
++import TasteEvalHistoryTable from 'apps/dashboard/features/tasteModels/components/TasteEvalHistoryTable';
++import TasteKpiCards from 'apps/dashboard/features/tasteModels/components/TasteKpiCards';
++import TasteStatusChips from 'apps/dashboard/features/tasteModels/components/TasteStatusChips';
++
++export const Component = () => {
++    const query = useTasteShadowEval(50);
++
++    return (
++        <Page
++            id='tasteModelsPage'
++            title={globalize.translate('HeaderTasteModels')}
++            className='mainAnimatedPage type-interior'
++        >
++            <Box className='content-primary' sx={{ p: 2 }}>
++                <Stack spacing={2}>
++                    <Box>
++                        <Typography variant='h5' gutterBottom>
++                            {globalize.translate('HeaderTasteModels')}
++                        </Typography>
++                        <Typography variant='body2' color='text.secondary'>
++                            {globalize.translate('TasteModelsHelp')}
++                        </Typography>
++                    </Box>
++
++                    {query.isLoading ? (
++                        <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
++                            <CircularProgress />
++                        </Box>
++                    ) : null}
++
++                    {query.isError ? (
++                        <Alert severity='error'>
++                            {globalize.translate('TasteModelsLoadError')}
++                        </Alert>
++                    ) : null}
++
++                    {query.data ? (
++                        <>
++                            <TasteStatusChips status={query.data.Status} />
++                            <TasteKpiCards latest={query.data.Latest} runs={query.data.Runs} />
++                            <TasteAucChart runs={query.data.Runs} />
++                            <TasteEvalHistoryTable runs={query.data.Runs} />
++                        </>
++                    ) : null}
++                </Stack>
++            </Box>
++        </Page>
++    );
++};
++
++Component.displayName = 'TasteModelsPage';
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+index 3b73ab0d7f..53da82e789 100755
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -521,6 +521,7 @@
+     "HeaderPlayback": "Media playback",
+     "HeaderPlaybackError": "Playback Error",
+     "HeaderPlaybackStatistics": "Playback statistics",
++    "HeaderTasteModels": "Taste models",
+     "HeaderPlayOn": "Play On",
+     "HeaderPleaseSignIn": "Please sign in",
+     "HeaderPortRanges": "Firewall and Proxy Settings",
+@@ -1731,6 +1732,38 @@
+     "TableOfContents": "Table of Contents",
+     "Tags": "Tags",
+     "TagsValue": "Tags: {0}",
++    "TasteModelsAucTrend": "AUC over time",
++    "TasteModelsColModel": "Model",
++    "TasteModelsColStatus": "Status",
++    "TasteModelsColWhen": "When",
++    "TasteModelsDeltaVsPrior": "{0} vs prior run",
++    "TasteModelsHelp": "Shadow models evaluate taste ranking offline. They do not affect live For You results unless neural serving is enabled.",
++    "TasteModelsHistory": "Training history",
++    "TasteModelsLabelAccuracy": "Accuracy",
++    "TasteModelsLabelAuc": "AUC",
++    "TasteModelsLabelDuration": "Train time",
++    "TasteModelsLabelHoldout": "Holdout",
++    "TasteModelsLabelPosNeg": "Positive / negative pairs",
++    "TasteModelsLabelPrecisionAt10": "Precision@10",
++    "TasteModelsLabelTrainingPairs": "Training pairs",
++    "TasteModelsLatestRun": "Latest successful run",
++    "TasteModelsLatestSkipped": "Latest run was skipped",
++    "TasteModelsLoadError": "Could not load taste model evaluation data.",
++    "TasteModelsNoRuns": "No shadow training runs yet. They appear after the Rebuild User Taste Profiles task runs with shadow training enabled.",
++    "TasteModelsNoSuccessfulRuns": "No successful evaluation runs to chart yet.",
++    "TasteModelsQualityExcellent": "Excellent",
++    "TasteModelsQualityFair": "Fair",
++    "TasteModelsQualityGood": "Good",
++    "TasteModelsQualityUnknown": "Unknown",
++    "TasteModelsQualityWeak": "Weak",
++    "TasteModelsStatusServingOff": "Live neural serving off",
++    "TasteModelsStatusServingOn": "Live neural serving on",
++    "TasteModelsStatusShadowOff": "Shadow training off",
++    "TasteModelsStatusShadowOn": "Shadow training on",
++    "TasteModelsStatusSkipped": "Skipped",
++    "TasteModelsStatusSucceeded": "Succeeded",
++    "TasteModelsStatusTasteOff": "Taste profiles off",
++    "TasteModelsStatusTasteOn": "Taste profiles on",
+     "TellUsAboutYourself": "Tell us about yourself",
+     "TextSent": "Text sent.",
+     "ThemeSongs": "Theme songs",
