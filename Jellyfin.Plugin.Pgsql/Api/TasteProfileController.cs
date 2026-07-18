@@ -99,11 +99,6 @@ public sealed class TasteProfileController : ControllerBase
                 row.UpdatedAt,
                 options.MinSamples,
                 affinityHints);
-            var eval = await context.TasteModelEvalRuns.AsNoTracking()
-                .OrderByDescending(e => e.CreatedAt)
-                .Select(e => new { e.Auc, e.CreatedAt })
-                .FirstOrDefaultAsync(cancellationToken)
-                .ConfigureAwait(false);
 
             return Ok(new TasteProfileResponse
             {
@@ -126,10 +121,7 @@ public sealed class TasteProfileController : ControllerBase
                 People = people,
                 RatingMean = payload.RatingMean,
                 RatingP25 = payload.RatingP25,
-                RatingP75 = payload.RatingP75,
-                ShadowEval = eval is null
-                    ? null
-                    : new TasteEvalFootnoteDto { Auc = eval.Auc, CreatedAt = eval.CreatedAt }
+                RatingP75 = payload.RatingP75
             });
         }
     }

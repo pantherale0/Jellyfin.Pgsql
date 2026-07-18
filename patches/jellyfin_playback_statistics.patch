@@ -141,16 +141,18 @@ index 19823dff37..24c28555f1 100644
              if (playbackFailed)
 diff --git a/Jellyfin.Api/Controllers/PlaybackActivityController.cs b/Jellyfin.Api/Controllers/PlaybackActivityController.cs
 new file mode 100644
-index 0000000000..58f3b0ae88
+index 0000000000..25cc4d577e
 --- /dev/null
 +++ b/Jellyfin.Api/Controllers/PlaybackActivityController.cs
-@@ -0,0 +1,216 @@
+@@ -0,0 +1,223 @@
 +using System;
 +using System.Linq;
 +using System.Threading;
 +using System.Threading.Tasks;
++using Jellyfin.Api.Helpers;
 +using Jellyfin.Database.Implementations;
 +using Jellyfin.Database.Implementations.Entities;
++using Microsoft.AspNetCore.Authorization;
 +using Microsoft.AspNetCore.Http;
 +using Microsoft.AspNetCore.Mvc;
 +using Microsoft.EntityFrameworkCore;
@@ -161,6 +163,7 @@ index 0000000000..58f3b0ae88
 +/// Playback activity controller.
 +/// </summary>
 +[ApiController]
++[Authorize]
 +[Route("Users/{userId}/PlaybackStats")]
 +public class PlaybackActivityController : BaseJellyfinApiController
 +{
@@ -190,6 +193,7 @@ index 0000000000..58f3b0ae88
 +        [FromQuery] DateTime? startDate,
 +        [FromQuery] DateTime? endDate)
 +    {
++        userId = RequestHelpers.GetUserId(User, userId);
 +        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
 +
 +        var stats = await ApplyDateFilter(dbContext.PlaybackActivity.AsNoTracking().Where(p => p.UserId.Equals(userId)), startDate, endDate)
@@ -221,6 +225,7 @@ index 0000000000..58f3b0ae88
 +        [FromQuery] DateTime? startDate,
 +        [FromQuery] DateTime? endDate)
 +    {
++        userId = RequestHelpers.GetUserId(User, userId);
 +        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
 +
 +        var stats = await ApplyDateFilter(dbContext.PlaybackActivity.AsNoTracking().Where(p => p.UserId.Equals(userId)), startDate, endDate)
@@ -253,6 +258,7 @@ index 0000000000..58f3b0ae88
 +        [FromQuery] DateTime? startDate,
 +        [FromQuery] DateTime? endDate)
 +    {
++        userId = RequestHelpers.GetUserId(User, userId);
 +        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
 +        var endExclusive = endDate.HasValue
 +            ? DateTime.SpecifyKind(endDate.Value.Date.AddDays(1), DateTimeKind.Utc)
@@ -292,6 +298,7 @@ index 0000000000..58f3b0ae88
 +        [FromQuery] DateTime? startDate,
 +        [FromQuery] DateTime? endDate)
 +    {
++        userId = RequestHelpers.GetUserId(User, userId);
 +        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
 +
 +        var stats = await ApplyDateFilter(

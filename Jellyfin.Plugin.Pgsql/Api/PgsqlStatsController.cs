@@ -1,4 +1,5 @@
 using Jellyfin.Plugin.Pgsql.Query;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Jellyfin.Plugin.Pgsql.Api;
@@ -7,9 +8,12 @@ namespace Jellyfin.Plugin.Pgsql.Api;
 /// Exposes runtime stats for the PostgreSQL plugin dashboard page.
 /// </summary>
 [ApiController]
+[Authorize(Roles = AdministratorRole)]
 [Route("Pgsql/Stats")]
 public sealed class PgsqlStatsController : ControllerBase
 {
+    private const string AdministratorRole = "Administrator";
+
     private readonly QueryRuntimeStats _stats;
 
     /// <summary>

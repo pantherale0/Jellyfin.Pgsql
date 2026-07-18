@@ -31,4 +31,9 @@ public sealed class EmbyImportSession
     /// Gets the UTC creation time.
     /// </summary>
     public required DateTime CreatedUtc { get; init; }
+
+    /// <summary>
+    /// Gets the Jellyfin user id of the administrator who created the session.
+    /// </summary>
+    public required Guid CreatedByUserId { get; init; }
 }

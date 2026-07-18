@@ -97,7 +97,7 @@ Configure the OIDC integration using the following environment variables in your
 | `JELLYFIN_SSO_OIDC_AUTHORITY` | empty | The base URL of your OIDC provider (e.g., `https://keycloak.example.com/realms/master`) |
 | `JELLYFIN_SSO_OIDC_CLIENT_ID` | empty | The client ID registered in your OIDC provider |
 | `JELLYFIN_SSO_OIDC_CLIENT_SECRET` | empty | The client secret (optional, only if client is confidential) |
-| `JELLYFIN_SSO_OIDC_REDIRECT_URI` | dynamically built | The callback URL (optional, defaults to `{Scheme}://{Host}/sso/callback`) |
+| `JELLYFIN_SSO_OIDC_REDIRECT_URI` | _(required when SSO enabled)_ | The OIDC callback URL (e.g. `https://jellyfin.example.com/sso/callback`). Must match the redirect URI registered with your IdP. |
 | `JELLYFIN_SSO_OIDC_SCOPE` | `openid profile email groups` | Scopes requested from the identity provider |
 | `JELLYFIN_SSO_OIDC_USERNAME_CLAIM` | `preferred_username` | The claim containing the user's Jellyfin username |
 | `JELLYFIN_SSO_OIDC_ROLES_CLAIM` | `groups` | The claim containing user groups/roles |
