@@ -44,8 +44,8 @@ public sealed class EmbyImportController : ControllerBase
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<EmbyImportUploadResponse>> Upload(
-        IFormFile? libraryDb,
-        IFormFile? usersDb,
+        [FromForm] IFormFile? libraryDb,
+        [FromForm] IFormFile? usersDb,
         CancellationToken cancellationToken)
     {
         if (!TryGetCallerUserId(out var callerUserId))
