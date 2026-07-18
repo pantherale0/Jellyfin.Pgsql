@@ -48,7 +48,7 @@ public sealed class PlaybackReportingMigrationService : IHostedService
             return;
         }
 
-        var markerPath = Path.Combine(_applicationPaths.DataPath, MigrationMarkerFileName);
+        var markerPath = Path.Join(_applicationPaths.DataPath, MigrationMarkerFileName);
         if (File.Exists(markerPath) && !string.Equals(mode, "force", StringComparison.OrdinalIgnoreCase))
         {
             if (_logger.IsEnabled(LogLevel.Information))
@@ -60,7 +60,7 @@ public sealed class PlaybackReportingMigrationService : IHostedService
         }
 
         var tsvOverride = Environment.GetEnvironmentVariable("PLAYBACK_REPORTING_TSV");
-        var sqlitePath = Path.Combine(_applicationPaths.DataPath, SqliteFileName);
+        var sqlitePath = Path.Join(_applicationPaths.DataPath, SqliteFileName);
 
         PlaybackReportingMigrationResult result;
         if (!string.IsNullOrWhiteSpace(tsvOverride))
@@ -110,7 +110,7 @@ public sealed class PlaybackReportingMigrationService : IHostedService
 
         if (File.Exists(sqlitePath))
         {
-            var migratedPath = Path.Combine(_applicationPaths.DataPath, MigratedSqliteFileName);
+            var migratedPath = Path.Join(_applicationPaths.DataPath, MigratedSqliteFileName);
             if (File.Exists(migratedPath))
             {
                 File.Delete(migratedPath);

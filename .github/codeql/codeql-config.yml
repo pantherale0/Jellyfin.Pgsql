@@ -1,0 +1,10 @@
+name: Jellyfin.Pgsql
+queries:
+  - uses: security-and-quality
+paths:
+  - Jellyfin.Plugin.Pgsql
+  - Jellyfin.Plugin.Pgsql.Tests
+  - Jellyfin.Plugin.Seerr
+paths-ignore:
+  - "**/obj/**"
+  - "**/bin/**"

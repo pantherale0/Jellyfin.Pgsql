@@ -114,7 +114,7 @@ public sealed class PlaybackReportingImporterTests
         await PlaybackReportingFixtureFactory.SeedTestDataAsync(dbContext).ConfigureAwait(false);
         await PlaybackReportingFixtureFactory.ClearPlaybackActivityAsync(dbContext).ConfigureAwait(false);
 
-        var tsvPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"playback-date-{Guid.NewGuid():N}.tsv");
+        var tsvPath = System.IO.Path.Join(System.IO.Path.GetTempPath(), $"playback-date-{Guid.NewGuid():N}.tsv");
         var local = new DateTime(2024, 6, 1, 20, 30, 0, DateTimeKind.Local);
         await System.IO.File.WriteAllTextAsync(
             tsvPath,

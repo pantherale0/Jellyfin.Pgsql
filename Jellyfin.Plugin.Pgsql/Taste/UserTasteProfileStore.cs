@@ -77,7 +77,8 @@ public sealed class UserTasteProfileStore
                 return value;
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is InvalidOperationException or TimeoutException
+            or System.Text.Json.JsonException or System.Data.Common.DbException)
         {
             _logger.LogWarning(ex, "Failed to load taste profile for user {UserId}", userId);
             return null;
