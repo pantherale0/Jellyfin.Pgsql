@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Caching.Distributed;
@@ -157,9 +158,8 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
 
         try
         {
-            foreach (var endpoint in _connection.GetEndPoints())
+            foreach (var server in _connection.GetEndPoints().Select(endpoint => _connection.GetServer(endpoint)))
             {
-                var server = _connection.GetServer(endpoint);
                 if (!server.IsConnected || server.IsReplica)
                 {
                     continue;

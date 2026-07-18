@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
@@ -110,6 +111,12 @@ public sealed class SeerrController : ControllerBase
         [FromBody] SeerrRequestBody body,
         CancellationToken cancellationToken)
     {
+        var jellyfinUser = GetAuthenticatedUser();
+        if (jellyfinUser is null)
+        {
+            return Unauthorized();
+        }
+
         if (!SeerrClient.IsConfigured())
         {
             return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = "Seerr gateway is not enabled." });
@@ -126,12 +133,6 @@ public sealed class SeerrController : ControllerBase
         if (mediaType is not ("movie" or "tv"))
         {
             return BadRequest(new { message = "mediaType must be 'movie' or 'tv'." });
-        }
-
-        var jellyfinUser = GetAuthenticatedUser();
-        if (jellyfinUser is null)
-        {
-            return Unauthorized();
         }
 
         try
@@ -193,7 +194,7 @@ public sealed class SeerrController : ControllerBase
         {
             return StatusCode(MapStatusCode(ex.StatusCode), new { message = ex.Message });
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException)
         {
             _logger.LogWarning(ex, "Seerr connection test failed");
             return StatusCode(StatusCodes.Status502BadGateway, new { message = "Unable to reach Seerr." });

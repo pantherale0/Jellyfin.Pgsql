@@ -237,10 +237,32 @@ public sealed class SeerrClient
         _logger.LogWarning(
             "Seerr API error {StatusCode} for {Path}: {Message}",
             (int)response.StatusCode,
-            relativePath,
-            message);
+            SanitizeForLog(relativePath),
+            SanitizeForLog(message));
         response.Dispose();
         throw new SeerrApiException((int)response.StatusCode, message);
+    }
+
+    /// <summary>
+    /// Strips CR/LF and other control characters so log sinks cannot be forged.
+    /// </summary>
+    private static string SanitizeForLog(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return value;
+        }
+
+        var chars = value.ToCharArray();
+        for (var i = 0; i < chars.Length; i++)
+        {
+            if (char.IsControl(chars[i]))
+            {
+                chars[i] = ' ';
+            }
+        }
+
+        return new string(chars).Trim();
     }
 
     private static string? ExtractErrorMessage(string errorBody)

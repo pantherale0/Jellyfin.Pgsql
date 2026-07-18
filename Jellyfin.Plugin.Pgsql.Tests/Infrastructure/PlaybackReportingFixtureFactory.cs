@@ -16,12 +16,12 @@ internal static class PlaybackReportingFixtureFactory
 {
     public static string GetFixturePath(string fileName)
     {
-        return Path.Combine(AppContext.BaseDirectory, "Fixtures", fileName);
+        return Path.Join(AppContext.BaseDirectory, "Fixtures", fileName);
     }
 
     public static string CreatePluginSqliteDatabase()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"playback_reporting_{Guid.NewGuid():N}.db");
+        var path = Path.Join(Path.GetTempPath(), $"playback_reporting_{Guid.NewGuid():N}.db");
         if (File.Exists(path))
         {
             File.Delete(path);

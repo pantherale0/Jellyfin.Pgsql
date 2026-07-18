@@ -117,7 +117,8 @@ public sealed class RebuildUserTasteProfilesTask : IScheduledTask, IConfigurable
                             cancellationToken)
                         .ConfigureAwait(false);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is InvalidOperationException or IOException or ObjectDisposedException
+                    or UnauthorizedAccessException or AggregateException or NotSupportedException)
                 {
                     // Shadow training must never fail the profile rebuild job.
                     _logger.LogWarning(ex, "Shadow taste model training failed; profiles were still updated (count={Count})", upserted);
@@ -135,7 +136,7 @@ public sealed class RebuildUserTasteProfilesTask : IScheduledTask, IConfigurable
     private static string ResolveModelDirectory()
     {
         var root = Plugin.Instance?.DataFolderPath
-            ?? Path.Combine(Path.GetTempPath(), "jellyfin-pgsql-taste");
-        return Path.Combine(root, "taste-models");
+            ?? Path.Join(Path.GetTempPath(), "jellyfin-pgsql-taste");
+        return Path.Join(root, "taste-models");
     }
 }

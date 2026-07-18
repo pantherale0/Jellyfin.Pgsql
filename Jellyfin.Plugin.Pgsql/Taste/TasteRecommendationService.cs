@@ -223,15 +223,9 @@ public sealed class TasteRecommendationService
             .Take(poolSize)
             .ToList();
 
-        List<(Guid Id, int Score)> selected;
-        if (pool.Count <= limit)
-        {
-            selected = pool;
-        }
-        else
-        {
-            selected = WeightedSampleWithoutReplacement(pool, limit, rng);
-        }
+        var selected = pool.Count <= limit
+            ? pool
+            : WeightedSampleWithoutReplacement(pool, limit, rng);
 
         var ordered = selected
             .OrderByDescending(s => s.Score)
