@@ -1,0 +1,676 @@
+diff --git a/src/apps/dashboard/features/embyImport/api/embyImportApi.ts b/src/apps/dashboard/features/embyImport/api/embyImportApi.ts
+new file mode 100644
+index 0000000000..972410c250
+--- /dev/null
++++ b/src/apps/dashboard/features/embyImport/api/embyImportApi.ts
+@@ -0,0 +1,94 @@
++import type { Api } from '@jellyfin/sdk';
++import type { AxiosRequestConfig } from 'axios';
++
++import type {
++    EmbyImportResponse,
++    EmbyImportUploadResponse
++} from '../types';
++
++export const uploadEmbyDatabases = async (
++    api: Api,
++    libraryDb: File,
++    usersDb: File,
++    options?: AxiosRequestConfig
++): Promise<EmbyImportUploadResponse> => {
++    const form = new FormData();
++    form.append('libraryDb', libraryDb);
++    form.append('usersDb', usersDb);
++
++    const response = await api.axiosInstance.post<EmbyImportUploadResponse>(
++        '/Pgsql/Admin/EmbyImport/Upload',
++        form,
++        {
++            ...options,
++            baseURL: api.basePath,
++            headers: {
++                ...options?.headers,
++                Authorization: api.authorizationHeader
++            }
++        }
++    );
++    return response.data;
++};
++
++export const previewEmbyImport = async (
++    api: Api,
++    sessionId: string,
++    embyUserIds: number[],
++    targetUserId: string,
++    options?: AxiosRequestConfig
++): Promise<EmbyImportResponse> => {
++    const response = await api.axiosInstance.post<EmbyImportResponse>(
++        '/Pgsql/Admin/EmbyImport/Preview',
++        { sessionId, embyUserIds, targetUserId },
++        {
++            ...options,
++            baseURL: api.basePath,
++            headers: {
++                ...options?.headers,
++                Authorization: api.authorizationHeader
++            }
++        }
++    );
++    return response.data;
++};
++
++export const executeEmbyImport = async (
++    api: Api,
++    sessionId: string,
++    embyUserIds: number[],
++    targetUserId: string,
++    options?: AxiosRequestConfig
++): Promise<EmbyImportResponse> => {
++    const response = await api.axiosInstance.post<EmbyImportResponse>(
++        '/Pgsql/Admin/EmbyImport/Execute',
++        { sessionId, embyUserIds, targetUserId },
++        {
++            ...options,
++            baseURL: api.basePath,
++            headers: {
++                ...options?.headers,
++                Authorization: api.authorizationHeader
++            }
++        }
++    );
++    return response.data;
++};
++
++export const discardEmbyImportSession = async (
++    api: Api,
++    sessionId: string,
++    options?: AxiosRequestConfig
++): Promise<void> => {
++    await api.axiosInstance.delete(
++        `/Pgsql/Admin/EmbyImport/${encodeURIComponent(sessionId)}`,
++        {
++            ...options,
++            baseURL: api.basePath,
++            headers: {
++                ...options?.headers,
++                Authorization: api.authorizationHeader
++            }
++        }
++    );
++};
+diff --git a/src/apps/dashboard/features/embyImport/api/useEmbyImport.ts b/src/apps/dashboard/features/embyImport/api/useEmbyImport.ts
+new file mode 100644
+index 0000000000..54fd78e9be
+--- /dev/null
++++ b/src/apps/dashboard/features/embyImport/api/useEmbyImport.ts
+@@ -0,0 +1,59 @@
++import { useMutation } from '@tanstack/react-query';
++
++import { useApi } from 'hooks/useApi';
++
++import {
++    discardEmbyImportSession,
++    executeEmbyImport,
++    previewEmbyImport,
++    uploadEmbyDatabases
++} from './embyImportApi';
++
++export const useUploadEmbyDatabases = () => {
++    const { api } = useApi();
++
++    return useMutation({
++        mutationFn: ({ libraryDb, usersDb }: { libraryDb: File; usersDb: File }) =>
++            uploadEmbyDatabases(api!, libraryDb, usersDb)
++    });
++};
++
++export const usePreviewEmbyImport = () => {
++    const { api } = useApi();
++
++    return useMutation({
++        mutationFn: ({
++            sessionId,
++            embyUserIds,
++            targetUserId
++        }: {
++            sessionId: string;
++            embyUserIds: number[];
++            targetUserId: string;
++        }) => previewEmbyImport(api!, sessionId, embyUserIds, targetUserId)
++    });
++};
++
++export const useExecuteEmbyImport = () => {
++    const { api } = useApi();
++
++    return useMutation({
++        mutationFn: ({
++            sessionId,
++            embyUserIds,
++            targetUserId
++        }: {
++            sessionId: string;
++            embyUserIds: number[];
++            targetUserId: string;
++        }) => executeEmbyImport(api!, sessionId, embyUserIds, targetUserId)
++    });
++};
++
++export const useDiscardEmbyImportSession = () => {
++    const { api } = useApi();
++
++    return useMutation({
++        mutationFn: (sessionId: string) => discardEmbyImportSession(api!, sessionId)
++    });
++};
+diff --git a/src/apps/dashboard/features/embyImport/types.ts b/src/apps/dashboard/features/embyImport/types.ts
+new file mode 100644
+index 0000000000..52c035a983
+--- /dev/null
++++ b/src/apps/dashboard/features/embyImport/types.ts
+@@ -0,0 +1,25 @@
++export interface EmbyUserInfo {
++    id: number;
++    name: string;
++    userDataCount: number;
++}
++
++export interface EmbyImportUploadResponse {
++    sessionId: string;
++    users: EmbyUserInfo[];
++}
++
++export interface EmbyImportCounts {
++    matchedKeys: number;
++    unmatchedKeys: number;
++    matchedItems: number;
++    itemsNew: number;
++    itemsMerged: number;
++    sourceRows: number;
++}
++
++export interface EmbyImportResponse {
++    isPreview: boolean;
++    counts: EmbyImportCounts;
++    warning?: string | null;
++}
+diff --git a/src/apps/dashboard/routes/_asyncRoutes.ts b/src/apps/dashboard/routes/_asyncRoutes.ts
+index 4f82b508b7..325219dd38 100644
+--- a/src/apps/dashboard/routes/_asyncRoutes.ts
++++ b/src/apps/dashboard/routes/_asyncRoutes.ts
+@@ -32,5 +32,6 @@ export const ASYNC_ADMIN_ROUTES: AsyncRoute[] = [
+     { path: 'users', type: AppType.Dashboard },
+     { path: 'users/add', type: AppType.Dashboard },
+     { path: 'users/merge', type: AppType.Dashboard },
++    { path: 'users/import-emby', type: AppType.Dashboard },
+     { path: 'users/:userId/:tab', page: 'users/edit', type: AppType.Dashboard }
+ ];
+diff --git a/src/apps/dashboard/routes/users/import-emby.tsx b/src/apps/dashboard/routes/users/import-emby.tsx
+new file mode 100644
+index 0000000000..48d7a91764
+--- /dev/null
++++ b/src/apps/dashboard/routes/users/import-emby.tsx
+@@ -0,0 +1,399 @@
++import Alert from '@mui/material/Alert';
++import Box from '@mui/material/Box';
++import Button from '@mui/material/Button';
++import Checkbox from '@mui/material/Checkbox';
++import FormControl from '@mui/material/FormControl';
++import FormControlLabel from '@mui/material/FormControlLabel';
++import FormGroup from '@mui/material/FormGroup';
++import InputLabel from '@mui/material/InputLabel';
++import MenuItem from '@mui/material/MenuItem';
++import Select from '@mui/material/Select';
++import Stack from '@mui/material/Stack';
++import Table from '@mui/material/Table';
++import TableBody from '@mui/material/TableBody';
++import TableCell from '@mui/material/TableCell';
++import TableHead from '@mui/material/TableHead';
++import TableRow from '@mui/material/TableRow';
++import TextField from '@mui/material/TextField';
++import Typography from '@mui/material/Typography';
++import React, { useCallback, useMemo, useState } from 'react';
++import { useNavigate } from 'react-router-dom';
++
++import Page from 'components/Page';
++import Loading from 'components/loading/LoadingComponent';
++import {
++    useDiscardEmbyImportSession,
++    useExecuteEmbyImport,
++    usePreviewEmbyImport,
++    useUploadEmbyDatabases
++} from 'apps/dashboard/features/embyImport/api/useEmbyImport';
++import type {
++    EmbyImportCounts,
++    EmbyImportResponse,
++    EmbyUserInfo
++} from 'apps/dashboard/features/embyImport/types';
++import { useUsers } from 'hooks/useUsers';
++import globalize from 'lib/globalize';
++
++const countRows = (counts: EmbyImportCounts): { label: string; value: string }[] => [
++    { label: globalize.translate('EmbyImportCountSourceRows'), value: String(counts.sourceRows) },
++    { label: globalize.translate('EmbyImportCountMatchedKeys'), value: String(counts.matchedKeys) },
++    { label: globalize.translate('EmbyImportCountUnmatchedKeys'), value: String(counts.unmatchedKeys) },
++    { label: globalize.translate('EmbyImportCountMatchedItems'), value: String(counts.matchedItems) },
++    { label: globalize.translate('EmbyImportCountItemsNew'), value: String(counts.itemsNew) },
++    { label: globalize.translate('EmbyImportCountItemsMerged'), value: String(counts.itemsMerged) }
++];
++
++const EmbyImportPage = () => {
++    const navigate = useNavigate();
++    const { data: users, isPending } = useUsers(undefined, { forceRefresh: true });
++
++    const uploadMutation = useUploadEmbyDatabases();
++    const previewMutation = usePreviewEmbyImport();
++    const executeMutation = useExecuteEmbyImport();
++    const discardMutation = useDiscardEmbyImportSession();
++
++    const [ libraryFile, setLibraryFile ] = useState<File | null>(null);
++    const [ usersFile, setUsersFile ] = useState<File | null>(null);
++    const [ sessionId, setSessionId ] = useState('');
++    const [ embyUsers, setEmbyUsers ] = useState<EmbyUserInfo[]>([]);
++    const [ selectedEmbyUserIds, setSelectedEmbyUserIds ] = useState<number[]>([]);
++    const [ targetUserId, setTargetUserId ] = useState('');
++    const [ confirmName, setConfirmName ] = useState('');
++    const [ preview, setPreview ] = useState<EmbyImportResponse | null>(null);
++    const [ result, setResult ] = useState<EmbyImportResponse | null>(null);
++    const [ error, setError ] = useState<string | null>(null);
++
++    const targetUser = useMemo(
++        () => users?.find(u => u.Id === targetUserId),
++        [ users, targetUserId ]
++    );
++
++    const canUpload = !!libraryFile && !!usersFile && !uploadMutation.isPending;
++    const canPreview = !!sessionId
++        && selectedEmbyUserIds.length > 0
++        && !!targetUserId
++        && !previewMutation.isPending;
++    const confirmMatches = !!targetUser?.Name
++        && confirmName.trim().localeCompare(targetUser.Name, undefined, { sensitivity: 'accent' }) === 0;
++    const canExecute = canPreview && confirmMatches && !!preview && !executeMutation.isPending && !result;
++
++    const resetAfterUpload = useCallback(() => {
++        setSelectedEmbyUserIds([]);
++        setTargetUserId('');
++        setConfirmName('');
++        setPreview(null);
++        setResult(null);
++        setError(null);
++    }, []);
++
++    const extractError = (err: unknown, fallback: string) => {
++        const message = (err as { response?: { data?: string } })?.response?.data;
++        return typeof message === 'string' && message ? message : fallback;
++    };
++
++    const handleUpload = useCallback(() => {
++        if (!libraryFile || !usersFile) {
++            return;
++        }
++
++        setError(null);
++        setResult(null);
++        setPreview(null);
++        uploadMutation.mutate(
++            { libraryDb: libraryFile, usersDb: usersFile },
++            {
++                onSuccess: (data) => {
++                    if (sessionId) {
++                        discardMutation.mutate(sessionId);
++                    }
++                    setSessionId(data.sessionId);
++                    setEmbyUsers(data.users || []);
++                    resetAfterUpload();
++                    setSelectedEmbyUserIds(
++                        (data.users || [])
++                            .filter(u => u.userDataCount > 0)
++                            .map(u => u.id)
++                    );
++                },
++                onError: (err: unknown) => {
++                    setError(extractError(err, globalize.translate('EmbyImportUploadFailed')));
++                }
++            }
++        );
++    }, [
++        discardMutation,
++        libraryFile,
++        resetAfterUpload,
++        sessionId,
++        uploadMutation,
++        usersFile
++    ]);
++
++    const handlePreview = useCallback(() => {
++        if (!canPreview) {
++            return;
++        }
++
++        setError(null);
++        setResult(null);
++        previewMutation.mutate(
++            {
++                sessionId,
++                embyUserIds: selectedEmbyUserIds,
++                targetUserId
++            },
++            {
++                onSuccess: (data) => setPreview(data),
++                onError: (err: unknown) => {
++                    setError(extractError(err, globalize.translate('EmbyImportPreviewFailed')));
++                    setPreview(null);
++                }
++            }
++        );
++    }, [ canPreview, previewMutation, selectedEmbyUserIds, sessionId, targetUserId ]);
++
++    const handleExecute = useCallback(() => {
++        if (!canExecute) {
++            return;
++        }
++
++        setError(null);
++        executeMutation.mutate(
++            {
++                sessionId,
++                embyUserIds: selectedEmbyUserIds,
++                targetUserId
++            },
++            {
++                onSuccess: (data) => {
++                    setResult(data);
++                    setPreview(null);
++                    setSessionId('');
++                },
++                onError: (err: unknown) => {
++                    setError(extractError(err, globalize.translate('EmbyImportExecuteFailed')));
++                }
++            }
++        );
++    }, [ canExecute, executeMutation, selectedEmbyUserIds, sessionId, targetUserId ]);
++
++    const toggleEmbyUser = (id: number, checked: boolean) => {
++        setPreview(null);
++        setResult(null);
++        setConfirmName('');
++        setSelectedEmbyUserIds(prev => {
++            if (checked) {
++                return prev.includes(id) ? prev : [ ...prev, id ];
++            }
++            return prev.filter(x => x !== id);
++        });
++    };
++
++    if (isPending) {
++        return <Loading />;
++    }
++
++    const displayCounts = result?.counts || preview?.counts;
++
++    return (
++        <Page
++            id='embyImportPage'
++            className='mainAnimatedPage type-interior'
++            title={globalize.translate('HeaderEmbyImport')}
++        >
++            <Box className='content-primary' sx={{ maxWidth: 720 }}>
++                <Stack spacing={3}>
++                    <Typography variant='body1'>
++                        {globalize.translate('EmbyImportHelp')}
++                    </Typography>
++
++                    <Stack spacing={2}>
++                        <Typography variant='subtitle2'>
++                            {globalize.translate('EmbyImportUploadStep')}
++                        </Typography>
++                        <Button variant='outlined' component='label'>
++                            {libraryFile ?
++                                globalize.translate('EmbyImportLibrarySelected', libraryFile.name) :
++                                globalize.translate('EmbyImportSelectLibraryDb')}
++                            <input
++                                hidden
++                                type='file'
++                                accept='.db,application/x-sqlite3,application/octet-stream'
++                                onChange={(e) => {
++                                    setLibraryFile(e.target.files?.[0] || null);
++                                    setSessionId('');
++                                    setEmbyUsers([]);
++                                    resetAfterUpload();
++                                }}
++                            />
++                        </Button>
++                        <Button variant='outlined' component='label'>
++                            {usersFile ?
++                                globalize.translate('EmbyImportUsersSelected', usersFile.name) :
++                                globalize.translate('EmbyImportSelectUsersDb')}
++                            <input
++                                hidden
++                                type='file'
++                                accept='.db,application/x-sqlite3,application/octet-stream'
++                                onChange={(e) => {
++                                    setUsersFile(e.target.files?.[0] || null);
++                                    setSessionId('');
++                                    setEmbyUsers([]);
++                                    resetAfterUpload();
++                                }}
++                            />
++                        </Button>
++                        <Button
++                            variant='contained'
++                            disabled={!canUpload}
++                            onClick={handleUpload}
++                        >
++                            {globalize.translate('EmbyImportUpload')}
++                        </Button>
++                    </Stack>
++
++                    {sessionId && (
++                        <Stack spacing={2}>
++                            <Typography variant='subtitle2'>
++                                {globalize.translate('EmbyImportSelectStep')}
++                            </Typography>
++                            <FormGroup>
++                                {embyUsers.map(user => (
++                                    <FormControlLabel
++                                        key={user.id}
++                                        control={
++                                            <Checkbox
++                                                checked={selectedEmbyUserIds.includes(user.id)}
++                                                onChange={(e) => toggleEmbyUser(user.id, e.target.checked)}
++                                            />
++                                        }
++                                        label={globalize.translate(
++                                            'EmbyImportUserOption',
++                                            user.name,
++                                            String(user.userDataCount)
++                                        )}
++                                    />
++                                ))}
++                            </FormGroup>
++
++                            <FormControl fullWidth>
++                                <InputLabel id='emby-target-user-label'>
++                                    {globalize.translate('EmbyImportTargetUser')}
++                                </InputLabel>
++                                <Select
++                                    labelId='emby-target-user-label'
++                                    label={globalize.translate('EmbyImportTargetUser')}
++                                    value={targetUserId}
++                                    onChange={(e) => {
++                                        setTargetUserId(e.target.value);
++                                        setPreview(null);
++                                        setResult(null);
++                                        setConfirmName('');
++                                    }}
++                                >
++                                    {(users || []).map(user => (
++                                        <MenuItem key={user.Id} value={user.Id || ''}>
++                                            {user.Name}
++                                        </MenuItem>
++                                    ))}
++                                </Select>
++                            </FormControl>
++
++                            <Stack direction='row' spacing={2}>
++                                <Button
++                                    variant='outlined'
++                                    disabled={!canPreview}
++                                    onClick={handlePreview}
++                                >
++                                    {globalize.translate('EmbyImportPreview')}
++                                </Button>
++                                <Button
++                                    variant='text'
++                                    onClick={() => {
++                                        if (sessionId) {
++                                            discardMutation.mutate(sessionId);
++                                        }
++                                        navigate('/dashboard/users');
++                                    }}
++                                >
++                                    {globalize.translate('ButtonCancel')}
++                                </Button>
++                            </Stack>
++                        </Stack>
++                    )}
++
++                    {error && <Alert severity='error'>{error}</Alert>}
++
++                    {displayCounts && (
++                        <Box>
++                            <Typography variant='h6' gutterBottom>
++                                {result
++                                    ? globalize.translate('EmbyImportResult')
++                                    : globalize.translate('EmbyImportPreviewResult')}
++                            </Typography>
++                            <Table size='small'>
++                                <TableHead>
++                                    <TableRow>
++                                        <TableCell>{globalize.translate('LabelType')}</TableCell>
++                                        <TableCell align='right'>
++                                            {globalize.translate('EmbyImportCount')}
++                                        </TableCell>
++                                    </TableRow>
++                                </TableHead>
++                                <TableBody>
++                                    {countRows(displayCounts).map(row => (
++                                        <TableRow key={row.label}>
++                                            <TableCell>{row.label}</TableCell>
++                                            <TableCell align='right'>{row.value}</TableCell>
++                                        </TableRow>
++                                    ))}
++                                </TableBody>
++                            </Table>
++                        </Box>
++                    )}
++
++                    {preview && !result && (
++                        <Stack spacing={2}>
++                            <Alert severity='warning'>
++                                {globalize.translate('EmbyImportConfirmWarning')}
++                            </Alert>
++                            <TextField
++                                fullWidth
++                                label={globalize.translate(
++                                    'EmbyImportConfirmUsername',
++                                    targetUser?.Name || ''
++                                )}
++                                value={confirmName}
++                                onChange={(e) => setConfirmName(e.target.value)}
++                                helperText={globalize.translate(
++                                    'EmbyImportConfirmHelp',
++                                    targetUser?.Name || ''
++                                )}
++                            />
++                            <Button
++                                variant='contained'
++                                color='error'
++                                disabled={!canExecute}
++                                onClick={handleExecute}
++                            >
++                                {globalize.translate('EmbyImportConfirm')}
++                            </Button>
++                        </Stack>
++                    )}
++
++                    {result && (
++                        <Button
++                            variant='contained'
++                            onClick={() => navigate(`/dashboard/users/${targetUserId}/profile`)}
++                        >
++                            {globalize.translate('ButtonOk')}
++                        </Button>
++                    )}
++                </Stack>
++            </Box>
++        </Page>
++    );
++};
++
++export default EmbyImportPage;
+diff --git a/src/apps/dashboard/routes/users/index.tsx b/src/apps/dashboard/routes/users/index.tsx
+index 17708f4cac..226df0303c 100644
+--- a/src/apps/dashboard/routes/users/index.tsx
++++ b/src/apps/dashboard/routes/users/index.tsx
+@@ -213,6 +213,13 @@ const UserProfiles = () => {
+                                 >
+                                     {globalize.translate('HeaderUserAdminMerge')}
+                                 </Button>
++                                <Button
++                                    variant='outlined'
++                                    size='small'
++                                    onClick={() => navigate('/dashboard/users/import-emby')}
++                                >
++                                    {globalize.translate('HeaderEmbyImport')}
++                                </Button>
+                             </Stack>
+                         </div>
+ 
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+index 53da82e789..b6ce55f728 100755
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -585,6 +585,7 @@
+     "HeaderUploadLyrics": "Upload Lyrics",
+     "HeaderUploadSubtitle": "Upload Subtitle",
+     "HeaderUser": "User",
++    "HeaderEmbyImport": "Import Emby UserData",
+     "HeaderUserAdminMerge": "Merge users",
+     "HeaderUsers": "Users",
+     "HeaderVideoAdvanced": "Video Advanced",
+@@ -1475,6 +1476,33 @@
+     "UserAdminModeMerge": "Full merge (delete source)",
+     "UserAdminModeMoveUserData": "Move UserData only",
+     "UserAdminPreview": "Preview",
++    "EmbyImportConfirm": "Import UserData",
++    "EmbyImportConfirmHelp": "Type the target username ({0}) to confirm importing Emby UserData into that account.",
++    "EmbyImportConfirmUsername": "Type {0} to confirm",
++    "EmbyImportConfirmWarning": "Matched playback state, favorites, and ratings will be merged into the selected Jellyfin user. Unmatched items are skipped.",
++    "EmbyImportCount": "Count",
++    "EmbyImportCountItemsMerged": "Items with existing UserData (merged)",
++    "EmbyImportCountItemsNew": "Items without existing UserData (new)",
++    "EmbyImportCountMatchedItems": "Matched Jellyfin items",
++    "EmbyImportCountMatchedKeys": "Matched UserData keys",
++    "EmbyImportCountSourceRows": "Emby UserData rows",
++    "EmbyImportCountUnmatchedKeys": "Unmatched UserData keys (skipped)",
++    "EmbyImportExecuteFailed": "The Emby import failed.",
++    "EmbyImportHelp": "Upload Emby library.db and users.db, choose which Emby users to import, and merge their watched status, favorites, and ratings into one Jellyfin user.",
++    "EmbyImportLibrarySelected": "library.db: {0}",
++    "EmbyImportPreview": "Preview",
++    "EmbyImportPreviewFailed": "Preview failed.",
++    "EmbyImportPreviewResult": "Preview",
++    "EmbyImportResult": "Import result",
++    "EmbyImportSelectLibraryDb": "Select library.db",
++    "EmbyImportSelectStep": "Select Emby users and Jellyfin target",
++    "EmbyImportSelectUsersDb": "Select users.db",
++    "EmbyImportTargetUser": "Target Jellyfin user",
++    "EmbyImportUpload": "Upload databases",
++    "EmbyImportUploadFailed": "Upload failed.",
++    "EmbyImportUploadStep": "Upload Emby databases",
++    "EmbyImportUserOption": "{0} ({1} rows)",
++    "EmbyImportUsersSelected": "users.db: {0}",
+     "UserAdminPreviewFailed": "Preview failed.",
+     "UserAdminPreviewResult": "Preview",
+     "UserAdminResult": "Result",

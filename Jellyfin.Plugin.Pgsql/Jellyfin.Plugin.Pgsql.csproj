@@ -21,6 +21,9 @@
     <Compile Update="PlaybackReportingImport/**/*.cs">
       <NoWarn>$(NoWarn);CA2007</NoWarn>
     </Compile>
+    <Compile Update="Admin/EmbyImport/**/*.cs">
+      <NoWarn>$(NoWarn);CA2007</NoWarn>
+    </Compile>
   </ItemGroup>
 
   <ItemGroup>
