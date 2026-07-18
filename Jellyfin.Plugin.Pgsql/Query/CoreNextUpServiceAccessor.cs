@@ -1,5 +1,7 @@
 using System;
+using System.IO;
 using System.Linq;
+using System.Reflection;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Persistence;
 using Microsoft.Extensions.DependencyInjection;
@@ -28,7 +30,19 @@ internal static class CoreNextUpServiceAccessor
                 {
                     return assembly.GetTypes();
                 }
-                catch
+                catch (ReflectionTypeLoadException)
+                {
+                    return Array.Empty<Type>();
+                }
+                catch (FileNotFoundException)
+                {
+                    return Array.Empty<Type>();
+                }
+                catch (FileLoadException)
+                {
+                    return Array.Empty<Type>();
+                }
+                catch (BadImageFormatException)
                 {
                     return Array.Empty<Type>();
                 }

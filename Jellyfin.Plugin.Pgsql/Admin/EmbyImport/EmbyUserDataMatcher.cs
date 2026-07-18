@@ -45,7 +45,7 @@ public sealed class EmbyUserDataMatcher
             {
                 keys = item.GetUserDataKeys();
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or NotSupportedException)
             {
                 if (_logger.IsEnabled(LogLevel.Debug))
                 {

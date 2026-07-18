@@ -54,30 +54,29 @@ public sealed class PostgresMovieSimilarItemsProviderIntegrationTests
         var provider = CreateProvider(factory);
         var scores = await provider.ComputeBatchScoresAsync([SpiderMan2002Id], default).ConfigureAwait(false);
 
-        Assert.True(scores.ContainsKey(SpiderMan2002Id));
-        var map = scores[SpiderMan2002Id];
+        Assert.True(scores.TryGetValue(SpiderMan2002Id, out var map));
 
-        Assert.True(map.ContainsKey(SpiderMan2004Id), "Expected collection mate Spider-Man 2");
-        Assert.True(map.ContainsKey(SpiderMan2007Id), "Expected collection mate Spider-Man 3");
-        Assert.True(map.ContainsKey(AmazingSpiderManId) || map.ContainsKey(NoWayHomeId),
+        Assert.True(map.TryGetValue(SpiderMan2004Id, out var spiderMan2004Score), "Expected collection mate Spider-Man 2");
+        Assert.True(map.TryGetValue(SpiderMan2007Id, out var spiderMan2007Score), "Expected collection mate Spider-Man 3");
+        Assert.True(map.TryGetValue(AmazingSpiderManId, out _) || map.TryGetValue(NoWayHomeId, out _),
             "Expected title-franchise Spider-Man film outside the Raimi box set");
-        Assert.True(map.ContainsKey(ActionGenreOnlyId), "Expected shared-genre Action film");
+        Assert.True(map.TryGetValue(ActionGenreOnlyId, out var actionGenreOnlyScore), "Expected shared-genre Action film");
 
         Assert.True(
-            map[SpiderMan2004Id] > map.GetValueOrDefault(AmazingSpiderManId)
-            || map[SpiderMan2004Id] > map.GetValueOrDefault(NoWayHomeId),
+            spiderMan2004Score > map.GetValueOrDefault(AmazingSpiderManId)
+            || spiderMan2004Score > map.GetValueOrDefault(NoWayHomeId),
             "Collection mates must outrank title-franchise-only matches");
 
         var bestTitleFranchise = Math.Max(
             map.GetValueOrDefault(AmazingSpiderManId),
             map.GetValueOrDefault(NoWayHomeId));
         Assert.True(
-            bestTitleFranchise > map[ActionGenreOnlyId],
-            $"Title franchise score {bestTitleFranchise} should beat genre-only {map[ActionGenreOnlyId]}");
+            bestTitleFranchise > actionGenreOnlyScore,
+            $"Title franchise score {bestTitleFranchise} should beat genre-only {actionGenreOnlyScore}");
 
         Assert.False(map.ContainsKey(UnrelatedId));
-        Assert.True(map[SpiderMan2004Id] >= MovieSimilarityWeights.CollectionWeight);
-        Assert.True(map[SpiderMan2007Id] >= MovieSimilarityWeights.CollectionWeight);
+        Assert.True(spiderMan2004Score >= MovieSimilarityWeights.CollectionWeight);
+        Assert.True(spiderMan2007Score >= MovieSimilarityWeights.CollectionWeight);
     }
 
     [PostgresTestFact]
@@ -224,22 +223,24 @@ public sealed class PostgresMovieSimilarItemsProviderIntegrationTests
             ActionGenreOnlyId
         ];
 
-        foreach (var itemId in actionLinked)
+        var existingActionLinks = await dbContext.ItemValuesMap
+            .Where(m => actionLinked.Contains(m.ItemId) && m.ItemValueId == actionGenreId)
+            .Select(m => m.ItemId)
+            .ToListAsync()
+            .ConfigureAwait(false);
+
+        foreach (var itemId in actionLinked.Where(id => !existingActionLinks.Contains(id)))
         {
-            if (!await dbContext.ItemValuesMap.AnyAsync(m => m.ItemId == itemId && m.ItemValueId == actionGenreId)
-                    .ConfigureAwait(false))
+            var item = await dbContext.BaseItems.SingleAsync(i => i.Id == itemId).ConfigureAwait(false);
+            var value = await dbContext.ItemValues.SingleAsync(v => v.ItemValueId == actionGenreId)
+                .ConfigureAwait(false);
+            dbContext.ItemValuesMap.Add(new ItemValueMap
             {
-                var item = await dbContext.BaseItems.SingleAsync(i => i.Id == itemId).ConfigureAwait(false);
-                var value = await dbContext.ItemValues.SingleAsync(v => v.ItemValueId == actionGenreId)
-                    .ConfigureAwait(false);
-                dbContext.ItemValuesMap.Add(new ItemValueMap
-                {
-                    ItemId = itemId,
-                    ItemValueId = actionGenreId,
-                    Item = item,
-                    ItemValue = value,
-                });
-            }
+                ItemId = itemId,
+                ItemValueId = actionGenreId,
+                Item = item,
+                ItemValue = value,
+            });
         }
 
         Guid[] raimiKids = [SpiderMan2002Id, SpiderMan2004Id, SpiderMan2007Id];

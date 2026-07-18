@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Jellyfin.Plugin.Pgsql.Similar;
 
 namespace Jellyfin.Plugin.Pgsql.Taste;
@@ -79,12 +80,9 @@ public static class LinearTasteScorer
         }
 
         float sum = 0f;
-        foreach (var value in values)
+        foreach (var value in values.Where(weights.ContainsKey))
         {
-            if (weights.TryGetValue(value, out var weight))
-            {
-                sum += weight * scale;
-            }
+            sum += weights[value] * scale;
         }
 
         return sum;
@@ -101,13 +99,16 @@ public static class LinearTasteScorer
         }
 
         float sum = 0f;
-        foreach (var id in ids)
+        foreach (var weight in ids
+                     .Select(id =>
+                         weights.TryGetValue(id.ToString("N"), out var w)
+                         || weights.TryGetValue(id.ToString("D"), out w)
+                             ? (float?)w
+                             : null)
+                     .Where(w => w.HasValue)
+                     .Select(w => w!.Value))
         {
-            if (weights.TryGetValue(id.ToString("N"), out var weight)
-                || weights.TryGetValue(id.ToString("D"), out weight))
-            {
-                sum += weight * scale;
-            }
+            sum += weight * scale;
         }
 
         return sum;

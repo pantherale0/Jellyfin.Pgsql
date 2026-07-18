@@ -106,20 +106,14 @@ public sealed class TasteShadowNeuralTrainer
             var featuresByItem = await LoadCandidateFeaturesAsync(context, allIds, cancellationToken)
                 .ConfigureAwait(false);
 
-            foreach (var id in positiveIds)
+            foreach (var id in positiveIds.Where(featuresByItem.ContainsKey))
             {
-                if (featuresByItem.TryGetValue(id, out var features))
-                {
-                    examples.Add(ToExample(payload, features, label: true));
-                }
+                examples.Add(ToExample(payload, featuresByItem[id], label: true));
             }
 
-            foreach (var id in negatives)
+            foreach (var id in negatives.Where(featuresByItem.ContainsKey))
             {
-                if (featuresByItem.TryGetValue(id, out var features))
-                {
-                    examples.Add(ToExample(payload, features, label: false));
-                }
+                examples.Add(ToExample(payload, featuresByItem[id], label: false));
             }
         }
 
@@ -164,7 +158,7 @@ public sealed class TasteShadowNeuralTrainer
         var fileName = string.Create(
             CultureInfo.InvariantCulture,
             $"taste-shadow-{DateTime.UtcNow:yyyyMMddHHmmss}.zip");
-        var modelPath = Path.Combine(modelDirectory, fileName);
+        var modelPath = Path.Join(modelDirectory, fileName);
         mlContext.Model.Save(model, trainData.Schema, modelPath);
 
         var holdoutData = mlContext.Data.LoadFromEnumerable(holdout);
@@ -349,12 +343,9 @@ public sealed class TasteShadowNeuralTrainer
     private static float SumWeights(Dictionary<string, float> weights, IReadOnlyCollection<string> values)
     {
         float sum = 0f;
-        foreach (var value in values)
+        foreach (var value in values.Where(weights.ContainsKey))
         {
-            if (weights.TryGetValue(value, out var w))
-            {
-                sum += w;
-            }
+            sum += weights[value];
         }
 
         return sum;
@@ -363,13 +354,16 @@ public sealed class TasteShadowNeuralTrainer
     private static float SumGuidWeights(Dictionary<string, float> weights, IReadOnlyCollection<Guid> ids)
     {
         float sum = 0f;
-        foreach (var id in ids)
+        foreach (var weight in ids
+                     .Select(id =>
+                         weights.TryGetValue(id.ToString("N"), out var w)
+                         || weights.TryGetValue(id.ToString("D"), out w)
+                             ? (float?)w
+                             : null)
+                     .Where(w => w.HasValue)
+                     .Select(w => w!.Value))
         {
-            if (weights.TryGetValue(id.ToString("N"), out var w)
-                || weights.TryGetValue(id.ToString("D"), out w))
-            {
-                sum += w;
-            }
+            sum += weight;
         }
 
         return sum;

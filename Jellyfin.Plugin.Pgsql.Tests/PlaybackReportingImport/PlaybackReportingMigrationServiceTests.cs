@@ -37,9 +37,9 @@ public sealed class PlaybackReportingMigrationServiceTests
     public async Task StartAsync_SkipsImport_WhenMarkerExists()
     {
         var previous = Environment.GetEnvironmentVariable("MIGRATE_PLAYBACK_REPORTING");
-        var tempDir = Path.Combine(Path.GetTempPath(), $"playback-marker-{Guid.NewGuid():N}");
+        var tempDir = Path.Join(Path.GetTempPath(), $"playback-marker-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
-        var markerPath = Path.Combine(tempDir, ".playback-reporting-migration-complete.json");
+        var markerPath = Path.Join(tempDir, ".playback-reporting-migration-complete.json");
         await File.WriteAllTextAsync(markerPath, "{}").ConfigureAwait(false);
 
         Environment.SetEnvironmentVariable("MIGRATE_PLAYBACK_REPORTING", "true");
@@ -68,10 +68,10 @@ public sealed class PlaybackReportingMigrationServiceTests
     {
         var previousMigrate = Environment.GetEnvironmentVariable("MIGRATE_PLAYBACK_REPORTING");
         var previousTsv = Environment.GetEnvironmentVariable("PLAYBACK_REPORTING_TSV");
-        var tempDir = Path.Combine(Path.GetTempPath(), $"playback-run-{Guid.NewGuid():N}");
+        var tempDir = Path.Join(Path.GetTempPath(), $"playback-run-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
 
-        var sqlitePath = Path.Combine(tempDir, "playback_reporting.db");
+        var sqlitePath = Path.Join(tempDir, "playback_reporting.db");
         await File.WriteAllTextAsync(sqlitePath, "placeholder").ConfigureAwait(false);
 
         Environment.SetEnvironmentVariable("MIGRATE_PLAYBACK_REPORTING", "true");
@@ -93,9 +93,9 @@ public sealed class PlaybackReportingMigrationServiceTests
             await service.StartAsync(CancellationToken.None).ConfigureAwait(false);
 
             importer.Verify(i => i.ImportFromSqliteAsync(sqlitePath, It.IsAny<CancellationToken>()), Times.Once);
-            Assert.True(File.Exists(Path.Combine(tempDir, ".playback-reporting-migration-complete.json")));
+            Assert.True(File.Exists(Path.Join(tempDir, ".playback-reporting-migration-complete.json")));
             Assert.False(File.Exists(sqlitePath));
-            Assert.True(File.Exists(Path.Combine(tempDir, "playback_reporting.db.migrated")));
+            Assert.True(File.Exists(Path.Join(tempDir, "playback_reporting.db.migrated")));
         }
         finally
         {
