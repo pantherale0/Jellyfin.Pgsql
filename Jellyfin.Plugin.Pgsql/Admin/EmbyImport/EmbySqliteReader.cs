@@ -88,24 +88,17 @@ public sealed class EmbySqliteReader
             return Array.Empty<EmbyUserDataRow>();
         }
 
-        var distinctIds = embyUserIds.Distinct().ToList();
+        // Filter in-process so CommandText stays a compile-time constant (CA2100 / CA3001).
+        var idSet = embyUserIds.ToHashSet();
         var rows = new List<EmbyUserDataRow>();
 
         await using var connection = OpenReadOnly(libraryDbPath);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
         await using var command = connection.CreateCommand();
-        var paramNames = new string[distinctIds.Count];
-        for (var i = 0; i < distinctIds.Count; i++)
-        {
-            paramNames[i] = "@u" + i.ToString(CultureInfo.InvariantCulture);
-            command.Parameters.AddWithValue(paramNames[i], distinctIds[i]);
-        }
-
         command.CommandText =
             "SELECT key, userId, rating, played, playCount, isFavorite, playbackPositionTicks, " +
-            "lastPlayedDate, AudioStreamIndex, SubtitleStreamIndex FROM UserDatas " +
-            "WHERE userId IN (" + string.Join(", ", paramNames) + ")";
+            "lastPlayedDate, AudioStreamIndex, SubtitleStreamIndex FROM UserDatas";
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -115,10 +108,16 @@ public sealed class EmbySqliteReader
                 continue;
             }
 
+            var userId = reader.GetInt32(1);
+            if (!idSet.Contains(userId))
+            {
+                continue;
+            }
+
             rows.Add(new EmbyUserDataRow
             {
                 Key = reader.GetString(0),
-                UserId = reader.GetInt32(1),
+                UserId = userId,
                 Rating = await reader.IsDBNullAsync(2, cancellationToken).ConfigureAwait(false)
                     ? null
                     : reader.GetDouble(2),
