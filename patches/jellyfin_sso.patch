@@ -1,9 +1,9 @@
 diff --git a/Jellyfin.Api/Controllers/SSOController.cs b/Jellyfin.Api/Controllers/SSOController.cs
 new file mode 100644
-index 0000000000..824ada2362
+index 0000000000..1e5ff5f692
 --- /dev/null
 +++ b/Jellyfin.Api/Controllers/SSOController.cs
-@@ -0,0 +1,809 @@
+@@ -0,0 +1,828 @@
 +using System;
 +using System.Collections.Concurrent;
 +using System.Collections.Generic;
@@ -11,6 +11,7 @@ index 0000000000..824ada2362
 +using System.IO;
 +using System.Linq;
 +using System.Net.Http;
++using System.Text.Encodings.Web;
 +using System.Threading.Tasks;
 +using Jellyfin.Api.Constants;
 +using Jellyfin.Api.Results;
@@ -122,6 +123,22 @@ index 0000000000..824ada2362
 +        }
 +    }
 +
++    private static string? GetRequiredRedirectUri()
++    {
++        var redirectUri = GetEnv("JELLYFIN_SSO_OIDC_REDIRECT_URI");
++        return string.IsNullOrWhiteSpace(redirectUri) ? null : redirectUri.Trim();
++    }
++
++    private static ContentResult PlainText(string message, int statusCode = StatusCodes.Status200OK)
++    {
++        return new ContentResult
++        {
++            Content = message,
++            ContentType = "text/plain; charset=utf-8",
++            StatusCode = statusCode
++        };
++    }
++
 +    /// <summary>
 +    /// Checks OIDC configuration status.
 +    /// </summary>
@@ -154,6 +171,12 @@ index 0000000000..824ada2362
 +            return BadRequest("SSO is not configured on this server.");
 +        }
 +
++        var redirectUri = GetRequiredRedirectUri();
++        if (redirectUri is null)
++        {
++            return BadRequest("JELLYFIN_SSO_OIDC_REDIRECT_URI must be set when SSO is enabled.");
++        }
++
 +        try
 +        {
 +            await EnsureEndpointsAsync(authority).ConfigureAwait(false);
@@ -161,18 +184,12 @@ index 0000000000..824ada2362
 +        catch (Exception ex)
 +        {
 +            _logger.LogError(ex, "Failed to discover OIDC endpoints from authority: {Authority}", authority);
-+            return StatusCode(500, $"Failed to contact OIDC provider for discovery: {ex.Message}");
++            return StatusCode(500, "Failed to contact OIDC provider for discovery.");
 +        }
 +
 +        PruneStates();
 +        var state = Guid.NewGuid().ToString("N");
 +        _stateStore[state] = (deviceId ?? string.Empty, DateTime.UtcNow);
-+
-+        var redirectUri = GetEnv("JELLYFIN_SSO_OIDC_REDIRECT_URI");
-+        if (string.IsNullOrEmpty(redirectUri))
-+        {
-+            redirectUri = $"{Request.Scheme}://{Request.Host}/sso/callback";
-+        }
 +
 +        var scope = GetEnv("JELLYFIN_SSO_OIDC_SCOPE", "openid profile email");
 +
@@ -200,7 +217,10 @@ index 0000000000..824ada2362
 +    {
 +        if (!string.IsNullOrEmpty(error))
 +        {
-+            return Content($"OIDC Provider Error: {error_description ?? error}", "text/html");
++            var detail = error_description ?? error;
++            return PlainText(
++                "OIDC Provider Error: " + HtmlEncoder.Default.Encode(detail),
++                StatusCodes.Status400BadRequest);
 +        }
 +
 +        if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(state))
@@ -222,16 +242,15 @@ index 0000000000..824ada2362
 +            return BadRequest("SSO is not configured on this server.");
 +        }
 +
++        var redirectUri = GetRequiredRedirectUri();
++        if (redirectUri is null)
++        {
++            return BadRequest("JELLYFIN_SSO_OIDC_REDIRECT_URI must be set when SSO is enabled.");
++        }
++
 +        try
 +        {
 +            await EnsureEndpointsAsync(authority).ConfigureAwait(false);
-+
-+            // Exchange code for token
-+            var redirectUri = GetEnv("JELLYFIN_SSO_OIDC_REDIRECT_URI");
-+            if (string.IsNullOrEmpty(redirectUri))
-+            {
-+                redirectUri = $"{Request.Scheme}://{Request.Host}/sso/callback";
-+            }
 +
 +            var tokenParams = new Dictionary<string, string>
 +            {
@@ -251,14 +270,14 @@ index 0000000000..824ada2362
 +            if (!tokenResponse.IsSuccessStatusCode)
 +            {
 +                _logger.LogError("Failed OIDC token exchange. Status: {Status}, Body: {Body}", tokenResponse.StatusCode, tokenResponseContent);
-+                return Content($"Failed to exchange code: {tokenResponseContent}", "text/html");
++                return PlainText("Failed to exchange authorization code with the OIDC provider.", StatusCodes.Status502BadGateway);
 +            }
 +
 +            using var tokenDoc = System.Text.Json.JsonDocument.Parse(tokenResponseContent);
 +            var accessToken = tokenDoc.RootElement.GetProperty("access_token").GetString();
 +            if (string.IsNullOrEmpty(accessToken))
 +            {
-+                return Content("Access token was not returned by OIDC provider.", "text/html");
++                return PlainText("Access token was not returned by OIDC provider.", StatusCodes.Status502BadGateway);
 +            }
 +
 +            // Fetch User Info
@@ -269,7 +288,7 @@ index 0000000000..824ada2362
 +            if (!userInfoResponse.IsSuccessStatusCode)
 +            {
 +                _logger.LogError("Failed OIDC userinfo fetch. Status: {Status}, Body: {Body}", userInfoResponse.StatusCode, userInfoResponseContent);
-+                return Content($"Failed to retrieve user info from provider: {userInfoResponseContent}", "text/html");
++                return PlainText("Failed to retrieve user info from the OIDC provider.", StatusCodes.Status502BadGateway);
 +            }
 +
 +            using var userInfoDoc = System.Text.Json.JsonDocument.Parse(userInfoResponseContent);
@@ -301,7 +320,7 @@ index 0000000000..824ada2362
 +
 +            if (string.IsNullOrEmpty(username))
 +            {
-+                return Content("Could not retrieve a valid username from OIDC claims.", "text/html");
++                return PlainText("Could not retrieve a valid username from OIDC claims.", StatusCodes.Status400BadRequest);
 +            }
 +
 +            username = username.Trim('"');
@@ -340,7 +359,7 @@ index 0000000000..824ada2362
 +            {
 +                if (!createUsers)
 +                {
-+                    return Content($"User '{username}' does not exist and auto-creation is disabled.", "text/html");
++                    return PlainText("User does not exist and auto-creation is disabled.", StatusCodes.Status403Forbidden);
 +                }
 +
 +                _logger.LogInformation("SSO Auto-creating new user '{Username}'", username);
@@ -544,7 +563,7 @@ index 0000000000..824ada2362
 +        catch (Exception ex)
 +        {
 +            _logger.LogError(ex, "SSO callback error processing login for state {State}", state);
-+            return StatusCode(500, $"An error occurred during SSO callback: {ex.Message}");
++            return StatusCode(500, "An error occurred during SSO callback.");
 +        }
 +    }
 +

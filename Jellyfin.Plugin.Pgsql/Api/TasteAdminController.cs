@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -87,7 +88,7 @@ public sealed class TasteAdminController : ControllerBase
             Accuracy = row.Accuracy,
             Auc = row.Auc,
             PrecisionAt10 = row.PrecisionAt10,
-            ModelPath = row.ModelPath,
+            ModelPath = string.IsNullOrWhiteSpace(row.ModelPath) ? null : Path.GetFileName(row.ModelPath),
             Notes = row.Notes,
             Succeeded = !hasNotes && hasMetrics
         };

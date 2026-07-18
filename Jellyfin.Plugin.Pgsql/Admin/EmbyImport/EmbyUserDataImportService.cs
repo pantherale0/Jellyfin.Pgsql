@@ -53,14 +53,16 @@ public sealed class EmbyUserDataImportService
     /// </summary>
     /// <param name="libraryDb">Library database stream.</param>
     /// <param name="usersDb">Users database stream.</param>
+    /// <param name="createdByUserId">Administrator who uploaded the databases.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Session id and Emby users.</returns>
     public async Task<(string SessionId, IReadOnlyList<EmbyUserInfo> Users)> UploadAsync(
         System.IO.Stream libraryDb,
         System.IO.Stream usersDb,
+        Guid createdByUserId,
         CancellationToken cancellationToken)
     {
-        var session = await _sessionStore.CreateAsync(libraryDb, usersDb, cancellationToken)
+        var session = await _sessionStore.CreateAsync(libraryDb, usersDb, createdByUserId, cancellationToken)
             .ConfigureAwait(false);
         try
         {
@@ -80,15 +82,17 @@ public sealed class EmbyUserDataImportService
     /// <param name="sessionId">Session id.</param>
     /// <param name="embyUserIds">Selected Emby user ids.</param>
     /// <param name="targetUserId">Target Jellyfin user id.</param>
+    /// <param name="callerUserId">Authenticated administrator user id.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Preview counts.</returns>
     public async Task<EmbyImportCounts> PreviewAsync(
         string sessionId,
         IReadOnlyCollection<int> embyUserIds,
         Guid targetUserId,
+        Guid callerUserId,
         CancellationToken cancellationToken)
     {
-        var plan = await BuildPlanAsync(sessionId, embyUserIds, targetUserId, cancellationToken)
+        var plan = await BuildPlanAsync(sessionId, embyUserIds, targetUserId, callerUserId, cancellationToken)
             .ConfigureAwait(false);
         return plan.Counts;
     }
@@ -99,15 +103,17 @@ public sealed class EmbyUserDataImportService
     /// <param name="sessionId">Session id.</param>
     /// <param name="embyUserIds">Selected Emby user ids.</param>
     /// <param name="targetUserId">Target Jellyfin user id.</param>
+    /// <param name="callerUserId">Authenticated administrator user id.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Result counts.</returns>
     public async Task<EmbyImportCounts> ExecuteAsync(
         string sessionId,
         IReadOnlyCollection<int> embyUserIds,
         Guid targetUserId,
+        Guid callerUserId,
         CancellationToken cancellationToken)
     {
-        var plan = await BuildPlanAsync(sessionId, embyUserIds, targetUserId, cancellationToken)
+        var plan = await BuildPlanAsync(sessionId, embyUserIds, targetUserId, callerUserId, cancellationToken)
             .ConfigureAwait(false);
 
         var imported = 0;
@@ -160,16 +166,18 @@ public sealed class EmbyUserDataImportService
     }
 
     /// <summary>
-    /// Discards an upload session.
+    /// Discards an upload session owned by the caller.
     /// </summary>
     /// <param name="sessionId">Session id.</param>
+    /// <param name="callerUserId">Authenticated administrator user id.</param>
     /// <returns><c>true</c> if removed.</returns>
-    public bool Discard(string sessionId) => _sessionStore.Delete(sessionId);
+    public bool Discard(string sessionId, Guid callerUserId) => _sessionStore.Delete(sessionId, callerUserId);
 
     private async Task<ImportPlan> BuildPlanAsync(
         string sessionId,
         IReadOnlyCollection<int> embyUserIds,
         Guid targetUserId,
+        Guid callerUserId,
         CancellationToken cancellationToken)
     {
         if (embyUserIds is null || embyUserIds.Count == 0)
@@ -180,7 +188,7 @@ public sealed class EmbyUserDataImportService
         var targetUser = _userManager.GetUserById(targetUserId)
             ?? throw new EmbyImportException("Target Jellyfin user was not found.");
 
-        var session = _sessionStore.GetRequired(sessionId);
+        var session = _sessionStore.GetRequired(sessionId, callerUserId);
         var rows = await _sqliteReader
             .ReadUserDataAsync(session.LibraryDbPath, embyUserIds, cancellationToken)
             .ConfigureAwait(false);

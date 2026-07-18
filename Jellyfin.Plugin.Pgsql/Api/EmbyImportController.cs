@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Pgsql.Admin.EmbyImport;
@@ -16,6 +17,8 @@ namespace Jellyfin.Plugin.Pgsql.Api;
 public sealed class EmbyImportController : ControllerBase
 {
     private const string AdministratorRole = "Administrator";
+    private const string UserIdClaim = "Jellyfin-UserId";
+    private const long MaxUploadBytes = 512L * 1024 * 1024;
 
     private readonly EmbyUserDataImportService _importService;
 
@@ -36,8 +39,8 @@ public sealed class EmbyImportController : ControllerBase
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Session id and Emby users.</returns>
     [HttpPost("Upload")]
-    [RequestSizeLimit(2L * 1024 * 1024 * 1024)]
-    [RequestFormLimits(MultipartBodyLengthLimit = 2L * 1024 * 1024 * 1024)]
+    [RequestSizeLimit(MaxUploadBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxUploadBytes)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<EmbyImportUploadResponse>> Upload(
@@ -45,6 +48,11 @@ public sealed class EmbyImportController : ControllerBase
         IFormFile? usersDb,
         CancellationToken cancellationToken)
     {
+        if (!TryGetCallerUserId(out var callerUserId))
+        {
+            return Forbid();
+        }
+
         if (libraryDb is null || libraryDb.Length == 0)
         {
             return BadRequest("library.db is required.");
@@ -60,7 +68,7 @@ public sealed class EmbyImportController : ControllerBase
             await using var libraryStream = libraryDb.OpenReadStream();
             await using var usersStream = usersDb.OpenReadStream();
             var (sessionId, users) = await _importService
-                .UploadAsync(libraryStream, usersStream, cancellationToken)
+                .UploadAsync(libraryStream, usersStream, callerUserId, cancellationToken)
                 .ConfigureAwait(false);
 
             return Ok(new EmbyImportUploadResponse
@@ -88,6 +96,11 @@ public sealed class EmbyImportController : ControllerBase
         [FromBody] EmbyImportRequest? request,
         CancellationToken cancellationToken)
     {
+        if (!TryGetCallerUserId(out var callerUserId))
+        {
+            return Forbid();
+        }
+
         if (request is null)
         {
             return BadRequest("Request body is required.");
@@ -96,7 +109,7 @@ public sealed class EmbyImportController : ControllerBase
         try
         {
             var counts = await _importService
-                .PreviewAsync(request.SessionId, request.EmbyUserIds, request.TargetUserId, cancellationToken)
+                .PreviewAsync(request.SessionId, request.EmbyUserIds, request.TargetUserId, callerUserId, cancellationToken)
                 .ConfigureAwait(false);
             return Ok(new EmbyImportResponse
             {
@@ -123,6 +136,11 @@ public sealed class EmbyImportController : ControllerBase
         [FromBody] EmbyImportRequest? request,
         CancellationToken cancellationToken)
     {
+        if (!TryGetCallerUserId(out var callerUserId))
+        {
+            return Forbid();
+        }
+
         if (request is null)
         {
             return BadRequest("Request body is required.");
@@ -131,7 +149,7 @@ public sealed class EmbyImportController : ControllerBase
         try
         {
             var counts = await _importService
-                .ExecuteAsync(request.SessionId, request.EmbyUserIds, request.TargetUserId, cancellationToken)
+                .ExecuteAsync(request.SessionId, request.EmbyUserIds, request.TargetUserId, callerUserId, cancellationToken)
                 .ConfigureAwait(false);
             return Ok(new EmbyImportResponse
             {
@@ -155,11 +173,28 @@ public sealed class EmbyImportController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public ActionResult Discard(string sessionId)
     {
-        if (!_importService.Discard(sessionId))
+        if (!TryGetCallerUserId(out var callerUserId))
+        {
+            return Forbid();
+        }
+
+        if (!_importService.Discard(sessionId, callerUserId))
         {
             return NotFound();
         }
 
         return NoContent();
+    }
+
+    private bool TryGetCallerUserId(out Guid userId)
+    {
+        var claim = User.FindFirst(c => c.Type.Equals(UserIdClaim, StringComparison.OrdinalIgnoreCase))?.Value;
+        if (string.IsNullOrWhiteSpace(claim) || !Guid.TryParse(claim, out userId) || userId == Guid.Empty)
+        {
+            userId = Guid.Empty;
+            return false;
+        }
+
+        return true;
     }
 }

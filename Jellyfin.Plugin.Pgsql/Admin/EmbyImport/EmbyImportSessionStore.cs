@@ -15,6 +15,9 @@ namespace Jellyfin.Plugin.Pgsql.Admin.EmbyImport;
 /// </summary>
 public sealed partial class EmbyImportSessionStore
 {
+    /// <summary>Maximum concurrent live import sessions.</summary>
+    public const int MaxConcurrentSessions = 3;
+
     private static readonly TimeSpan SessionTtl = TimeSpan.FromHours(1);
     private static readonly byte[] SqliteHeaderBytes = "SQLite format 3\0"u8.ToArray();
 
@@ -41,17 +44,29 @@ public sealed partial class EmbyImportSessionStore
     /// </summary>
     /// <param name="libraryDb">Library database stream.</param>
     /// <param name="usersDb">Users database stream.</param>
+    /// <param name="createdByUserId">Administrator who uploaded the databases.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The created session.</returns>
     public async Task<EmbyImportSession> CreateAsync(
         Stream libraryDb,
         Stream usersDb,
+        Guid createdByUserId,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(libraryDb);
         ArgumentNullException.ThrowIfNull(usersDb);
+        if (createdByUserId == Guid.Empty)
+        {
+            throw new EmbyImportException("Authenticated user id is required.");
+        }
 
         CleanupExpired();
+
+        if (_sessions.Count >= MaxConcurrentSessions)
+        {
+            throw new EmbyImportException(
+                $"Too many active Emby import sessions (max {MaxConcurrentSessions}). Discard or wait for an existing session to expire.");
+        }
 
         var sessionId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
         var directory = Path.Combine(_rootPath, sessionId);
@@ -74,6 +89,7 @@ public sealed partial class EmbyImportSessionStore
                 LibraryDbPath = libraryPath,
                 UsersDbPath = usersPath,
                 CreatedUtc = DateTime.UtcNow,
+                CreatedByUserId = createdByUserId,
             };
 
             if (!_sessions.TryAdd(sessionId, session))
@@ -92,11 +108,12 @@ public sealed partial class EmbyImportSessionStore
     }
 
     /// <summary>
-    /// Gets a session by id, or throws if missing/expired.
+    /// Gets a session by id for the given administrator, or throws if missing/expired/unauthorized.
     /// </summary>
     /// <param name="sessionId">Session id.</param>
+    /// <param name="callerUserId">Authenticated administrator user id.</param>
     /// <returns>The session.</returns>
-    public EmbyImportSession GetRequired(string sessionId)
+    public EmbyImportSession GetRequired(string sessionId, Guid callerUserId)
     {
         var safeId = NormalizeSessionId(sessionId);
         CleanupExpired();
@@ -112,7 +129,34 @@ public sealed partial class EmbyImportSessionStore
             throw new EmbyImportException("Import session has expired.");
         }
 
+        if (session.CreatedByUserId != callerUserId)
+        {
+            throw new EmbyImportException("Import session was not found or has expired.");
+        }
+
         return session;
+    }
+
+    /// <summary>
+    /// Deletes a session owned by <paramref name="callerUserId"/>.
+    /// </summary>
+    /// <param name="sessionId">Session id.</param>
+    /// <param name="callerUserId">Authenticated administrator user id.</param>
+    /// <returns><c>true</c> if a session was removed.</returns>
+    public bool Delete(string sessionId, Guid callerUserId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) || !SessionIdRegex().IsMatch(sessionId))
+        {
+            return false;
+        }
+
+        if (!_sessions.TryGetValue(sessionId, out var existing)
+            || existing.CreatedByUserId != callerUserId)
+        {
+            return false;
+        }
+
+        return Delete(sessionId);
     }
 
     /// <summary>
