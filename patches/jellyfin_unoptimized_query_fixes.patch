@@ -224,7 +224,7 @@ index 1842a9b..c065112 100644
          IOrderedQueryable<BaseItemEntity>? orderedQuery = null;
  
          if (hasSearch)
-@@ -410,6 +420,108 @@ public sealed partial class BaseItemRepository
+@@ -422,6 +432,108 @@ public sealed partial class BaseItemRepository
          return ordered.ThenBy(x => x.Item.SortName).Select(x => x.Item);
      }
  
