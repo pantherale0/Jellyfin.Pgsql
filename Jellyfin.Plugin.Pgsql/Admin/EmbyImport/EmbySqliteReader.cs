@@ -85,16 +85,25 @@ public sealed class EmbySqliteReader
 
         // Filter in-process so CommandText stays a compile-time constant (CA2100 / CA3001).
         var idSet = embyUserIds.ToHashSet();
-        var rows = new List<EmbyUserDataRow>();
 
         await using var connection = OpenReadOnly(libraryDbPath);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
+        var schema = await DetectUserDataSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT key, userId, rating, played, playCount, isFavorite, playbackPositionTicks, " +
-            "lastPlayedDate, AudioStreamIndex, SubtitleStreamIndex FROM UserDatas";
+        command.CommandText = schema switch
+        {
+            UserDataSchema.LegacyKeyColumn =>
+                "SELECT key, userId, rating, played, playCount, isFavorite, playbackPositionTicks, " +
+                "lastPlayedDate, AudioStreamIndex, SubtitleStreamIndex FROM UserDatas",
+            UserDataSchema.KeyTableV2 =>
+                "SELECT k.UserDataKey, d.userId, d.rating, d.played, d.playCount, d.isFavorite, " +
+                "d.playbackPositionTicks, d.LastPlayedDateInt, d.AudioStreamIndex, d.SubtitleStreamIndex " +
+                "FROM UserDatas d INNER JOIN UserDataKeys2 k ON k.Id = d.UserDataKeyId",
+            _ => throw new EmbyImportException("Unsupported Emby UserDatas schema."),
+        };
 
+        var rows = new List<EmbyUserDataRow>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -109,9 +118,15 @@ public sealed class EmbySqliteReader
                 continue;
             }
 
+            var key = reader.GetString(0);
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
             rows.Add(new EmbyUserDataRow
             {
-                Key = reader.GetString(0),
+                Key = key,
                 UserId = userId,
                 Rating = await reader.IsDBNullAsync(2, cancellationToken).ConfigureAwait(false)
                     ? null
@@ -123,12 +138,10 @@ public sealed class EmbySqliteReader
                 LastPlayedDate = await reader.IsDBNullAsync(7, cancellationToken).ConfigureAwait(false)
                     ? null
                     : ReadDateTime(reader, 7),
-                AudioStreamIndex = await reader.IsDBNullAsync(8, cancellationToken).ConfigureAwait(false)
-                    ? null
-                    : reader.GetInt32(8),
-                SubtitleStreamIndex = await reader.IsDBNullAsync(9, cancellationToken).ConfigureAwait(false)
-                    ? null
-                    : reader.GetInt32(9),
+                AudioStreamIndex = await ReadOptionalStreamIndexAsync(reader, 8, cancellationToken)
+                    .ConfigureAwait(false),
+                SubtitleStreamIndex = await ReadOptionalStreamIndexAsync(reader, 9, cancellationToken)
+                    .ConfigureAwait(false),
             });
         }
 
@@ -144,6 +157,32 @@ public sealed class EmbySqliteReader
         {
             throw new EmbyImportException("library.db does not contain a UserDatas table.");
         }
+
+        _ = await DetectUserDataSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<UserDataSchema> DetectUserDataSchemaAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        // Older Emby: UserDatas.key + lastPlayedDate.
+        if (await ColumnExistsAsync(connection, "UserDatas", "key", cancellationToken).ConfigureAwait(false))
+        {
+            return UserDataSchema.LegacyKeyColumn;
+        }
+
+        // Current Emby: UserDatas.UserDataKeyId → UserDataKeys2.UserDataKey (+ LastPlayedDateInt).
+        if (await TableExistsAsync(connection, "UserDataKeys2", cancellationToken).ConfigureAwait(false)
+            && await ColumnExistsAsync(connection, "UserDatas", "UserDataKeyId", cancellationToken)
+                .ConfigureAwait(false)
+            && await ColumnExistsAsync(connection, "UserDataKeys2", "UserDataKey", cancellationToken)
+                .ConfigureAwait(false))
+        {
+            return UserDataSchema.KeyTableV2;
+        }
+
+        throw new EmbyImportException(
+            "Unsupported library.db UserDatas schema. Expected either a key column or UserDataKeys2.");
     }
 
     private async Task<IReadOnlyList<EmbyUserInfo>> ReadUsersAsync(
@@ -361,6 +400,36 @@ public sealed class EmbySqliteReader
         return value is not null and not DBNull;
     }
 
+    private static async Task<bool> ColumnExistsAsync(
+        SqliteConnection connection,
+        string tableName,
+        string columnName,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        // pragma_table_info(?) is parameterized; table names are only passed from compile-time constants.
+        command.CommandText = "SELECT 1 FROM pragma_table_info(@table) WHERE name=@column LIMIT 1";
+        command.Parameters.AddWithValue("@table", tableName);
+        command.Parameters.AddWithValue("@column", columnName);
+        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return value is not null and not DBNull;
+    }
+
+    private static async Task<int?> ReadOptionalStreamIndexAsync(
+        SqliteDataReader reader,
+        int index,
+        CancellationToken cancellationToken)
+    {
+        if (await reader.IsDBNullAsync(index, cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        var value = reader.GetInt32(index);
+        // Emby uses -1 for "unset" stream indexes.
+        return value < 0 ? null : value;
+    }
+
     private static SqliteConnection OpenReadOnly(string path)
     {
         var connectionString = new SqliteConnectionStringBuilder
@@ -381,8 +450,15 @@ public sealed class EmbySqliteReader
                 : dateTime.ToUniversalTime();
         }
 
-        if (rawValue is long unixTimestamp
-            && unixTimestamp > 0
+        // Emby LastPlayedDateInt is unix seconds (INT/BIGINT depending on provider).
+        var unixTimestamp = rawValue switch
+        {
+            long l => l,
+            int i => (long)i,
+            _ => 0L,
+        };
+
+        if (unixTimestamp > 0
             && unixTimestamp <= DateTimeOffset.MaxValue.ToUnixTimeSeconds())
         {
             return DateTimeOffset.FromUnixTimeSeconds(unixTimestamp).UtcDateTime;
@@ -397,5 +473,11 @@ public sealed class EmbySqliteReader
         }
 
         return null;
+    }
+
+    private enum UserDataSchema
+    {
+        LegacyKeyColumn,
+        KeyTableV2,
     }
 }
