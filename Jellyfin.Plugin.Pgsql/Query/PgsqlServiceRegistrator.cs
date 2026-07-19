@@ -42,11 +42,13 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
         {
             // Server layout changed; keep the core repository untouched, but still wire taste feeds.
             serviceCollection.AddSingleton<IQueryResultCache>(_ => new MemoryQueryResultCache());
+            serviceCollection.AddSingleton<IQueryCacheVersionStore>(_ => new MemoryQueryCacheVersionStore());
             serviceCollection.AddSingleton<TasteRecommendationService>();
             return;
         }
 
         serviceCollection.AddSingleton<QueryRuntimeStats>();
+        serviceCollection.AddSingleton<IQueryCacheVersionStore>(CreateVersionStore);
         serviceCollection.AddSingleton<IQueryResultCache>(CreateCache);
         serviceCollection.AddSingleton<TasteRecommendationService>();
 
@@ -85,6 +87,7 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<IItemRepository>(sp => new CachingItemRepository(
             (IItemRepository)sp.GetRequiredService(coreRepositoryType),
             sp.GetRequiredService<IQueryResultCache>(),
+            sp.GetRequiredService<IQueryCacheVersionStore>(),
             sp.GetRequiredService<CachedItemLoader>(),
             sp.GetRequiredService<PgLatestQueryService>(),
             sp.GetRequiredService<QueryRuntimeStats>(),
@@ -93,6 +96,7 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<INextUpService>(sp => new CachingNextUpService(
             CoreNextUpServiceAccessor.Create(sp),
             sp.GetRequiredService<IQueryResultCache>(),
+            sp.GetRequiredService<IQueryCacheVersionStore>(),
             sp.GetRequiredService<CachedItemLoader>(),
             sp.GetRequiredService<PgNextUpQuery>(),
             sp.GetRequiredService<QueryRuntimeStats>(),
@@ -103,6 +107,27 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<PlaybackReportingImporter>();
         serviceCollection.AddSingleton<IPlaybackReportingImporter>(sp => sp.GetRequiredService<PlaybackReportingImporter>());
         serviceCollection.AddHostedService<PlaybackReportingMigrationService>();
+    }
+
+    private static IQueryCacheVersionStore CreateVersionStore(IServiceProvider serviceProvider)
+    {
+        var options = PgsqlQueryOptions.Current;
+        var logger = serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<RedisQueryCacheVersionStore>();
+
+        if (options.CacheBackend == QueryCacheBackend.Redis
+            && !string.IsNullOrWhiteSpace(options.RedisConnectionString))
+        {
+            try
+            {
+                return new RedisQueryCacheVersionStore(options.RedisConnectionString, logger);
+            }
+            catch (Exception ex) when (ex is RedisException or IOException or TimeoutException or ArgumentException)
+            {
+                logger.LogWarning(ex, "Failed to initialize Redis query cache versions; using memory versions");
+            }
+        }
+
+        return new MemoryQueryCacheVersionStore();
     }
 
     private static IQueryResultCache CreateCache(IServiceProvider serviceProvider)

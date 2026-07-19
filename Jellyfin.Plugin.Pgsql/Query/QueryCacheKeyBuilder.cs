@@ -22,41 +22,14 @@ internal static class QueryCacheKeyBuilder
     /// </summary>
     /// <param name="filter">The query filter.</param>
     /// <param name="collectionType">The collection type.</param>
+    /// <param name="libraryVersion">Library-wide cache generation.</param>
+    /// <param name="userVersion">Per-user cache generation.</param>
     /// <returns>The cache key, or <c>null</c> when the query cannot be safely keyed.</returns>
-    public static string? BuildLatestKey(InternalItemsQuery filter, CollectionType collectionType)
-    {
-        var canonical = BuildCanonical(filter);
-        if (canonical is null)
-        {
-            return null;
-        }
-
-        return string.Create(CultureInfo.InvariantCulture, $"latest:{collectionType}:{Hash(canonical)}");
-    }
-
-    /// <summary>
-    /// Builds a cache key for a Resume (IsResumable) item list query.
-    /// </summary>
-    /// <param name="filter">The query filter.</param>
-    /// <returns>The cache key, or <c>null</c> when the query cannot be safely keyed.</returns>
-    public static string? BuildResumeKey(InternalItemsQuery filter)
-    {
-        var canonical = BuildCanonical(filter);
-        if (canonical is null)
-        {
-            return null;
-        }
-
-        return $"resume:{Hash(canonical)}";
-    }
-
-    /// <summary>
-    /// Builds a cache key for a NextUp series-key query.
-    /// </summary>
-    /// <param name="filter">The query filter.</param>
-    /// <param name="dateCutoff">The next-up date cutoff.</param>
-    /// <returns>The cache key, or <c>null</c> when the query cannot be safely keyed.</returns>
-    public static string? BuildNextUpSeriesKeysKey(InternalItemsQuery filter, DateTime dateCutoff)
+    public static string? BuildLatestKey(
+        InternalItemsQuery filter,
+        CollectionType collectionType,
+        long libraryVersion,
+        long userVersion)
     {
         var canonical = BuildCanonical(filter);
         if (canonical is null)
@@ -66,7 +39,52 @@ internal static class QueryCacheKeyBuilder
 
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"nextup-keys:{dateCutoff.Ticks}:{Hash(canonical)}");
+            $"lv{libraryVersion}:uv{userVersion}:latest:{collectionType}:{Hash(canonical)}");
+    }
+
+    /// <summary>
+    /// Builds a cache key for a Resume (IsResumable) item list query.
+    /// </summary>
+    /// <param name="filter">The query filter.</param>
+    /// <param name="libraryVersion">Library-wide cache generation.</param>
+    /// <param name="userVersion">Per-user cache generation.</param>
+    /// <returns>The cache key, or <c>null</c> when the query cannot be safely keyed.</returns>
+    public static string? BuildResumeKey(InternalItemsQuery filter, long libraryVersion, long userVersion)
+    {
+        var canonical = BuildCanonical(filter);
+        if (canonical is null)
+        {
+            return null;
+        }
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"lv{libraryVersion}:uv{userVersion}:resume:{Hash(canonical)}");
+    }
+
+    /// <summary>
+    /// Builds a cache key for a NextUp series-key query.
+    /// </summary>
+    /// <param name="filter">The query filter.</param>
+    /// <param name="dateCutoff">The next-up date cutoff.</param>
+    /// <param name="libraryVersion">Library-wide cache generation.</param>
+    /// <param name="userVersion">Per-user cache generation.</param>
+    /// <returns>The cache key, or <c>null</c> when the query cannot be safely keyed.</returns>
+    public static string? BuildNextUpSeriesKeysKey(
+        InternalItemsQuery filter,
+        DateTime dateCutoff,
+        long libraryVersion,
+        long userVersion)
+    {
+        var canonical = BuildCanonical(filter);
+        if (canonical is null)
+        {
+            return null;
+        }
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"lv{libraryVersion}:uv{userVersion}:nextup-keys:{dateCutoff.Ticks}:{Hash(canonical)}");
     }
 
     /// <summary>
@@ -76,12 +94,16 @@ internal static class QueryCacheKeyBuilder
     /// <param name="seriesKeys">The series keys.</param>
     /// <param name="includeSpecials">Whether specials are included.</param>
     /// <param name="includeWatchedForRewatching">Whether rewatching mode is enabled.</param>
+    /// <param name="libraryVersion">Library-wide cache generation.</param>
+    /// <param name="userVersion">Per-user cache generation.</param>
     /// <returns>The cache key, or <c>null</c> when the query cannot be safely keyed.</returns>
     public static string? BuildNextUpBatchKey(
         InternalItemsQuery filter,
         IReadOnlyList<string> seriesKeys,
         bool includeSpecials,
-        bool includeWatchedForRewatching)
+        bool includeWatchedForRewatching,
+        long libraryVersion,
+        long userVersion)
     {
         var canonical = BuildCanonical(filter);
         if (canonical is null)
@@ -92,8 +114,15 @@ internal static class QueryCacheKeyBuilder
         var keys = string.Join(',', seriesKeys.OrderBy(k => k, StringComparer.Ordinal));
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"nextup-batch:{includeSpecials}:{includeWatchedForRewatching}:{Hash(canonical + '|' + keys)}");
+            $"lv{libraryVersion}:uv{userVersion}:nextup-batch:{includeSpecials}:{includeWatchedForRewatching}:{Hash(canonical + '|' + keys)}");
     }
+
+    /// <summary>
+    /// Resolves the user id used for version stamps from a filter, or <see cref="Guid.Empty"/> when anonymous.
+    /// </summary>
+    /// <param name="filter">The query filter.</param>
+    /// <returns>The user id.</returns>
+    public static Guid GetVersionUserId(InternalItemsQuery filter) => filter.User?.Id ?? Guid.Empty;
 
     private static string? BuildCanonical(InternalItemsQuery filter)
     {

@@ -1,0 +1,19 @@
+# Disable false-positive MKV DirectPlay on Chrome/Opera (jellyfin-web#7651) so codec-compatible MKV remuxes via HLS.
+diff --git a/src/scripts/browserDeviceProfile.js b/src/scripts/browserDeviceProfile.js
+index c92757f5bd..b895e82e58 100644
+--- a/src/scripts/browserDeviceProfile.js
++++ b/src/scripts/browserDeviceProfile.js
+@@ -220,6 +220,13 @@ function testCanPlayMkv(videoTestElement) {
+         return false;
+     }
+ 
++    // Chrome/Opera report Matroska via canPlayType but cannot DirectPlay MKV in <video>,
++    // which yields silent 0ms failures. Force ContainerNotSupported → HLS remux/DirectStream
++    // instead (typical Delivery top reason). See jellyfin-web#7651.
++    if (browser.chrome || browser.opera) {
++        return false;
++    }
++
+     if (videoTestElement.canPlayType('video/x-matroska').replace(/no/, '')
+             || videoTestElement.canPlayType('video/mkv').replace(/no/, '')) {
+         return true;

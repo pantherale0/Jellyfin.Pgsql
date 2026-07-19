@@ -107,11 +107,11 @@ diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbC
 index 1111111111..2222222222 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
-@@ -176,6 +176,16 @@ public class JellyfinDbContext(DbContextOptions<JellyfinDbContext> options, ILog
+@@ -181,6 +181,16 @@ public class JellyfinDbContext(DbContextOptions<JellyfinDbContext> options, ILog
      /// <summary>
-     /// Gets the <see cref="DbSet{TEntity}"/> containing the playback activity.
+     /// Gets the <see cref="DbSet{TEntity}"/> containing daily playback activity rollups.
      /// </summary>
-     public DbSet<PlaybackActivity> PlaybackActivity => Set<PlaybackActivity>();
+     public DbSet<PlaybackActivityDaily> PlaybackActivityDaily => Set<PlaybackActivityDaily>();
 +
 +    /// <summary>
 +    /// Gets the <see cref="DbSet{TEntity}"/> containing user taste profiles.

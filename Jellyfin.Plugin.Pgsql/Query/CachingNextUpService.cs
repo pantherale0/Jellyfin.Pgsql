@@ -18,6 +18,7 @@ internal sealed class CachingNextUpService : INextUpService
 
     private readonly INextUpService _inner;
     private readonly IQueryResultCache _cache;
+    private readonly IQueryCacheVersionStore _versions;
     private readonly CachedItemLoader _loader;
     private readonly PgNextUpQuery _pgNextUp;
     private readonly QueryRuntimeStats _stats;
@@ -29,6 +30,7 @@ internal sealed class CachingNextUpService : INextUpService
     /// </summary>
     /// <param name="inner">The core next-up service.</param>
     /// <param name="cache">The query result cache.</param>
+    /// <param name="versions">The query cache version store.</param>
     /// <param name="loader">The cached item loader.</param>
     /// <param name="pgNextUp">The PostgreSQL NextUp optimiser.</param>
     /// <param name="stats">The runtime stats collector.</param>
@@ -36,6 +38,7 @@ internal sealed class CachingNextUpService : INextUpService
     public CachingNextUpService(
         INextUpService inner,
         IQueryResultCache cache,
+        IQueryCacheVersionStore versions,
         CachedItemLoader loader,
         PgNextUpQuery pgNextUp,
         QueryRuntimeStats stats,
@@ -43,6 +46,7 @@ internal sealed class CachingNextUpService : INextUpService
     {
         _inner = inner;
         _cache = cache;
+        _versions = versions;
         _loader = loader;
         _pgNextUp = pgNextUp;
         _stats = stats;
@@ -59,7 +63,12 @@ internal sealed class CachingNextUpService : INextUpService
             return _inner.GetNextUpSeriesKeys(filter, dateCutoff);
         }
 
-        var key = QueryCacheKeyBuilder.BuildNextUpSeriesKeysKey(filter, dateCutoff);
+        var userId = QueryCacheKeyBuilder.GetVersionUserId(filter);
+        var key = QueryCacheKeyBuilder.BuildNextUpSeriesKeysKey(
+            filter,
+            dateCutoff,
+            _versions.GetLibraryVersion(),
+            _versions.GetUserVersion(userId));
         if (key is null)
         {
             return _inner.GetNextUpSeriesKeys(filter, dateCutoff);
@@ -96,7 +105,14 @@ internal sealed class CachingNextUpService : INextUpService
 
         if (cacheEnabled)
         {
-            cacheKey = QueryCacheKeyBuilder.BuildNextUpBatchKey(filter, seriesKeys, includeSpecials, includeWatchedForRewatching);
+            var userId = QueryCacheKeyBuilder.GetVersionUserId(filter);
+            cacheKey = QueryCacheKeyBuilder.BuildNextUpBatchKey(
+                filter,
+                seriesKeys,
+                includeSpecials,
+                includeWatchedForRewatching,
+                _versions.GetLibraryVersion(),
+                _versions.GetUserVersion(userId));
             if (cacheKey is not null
                 && _cache.TryGetPayload(cacheKey, out var cachedPayload)
                 && cachedPayload is not null

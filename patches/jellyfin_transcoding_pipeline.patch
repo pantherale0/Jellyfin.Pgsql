@@ -1,5 +1,7 @@
+# Lazy transcoding pipeline probe (EnsureProbed on admin GetSessions; RegisterPending at ffmpeg start).
+# Also exposes Speed/TranscodeBufferTicks/Pipeline on TranscodingInfo and HW-accel strip for non-admins.
 diff --git a/Emby.Server.Implementations/ApplicationHost.cs b/Emby.Server.Implementations/ApplicationHost.cs
-index 69e23bcb63..cf3216d57e 100644
+index 81be5d3c37..e967b13db1 100644
 --- a/Emby.Server.Implementations/ApplicationHost.cs
 +++ b/Emby.Server.Implementations/ApplicationHost.cs
 @@ -604,6 +604,7 @@ namespace Emby.Server.Implementations
@@ -11,10 +13,52 @@ index 69e23bcb63..cf3216d57e 100644
              serviceCollection.AddSingleton<ITranscodeManager, TranscodeManager>();
              serviceCollection.AddScoped<MediaInfoHelper>();
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 19823dff37..42a515d114 100644
+index 79fb233382..a9e616a190 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
-@@ -2021,12 +2021,13 @@ namespace Emby.Server.Implementations.Session
+@@ -29,6 +29,7 @@ using MediaBrowser.Controller.Events;
+ using MediaBrowser.Controller.Events.Authentication;
+ using MediaBrowser.Controller.Events.Session;
+ using MediaBrowser.Controller.Library;
++using MediaBrowser.Controller.MediaEncoding;
+ using MediaBrowser.Controller.Net;
+ using MediaBrowser.Controller.Session;
+ using MediaBrowser.Model.Dto;
+@@ -50,6 +51,7 @@ namespace Emby.Server.Implementations.Session
+     public sealed class SessionManager : ISessionManager, IAsyncDisposable
+     {
+         private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
++        private readonly ITranscodingPipelineProbe _pipelineProbe;
+         private readonly IUserDataManager _userDataManager;
+         private readonly IServerConfigurationManager _config;
+         private readonly ILogger<SessionManager> _logger;
+@@ -101,6 +103,7 @@ namespace Emby.Server.Implementations.Session
+         /// <param name="mediaSourceManager">Instance of <see cref="IMediaSourceManager"/> interface.</param>
+         /// <param name="hostApplicationLifetime">Instance of <see cref="IHostApplicationLifetime"/> interface.</param>
+         /// <param name="dbProvider">Instance of <see cref="IDbContextFactory{JellyfinDbContext}"/> interface.</param>
++        /// <param name="pipelineProbe">Instance of <see cref="ITranscodingPipelineProbe"/> interface.</param>
+         public SessionManager(
+             ILogger<SessionManager> logger,
+             IEventManager eventManager,
+@@ -115,7 +118,8 @@ namespace Emby.Server.Implementations.Session
+             IDeviceManager deviceManager,
+             IMediaSourceManager mediaSourceManager,
+             IHostApplicationLifetime hostApplicationLifetime,
+-            IDbContextFactory<JellyfinDbContext> dbProvider)
++            IDbContextFactory<JellyfinDbContext> dbProvider,
++            ITranscodingPipelineProbe pipelineProbe)
+         {
+             _logger = logger;
+             _eventManager = eventManager;
+@@ -133,6 +137,7 @@ namespace Emby.Server.Implementations.Session
+ 
+             _deviceManager.DeviceOptionsUpdated += OnDeviceManagerDeviceOptionsUpdated;
+             _dbProvider = dbProvider;
++            _pipelineProbe = pipelineProbe;
+         }
+ 
+         /// <summary>
+@@ -2156,12 +2161,31 @@ namespace Emby.Server.Implementations.Session
  
              if (!userIsAdmin)
              {
@@ -26,9 +70,71 @@ index 19823dff37..42a515d114 100644
                      {
                          r.TranscodingInfo.HardwareAccelerationType = HardwareAccelerationType.none;
 +                        r.TranscodingInfo.Pipeline = null;
++                    }
++
++                    return r;
++                });
++            }
++            else
++            {
++                // Lazy pipeline probe: only when an admin lists sessions.
++                result = result.Select(r =>
++                {
++                    if (r.TranscodingInfo is not null
++                        && !string.IsNullOrEmpty(r.TranscodingInfo.PlaySessionId))
++                    {
++                        var pipeline = _pipelineProbe.EnsureProbed(r.TranscodingInfo.PlaySessionId);
++                        if (pipeline is not null)
++                        {
++                            r.TranscodingInfo.Pipeline = pipeline;
++                        }
                      }
  
                      return r;
+diff --git a/Jellyfin.Api/WebSocketListeners/SessionInfoWebSocketListener.cs b/Jellyfin.Api/WebSocketListeners/SessionInfoWebSocketListener.cs
+index db24c97460..9186c10a9e 100644
+--- a/Jellyfin.Api/WebSocketListeners/SessionInfoWebSocketListener.cs
++++ b/Jellyfin.Api/WebSocketListeners/SessionInfoWebSocketListener.cs
+@@ -8,6 +8,7 @@ using MediaBrowser.Controller.Library;
+ using MediaBrowser.Controller.Net;
+ using MediaBrowser.Controller.Session;
+ using MediaBrowser.Model.Dto;
++using MediaBrowser.Model.Entities;
+ using MediaBrowser.Model.Session;
+ using Microsoft.Extensions.Logging;
+ 
+@@ -62,17 +63,29 @@ public class SessionInfoWebSocketListener : BasePeriodicWebSocketListener<IEnume
+     protected override Task<IEnumerable<SessionInfoDto>> GetDataToSendForConnection(IWebSocketConnection connection)
+     {
+         var sessions = _sessionManager.Sessions;
++        var isAdmin = connection.AuthorizationInfo?.IsApiKey == true
++            || connection.AuthorizationInfo?.User?.HasPermission(PermissionKind.IsAdministrator) == true;
+ 
+         // For non-admin users, filter the sessions to only include their own sessions
+         if (connection.AuthorizationInfo?.User is not null &&
+             !connection.AuthorizationInfo.IsApiKey &&
+-            !connection.AuthorizationInfo.User.HasPermission(PermissionKind.IsAdministrator))
++            !isAdmin)
+         {
+             var userId = connection.AuthorizationInfo.User.Id;
+             sessions = sessions.Where(s => s.UserId.Equals(userId) || s.ContainsUser(userId));
+         }
+ 
+-        return Task.FromResult(sessions.Select(_sessionManager.ToSessionInfoDto));
++        return Task.FromResult(sessions.Select(session =>
++        {
++            var dto = _sessionManager.ToSessionInfoDto(session);
++            if (!isAdmin && dto.TranscodingInfo is not null)
++            {
++                dto.TranscodingInfo.HardwareAccelerationType = HardwareAccelerationType.none;
++                dto.TranscodingInfo.Pipeline = null;
++            }
++
++            return dto;
++        }));
+     }
+ 
+     /// <inheritdoc />
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingJobInfo.cs b/MediaBrowser.Controller/MediaEncoding/EncodingJobInfo.cs
 index 314cd32903..6964d0476c 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingJobInfo.cs
@@ -66,12 +172,11 @@ index 09bc01f748..162ea408ca 100644
      /// Starts FFMpeg.
 diff --git a/MediaBrowser.Controller/MediaEncoding/ITranscodingPipelineProbe.cs b/MediaBrowser.Controller/MediaEncoding/ITranscodingPipelineProbe.cs
 new file mode 100644
-index 0000000000..ec9455d4f6
+index 0000000000..e39b5d3087
 --- /dev/null
 +++ b/MediaBrowser.Controller/MediaEncoding/ITranscodingPipelineProbe.cs
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,40 @@
 +using System.Threading;
-+using System.Threading.Tasks;
 +using MediaBrowser.Model.Session;
 +
 +namespace MediaBrowser.Controller.MediaEncoding;
@@ -89,12 +194,21 @@ index 0000000000..ec9455d4f6
 +    TranscodingPipelineInfo? GetCachedPipeline(string? playSessionId);
 +
 +    /// <summary>
-+    /// Starts an asynchronous probe for the given play session using the live ffmpeg arguments.
++    /// Stores ffmpeg arguments for a play session without starting a probe.
++    /// Call <see cref="EnsureProbed"/> when an admin views sessions.
 +    /// </summary>
 +    /// <param name="playSessionId">Play session id.</param>
 +    /// <param name="commandLineArguments">FFmpeg arguments used for the live transcode.</param>
-+    /// <param name="cancellationToken">Cancellation token.</param>
-+    void BeginProbe(string? playSessionId, string commandLineArguments, CancellationToken cancellationToken = default);
++    void RegisterPending(string? playSessionId, string commandLineArguments);
++
++    /// <summary>
++    /// Ensures a pipeline is available for the play session: sync CLI parse for immediate
++    /// UI, then optionally starts an async <c>-print_graphs</c> upgrade (ffmpeg ≥ 8).
++    /// </summary>
++    /// <param name="playSessionId">Play session id.</param>
++    /// <param name="cancellationToken">Cancellation token for the async graph probe.</param>
++    /// <returns>Pipeline info if available.</returns>
++    TranscodingPipelineInfo? EnsureProbed(string? playSessionId, CancellationToken cancellationToken = default);
 +
 +    /// <summary>
 +    /// Removes a cached pipeline when the job ends.
@@ -191,7 +305,7 @@ index 195dda5fe8..829d1068fd 100644
  
      /// <summary>
 diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
-index defd855ec0..94af1b0f6c 100644
+index defd855ec0..61b3b2dea1 100644
 --- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
 +++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
 @@ -44,6 +44,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
@@ -258,7 +372,7 @@ index defd855ec0..94af1b0f6c 100644
          }
  
          var deviceId = state.Request.DeviceId;
-@@ -348,6 +359,26 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+@@ -348,6 +359,28 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
              var videoCodec = state.ActualOutputVideoCodec;
              var hardwareAccelerationType = _serverConfigurationManager.GetEncodingOptions().HardwareAccelerationType;
  
@@ -268,6 +382,8 @@ index defd855ec0..94af1b0f6c 100644
 +                bufferTicks = Math.Max(0, job.TranscodingPositionTicks.Value - job.DownloadPositionTicks.Value);
 +            }
 +
++            // Only attach a pipeline if an admin already triggered EnsureProbed; do not
++            // start ffmpeg -print_graphs from the progress hot path.
 +            var pipeline = job?.Pipeline
 +                ?? _pipelineProbe.GetCachedPipeline(job?.PlaySessionId ?? state.Request.PlaySessionId);
 +            if (pipeline is not null && job is not null)
@@ -285,13 +401,14 @@ index defd855ec0..94af1b0f6c 100644
              _sessionManager.ReportTranscodingInfo(deviceId, new TranscodingInfo
              {
                  Bitrate = bitRate ?? state.TotalOutputBitrate,
-@@ -362,7 +393,18 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+@@ -362,7 +395,19 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
                  IsAudioDirect = EncodingHelper.IsCopyCodec(state.OutputAudioCodec),
                  IsVideoDirect = EncodingHelper.IsCopyCodec(state.OutputVideoCodec),
                  HardwareAccelerationType = hardwareAccelerationType,
 -                TranscodeReasons = state.TranscodeReasons
 +                TranscodeReasons = state.TranscodeReasons,
 +                TranscodeProtocol = transcodeProtocol,
++                PlaySessionId = job?.PlaySessionId ?? state.Request.PlaySessionId,
 +                VideoBitrate = state.OutputVideoBitrate,
 +                AudioBitrate = state.OutputAudioBitrate,
 +                BytesTranscoded = bytesTranscoded ?? job?.BytesTranscoded,
@@ -305,15 +422,12 @@ index defd855ec0..94af1b0f6c 100644
              });
          }
      }
-@@ -501,6 +543,12 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+@@ -501,6 +546,9 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
          _logger.LogDebug("Launched FFmpeg process");
          state.TranscodingJob = transcodingJob;
  
-+        // Probe pipeline asynchronously; must not block playback start.
-+        _pipelineProbe.BeginProbe(
-+            state.Request.PlaySessionId,
-+            commandLineArguments,
-+            cancellationTokenSource.Token);
++        // Defer pipeline probing until an admin views sessions (EnsureProbed).
++        _pipelineProbe.RegisterPending(state.Request.PlaySessionId, commandLineArguments);
 +
          // Important - don't await the log task or we won't be able to kill FFmpeg when the user stops playback
          _ = new JobLogger(_logger).StartStreamingLog(state, process.StandardError, logStream);
@@ -1176,10 +1290,10 @@ index 0000000000..da01a4305f
 +}
 diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodingPipelineProbe.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodingPipelineProbe.cs
 new file mode 100644
-index 0000000000..c271d3f7dd
+index 0000000000..a8d307387d
 --- /dev/null
 +++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodingPipelineProbe.cs
-@@ -0,0 +1,267 @@
+@@ -0,0 +1,277 @@
 +using System;
 +using System.Collections.Concurrent;
 +using System.Diagnostics;
@@ -1207,6 +1321,7 @@ index 0000000000..c271d3f7dd
 +    private readonly IMediaEncoder _mediaEncoder;
 +    private readonly IApplicationPaths _appPaths;
 +    private readonly ConcurrentDictionary<string, TranscodingPipelineInfo> _cache = new(StringComparer.OrdinalIgnoreCase);
++    private readonly ConcurrentDictionary<string, string> _pendingArgs = new(StringComparer.OrdinalIgnoreCase);
 +    private readonly ConcurrentDictionary<string, byte> _inFlight = new(StringComparer.OrdinalIgnoreCase);
 +
 +    /// <summary>
@@ -1237,25 +1352,53 @@ index 0000000000..c271d3f7dd
 +    }
 +
 +    /// <inheritdoc />
-+    public void BeginProbe(string? playSessionId, string commandLineArguments, CancellationToken cancellationToken = default)
++    public void RegisterPending(string? playSessionId, string commandLineArguments)
 +    {
 +        if (string.IsNullOrWhiteSpace(playSessionId) || string.IsNullOrWhiteSpace(commandLineArguments))
 +        {
 +            return;
 +        }
 +
-+        if (!_inFlight.TryAdd(playSessionId, 0))
++        _pendingArgs[playSessionId] = commandLineArguments;
++    }
++
++    /// <inheritdoc />
++    public TranscodingPipelineInfo? EnsureProbed(string? playSessionId, CancellationToken cancellationToken = default)
++    {
++        if (string.IsNullOrWhiteSpace(playSessionId))
 +        {
-+            return;
++            return null;
 +        }
 +
-+        if (_cache.ContainsKey(playSessionId))
++        if (_cache.TryGetValue(playSessionId, out var cached))
 +        {
-+            _inFlight.TryRemove(playSessionId, out _);
-+            return;
++            return cached;
 +        }
 +
-+        _ = Task.Run(() => ProbeAsync(playSessionId, commandLineArguments, cancellationToken), CancellationToken.None);
++        if (!_pendingArgs.TryGetValue(playSessionId, out var commandLineArguments)
++            || string.IsNullOrWhiteSpace(commandLineArguments))
++        {
++            return null;
++        }
++
++        // Immediate CLI parse so the admin sessions UI is not empty on first paint.
++        var cliPipeline = TranscodingPipelineGraphParser.ParseCommandLine(commandLineArguments);
++        if (cliPipeline is not null)
++        {
++            _cache[playSessionId] = cliPipeline;
++        }
++
++        // Upgrade with -print_graphs asynchronously when ffmpeg supports it.
++        if (_mediaEncoder.EncoderVersion >= MinPrintGraphsVersion
++            && !string.IsNullOrEmpty(_mediaEncoder.EncoderPath)
++            && _inFlight.TryAdd(playSessionId, 0))
++        {
++            _ = Task.Run(
++                () => UpgradeWithPrintGraphsAsync(playSessionId, commandLineArguments, cancellationToken),
++                CancellationToken.None);
++        }
++
++        return cliPipeline;
 +    }
 +
 +    /// <inheritdoc />
@@ -1267,49 +1410,30 @@ index 0000000000..c271d3f7dd
 +        }
 +
 +        _cache.TryRemove(playSessionId, out _);
++        _pendingArgs.TryRemove(playSessionId, out _);
 +        _inFlight.TryRemove(playSessionId, out _);
 +    }
 +
-+    private async Task ProbeAsync(string playSessionId, string commandLineArguments, CancellationToken cancellationToken)
++    private async Task UpgradeWithPrintGraphsAsync(
++        string playSessionId,
++        string commandLineArguments,
++        CancellationToken cancellationToken)
 +    {
 +        try
 +        {
-+            TranscodingPipelineInfo? pipeline = null;
-+
-+            if (_mediaEncoder.EncoderVersion >= MinPrintGraphsVersion
-+                && !string.IsNullOrEmpty(_mediaEncoder.EncoderPath))
-+            {
-+                pipeline = await RunPrintGraphsProbeAsync(commandLineArguments, cancellationToken).ConfigureAwait(false);
-+            }
-+
-+            pipeline ??= TranscodingPipelineGraphParser.ParseCommandLine(commandLineArguments);
-+
++            var pipeline = await RunPrintGraphsProbeAsync(commandLineArguments, cancellationToken).ConfigureAwait(false);
 +            if (pipeline is not null)
 +            {
 +                _cache[playSessionId] = pipeline;
 +                _logger.LogDebug(
-+                    "Cached transcoding pipeline for PlaySessionId={PlaySessionId} with {StageCount} stages",
++                    "Cached print_graphs transcoding pipeline for PlaySessionId={PlaySessionId} with {StageCount} stages",
 +                    playSessionId,
 +                    pipeline.Stages.Count);
 +            }
 +        }
 +        catch (Exception ex) when (ex is not OperationCanceledException)
 +        {
-+            _logger.LogDebug(ex, "Failed to probe transcoding pipeline for PlaySessionId={PlaySessionId}", playSessionId);
-+
-+            // Still try CLI fallback if graph probe threw.
-+            try
-+            {
-+                var fallback = TranscodingPipelineGraphParser.ParseCommandLine(commandLineArguments);
-+                if (fallback is not null)
-+                {
-+                    _cache[playSessionId] = fallback;
-+                }
-+            }
-+            catch (Exception fallbackEx)
-+            {
-+                _logger.LogDebug(fallbackEx, "CLI pipeline fallback also failed for PlaySessionId={PlaySessionId}", playSessionId);
-+            }
++            _logger.LogDebug(ex, "Failed print_graphs upgrade for PlaySessionId={PlaySessionId}", playSessionId);
 +        }
 +        finally
 +        {
@@ -1521,7 +1645,7 @@ index 0000000000..51bbfdc66e
 +    V4l2m2m = 11
 +}
 diff --git a/MediaBrowser.Model/Session/TranscodingInfo.cs b/MediaBrowser.Model/Session/TranscodingInfo.cs
-index 11e83844b0..fa55c7ef64 100644
+index 11e83844b0..1b3a50c637 100644
 --- a/MediaBrowser.Model/Session/TranscodingInfo.cs
 +++ b/MediaBrowser.Model/Session/TranscodingInfo.cs
 @@ -1,5 +1,6 @@
@@ -1531,7 +1655,7 @@ index 11e83844b0..fa55c7ef64 100644
  using MediaBrowser.Model.Entities;
  
  namespace MediaBrowser.Model.Session;
-@@ -73,4 +74,59 @@ public class TranscodingInfo
+@@ -73,4 +74,64 @@ public class TranscodingInfo
      /// Gets or sets the transcode reasons.
      /// </summary>
      public TranscodeReason TranscodeReasons { get; set; }
@@ -1540,6 +1664,11 @@ index 11e83844b0..fa55c7ef64 100644
 +    /// Gets or sets the transport protocol used for the transcode ("hls", "dash", or "http").
 +    /// </summary>
 +    public string TranscodeProtocol { get; set; }
++
++    /// <summary>
++    /// Gets or sets the play session id used to correlate pipeline probes.
++    /// </summary>
++    public string PlaySessionId { get; set; }
 +
 +    /// <summary>
 +    /// Gets or sets the target video-only bitrate.
@@ -1889,3 +2018,35 @@ index 0000000000..2a05a1cf44
 +        Assert.DoesNotContain("/tmp/out.mp4", args, System.StringComparison.Ordinal);
 +    }
 +}
+diff --git a/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs b/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
+index 3a971a163d..a6ca2fccab 100644
+--- a/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
++++ b/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
+@@ -9,6 +9,7 @@ using MediaBrowser.Controller.Drawing;
+ using MediaBrowser.Controller.Dto;
+ using MediaBrowser.Controller.Events;
+ using MediaBrowser.Controller.Library;
++using MediaBrowser.Controller.MediaEncoding;
+ using MediaBrowser.Controller.Session;
+ using Microsoft.Extensions.Hosting;
+ using Microsoft.Extensions.Logging.Abstractions;
+@@ -38,7 +39,8 @@ public class SessionManagerTests
+             Mock.Of<IDeviceManager>(),
+             Mock.Of<IMediaSourceManager>(),
+             Mock.Of<IHostApplicationLifetime>(),
+-            Mock.Of<IDbContextFactory<JellyfinDbContext>>());
++            Mock.Of<IDbContextFactory<JellyfinDbContext>>(),
++            Mock.Of<ITranscodingPipelineProbe>());
+ 
+         await Assert.ThrowsAsync(exceptionType, () => sessionManager.GetAuthorizationToken(
+             new User("test", "default", "default"),
+@@ -66,7 +68,8 @@ public class SessionManagerTests
+             Mock.Of<IDeviceManager>(),
+             Mock.Of<IMediaSourceManager>(),
+             Mock.Of<IHostApplicationLifetime>(),
+-            Mock.Of<IDbContextFactory<JellyfinDbContext>>());
++            Mock.Of<IDbContextFactory<JellyfinDbContext>>(),
++            Mock.Of<ITranscodingPipelineProbe>());
+ 
+         await Assert.ThrowsAsync(exceptionType, () => sessionManager.AuthenticateNewSessionInternal(authenticationRequest, false));
+     }
