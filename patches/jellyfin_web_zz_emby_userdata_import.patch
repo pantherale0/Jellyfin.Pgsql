@@ -1,16 +1,19 @@
 diff --git a/src/apps/dashboard/features/embyImport/api/embyImportApi.ts b/src/apps/dashboard/features/embyImport/api/embyImportApi.ts
 new file mode 100644
-index 0000000000..0c6fa26750
+index 0000000000..3486f4b9b2
 --- /dev/null
 +++ b/src/apps/dashboard/features/embyImport/api/embyImportApi.ts
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,275 @@
 +import type { Api } from '@jellyfin/sdk';
 +import type { AxiosRequestConfig } from 'axios';
 +
 +import type {
 +    EmbyImportCounts,
 +    EmbyImportResponse,
++    EmbyImportUploadInitResponse,
 +    EmbyImportUploadResponse,
++    EmbyUploadFileKind,
++    EmbyUploadProgress,
 +    EmbyUserInfo
 +} from '../types';
 +
@@ -22,6 +25,16 @@ index 0000000000..0c6fa26750
 +    Accept: camelCaseAccept,
 +    Authorization: api.authorizationHeader
 +});
++
++const multipartHeaders = (api: Api, options?: AxiosRequestConfig) => {
++    const headers = {
++        ...jsonHeaders(api, options)
++    };
++    // Let the browser set multipart boundary; a JSON Content-Type breaks IFormFile binding.
++    delete (headers as Record<string, unknown>)['Content-Type'];
++    delete (headers as Record<string, unknown>)['content-type'];
++    return headers;
++};
 +
 +const asRecord = (value: unknown): Record<string, unknown> | null =>
 +    value && typeof value === 'object' ? value as Record<string, unknown> : null;
@@ -49,6 +62,14 @@ index 0000000000..0c6fa26750
 +    }
 +
 +    return { id, name, userDataCount };
++};
++
++const normalizeInitResponse = (raw: unknown): EmbyImportUploadInitResponse => {
++    const obj = asRecord(raw) || {};
++    return {
++        sessionId: pick<string>(obj, 'sessionId', 'SessionId') || '',
++        chunkSizeBytes: pick<number>(obj, 'chunkSizeBytes', 'ChunkSizeBytes') || 0
++    };
 +};
 +
 +const normalizeUploadResponse = (raw: unknown): EmbyImportUploadResponse => {
@@ -80,33 +101,130 @@ index 0000000000..0c6fa26750
 +    };
 +};
 +
-+export const uploadEmbyDatabases = async (
++const initEmbyUpload = async (
 +    api: Api,
-+    libraryDb: File,
-+    usersDb: File,
++    libraryDbBytes: number,
++    usersDbBytes: number,
 +    options?: AxiosRequestConfig
-+): Promise<EmbyImportUploadResponse> => {
-+    const form = new FormData();
-+    form.append('libraryDb', libraryDb);
-+    form.append('usersDb', usersDb);
-+
-+    const headers = {
-+        ...jsonHeaders(api, options)
-+    };
-+    // Let the browser set multipart boundary; a JSON Content-Type breaks IFormFile binding.
-+    delete (headers as Record<string, unknown>)['Content-Type'];
-+    delete (headers as Record<string, unknown>)['content-type'];
-+
++): Promise<EmbyImportUploadInitResponse> => {
 +    const response = await api.axiosInstance.post(
-+        '/Pgsql/Admin/EmbyImport/Upload',
++        '/Pgsql/Admin/EmbyImport/Upload/Init',
++        { libraryDbBytes, usersDbBytes },
++        {
++            ...options,
++            baseURL: api.basePath,
++            headers: jsonHeaders(api, options)
++        }
++    );
++    return normalizeInitResponse(response.data);
++};
++
++const uploadEmbyChunk = async (
++    api: Api,
++    sessionId: string,
++    file: EmbyUploadFileKind,
++    chunkIndex: number,
++    chunk: Blob,
++    options?: AxiosRequestConfig
++): Promise<void> => {
++    const form = new FormData();
++    form.append('sessionId', sessionId);
++    form.append('file', file);
++    form.append('chunkIndex', String(chunkIndex));
++    form.append('chunk', chunk, `${file}.part${chunkIndex}`);
++
++    await api.axiosInstance.put(
++        '/Pgsql/Admin/EmbyImport/Upload/Chunk',
 +        form,
 +        {
 +            ...options,
 +            baseURL: api.basePath,
-+            headers
++            headers: multipartHeaders(api, options)
++        }
++    );
++};
++
++const completeEmbyUpload = async (
++    api: Api,
++    sessionId: string,
++    options?: AxiosRequestConfig
++): Promise<EmbyImportUploadResponse> => {
++    const response = await api.axiosInstance.post(
++        '/Pgsql/Admin/EmbyImport/Upload/Complete',
++        { sessionId },
++        {
++            ...options,
++            baseURL: api.basePath,
++            headers: jsonHeaders(api, options)
 +        }
 +    );
 +    return normalizeUploadResponse(response.data);
++};
++
++const uploadFileInChunks = async (
++    api: Api,
++    sessionId: string,
++    fileKind: EmbyUploadFileKind,
++    file: File,
++    chunkSizeBytes: number,
++    onProgress?: (progress: EmbyUploadProgress) => void,
++    options?: AxiosRequestConfig
++): Promise<void> => {
++    const totalChunks = Math.max(1, Math.ceil(file.size / chunkSizeBytes));
++    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
++        const start = chunkIndex * chunkSizeBytes;
++        const end = Math.min(start + chunkSizeBytes, file.size);
++        const blob = file.slice(start, end);
++        onProgress?.({ file: fileKind, chunkIndex: chunkIndex + 1, totalChunks });
++        await uploadEmbyChunk(api, sessionId, fileKind, chunkIndex, blob, options);
++    }
++};
++
++export const uploadEmbyDatabases = async (
++    api: Api,
++    libraryDb: File,
++    usersDb: File,
++    onProgress?: (progress: EmbyUploadProgress) => void,
++    options?: AxiosRequestConfig
++): Promise<EmbyImportUploadResponse> => {
++    let sessionId = '';
++    try {
++        const init = await initEmbyUpload(api, libraryDb.size, usersDb.size, options);
++        sessionId = init.sessionId;
++        if (!sessionId || init.chunkSizeBytes <= 0) {
++            throw new Error('Upload init failed.');
++        }
++
++        await uploadFileInChunks(
++            api,
++            sessionId,
++            'libraryDb',
++            libraryDb,
++            init.chunkSizeBytes,
++            onProgress,
++            options
++        );
++        await uploadFileInChunks(
++            api,
++            sessionId,
++            'usersDb',
++            usersDb,
++            init.chunkSizeBytes,
++            onProgress,
++            options
++        );
++
++        return await completeEmbyUpload(api, sessionId, options);
++    } catch (err) {
++        if (sessionId) {
++            try {
++                await discardEmbyImportSession(api, sessionId, options);
++            } catch {
++                // Best-effort cleanup; surface the original upload error.
++            }
++        }
++        throw err;
++    }
 +};
 +
 +export const previewEmbyImport = async (
@@ -163,14 +281,15 @@ index 0000000000..0c6fa26750
 +};
 diff --git a/src/apps/dashboard/features/embyImport/api/useEmbyImport.ts b/src/apps/dashboard/features/embyImport/api/useEmbyImport.ts
 new file mode 100644
-index 0000000000..54fd78e9be
+index 0000000000..9221137833
 --- /dev/null
 +++ b/src/apps/dashboard/features/embyImport/api/useEmbyImport.ts
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,67 @@
 +import { useMutation } from '@tanstack/react-query';
 +
 +import { useApi } from 'hooks/useApi';
 +
++import type { EmbyUploadProgress } from '../types';
 +import {
 +    discardEmbyImportSession,
 +    executeEmbyImport,
@@ -182,8 +301,15 @@ index 0000000000..54fd78e9be
 +    const { api } = useApi();
 +
 +    return useMutation({
-+        mutationFn: ({ libraryDb, usersDb }: { libraryDb: File; usersDb: File }) =>
-+            uploadEmbyDatabases(api!, libraryDb, usersDb)
++        mutationFn: ({
++            libraryDb,
++            usersDb,
++            onProgress
++        }: {
++            libraryDb: File;
++            usersDb: File;
++            onProgress?: (progress: EmbyUploadProgress) => void;
++        }) => uploadEmbyDatabases(api!, libraryDb, usersDb, onProgress)
 +    });
 +};
 +
@@ -228,14 +354,19 @@ index 0000000000..54fd78e9be
 +};
 diff --git a/src/apps/dashboard/features/embyImport/types.ts b/src/apps/dashboard/features/embyImport/types.ts
 new file mode 100644
-index 0000000000..52c035a983
+index 0000000000..4d3cf2a9a6
 --- /dev/null
 +++ b/src/apps/dashboard/features/embyImport/types.ts
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,38 @@
 +export interface EmbyUserInfo {
 +    id: number;
 +    name: string;
 +    userDataCount: number;
++}
++
++export interface EmbyImportUploadInitResponse {
++    sessionId: string;
++    chunkSizeBytes: number;
 +}
 +
 +export interface EmbyImportUploadResponse {
@@ -257,6 +388,14 @@ index 0000000000..52c035a983
 +    counts: EmbyImportCounts;
 +    warning?: string | null;
 +}
++
++export type EmbyUploadFileKind = 'libraryDb' | 'usersDb';
++
++export interface EmbyUploadProgress {
++    file: EmbyUploadFileKind;
++    chunkIndex: number;
++    totalChunks: number;
++}
 diff --git a/src/apps/dashboard/routes/_asyncRoutes.ts b/src/apps/dashboard/routes/_asyncRoutes.ts
 index 4f82b508b7..325219dd38 100644
 --- a/src/apps/dashboard/routes/_asyncRoutes.ts
@@ -270,10 +409,10 @@ index 4f82b508b7..325219dd38 100644
  ];
 diff --git a/src/apps/dashboard/routes/users/import-emby.tsx b/src/apps/dashboard/routes/users/import-emby.tsx
 new file mode 100644
-index 0000000000..5fec006c04
+index 0000000000..52b8c9f6ff
 --- /dev/null
 +++ b/src/apps/dashboard/routes/users/import-emby.tsx
-@@ -0,0 +1,407 @@
+@@ -0,0 +1,423 @@
 +import Alert from '@mui/material/Alert';
 +import Box from '@mui/material/Box';
 +import Button from '@mui/material/Button';
@@ -306,6 +445,7 @@ index 0000000000..5fec006c04
 +import type {
 +    EmbyImportCounts,
 +    EmbyImportResponse,
++    EmbyUploadProgress,
 +    EmbyUserInfo
 +} from 'apps/dashboard/features/embyImport/types';
 +import { useUsers } from 'hooks/useUsers';
@@ -339,6 +479,7 @@ index 0000000000..5fec006c04
 +    const [ preview, setPreview ] = useState<EmbyImportResponse | null>(null);
 +    const [ result, setResult ] = useState<EmbyImportResponse | null>(null);
 +    const [ error, setError ] = useState<string | null>(null);
++    const [ uploadProgress, setUploadProgress ] = useState<EmbyUploadProgress | null>(null);
 +
 +    const targetUser = useMemo(
 +        () => users?.find(u => u.Id === targetUserId),
@@ -376,10 +517,16 @@ index 0000000000..5fec006c04
 +        setError(null);
 +        setResult(null);
 +        setPreview(null);
++        setUploadProgress(null);
 +        uploadMutation.mutate(
-+            { libraryDb: libraryFile, usersDb: usersFile },
++            {
++                libraryDb: libraryFile,
++                usersDb: usersFile,
++                onProgress: setUploadProgress
++            },
 +            {
 +                onSuccess: (data) => {
++                    setUploadProgress(null);
 +                    if (!data.sessionId) {
 +                        setError(globalize.translate('EmbyImportUploadFailed'));
 +                        return;
@@ -399,6 +546,7 @@ index 0000000000..5fec006c04
 +                    );
 +                },
 +                onError: (err: unknown) => {
++                    setUploadProgress(null);
 +                    setError(extractError(err, globalize.translate('EmbyImportUploadFailed')));
 +                }
 +            }
@@ -532,7 +680,14 @@ index 0000000000..5fec006c04
 +                            onClick={handleUpload}
 +                        >
 +                            {uploadMutation.isPending
-+                                ? globalize.translate('EmbyImportUploading')
++                                ? (uploadProgress
++                                    ? globalize.translate(
++                                        'EmbyImportUploadingFile',
++                                        uploadProgress.file === 'libraryDb' ? 'library.db' : 'users.db',
++                                        String(uploadProgress.chunkIndex),
++                                        String(uploadProgress.totalChunks)
++                                    )
++                                    : globalize.translate('EmbyImportUploading'))
 +                                : globalize.translate('EmbyImportUpload')}
 +                        </Button>
 +                    </Stack>
@@ -700,7 +855,7 @@ index 17708f4cac..226df0303c 100644
                          </div>
  
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 53da82e789..93e701966a 100755
+index 53da82e789..c13f3d48f2 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
 @@ -585,6 +585,7 @@
@@ -711,7 +866,7 @@ index 53da82e789..93e701966a 100755
      "HeaderUserAdminMerge": "Merge users",
      "HeaderUsers": "Users",
      "HeaderVideoAdvanced": "Video Advanced",
-@@ -1475,6 +1476,34 @@
+@@ -1475,6 +1476,35 @@
      "UserAdminModeMerge": "Full merge (delete source)",
      "UserAdminModeMoveUserData": "Move UserData only",
      "UserAdminPreview": "Preview",
@@ -740,6 +895,7 @@ index 53da82e789..93e701966a 100755
 +    "EmbyImportUpload": "Upload databases",
 +    "EmbyImportUploadFailed": "Upload failed.",
 +    "EmbyImportUploading": "Uploading…",
++    "EmbyImportUploadingFile": "Uploading {0} ({1}/{2})…",
 +    "EmbyImportUploadStep": "Upload Emby databases",
 +    "EmbyImportUserOption": "{0} ({1} rows)",
 +    "EmbyImportUsersSelected": "users.db: {0}",
