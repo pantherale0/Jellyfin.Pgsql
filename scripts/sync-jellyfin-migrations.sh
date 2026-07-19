@@ -31,7 +31,7 @@ Usage: $(basename "$0") [OPTIONS]
 Sync PostgreSQL EF migrations with a Jellyfin release.
 
 Options:
-  --version VERSION   Target Jellyfin version (default: latest release)
+  --version VERSION   Target Jellyfin version (default: latest release, including pre-releases)
   --force             Run sync even if state appears up to date
   --dry-run           Detect drift and report without making changes
   -h, --help          Show this help
@@ -88,7 +88,13 @@ read_state() {
 }
 
 fetch_latest_release() {
-    gh api repos/jellyfin/jellyfin/releases/latest -q '.tag_name' | sed 's/^v//'
+    # /releases/latest excludes pre-releases; list all non-draft tags and take the
+    # highest by version sort so RCs (e.g. 12.0-rc2) win over older stables.
+    gh api repos/jellyfin/jellyfin/releases --paginate \
+        -q '.[] | select(.draft == false) | .tag_name' \
+        | sed 's/^v//' \
+        | sort -V \
+        | tail -n1
 }
 
 fetch_core_migrations() {
