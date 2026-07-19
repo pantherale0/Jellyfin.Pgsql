@@ -169,6 +169,69 @@ public sealed class SeerrParentalFilter
     }
 
     /// <summary>
+    /// Discovers Seerr titles and applies parental filtering for restricted users.
+    /// </summary>
+    /// <param name="user">Authenticated Jellyfin user.</param>
+    /// <param name="mediaType"><c>movie</c> or <c>tv</c>.</param>
+    /// <param name="genreIds">TMDB genre ids.</param>
+    /// <param name="voteAverageGte">Optional vote-average floor.</param>
+    /// <param name="limit">Max requestable items.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Filtered discover items.</returns>
+    public async Task<IReadOnlyList<SeerrSearchItem>> DiscoverForUserAsync(
+        User user,
+        string mediaType,
+        IReadOnlyList<int> genreIds,
+        float? voteAverageGte,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        limit = Math.Clamp(limit <= 0 ? 16 : limit, 1, 24);
+
+        if (!NeedsFiltering(user))
+        {
+            return await _client
+                .DiscoverAsync(mediaType, genreIds, voteAverageGte, limit, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var allowed = new List<SeerrSearchItem>(limit);
+        for (var page = 1; page <= MaxBackfillPages && allowed.Count < limit; page++)
+        {
+            var candidates = await _client
+                .DiscoverPageAsync(mediaType, genreIds, voteAverageGte, page, cancellationToken)
+                .ConfigureAwait(false);
+            if (candidates.Count == 0)
+            {
+                break;
+            }
+
+            var needsDetail = candidates.Where(c => c.Item.CanRequest && !c.Adult).ToList();
+            if (needsDetail.Count == 0)
+            {
+                continue;
+            }
+
+            var ratingTasks = needsDetail
+                .Select(c => _client.GetMediaRatingAsync(c.Item.MediaType, c.Item.MediaId, cancellationToken))
+                .ToArray();
+            var ratings = await Task.WhenAll(ratingTasks).ConfigureAwait(false);
+
+            for (var i = 0; i < needsDetail.Count && allowed.Count < limit; i++)
+            {
+                var candidate = needsDetail[i];
+                var rating = ratings[i];
+                if (IsContentAllowed(user, candidate.Item.MediaType, rating, _localization))
+                {
+                    allowed.Add(candidate.Item);
+                }
+            }
+        }
+
+        return allowed;
+    }
+
+    /// <summary>
     /// Returns whether the user may request the given title.
     /// </summary>
     /// <param name="user">Authenticated Jellyfin user.</param>

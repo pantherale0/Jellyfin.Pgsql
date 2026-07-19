@@ -1,0 +1,458 @@
+--- a/src/components/homesections/sections/beyondYourLibrary.ts
++++ b/src/components/homesections/sections/beyondYourLibrary.ts
+@@ -0,0 +1,272 @@
++import type { ApiClient } from 'jellyfin-apiclient';
++
++import toast from 'components/toast/toast';
++import {
++    CamelCaseAccept,
++    fetchSeerrDiscover,
++    fetchSeerrStatus,
++    requestSeerrMedia
++} from 'lib/seerr/seerrApi';
++import {
++    getSeerrSearchItems,
++    isSeerrEnabled,
++    type NormalizedSeerrSearchItem
++} from 'lib/seerr/seerrTypes';
++import { mapGenreLabelsToTmdbIds } from 'lib/seerr/tmdbGenres';
++import globalize from 'lib/globalize';
++
++import type { SectionOptions } from './section';
++
++import './beyondYourLibrary.scss';
++
++type DiscoverMediaType = 'movie' | 'tv';
++
++type TasteWeight = {
++    label?: string;
++    Label?: string;
++    weight?: number;
++    Weight?: number;
++};
++
++type TasteProfileResponse = {
++    hasProfile?: boolean;
++    HasProfile?: boolean;
++    genres?: TasteWeight[];
++    Genres?: TasteWeight[];
++    ratingP25?: number | null;
++    RatingP25?: number | null;
++};
++
++type Personalization = {
++    genreIds: number[];
++    voteAverageGte?: number;
++};
++
++function escapeHtml(value: string): string {
++    return value
++        .replace(/&/g, '&amp;')
++        .replace(/</g, '&lt;')
++        .replace(/>/g, '&gt;')
++        .replace(/"/g, '&quot;')
++        .replace(/'/g, '&#39;');
++}
++
++function itemKey(item: NormalizedSeerrSearchItem): string {
++    return `${item.mediaType}:${item.mediaId}`;
++}
++
++async function fetchTastePersonalization(apiClient: ApiClient): Promise<Personalization> {
++    const userId = apiClient.getCurrentUserId();
++    try {
++        const profile = await apiClient.ajax({
++            type: 'GET',
++            url: apiClient.getUrl(`Pgsql/Taste/Users/${userId}`),
++            dataType: 'json',
++            headers: { accept: CamelCaseAccept }
++        }) as TasteProfileResponse;
++
++        const hasProfile = !!(profile?.hasProfile ?? profile?.HasProfile);
++        if (!hasProfile) {
++            return { genreIds: [] };
++        }
++
++        const genres = [...(profile.genres ?? profile.Genres ?? [])]
++            .map((g) => ({
++                label: g.label ?? g.Label ?? '',
++                weight: g.weight ?? g.Weight ?? 0
++            }))
++            .filter((g) => g.label)
++            .sort((a, b) => b.weight - a.weight);
++
++        const genreIds = mapGenreLabelsToTmdbIds(genres.map((g) => g.label), 5);
++        const ratingP25 = profile.ratingP25 ?? profile.RatingP25;
++        const voteAverageGte = typeof ratingP25 === 'number' && ratingP25 > 0
++            ? Math.min(10, Math.max(0, ratingP25))
++            : undefined;
++
++        return { genreIds, voteAverageGte };
++    } catch {
++        return { genreIds: [] };
++    }
++}
++
++function renderCardHtml(item: NormalizedSeerrSearchItem): string {
++    const key = itemKey(item);
++    const mediaLabel = item.mediaType === 'tv'
++        ? globalize.translate('Series')
++        : globalize.translate('Movie');
++    const meta = [item.year, mediaLabel].filter(Boolean).join(' · ');
++    const poster = item.posterUrl
++        ? `<img src="${escapeHtml(item.posterUrl)}" alt="" loading="lazy" />`
++        : '<div class="beyondYourLibraryPosterPlaceholder"></div>';
++
++    return `
++        <div class="beyondYourLibraryCard" data-seerr-key="${escapeHtml(key)}" data-media-type="${escapeHtml(String(item.mediaType))}" data-media-id="${item.mediaId}">
++            <div class="beyondYourLibraryPoster">${poster}</div>
++            <div class="beyondYourLibraryTitle">${escapeHtml(item.title)}</div>
++            ${meta ? `<div class="beyondYourLibraryMeta secondaryText">${escapeHtml(meta)}</div>` : ''}
++            <button type="button" class="emby-button raised button-submit beyondYourLibraryRequest" data-title="${escapeHtml(item.title)}">
++                ${globalize.translate('ButtonRequest')}
++            </button>
++        </div>
++    `;
++}
++
++function wireRequestButtons(row: HTMLElement, apiClient: ApiClient) {
++    const buttons = row.querySelectorAll<HTMLButtonElement>('.beyondYourLibraryRequest');
++    for (const button of buttons) {
++        button.addEventListener('click', () => {
++            void onRequestClick(button, apiClient);
++        });
++    }
++}
++
++async function onRequestClick(button: HTMLButtonElement, apiClient: ApiClient) {
++    const card = button.closest<HTMLElement>('.beyondYourLibraryCard');
++    if (!card || button.disabled) {
++        return;
++    }
++
++    const mediaType = card.dataset.mediaType;
++    const mediaId = Number(card.dataset.mediaId);
++    const title = button.dataset.title || 'Untitled';
++    if (!mediaType || !Number.isFinite(mediaId) || mediaId <= 0) {
++        return;
++    }
++
++    button.disabled = true;
++    button.textContent = globalize.translate('SeerrRequesting');
++
++    try {
++        await requestSeerrMedia(apiClient, mediaType, mediaId);
++        button.textContent = globalize.translate('SeerrRequested');
++        toast(globalize.translate('SeerrRequestSuccess', title));
++    } catch (err: unknown) {
++        button.disabled = false;
++        button.textContent = globalize.translate('ButtonRequest');
++
++        let message = globalize.translate('SeerrRequestFailed');
++        const response = err as { responseText?: string };
++        if (response?.responseText) {
++            try {
++                const parsed = JSON.parse(response.responseText) as {
++                    message?: string;
++                    Message?: string;
++                };
++                message = parsed.message || parsed.Message || message;
++            } catch {
++                // Keep default message.
++            }
++        }
++
++        toast(message);
++    }
++}
++
++async function renderDiscoverRow(
++    elem: HTMLElement,
++    apiClient: ApiClient,
++    titleKey: string,
++    mediaType: DiscoverMediaType,
++    personalization: Personalization,
++    options: SectionOptions
++) {
++    const limit = options.enableOverflow ? 24 : 16;
++    let items: NormalizedSeerrSearchItem[] = [];
++
++    try {
++        const data = await fetchSeerrDiscover(apiClient, {
++            mediaType,
++            genreIds: personalization.genreIds,
++            voteAverageGte: personalization.voteAverageGte,
++            limit
++        });
++        items = getSeerrSearchItems(data).filter((item) => item.canRequest && item.mediaId > 0);
++    } catch {
++        items = [];
++    }
++
++    if (!items.length) {
++        elem.classList.add('hide');
++        elem.innerHTML = '';
++        return;
++    }
++
++    elem.classList.remove('hide');
++
++    let html = '';
++    html += '<div class="sectionTitleContainer sectionTitleContainer-cards padded-left">';
++    html += '<h2 class="sectionTitle sectionTitle-cards">';
++    html += globalize.translate(titleKey);
++    html += '</h2>';
++    html += '</div>';
++
++    const scrollerClass = options.enableOverflow
++        ? 'beyondYourLibraryScroller padded-left padded-right padded-top-focusscale padded-bottom-focusscale'
++        : 'beyondYourLibraryScroller padded-left padded-right vertical-wrap';
++
++    html += `<div class="${scrollerClass} focuscontainer-x">`;
++    html += items.map(renderCardHtml).join('');
++    html += '</div>';
++
++    elem.innerHTML = html;
++    wireRequestButtons(elem, apiClient);
++}
++
++/**
++ * Loads Beyond Your Library movie/show rows from Seerr discover + taste genres.
++ */
++export async function loadBeyondYourLibrary(
++    elem: HTMLElement,
++    apiClient: ApiClient,
++    options: SectionOptions
++) {
++    elem.classList.remove('verticalSection');
++    elem.innerHTML = '';
++
++    try {
++        const status = await fetchSeerrStatus(apiClient);
++        if (!isSeerrEnabled(status)) {
++            elem.classList.add('hide');
++            return;
++        }
++    } catch {
++        elem.classList.add('hide');
++        return;
++    }
++
++    elem.classList.remove('hide');
++
++    const moviesFrag = document.createElement('div');
++    moviesFrag.classList.add('verticalSection', 'hide');
++    elem.appendChild(moviesFrag);
++
++    const showsFrag = document.createElement('div');
++    showsFrag.classList.add('verticalSection', 'hide');
++    elem.appendChild(showsFrag);
++
++    const personalization = await fetchTastePersonalization(apiClient);
++
++    await Promise.all([
++        renderDiscoverRow(
++            moviesFrag,
++            apiClient,
++            'HeaderBeyondYourLibraryMovies',
++            'movie',
++            personalization,
++            options
++        ),
++        renderDiscoverRow(
++            showsFrag,
++            apiClient,
++            'HeaderBeyondYourLibraryShows',
++            'tv',
++            personalization,
++            options
++        )
++    ]);
++
++    if (moviesFrag.classList.contains('hide') && showsFrag.classList.contains('hide')) {
++        elem.classList.add('hide');
++    }
++}
+--- a/src/components/homesections/sections/beyondYourLibrary.scss
++++ b/src/components/homesections/sections/beyondYourLibrary.scss
+@@ -0,0 +1,55 @@
++.beyondYourLibraryScroller {
++    display: flex;
++    flex-direction: row;
++    gap: 0.85rem;
++    overflow-x: auto;
++    padding-bottom: 0.35rem;
++}
++
++.beyondYourLibraryCard {
++    flex: 0 0 auto;
++    width: 8.5rem;
++    display: flex;
++    flex-direction: column;
++    gap: 0.4rem;
++}
++
++.beyondYourLibraryPoster {
++    width: 8.5rem;
++    height: 12.75rem;
++    overflow: hidden;
++    border-radius: 0.25rem;
++    background: rgba(255, 255, 255, 0.08);
++}
++
++.beyondYourLibraryPoster img {
++    width: 100%;
++    height: 100%;
++    object-fit: cover;
++    display: block;
++}
++
++.beyondYourLibraryPosterPlaceholder {
++    width: 100%;
++    height: 100%;
++}
++
++.beyondYourLibraryTitle {
++    font-weight: 600;
++    font-size: 0.92em;
++    line-height: 1.25;
++    display: -webkit-box;
++    -webkit-line-clamp: 2;
++    -webkit-box-orient: vertical;
++    overflow: hidden;
++    min-height: 2.5em;
++}
++
++.beyondYourLibraryMeta {
++    font-size: 0.85em;
++}
++
++.beyondYourLibraryCard .emby-button {
++    width: 100%;
++    margin: 0;
++}
+--- a/src/constants/homeSectionType.ts
++++ b/src/constants/homeSectionType.ts
+@@ -11,7 +11,8 @@
+     NextUp = 'nextup',
+     LiveTv = 'livetv',
+     ResumeBook = 'resumebook',
+-    ForYou = 'foryou'
++    ForYou = 'foryou',
++    BeyondYourLibrary = 'beyondyourlibrary'
+ }
+ 
+ // NOTE: This needs to match the server defaults
+--- a/src/components/homesections/homesections.js
++++ b/src/components/homesections/homesections.js
+@@ -7,6 +7,7 @@
+ import { queryClient } from 'utils/query/queryClient';
+ 
+ import { loadRecordings } from './sections/activeRecordings';
++import { loadBeyondYourLibrary } from './sections/beyondYourLibrary';
+ import { loadForYou } from './sections/forYou';
+ import { loadLibraryButtons } from './sections/libraryButtons';
+ import { loadLibraryTiles } from './sections/libraryTiles';
+@@ -149,6 +150,8 @@
+         case HomeSectionType.ForYou:
+             loadForYou(elem, apiClient, options);
+             break;
++        case HomeSectionType.BeyondYourLibrary:
++            return loadBeyondYourLibrary(elem, apiClient, options);
+         case HomeSectionType.LatestMedia:
+             loadRecentlyAdded(elem, apiClient, user, userViews, options);
+             break;
+--- a/src/components/homeScreenSettings/homeScreenSettings.template.html
++++ b/src/components/homeScreenSettings/homeScreenSettings.template.html
+@@ -22,6 +22,7 @@
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -37,6 +38,7 @@
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -52,6 +54,7 @@
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -67,6 +70,7 @@
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -82,6 +86,7 @@
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -97,6 +102,7 @@
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -112,6 +118,7 @@
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -127,6 +134,7 @@
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -142,6 +150,7 @@
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -157,6 +166,7 @@
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -460,6 +460,9 @@
+     "HeaderFetcherSettings": "Fetcher Settings",
+     "HeaderFetchImages": "Fetch Images",
+     "HeaderForKids": "For Kids",
++    "HeaderBeyondYourLibrary": "Beyond Your Library",
++    "HeaderBeyondYourLibraryMovies": "Beyond Your Library Movies",
++    "HeaderBeyondYourLibraryShows": "Beyond Your Library Shows",
+     "HeaderForYou": "For You",
+     "HeaderForYouMovies": "For You Movies",
+     "HeaderForYouShows": "For You Shows",

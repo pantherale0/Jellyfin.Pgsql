@@ -110,6 +110,64 @@ public sealed class SeerrController : ControllerBase
     }
 
     /// <summary>
+    /// Discovers requestable Seerr titles, optionally filtered by TMDB genres.
+    /// </summary>
+    /// <param name="mediaType"><c>movie</c> or <c>tv</c>.</param>
+    /// <param name="genreIds">Comma-separated TMDB genre ids (max 5).</param>
+    /// <param name="voteAverageGte">Optional vote-average floor.</param>
+    /// <param name="limit">Max items to return (1–24).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Requestable discover items.</returns>
+    [HttpGet("Discover")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<ActionResult<SeerrSearchResponse>> Discover(
+        [FromQuery, Required] string mediaType,
+        [FromQuery] string? genreIds,
+        [FromQuery] float? voteAverageGte,
+        [FromQuery] int limit = 16,
+        CancellationToken cancellationToken = default)
+    {
+        var jellyfinUser = GetAuthenticatedUser();
+        if (jellyfinUser is null)
+        {
+            return Unauthorized();
+        }
+
+        if (!SeerrClient.IsConfigured())
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = "Seerr gateway is not enabled." });
+        }
+
+        var normalizedType = SeerrClient.NormalizeDiscoverMediaType(mediaType);
+        if (normalizedType is null)
+        {
+            return BadRequest(new { message = "mediaType must be 'movie' or 'tv'." });
+        }
+
+        try
+        {
+            var parsedGenres = SeerrClient.ParseGenreIds(genreIds);
+            var items = await _parentalFilter
+                .DiscoverForUserAsync(
+                    jellyfinUser,
+                    normalizedType,
+                    parsedGenres,
+                    voteAverageGte,
+                    limit,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return Ok(new SeerrSearchResponse { Items = items });
+        }
+        catch (SeerrApiException ex)
+        {
+            return StatusCode(MapStatusCode(ex.StatusCode), new { message = ex.Message });
+        }
+    }
+
+    /// <summary>
     /// Creates a Seerr request on behalf of the authenticated Jellyfin user.
     /// </summary>
     /// <param name="body">Request payload.</param>
