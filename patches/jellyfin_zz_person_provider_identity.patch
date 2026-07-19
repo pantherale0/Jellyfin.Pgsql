@@ -1,0 +1,1312 @@
+diff --git a/Emby.Server.Implementations/Dto/DtoService.cs b/Emby.Server.Implementations/Dto/DtoService.cs
+index 3cd72a8..c8d886a 100644
+--- a/Emby.Server.Implementations/Dto/DtoService.cs
++++ b/Emby.Server.Implementations/Dto/DtoService.cs
+@@ -773,60 +773,55 @@ namespace Emby.Server.Implementations.Dto
+ 
+             var list = new List<BaseItemPerson>();
+ 
+-            Dictionary<string, Person> dictionary = people.Select(p => p.Name)
+-                .Distinct(StringComparer.OrdinalIgnoreCase).Select(c =>
+-                {
+-                    try
+-                    {
+-                        return _libraryManager.GetPerson(c);
+-                    }
+-                    catch (Exception ex)
+-                    {
+-                        _logger.LogError(ex, "Error getting person {Name}", c);
+-                        return null;
+-                    }
+-                }).Where(i => i is not null)
+-                .Where(i => user is null || i!.IsVisible(user))
+-                .DistinctBy(x => x!.Name, StringComparer.OrdinalIgnoreCase)
+-                .ToDictionary(i => i!.Name, StringComparer.OrdinalIgnoreCase)!; // null values got filtered out
+-
+             for (var i = 0; i < people.Count; i++)
+             {
+                 var person = people[i];
++                Person? entity;
++                try
++                {
++                    entity = _libraryManager.GetPerson(person);
++                }
++                catch (Exception ex)
++                {
++                    _logger.LogError(ex, "Error getting person {Name}", person.Name);
++                    continue;
++                }
++
++                if (entity is null || (user is not null && !entity.IsVisible(user)))
++                {
++                    continue;
++                }
+ 
+                 var baseItemPerson = new BaseItemPerson
+                 {
+                     Name = person.Name,
+                     Role = person.Role,
+-                    Type = person.Type
++                    Type = person.Type,
++                    Id = entity.Id,
++                    PrimaryImageTag = GetTagAndFillBlurhash(dto, entity, ImageType.Primary)
+                 };
+ 
+-                if (dictionary.TryGetValue(person.Name, out Person? entity))
++                if (dto.ImageBlurHashes is not null)
+                 {
+-                    baseItemPerson.PrimaryImageTag = GetTagAndFillBlurhash(dto, entity, ImageType.Primary);
+-                    baseItemPerson.Id = entity.Id;
+-                    if (dto.ImageBlurHashes is not null)
++                    // Only add BlurHash for the person's image.
++                    baseItemPerson.ImageBlurHashes = [];
++                    foreach (var (imageType, blurHash) in dto.ImageBlurHashes)
+                     {
+-                        // Only add BlurHash for the person's image.
+-                        baseItemPerson.ImageBlurHashes = [];
+-                        foreach (var (imageType, blurHash) in dto.ImageBlurHashes)
++                        if (blurHash is not null)
+                         {
+-                            if (blurHash is not null)
++                            baseItemPerson.ImageBlurHashes[imageType] = [];
++                            foreach (var (imageId, blurHashValue) in blurHash)
+                             {
+-                                baseItemPerson.ImageBlurHashes[imageType] = [];
+-                                foreach (var (imageId, blurHashValue) in blurHash)
++                                if (string.Equals(baseItemPerson.PrimaryImageTag, imageId, StringComparison.OrdinalIgnoreCase))
+                                 {
+-                                    if (string.Equals(baseItemPerson.PrimaryImageTag, imageId, StringComparison.OrdinalIgnoreCase))
+-                                    {
+-                                        baseItemPerson.ImageBlurHashes[imageType][imageId] = blurHashValue;
+-                                    }
++                                    baseItemPerson.ImageBlurHashes[imageType][imageId] = blurHashValue;
+                                 }
+                             }
+                         }
+                     }
+-
+-                    list.Add(baseItemPerson);
+                 }
++
++                list.Add(baseItemPerson);
+             }
+ 
+             dto.People = list.ToArray();
+diff --git a/Emby.Server.Implementations/Library/LibraryManager.cs b/Emby.Server.Implementations/Library/LibraryManager.cs
+index b672df6..a7b5fbf 100644
+--- a/Emby.Server.Implementations/Library/LibraryManager.cs
++++ b/Emby.Server.Implementations/Library/LibraryManager.cs
+@@ -1204,6 +1204,53 @@ namespace Emby.Server.Implementations.Library
+             return null;
+         }
+ 
++        /// <inheritdoc />
++        public Person? GetPerson(PersonInfo person)
++        {
++            ArgumentNullException.ThrowIfNull(person);
++
++            if (PersonIdentity.TryGetProviderKey(person, out var providerKey) && !string.IsNullOrEmpty(providerKey)
++                && PersonIdentity.TryParseProviderKey(providerKey, out var providerName, out var providerValue))
++            {
++                var byProvider = GetItemList(new InternalItemsQuery
++                {
++                    IncludeItemTypes = [BaseItemKind.Person],
++                    HasAnyProviderIds = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
++                    {
++                        [providerName] = [providerValue]
++                    },
++                    Limit = 1,
++                    DtoOptions = new DtoOptions(true)
++                }).OfType<Person>().FirstOrDefault();
++
++                if (byProvider is not null)
++                {
++                    return byProvider;
++                }
++
++                var providerPath = Person.GetPath(person.Name, providerKey);
++                var providerPathId = GetItemByNameId<Person>(providerPath);
++                if (GetItemById(providerPathId) is Person providerPerson)
++                {
++                    return providerPerson;
++                }
++            }
++
++            var legacy = string.IsNullOrEmpty(person.Name) ? null : GetPerson(person.Name);
++            if (legacy is null)
++            {
++                return null;
++            }
++
++            // Name match only when the existing person does not belong to a different provider identity.
++            if (PersonIdentity.HasConflictingProviderIds(legacy.ProviderIds, person.ProviderIds))
++            {
++                return null;
++            }
++
++            return legacy;
++        }
++
+         /// <summary>
+         /// Gets the studio.
+         /// </summary>
+@@ -3455,7 +3502,7 @@ namespace Emby.Server.Implementations.Library
+                 {
+                     try
+                     {
+-                        return GetPerson(i.Name);
++                        return GetPerson(i);
+                     }
+                     catch (Exception ex)
+                     {
+@@ -3466,6 +3513,7 @@ namespace Emby.Server.Implementations.Library
+                 .Where(i => i is not null)
+                 .Where(i => query.User is null || i!.IsVisible(query.User))
+                 .OfType<BaseItem>()
++                .DistinctBy(i => i.Id)
+                 .ToList()
+                 .AsReadOnly();
+ 
+@@ -3620,7 +3668,6 @@ namespace Emby.Server.Implementations.Library
+         private async Task SavePeopleMetadataAsync(IEnumerable<PersonInfo> people, CancellationToken cancellationToken)
+         {
+             var peopleList = people.ToList();
+-            var peopleByName = GetPersonsByNames(peopleList.Select(p => p.Name).ToList());
+ 
+             foreach (var person in peopleList)
+             {
+@@ -3629,16 +3676,14 @@ namespace Emby.Server.Implementations.Library
+                 var itemUpdateType = ItemUpdateType.MetadataDownload;
+                 var saveEntity = false;
+                 var createEntity = false;
+-                if (!peopleByName.TryGetValue(person.Name, out var personEntity))
+-                {
+-                    personEntity = null;
+-                }
++                PersonIdentity.TryGetProviderKey(person, out var providerKey);
++                var personEntity = GetPerson(person);
+ 
+                 if (personEntity is null)
+                 {
+                     try
+                     {
+-                        var path = Person.GetPath(person.Name);
++                        var path = Person.GetPath(person.Name, providerKey);
+                         var info = Directory.CreateDirectory(path);
+                         personEntity = new Person()
+                         {
+@@ -3662,11 +3707,22 @@ namespace Emby.Server.Implementations.Library
+ 
+                 foreach (var id in person.ProviderIds)
+                 {
+-                    if (!string.Equals(personEntity.GetProviderId(id.Key), id.Value, StringComparison.OrdinalIgnoreCase))
++                    var existingValue = personEntity.GetProviderId(id.Key);
++                    if (string.IsNullOrEmpty(existingValue))
+                     {
+                         personEntity.SetProviderId(id.Key, id.Value);
+                         saveEntity = true;
+                     }
++                    else if (!string.Equals(existingValue, id.Value, StringComparison.OrdinalIgnoreCase))
++                    {
++                        // Never overwrite a provider id with a conflicting value (same-name different people).
++                        _logger.LogDebug(
++                            "Skipping conflicting {Provider} id for person {Name}: existing {Existing}, incoming {Incoming}",
++                            id.Key,
++                            person.Name,
++                            existingValue,
++                            id.Value);
++                    }
+                 }
+ 
+                 if (!string.IsNullOrWhiteSpace(person.ImageUrl) && !personEntity.HasImage(ImageType.Primary))
+diff --git a/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs b/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
+index 15d6790..77d7f1b 100644
+--- a/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
++++ b/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
+@@ -49,12 +49,11 @@ public class PeopleValidator
+     /// <returns>Task.</returns>
+     public async Task ValidatePeople(CancellationToken cancellationToken, IProgress<double> progress)
+     {
+-        var people = _libraryManager.GetPeopleNames(new InternalPeopleQuery());
++        var people = _libraryManager.GetPeople(new InternalPeopleQuery());
+ 
+         var numComplete = 0;
+ 
+         var numPeople = people.Count;
+-        var peopleByName = _libraryManager.GetPersonsByNames(people);
+ 
+         IProgress<double> subProgress = new Progress<double>((val) => progress.Report(val / 2));
+ 
+@@ -66,14 +65,11 @@ public class PeopleValidator
+ 
+             try
+             {
+-                if (!peopleByName.TryGetValue(person, out var item))
+-                {
+-                    item = _libraryManager.GetPerson(person);
+-                }
++                var item = _libraryManager.GetPerson(person);
+ 
+                 if (item is null)
+                 {
+-                    _logger.LogWarning("Failed to get person: {Name}", person);
++                    _logger.LogWarning("Failed to get person: {Name}", person.Name);
+                     continue;
+                 }
+ 
+diff --git a/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs b/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs
+index 3451c45..5a49a4c 100644
+--- a/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs
++++ b/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs
+@@ -87,51 +87,68 @@ public class PeopleValidationTask : IScheduledTask, IConfigurableScheduledTask
+         await using (context.ConfigureAwait(false))
+         {
+             IProgress<double> subProgress = new Progress<double>((val) => progress.Report(val / 2));
+-            var dupQuery = context.Peoples
++            // Only merge true duplicates for the same identity. Provider-keyed rows must never
++            // collapse with a different key (or with a different name-only person).
++            var keyedDupQuery = context.Peoples
++                    .Where(e => e.ProviderKey != null && e.ProviderKey != string.Empty)
++                    .GroupBy(e => new { e.ProviderKey, e.PersonType })
++                    .Where(e => e.Count() > 1)
++                    .Select(e => e.Select(f => f.Id).ToArray());
++
++            var nameOnlyDupQuery = context.Peoples
++                    .Where(e => e.ProviderKey == null || e.ProviderKey == string.Empty)
+                     .GroupBy(e => new { e.Name, e.PersonType })
+                     .Where(e => e.Count() > 1)
+                     .Select(e => e.Select(f => f.Id).ToArray());
+ 
+-            var total = dupQuery.Count();
++            var total = keyedDupQuery.Count() + nameOnlyDupQuery.Count();
++            var merged = 0;
+ 
+-            const int PartitionSize = 100;
+-            var iterator = 0;
+-            int itemCounter;
+-            var buffer = ArrayPool<Guid[]>.Shared.Rent(PartitionSize)!;
+-            try
++            async Task MergeDuplicatesAsync(IQueryable<Guid[]> dupQuery)
+             {
+-                do
++                const int PartitionSize = 100;
++                int itemCounter;
++                var buffer = ArrayPool<Guid[]>.Shared.Rent(PartitionSize)!;
++                try
+                 {
+-                    itemCounter = 0;
+-                    await foreach (var item in dupQuery
+-                        .Take(PartitionSize)
+-                        .AsAsyncEnumerable()
+-                        .WithCancellation(cancellationToken)
+-                        .ConfigureAwait(false))
+-                    {
+-                        buffer[itemCounter++] = item;
+-                    }
+-
+-                    for (int i = 0; i < itemCounter; i++)
++                    do
+                     {
+-                        var item = buffer[i];
+-                        var reference = item[0];
+-                        var dups = item[1..];
+-                        await context.PeopleBaseItemMap.WhereOneOrMany(dups, e => e.PeopleId)
+-                            .ExecuteUpdateAsync(e => e.SetProperty(f => f.PeopleId, reference), cancellationToken)
+-                            .ConfigureAwait(false);
+-                        await context.Peoples.Where(e => dups.Contains(e.Id)).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+-                        subProgress.Report(100f / total * ((iterator * PartitionSize) + i));
+-                    }
+-
+-                    iterator++;
+-                } while (itemCounter == PartitionSize && !cancellationToken.IsCancellationRequested);
+-            }
+-            finally
+-            {
+-                ArrayPool<Guid[]>.Shared.Return(buffer);
++                        itemCounter = 0;
++                        await foreach (var item in dupQuery
++                            .Take(PartitionSize)
++                            .AsAsyncEnumerable()
++                            .WithCancellation(cancellationToken)
++                            .ConfigureAwait(false))
++                        {
++                            buffer[itemCounter++] = item;
++                        }
++
++                        for (int i = 0; i < itemCounter; i++)
++                        {
++                            var item = buffer[i];
++                            var reference = item[0];
++                            var dups = item[1..];
++                            await context.PeopleBaseItemMap.WhereOneOrMany(dups, e => e.PeopleId)
++                                .ExecuteUpdateAsync(e => e.SetProperty(f => f.PeopleId, reference), cancellationToken)
++                                .ConfigureAwait(false);
++                            await context.Peoples.Where(e => dups.Contains(e.Id)).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
++                            merged++;
++                            if (total > 0)
++                            {
++                                subProgress.Report(100f / total * merged);
++                            }
++                        }
++                    } while (itemCounter == PartitionSize && !cancellationToken.IsCancellationRequested);
++                }
++                finally
++                {
++                    ArrayPool<Guid[]>.Shared.Return(buffer);
++                }
+             }
+ 
++            await MergeDuplicatesAsync(keyedDupQuery).ConfigureAwait(false);
++            await MergeDuplicatesAsync(nameOnlyDupQuery).ConfigureAwait(false);
++
+             var peopleToDelete = await context.Peoples
+                 .Where(p => !context.PeopleBaseItemMap.Any(m => m.PeopleId.Equals(p.Id)))
+                 .ExecuteDeleteAsync(cancellationToken)
+diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
+index 14719bb..150e572 100644
+--- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
++++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
+@@ -364,14 +364,29 @@ public sealed partial class BaseItemRepository
+ 
+         if (filter.PersonIds.Length > 0)
+         {
+-            var personNames = context.BaseItems
+-                .WhereOneOrMany(filter.PersonIds, b => b.Id)
+-                .Select(b => b.Name);
++            var personItemIds = filter.PersonIds;
++
++            // Prefer provider-key identity so same-name people do not share filmographies.
++            var keyedPeopleIds = context.Peoples
++                .Where(p => p.ProviderKey != null
++                    && context.BaseItemProviders.Any(bp =>
++                        personItemIds.Contains(bp.ItemId)
++                        && (bp.ProviderId == "Tmdb" || bp.ProviderId == "Imdb" || bp.ProviderId == "Tvdb")
++                        && p.ProviderKey == bp.ProviderId + ":" + bp.ProviderValue))
++                .Select(p => p.Id);
+ 
+-            var peopleEntityIds = context.Peoples
+-                .Where(p => personNames.Contains(p.Name))
++            var nameOnlyPeopleIds = context.Peoples
++                .Where(p => p.ProviderKey == null
++                    && context.BaseItems
++                        .WhereOneOrMany(personItemIds, b => b.Id)
++                        .Any(b => b.Name == p.Name
++                            && !context.BaseItemProviders.Any(bp =>
++                                bp.ItemId == b.Id
++                                && (bp.ProviderId == "Tmdb" || bp.ProviderId == "Imdb" || bp.ProviderId == "Tvdb"))))
+                 .Select(p => p.Id);
+ 
++            var peopleEntityIds = keyedPeopleIds.Union(nameOnlyPeopleIds);
++
+             baseQuery = baseQuery
+                 .Where(e => context.PeopleBaseItemMap
+                     .Any(m => m.ItemId == e.Id && peopleEntityIds.Contains(m.PeopleId)));
+diff --git a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
+index eb87b52..9dea7d7 100644
+--- a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
++++ b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
+@@ -7,6 +7,7 @@ using Jellyfin.Database.Implementations.Entities;
+ using Jellyfin.Extensions;
+ using MediaBrowser.Controller.Entities;
+ using MediaBrowser.Controller.Persistence;
++using MediaBrowser.Model.Entities;
+ using MediaBrowser.Model.Querying;
+ using Microsoft.EntityFrameworkCore;
+ 
+@@ -44,12 +45,12 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+         }
+         else
+         {
+-            // The Peoples table has one row per (Name, PersonType), so the same person can
+-            // appear multiple times (e.g. as Actor and GuestStar). Collapse to one row per
+-            // name so /Persons doesn't return the same BaseItem id repeatedly. Lowercase the
+-            // grouping key so case-only duplicates collapse together.
++            // Collapse Actor/GuestStar rows for the same identity. Prefer ProviderKey when present
++            // so two people who share a display name remain distinct.
+             var representativeIds = dbQuery
+-                .GroupBy(e => e.Name.ToLower())
++                .GroupBy(e => e.ProviderKey != null && e.ProviderKey != string.Empty
++                    ? "k:" + e.ProviderKey
++                    : "n:" + e.Name.ToLower())
+                 .Select(g => g.Min(e => e.Id));
+             dbQuery = context.Peoples.AsNoTracking()
+                 .Where(p => representativeIds.Contains(p.Id))
+@@ -103,24 +104,51 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+             person.Role = person.Role?.Trim() ?? string.Empty;
+         }
+ 
+-        // multiple metadata providers can provide the _same_ person; dedupe case-insensitively.
+-        people = people.DistinctBy(e => e.Name.ToLowerInvariant() + "-" + e.Type).ToArray();
+-        var personKeys = people.Select(e => e.Name.ToLowerInvariant() + "-" + e.Type).ToArray();
++        // Multiple metadata providers can provide the same person; prefer provider key identity.
++        people = people.DistinctBy(e =>
++        {
++            PersonIdentity.TryGetProviderKey(e, out var key);
++            return PersonIdentity.GetSelectionKey(e.Name, e.Type.ToString(), key);
++        }).ToArray();
++
++        var providerKeys = people
++            .Select(e => PersonIdentity.TryGetProviderKey(e, out var key) ? key : null)
++            .Where(k => !string.IsNullOrEmpty(k))
++            .Cast<string>()
++            .Distinct(StringComparer.OrdinalIgnoreCase)
++            .ToArray();
++
++        var nameOnlyKeys = people
++            .Where(e => !PersonIdentity.TryGetProviderKey(e, out _))
++            .Select(e => e.Name.ToLowerInvariant() + "-" + e.Type)
++            .Distinct()
++            .ToArray();
+ 
+         using var context = _dbProvider.CreateDbContext();
+         using var transaction = context.Database.BeginTransaction();
+-        var existingPersons = context.Peoples.Select(e => new
+-        {
+-            item = e,
+-            SelectionKey = e.Name.ToLower() + "-" + e.PersonType
+-        })
+-            .Where(p => personKeys.Contains(p.SelectionKey))
+-            .Select(f => f.item)
++        var existingPersons = context.Peoples
++            .Where(p =>
++                (p.ProviderKey != null && providerKeys.Contains(p.ProviderKey))
++                || (p.ProviderKey == null && nameOnlyKeys.Contains(p.Name.ToLower() + "-" + p.PersonType)))
+             .ToArray();
+ 
+-        var toAdd = people
+-            .Where(e => !existingPersons.Any(f => string.Equals(f.Name, e.Name, StringComparison.OrdinalIgnoreCase) && f.PersonType == e.Type.ToString()))
+-            .Select(Map);
++        var toAdd = new List<People>();
++        foreach (var person in people)
++        {
++            var existing = FindMatchingPerson(existingPersons.Concat(toAdd), person);
++            if (existing is null)
++            {
++                toAdd.Add(Map(person));
++                continue;
++            }
++
++            PersonIdentity.TryGetProviderKey(person, out var key);
++            if (string.IsNullOrEmpty(existing.ProviderKey) && !string.IsNullOrEmpty(key))
++            {
++                existing.ProviderKey = key;
++            }
++        }
++
+         context.Peoples.AddRange(toAdd);
+         context.SaveChanges();
+ 
+@@ -132,8 +160,10 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+ 
+         foreach (var person in people)
+         {
+-            var entityPerson = personsEntities.First(e => string.Equals(e.Name, person.Name, StringComparison.OrdinalIgnoreCase) && e.PersonType == person.Type.ToString());
+-            var existingMap = existingMaps.FirstOrDefault(e => string.Equals(e.People.Name, person.Name, StringComparison.OrdinalIgnoreCase) && e.People.PersonType == person.Type.ToString() && e.Role == person.Role);
++            var entityPerson = FindMatchingPerson(personsEntities, person)
++                ?? throw new InvalidOperationException("Failed to resolve people entity for " + person.Name);
++            var existingMap = existingMaps.FirstOrDefault(e =>
++                MatchesPerson(e.People, person) && e.Role == person.Role);
+             if (existingMap is null)
+             {
+                 context.PeopleBaseItemMap.Add(new PeopleBaseItemMap()
+@@ -201,6 +231,27 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+         return result;
+     }
+ 
++    private static People? FindMatchingPerson(IEnumerable<People> people, PersonInfo person)
++        => people.FirstOrDefault(e => MatchesPerson(e, person));
++
++    private static bool MatchesPerson(People entity, PersonInfo person)
++    {
++        var type = person.Type.ToString();
++        if (!string.Equals(entity.PersonType, type, StringComparison.Ordinal))
++        {
++            return false;
++        }
++
++        PersonIdentity.TryGetProviderKey(person, out var key);
++        if (!string.IsNullOrEmpty(key))
++        {
++            return string.Equals(entity.ProviderKey, key, StringComparison.OrdinalIgnoreCase);
++        }
++
++        return string.IsNullOrEmpty(entity.ProviderKey)
++            && string.Equals(entity.Name, person.Name, StringComparison.OrdinalIgnoreCase);
++    }
++
+     private PersonInfo Map(People people)
+     {
+         var mapping = people.BaseItems?.FirstOrDefault();
+@@ -216,16 +267,23 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+             personInfo.Type = kind;
+         }
+ 
++        if (PersonIdentity.TryParseProviderKey(people.ProviderKey, out var providerName, out var providerValue))
++        {
++            personInfo.SetProviderId(providerName, providerValue);
++        }
++
+         return personInfo;
+     }
+ 
+     private People Map(PersonInfo people)
+     {
++        PersonIdentity.TryGetProviderKey(people, out var providerKey);
+         var personInfo = new People()
+         {
+             Name = people.Name,
+             PersonType = people.Type.ToString(),
+             Id = people.Id,
++            ProviderKey = providerKey
+         };
+ 
+         return personInfo;
+diff --git a/MediaBrowser.Controller/Entities/PeopleHelper.cs b/MediaBrowser.Controller/Entities/PeopleHelper.cs
+index 24b1843..383b3ff 100644
+--- a/MediaBrowser.Controller/Entities/PeopleHelper.cs
++++ b/MediaBrowser.Controller/Entities/PeopleHelper.cs
+@@ -38,7 +38,10 @@ namespace MediaBrowser.Controller.Entities
+             // If the type is GuestStar and there's already an Actor entry, then update it to avoid dupes
+             if (person.Type == PersonKind.GuestStar)
+             {
+-                var existing = people.FirstOrDefault(p => p.Name.Equals(person.Name, StringComparison.OrdinalIgnoreCase) && p.Type == PersonKind.Actor);
++                var existing = FindExisting(
++                    people,
++                    person,
++                    p => p.Type == PersonKind.Actor);
+ 
+                 if (existing is not null)
+                 {
+@@ -51,7 +54,10 @@ namespace MediaBrowser.Controller.Entities
+             if (person.Type == PersonKind.Actor)
+             {
+                 // If the actor already exists without a role and we have one, fill it in
+-                var existing = people.FirstOrDefault(p => p.Name.Equals(person.Name, StringComparison.OrdinalIgnoreCase) && (p.Type == PersonKind.Actor || p.Type == PersonKind.GuestStar));
++                var existing = FindExisting(
++                    people,
++                    person,
++                    p => p.Type == PersonKind.Actor || p.Type == PersonKind.GuestStar);
+                 if (existing is null)
+                 {
+                     // Wasn't there - add it
+@@ -70,11 +76,12 @@ namespace MediaBrowser.Controller.Entities
+             }
+             else
+             {
+-                var existing = people.FirstOrDefault(p =>
+-                    string.Equals(p.Name, person.Name, StringComparison.OrdinalIgnoreCase)
+-                    && p.Type == person.Type);
++                var existing = FindExisting(
++                    people,
++                    person,
++                    p => p.Type == person.Type);
+ 
+-                // Check for dupes based on the combination of Name and Type
++                // Check for dupes based on identity and Type
+                 if (existing is null)
+                 {
+                     people.Add(person);
+@@ -86,6 +93,49 @@ namespace MediaBrowser.Controller.Entities
+             }
+         }
+ 
++        private static PersonInfo? FindExisting(
++            ICollection<PersonInfo> people,
++            PersonInfo person,
++            Func<PersonInfo, bool> typePredicate)
++        {
++            PersonIdentity.TryGetProviderKey(person, out var personKey);
++
++            foreach (var candidate in people.Where(typePredicate))
++            {
++                if (PersonIdentity.HasConflictingProviderIds(candidate.ProviderIds, person.ProviderIds))
++                {
++                    continue;
++                }
++
++                PersonIdentity.TryGetProviderKey(candidate, out var candidateKey);
++                if (!string.IsNullOrEmpty(personKey) || !string.IsNullOrEmpty(candidateKey))
++                {
++                    if (PersonIdentity.SharesProviderId(candidate.ProviderIds, person.ProviderIds)
++                        || (string.Equals(personKey, candidateKey, StringComparison.OrdinalIgnoreCase)
++                            && !string.IsNullOrEmpty(personKey)))
++                    {
++                        return candidate;
++                    }
++
++                    // Same display name but only one side has a provider key: merge into the keyed entry.
++                    if (candidate.Name.Equals(person.Name, StringComparison.OrdinalIgnoreCase)
++                        && (string.IsNullOrEmpty(personKey) || string.IsNullOrEmpty(candidateKey)))
++                    {
++                        return candidate;
++                    }
++
++                    continue;
++                }
++
++                if (candidate.Name.Equals(person.Name, StringComparison.OrdinalIgnoreCase))
++                {
++                    return candidate;
++                }
++            }
++
++            return null;
++        }
++
+         private static void MergeExisting(PersonInfo existing, PersonInfo person)
+         {
+             existing.SortOrder = person.SortOrder ?? existing.SortOrder;
+@@ -93,7 +143,11 @@ namespace MediaBrowser.Controller.Entities
+ 
+             foreach (var id in person.ProviderIds)
+             {
+-                existing.SetProviderId(id.Key, id.Value);
++                var current = existing.GetProviderId(id.Key);
++                if (string.IsNullOrEmpty(current))
++                {
++                    existing.SetProviderId(id.Key, id.Value);
++                }
+             }
+         }
+     }
+diff --git a/MediaBrowser.Controller/Entities/Person.cs b/MediaBrowser.Controller/Entities/Person.cs
+index 5cc4d32..9fb0bb4 100644
+--- a/MediaBrowser.Controller/Entities/Person.cs
++++ b/MediaBrowser.Controller/Entities/Person.cs
+@@ -86,12 +86,40 @@ namespace MediaBrowser.Controller.Entities
+         }
+ 
+         public static string GetPath(string name, bool normalizeName)
++        {
++            return GetPath(name, null, normalizeName);
++        }
++
++        /// <summary>
++        /// Gets the metadata path for a person, optionally disambiguated by provider key.
++        /// </summary>
++        /// <param name="name">Person display name.</param>
++        /// <param name="providerKey">Optional provider key (e.g. <c>Tmdb:1248</c>).</param>
++        /// <returns>Absolute people metadata path.</returns>
++        public static string GetPath(string name, string providerKey)
++        {
++            return GetPath(name, providerKey, true);
++        }
++
++        /// <summary>
++        /// Gets the metadata path for a person, optionally disambiguated by provider key.
++        /// </summary>
++        /// <param name="name">Person display name.</param>
++        /// <param name="providerKey">Optional provider key (e.g. <c>Tmdb:1248</c>).</param>
++        /// <param name="normalizeName">Whether to sanitize the name for the filesystem.</param>
++        /// <returns>Absolute people metadata path.</returns>
++        public static string GetPath(string name, string providerKey, bool normalizeName)
+         {
+             // Trim the period at the end because windows will have a hard time with that
+             var validFilename = normalizeName ?
+                 FileSystem.GetValidFilename(name).Trim().TrimEnd('.') :
+                 name;
+ 
++            if (!string.IsNullOrEmpty(providerKey))
++            {
++                validFilename = validFilename + " [" + PersonIdentity.GetPathSuffix(providerKey) + "]";
++            }
++
+             string subFolderPrefix = null;
+ 
+             foreach (char c in validFilename)
+@@ -112,7 +140,21 @@ namespace MediaBrowser.Controller.Entities
+ 
+         private string GetRebasedPath()
+         {
+-            return GetPath(System.IO.Path.GetFileName(Path), false);
++            var fileName = System.IO.Path.GetFileName(Path);
++            if (PersonIdentity.TryGetProviderKey(this, out var providerKey) && !string.IsNullOrEmpty(providerKey))
++            {
++                var suffix = " [" + PersonIdentity.GetPathSuffix(providerKey) + "]";
++                if (fileName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
++                {
++                    // Folder name already includes the provider suffix; do not append again.
++                    return GetPath(fileName, null, false);
++                }
++
++                // Legacy name-only folder: move onto the provider-aware path.
++                return GetPath(Name ?? fileName, providerKey, true);
++            }
++
++            return GetPath(fileName, null, false);
+         }
+ 
+         public override bool RequiresRefresh()
+diff --git a/jf-ours/MediaBrowser.Controller/Entities/PersonIdentity.cs b/MediaBrowser.Controller/Entities/PersonIdentity.cs
+new file mode 100644
+index 0000000..98f6e5e
+--- /dev/null
++++ b/MediaBrowser.Controller/Entities/PersonIdentity.cs
+@@ -0,0 +1,230 @@
++using System;
++using System.Collections.Generic;
++using System.IO;
++using MediaBrowser.Model.Entities;
++
++namespace MediaBrowser.Controller.Entities;
++
++/// <summary>
++/// Resolves stable person identity from metadata provider ids, with name-only fallback.
++/// </summary>
++public static class PersonIdentity
++{
++    private static readonly MetadataProvider[] PreferredProviders =
++    [
++        MetadataProvider.Tmdb,
++        MetadataProvider.Imdb,
++        MetadataProvider.Tvdb
++    ];
++
++    /// <summary>
++    /// Tries to get the preferred provider key for a person (e.g. <c>Tmdb:1248</c>).
++    /// </summary>
++    /// <param name="providerIds">Provider id map.</param>
++    /// <param name="providerKey">The resolved key when found.</param>
++    /// <returns><c>true</c> when a preferred provider id is present.</returns>
++    public static bool TryGetProviderKey(IReadOnlyDictionary<string, string>? providerIds, out string? providerKey)
++    {
++        providerKey = null;
++        if (providerIds is null || providerIds.Count == 0)
++        {
++            return false;
++        }
++
++        foreach (var provider in PreferredProviders)
++        {
++            var name = provider.ToString();
++            if (providerIds.TryGetValue(name, out var value)
++                && !string.IsNullOrWhiteSpace(value))
++            {
++                providerKey = FormatProviderKey(name, value);
++                return true;
++            }
++        }
++
++        // Case-insensitive fallback for dictionaries that were not created with OrdinalIgnoreCase.
++        foreach (var provider in PreferredProviders)
++        {
++            var name = provider.ToString();
++            foreach (var pair in providerIds)
++            {
++                if (string.Equals(pair.Key, name, StringComparison.OrdinalIgnoreCase)
++                    && !string.IsNullOrWhiteSpace(pair.Value))
++                {
++                    providerKey = FormatProviderKey(name, pair.Value);
++                    return true;
++                }
++            }
++        }
++
++        return false;
++    }
++
++    /// <summary>
++    /// Tries to get the preferred provider key from an <see cref="IHasProviderIds"/> instance.
++    /// </summary>
++    /// <param name="hasProviderIds">Object with provider ids.</param>
++    /// <param name="providerKey">The resolved key when found.</param>
++    /// <returns><c>true</c> when a preferred provider id is present.</returns>
++    public static bool TryGetProviderKey(IHasProviderIds? hasProviderIds, out string? providerKey)
++    {
++        providerKey = null;
++        return hasProviderIds is not null && TryGetProviderKey(hasProviderIds.ProviderIds, out providerKey);
++    }
++
++    /// <summary>
++    /// Formats a provider key string.
++    /// </summary>
++    /// <param name="providerName">Provider name (e.g. Tmdb).</param>
++    /// <param name="providerValue">Provider value.</param>
++    /// <returns>Normalized key.</returns>
++    public static string FormatProviderKey(string providerName, string providerValue)
++        => $"{providerName}:{providerValue.Trim()}";
++
++    /// <summary>
++    /// Parses a provider key into name and value.
++    /// </summary>
++    /// <param name="providerKey">Key in <c>Provider:Value</c> form.</param>
++    /// <param name="providerName">Provider name.</param>
++    /// <param name="providerValue">Provider value.</param>
++    /// <returns><c>true</c> when parsing succeeds.</returns>
++    public static bool TryParseProviderKey(string? providerKey, out string providerName, out string providerValue)
++    {
++        providerName = string.Empty;
++        providerValue = string.Empty;
++        if (string.IsNullOrWhiteSpace(providerKey))
++        {
++            return false;
++        }
++
++        var separator = providerKey.IndexOf(':', StringComparison.Ordinal);
++        if (separator <= 0 || separator >= providerKey.Length - 1)
++        {
++            return false;
++        }
++
++        providerName = providerKey[..separator];
++        providerValue = providerKey[(separator + 1)..];
++        return !string.IsNullOrWhiteSpace(providerName) && !string.IsNullOrWhiteSpace(providerValue);
++    }
++
++    /// <summary>
++    /// Builds a filesystem-safe folder name suffix for a provider key (e.g. <c>tmdb-1248</c>).
++    /// </summary>
++    /// <param name="providerKey">Provider key.</param>
++    /// <returns>Path suffix without brackets.</returns>
++    public static string GetPathSuffix(string providerKey)
++    {
++        if (!TryParseProviderKey(providerKey, out var providerName, out var providerValue))
++        {
++            return providerKey;
++        }
++
++        var safeValue = providerValue.Trim();
++        foreach (var c in Path.GetInvalidFileNameChars())
++        {
++            safeValue = safeValue.Replace(c, '_');
++        }
++
++        return $"{providerName.ToLowerInvariant()}-{safeValue}";
++    }
++
++    /// <summary>
++    /// Gets a selection key used to dedupe people within an item update.
++    /// </summary>
++    /// <param name="name">Person name.</param>
++    /// <param name="personType">Person type string.</param>
++    /// <param name="providerKey">Optional provider key.</param>
++    /// <returns>Selection key.</returns>
++    public static string GetSelectionKey(string name, string? personType, string? providerKey)
++    {
++        var typePart = personType ?? string.Empty;
++        if (!string.IsNullOrEmpty(providerKey))
++        {
++            return providerKey + "\0" + typePart;
++        }
++
++        return name.ToLowerInvariant() + "\0" + typePart;
++    }
++
++    /// <summary>
++    /// Returns whether two provider-id maps conflict (same provider, different values).
++    /// </summary>
++    /// <param name="first">First map.</param>
++    /// <param name="second">Second map.</param>
++    /// <returns><c>true</c> when a conflict exists.</returns>
++    public static bool HasConflictingProviderIds(
++        IReadOnlyDictionary<string, string>? first,
++        IReadOnlyDictionary<string, string>? second)
++    {
++        if (first is null || second is null || first.Count == 0 || second.Count == 0)
++        {
++            return false;
++        }
++
++        foreach (var provider in PreferredProviders)
++        {
++            var name = provider.ToString();
++            var firstValue = GetProviderValue(first, name);
++            var secondValue = GetProviderValue(second, name);
++            if (firstValue is not null
++                && secondValue is not null
++                && !string.Equals(firstValue, secondValue, StringComparison.OrdinalIgnoreCase))
++            {
++                return true;
++            }
++        }
++
++        return false;
++    }
++
++    /// <summary>
++    /// Returns whether two provider-id maps share at least one preferred provider value.
++    /// </summary>
++    /// <param name="first">First map.</param>
++    /// <param name="second">Second map.</param>
++    /// <returns><c>true</c> when they share an id.</returns>
++    public static bool SharesProviderId(
++        IReadOnlyDictionary<string, string>? first,
++        IReadOnlyDictionary<string, string>? second)
++    {
++        if (first is null || second is null || first.Count == 0 || second.Count == 0)
++        {
++            return false;
++        }
++
++        foreach (var provider in PreferredProviders)
++        {
++            var name = provider.ToString();
++            var firstValue = GetProviderValue(first, name);
++            var secondValue = GetProviderValue(second, name);
++            if (firstValue is not null
++                && secondValue is not null
++                && string.Equals(firstValue, secondValue, StringComparison.OrdinalIgnoreCase))
++            {
++                return true;
++            }
++        }
++
++        return false;
++    }
++
++    private static string? GetProviderValue(IReadOnlyDictionary<string, string> providerIds, string name)
++    {
++        if (providerIds.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value))
++        {
++            return value.Trim();
++        }
++
++        foreach (var pair in providerIds)
++        {
++            if (string.Equals(pair.Key, name, StringComparison.OrdinalIgnoreCase)
++                && !string.IsNullOrWhiteSpace(pair.Value))
++            {
++                return pair.Value.Trim();
++            }
++        }
++
++        return null;
++    }
++}
+diff --git a/MediaBrowser.Controller/Extensions/XmlReaderExtensions.cs b/MediaBrowser.Controller/Extensions/XmlReaderExtensions.cs
+index b53210b..3d6cee9 100644
+--- a/MediaBrowser.Controller/Extensions/XmlReaderExtensions.cs
++++ b/MediaBrowser.Controller/Extensions/XmlReaderExtensions.cs
+@@ -5,6 +5,7 @@ using System.Linq;
+ using System.Xml;
+ using Jellyfin.Data.Enums;
+ using MediaBrowser.Controller.Entities;
++using MediaBrowser.Model.Entities;
+ 
+ namespace MediaBrowser.Controller.Extensions;
+ 
+@@ -95,6 +96,9 @@ public static class XmlReaderExtensions
+         var role = string.Empty;
+         int? sortOrder = null;
+         string? imageUrl = null;
++        string? tmdbId = null;
++        string? imdbId = null;
++        string? tvdbId = null;
+ 
+         using var subtree = reader.ReadSubtree();
+         subtree.MoveToContent();
+@@ -134,6 +138,18 @@ public static class XmlReaderExtensions
+                 case "thumb":
+                     imageUrl = subtree.ReadNormalizedString();
+                     break;
++                case "tmdbid":
++                case "TmdbId":
++                    tmdbId = subtree.ReadNormalizedString();
++                    break;
++                case "imdbid":
++                case "ImdbId":
++                    imdbId = subtree.ReadNormalizedString();
++                    break;
++                case "tvdbid":
++                case "TvdbId":
++                    tvdbId = subtree.ReadNormalizedString();
++                    break;
+                 default:
+                     subtree.Skip();
+                     break;
+@@ -145,7 +161,7 @@ public static class XmlReaderExtensions
+             return null;
+         }
+ 
+-        return new PersonInfo
++        var person = new PersonInfo
+         {
+             Name = name,
+             Role = role,
+@@ -153,6 +169,12 @@ public static class XmlReaderExtensions
+             SortOrder = sortOrder,
+             ImageUrl = imageUrl
+         };
++
++        person.TrySetProviderId(MetadataProvider.Tmdb, tmdbId);
++        person.TrySetProviderId(MetadataProvider.Imdb, imdbId);
++        person.TrySetProviderId(MetadataProvider.Tvdb, tvdbId);
++
++        return person;
+     }
+ 
+     /// <summary>
+diff --git a/MediaBrowser.Controller/Library/ILibraryManager.cs b/MediaBrowser.Controller/Library/ILibraryManager.cs
+index 063a46e..feac53a 100644
+--- a/MediaBrowser.Controller/Library/ILibraryManager.cs
++++ b/MediaBrowser.Controller/Library/ILibraryManager.cs
+@@ -106,6 +106,13 @@ namespace MediaBrowser.Controller.Library
+         /// <returns>Task{Person}.</returns>
+         Person? GetPerson(string name);
+ 
++        /// <summary>
++        /// Gets a Person using provider ids when available, otherwise name.
++        /// </summary>
++        /// <param name="person">Person stub with optional provider ids.</param>
++        /// <returns>The matching person, or null.</returns>
++        Person? GetPerson(PersonInfo person);
++
+         /// <summary>
+         /// Finds the by path.
+         /// </summary>
+diff --git a/MediaBrowser.XbmcMetadata/Savers/BaseNfoSaver.cs b/MediaBrowser.XbmcMetadata/Savers/BaseNfoSaver.cs
+index 78907a5..c58aeb1 100644
+--- a/MediaBrowser.XbmcMetadata/Savers/BaseNfoSaver.cs
++++ b/MediaBrowser.XbmcMetadata/Savers/BaseNfoSaver.cs
+@@ -960,9 +960,27 @@ namespace MediaBrowser.XbmcMetadata.Savers
+                         person.SortOrder.Value.ToString(CultureInfo.InvariantCulture));
+                 }
+ 
++                var tmdb = person.GetProviderId(MetadataProvider.Tmdb);
++                if (!string.IsNullOrWhiteSpace(tmdb))
++                {
++                    writer.WriteElementString("tmdbid", tmdb);
++                }
++
++                var imdb = person.GetProviderId(MetadataProvider.Imdb);
++                if (!string.IsNullOrWhiteSpace(imdb))
++                {
++                    writer.WriteElementString("imdbid", imdb);
++                }
++
++                var tvdb = person.GetProviderId(MetadataProvider.Tvdb);
++                if (!string.IsNullOrWhiteSpace(tvdb))
++                {
++                    writer.WriteElementString("tvdbid", tvdb);
++                }
++
+                 if (saveImagePath)
+                 {
+-                    var personEntity = libraryManager.GetPerson(person.Name);
++                    var personEntity = libraryManager.GetPerson(person);
+                     var image = personEntity?.GetImageInfo(ImageType.Primary, 0);
+ 
+                     if (image is not null)
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/People.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/People.cs
+index 20cf3e2..d4fffc0 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/People.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/People.cs
+@@ -25,6 +25,12 @@ public class People
+     /// </summary>
+     public string? PersonType { get; set; }
+ 
++    /// <summary>
++    /// Gets or Sets the preferred metadata provider key (e.g. <c>Tmdb:1248</c>).
++    /// Null for name-only people from providers that do not supply ids.
++    /// </summary>
++    public string? ProviderKey { get; set; }
++
+     /// <summary>
+     /// Gets or Sets the mapping of People to BaseItems.
+     /// </summary>
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/PeopleConfiguration.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/PeopleConfiguration.cs
+index e8f77a8..078a3b1 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/PeopleConfiguration.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/PeopleConfiguration.cs
+@@ -14,6 +14,7 @@ public class PeopleConfiguration : IEntityTypeConfiguration<People>
+     {
+         builder.HasKey(e => e.Id);
+         builder.HasIndex(e => e.Name);
++        builder.HasIndex(e => e.ProviderKey);
+         builder.HasMany(e => e.BaseItems);
+     }
+ }
+diff --git a/jf-ours/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260719210000_AddPeopleProviderKey.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260719210000_AddPeopleProviderKey.cs
+new file mode 100644
+index 0000000..bc0fe31
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260719210000_AddPeopleProviderKey.cs
+@@ -0,0 +1,41 @@
++using Jellyfin.Database.Implementations;
++using Microsoft.EntityFrameworkCore.Infrastructure;
++using Microsoft.EntityFrameworkCore.Migrations;
++
++#nullable disable
++
++namespace Jellyfin.Server.Implementations.Migrations
++{
++    /// <inheritdoc />
++    [DbContext(typeof(JellyfinDbContext))]
++    [Migration("20260719210000_AddPeopleProviderKey")]
++    public partial class AddPeopleProviderKey : Migration
++    {
++        /// <inheritdoc />
++        protected override void Up(MigrationBuilder migrationBuilder)
++        {
++            migrationBuilder.AddColumn<string>(
++                name: "ProviderKey",
++                table: "Peoples",
++                type: "TEXT",
++                nullable: true);
++
++            migrationBuilder.CreateIndex(
++                name: "IX_Peoples_ProviderKey",
++                table: "Peoples",
++                column: "ProviderKey");
++        }
++
++        /// <inheritdoc />
++        protected override void Down(MigrationBuilder migrationBuilder)
++        {
++            migrationBuilder.DropIndex(
++                name: "IX_Peoples_ProviderKey",
++                table: "Peoples");
++
++            migrationBuilder.DropColumn(
++                name: "ProviderKey",
++                table: "Peoples");
++        }
++    }
++}
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
+index fe87cf0..033ad00 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
+@@ -1036,10 +1036,15 @@ namespace Jellyfin.Server.Implementations.Migrations
+                     b.Property<string>("PersonType")
+                         .HasColumnType("TEXT");
+ 
++                    b.Property<string>("ProviderKey")
++                        .HasColumnType("TEXT");
++
+                     b.HasKey("Id");
+ 
+                     b.HasIndex("Name");
+ 
++                    b.HasIndex("ProviderKey");
++
+                     b.ToTable("Peoples");
+ 
+                     b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
+diff --git a/jf-ours/tests/Jellyfin.Controller.Tests/Entities/PeopleHelperTests.cs b/tests/Jellyfin.Controller.Tests/Entities/PeopleHelperTests.cs
+new file mode 100644
+index 0000000..aa2c000
+--- /dev/null
++++ b/tests/Jellyfin.Controller.Tests/Entities/PeopleHelperTests.cs
+@@ -0,0 +1,58 @@
++using System.Collections.Generic;
++using Jellyfin.Data.Enums;
++using MediaBrowser.Controller.Entities;
++using MediaBrowser.Model.Entities;
++using Xunit;
++
++namespace Jellyfin.Controller.Tests.Entities;
++
++public class PeopleHelperTests
++{
++    [Fact]
++    public void AddPerson_DoesNotMergeConflictingProviderIds()
++    {
++        var people = new List<PersonInfo>();
++        var actor = new PersonInfo { Name = "Brian Cox", Type = PersonKind.Actor };
++        actor.SetProviderId(MetadataProvider.Tmdb, "1248");
++        var presenter = new PersonInfo { Name = "Brian Cox", Type = PersonKind.Actor };
++        presenter.SetProviderId(MetadataProvider.Tmdb, "224290");
++
++        PeopleHelper.AddPerson(people, actor);
++        PeopleHelper.AddPerson(people, presenter);
++
++        Assert.Equal(2, people.Count);
++    }
++
++    [Fact]
++    public void AddPerson_MergesSameProviderId()
++    {
++        var people = new List<PersonInfo>();
++        var first = new PersonInfo { Name = "Brian Cox", Type = PersonKind.Actor, Role = "Ryan" };
++        first.SetProviderId(MetadataProvider.Tmdb, "1248");
++        var second = new PersonInfo { Name = "Brian Cox", Type = PersonKind.Actor };
++        second.SetProviderId(MetadataProvider.Tmdb, "1248");
++
++        PeopleHelper.AddPerson(people, first);
++        PeopleHelper.AddPerson(people, second);
++
++        Assert.Single(people);
++        Assert.Equal("Ryan", people[0].Role);
++        Assert.Equal("1248", people[0].GetProviderId(MetadataProvider.Tmdb));
++    }
++
++    [Fact]
++    public void AddPerson_MergesNameOnlyIntoKeyedPerson()
++    {
++        var people = new List<PersonInfo>();
++        var keyed = new PersonInfo { Name = "Brian Cox", Type = PersonKind.Actor };
++        keyed.SetProviderId(MetadataProvider.Tmdb, "1248");
++        var nameOnly = new PersonInfo { Name = "Brian Cox", Type = PersonKind.Actor, Role = "Himself" };
++
++        PeopleHelper.AddPerson(people, keyed);
++        PeopleHelper.AddPerson(people, nameOnly);
++
++        Assert.Single(people);
++        Assert.Equal("Himself", people[0].Role);
++        Assert.Equal("1248", people[0].GetProviderId(MetadataProvider.Tmdb));
++    }
++}
+diff --git a/jf-ours/tests/Jellyfin.Controller.Tests/Entities/PersonIdentityTests.cs b/tests/Jellyfin.Controller.Tests/Entities/PersonIdentityTests.cs
+new file mode 100644
+index 0000000..0864d9f
+--- /dev/null
++++ b/tests/Jellyfin.Controller.Tests/Entities/PersonIdentityTests.cs
+@@ -0,0 +1,57 @@
++using System;
++using System.Collections.Generic;
++using MediaBrowser.Controller.Entities;
++using MediaBrowser.Model.Entities;
++using Xunit;
++
++namespace Jellyfin.Controller.Tests.Entities;
++
++public class PersonIdentityTests
++{
++    [Fact]
++    public void TryGetProviderKey_PrefersTmdbOverImdb()
++    {
++        var ids = new Dictionary<string, string>
++        {
++            [MetadataProvider.Imdb.ToString()] = "nm123",
++            [MetadataProvider.Tmdb.ToString()] = "1248"
++        };
++
++        Assert.True(PersonIdentity.TryGetProviderKey(ids, out var key));
++        Assert.Equal("Tmdb:1248", key);
++    }
++
++    [Fact]
++    public void HasConflictingProviderIds_DetectsDifferentTmdbIds()
++    {
++        var first = new Dictionary<string, string> { [MetadataProvider.Tmdb.ToString()] = "1248" };
++        var second = new Dictionary<string, string> { [MetadataProvider.Tmdb.ToString()] = "224290" };
++
++        Assert.True(PersonIdentity.HasConflictingProviderIds(first, second));
++    }
++
++    [Fact]
++    public void HasConflictingProviderIds_AllowsComplementaryProviders()
++    {
++        var first = new Dictionary<string, string> { [MetadataProvider.Tmdb.ToString()] = "1248" };
++        var second = new Dictionary<string, string> { [MetadataProvider.Imdb.ToString()] = "nm0000001" };
++
++        Assert.False(PersonIdentity.HasConflictingProviderIds(first, second));
++    }
++
++    [Fact]
++    public void GetPathSuffix_FormatsProviderKey()
++    {
++        Assert.Equal("tmdb-1248", PersonIdentity.GetPathSuffix("Tmdb:1248"));
++    }
++
++    [Fact]
++    public void GetSelectionKey_UsesProviderKeyWhenPresent()
++    {
++        var keyed = PersonIdentity.GetSelectionKey("Brian Cox", "Actor", "Tmdb:1248");
++        var nameOnly = PersonIdentity.GetSelectionKey("Brian Cox", "Actor", null);
++
++        Assert.NotEqual(keyed, nameOnly);
++        Assert.StartsWith("Tmdb:1248", keyed, StringComparison.Ordinal);
++    }
++}

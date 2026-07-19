@@ -1014,9 +1014,14 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Property<string>("PersonType")
                         .HasColumnType("text");
 
+                    b.Property<string>("ProviderKey")
+                        .HasColumnType("text");
+
                     b.HasKey("Id");
 
                     b.HasIndex("Name");
+
+                    b.HasIndex("ProviderKey");
 
                     b.ToTable("Peoples");
                 });
