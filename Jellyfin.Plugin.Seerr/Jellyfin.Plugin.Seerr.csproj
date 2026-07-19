@@ -12,6 +12,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Jellyfin.Plugin.Seerr.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Needed for User entity via IUserManager; stripped from publish so the plugin
          ALC does not load a private copy of host-shared types. -->
     <ProjectReference Include="..\jellyfin\src\Jellyfin.Database\Jellyfin.Database.Implementations\Jellyfin.Database.Implementations.csproj" />

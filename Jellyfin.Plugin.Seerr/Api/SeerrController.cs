@@ -28,6 +28,7 @@ public sealed class SeerrController : ControllerBase
 
     private readonly SeerrClient _client;
     private readonly SeerrUserResolver _userResolver;
+    private readonly SeerrParentalFilter _parentalFilter;
     private readonly IUserManager _userManager;
     private readonly ILogger<SeerrController> _logger;
 
@@ -36,16 +37,19 @@ public sealed class SeerrController : ControllerBase
     /// </summary>
     /// <param name="client">Seerr HTTP client.</param>
     /// <param name="userResolver">Username → Seerr user mapper.</param>
+    /// <param name="parentalFilter">Parental-control filter.</param>
     /// <param name="userManager">Jellyfin user manager.</param>
     /// <param name="logger">Logger.</param>
     public SeerrController(
         SeerrClient client,
         SeerrUserResolver userResolver,
+        SeerrParentalFilter parentalFilter,
         IUserManager userManager,
         ILogger<SeerrController> logger)
     {
         _client = client;
         _userResolver = userResolver;
+        _parentalFilter = parentalFilter;
         _userManager = userManager;
         _logger = logger;
     }
@@ -70,11 +74,18 @@ public sealed class SeerrController : ControllerBase
     [HttpGet("Search")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
     public async Task<ActionResult<SeerrSearchResponse>> Search(
         [FromQuery, Required] string query,
         CancellationToken cancellationToken)
     {
+        var jellyfinUser = GetAuthenticatedUser();
+        if (jellyfinUser is null)
+        {
+            return Unauthorized();
+        }
+
         if (!SeerrClient.IsConfigured())
         {
             return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = "Seerr gateway is not enabled." });
@@ -87,7 +98,9 @@ public sealed class SeerrController : ControllerBase
 
         try
         {
-            var items = await _client.SearchAsync(query.Trim(), cancellationToken).ConfigureAwait(false);
+            var items = await _parentalFilter
+                .SearchForUserAsync(jellyfinUser, query.Trim(), cancellationToken)
+                .ConfigureAwait(false);
             return Ok(new SeerrSearchResponse { Items = items });
         }
         catch (SeerrApiException ex)
@@ -105,6 +118,7 @@ public sealed class SeerrController : ControllerBase
     [HttpPost("Request")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
     public async Task<ActionResult<SeerrRequestResponse>> RequestMedia(
@@ -137,6 +151,16 @@ public sealed class SeerrController : ControllerBase
 
         try
         {
+            var allowed = await _parentalFilter
+                .IsRequestAllowedAsync(jellyfinUser, mediaType, body.MediaId, cancellationToken)
+                .ConfigureAwait(false);
+            if (!allowed)
+            {
+                return StatusCode(
+                    StatusCodes.Status403Forbidden,
+                    new { message = "This title is blocked by parental controls." });
+            }
+
             var seerrUserId = await _userResolver
                 .ResolveAsync(jellyfinUser.Id, jellyfinUser.Username, cancellationToken)
                 .ConfigureAwait(false);

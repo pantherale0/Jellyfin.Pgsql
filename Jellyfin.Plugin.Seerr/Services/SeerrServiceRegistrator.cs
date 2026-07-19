@@ -20,5 +20,6 @@ public sealed class SeerrServiceRegistrator : IPluginServiceRegistrator
         });
         serviceCollection.AddSingleton<SeerrClient>();
         serviceCollection.AddSingleton<SeerrUserResolver>();
+        serviceCollection.AddSingleton<SeerrParentalFilter>();
     }
 }
