@@ -1,0 +1,413 @@
+diff --git a/Jellyfin.Server.Implementations/Item/BaseItemMapper.cs b/Jellyfin.Server.Implementations/Item/BaseItemMapper.cs
+index c64e6ac068..0c66aa58f2 100644
+--- a/Jellyfin.Server.Implementations/Item/BaseItemMapper.cs
++++ b/Jellyfin.Server.Implementations/Item/BaseItemMapper.cs
+@@ -2,6 +2,7 @@
+ 
+ using System;
+ using System.Collections.Concurrent;
++using System.Collections.Generic;
+ using System.Linq;
+ using System.Reflection;
+ using System.Text;
+@@ -340,7 +341,9 @@ public static class BaseItemMapper
+ 
+         if (dto.ImageInfos is not null)
+         {
+-            entity.Images = dto.ImageInfos.Select(f => MapImageToEntity(dto.Id, f)).ToArray();
++            entity.Images = DeduplicateImageInfos(dto.ImageInfos)
++                .Select(f => MapImageToEntity(dto.Id, f))
++                .ToArray();
+         }
+ 
+         if (dto is Trailer trailer)
+@@ -414,6 +417,36 @@ public static class BaseItemMapper
+         };
+     }
+ 
++    /// <summary>
++    /// Collapses duplicate logical images, preferring populated dimensions and blurhash.
++    /// </summary>
++    /// <param name="images">The image infos to deduplicate.</param>
++    /// <returns>One entry per <c>(Type, Path)</c>.</returns>
++    public static IEnumerable<ItemImageInfo> DeduplicateImageInfos(IEnumerable<ItemImageInfo> images)
++    {
++        ArgumentNullException.ThrowIfNull(images);
++
++        return images
++            .OrderByDescending(e => e.Width > 0 && e.Height > 0)
++            .ThenByDescending(e => !string.IsNullOrEmpty(e.BlurHash))
++            .DistinctBy(e => (e.Type, e.Path));
++    }
++
++    /// <summary>
++    /// Collapses duplicate image entities, preferring populated dimensions and blurhash.
++    /// </summary>
++    /// <param name="images">The image entities to deduplicate.</param>
++    /// <returns>One entry per <c>(ImageType, Path)</c>.</returns>
++    public static IEnumerable<BaseItemImageInfo> DeduplicateImageEntities(IEnumerable<BaseItemImageInfo> images)
++    {
++        ArgumentNullException.ThrowIfNull(images);
++
++        return images
++            .OrderByDescending(e => e.Width > 0 && e.Height > 0)
++            .ThenByDescending(e => e.Blurhash is { Length: > 0 })
++            .DistinctBy(e => (e.ImageType, e.Path));
++    }
++
+     /// <summary>
+     /// Gets the type from a type name string.
+     /// </summary>
+diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
+index d6ddf8f5c8..c42863de28 100644
+--- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
++++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
+@@ -25,7 +25,15 @@ public sealed partial class BaseItemRepository
+     /// <inheritdoc />
+     public IQueryable<BaseItemEntity> PrepareItemQuery(JellyfinDbContext context, InternalItemsQuery filter)
+     {
+-        IQueryable<BaseItemEntity> dbQuery = context.BaseItems.AsNoTracking();
++        // Identity resolution is required: this query eagerly loads multiple collection
++        // navigations (Images, Provider, UserData, LinkedChildEntities, ...) as a single query.
++        // With plain AsNoTracking() EF Core performs no identity resolution, so the JOIN
++        // cartesian materializes duplicate entries into each collection navigation
++        // (e.g. entity.Images gets |Images| x |otherCollections| copies). When such an item is
++        // later persisted via delete-then-insert, the duplicated images are written back and —
++        // because BaseItemImageInfos uses a random surrogate GUID primary key — they accumulate
++        // and double on every scan that re-saves images.
++        IQueryable<BaseItemEntity> dbQuery = context.BaseItems.AsNoTrackingWithIdentityResolution();
+         dbQuery = dbQuery.AsSingleQuery();
+ 
+         return dbQuery;
+@@ -69,17 +77,17 @@ public sealed partial class BaseItemRepository
+         if (enableGroupByPresentationUniqueKey && filter.GroupBySeriesPresentationUniqueKey)
+         {
+             var groupedIds = dbQuery.GroupBy(e => new { e.PresentationUniqueKey, e.SeriesPresentationUniqueKey }).Select(e => e.Min(x => x.Id));
+-            dbQuery = context.BaseItems.AsNoTracking().Where(e => groupedIds.Contains(e.Id));
++            dbQuery = context.BaseItems.AsNoTrackingWithIdentityResolution().Where(e => groupedIds.Contains(e.Id));
+         }
+         else if (enableGroupByPresentationUniqueKey)
+         {
+             var groupedIds = dbQuery.GroupBy(e => e.PresentationUniqueKey).Select(e => e.Min(x => x.Id));
+-            dbQuery = context.BaseItems.AsNoTracking().Where(e => groupedIds.Contains(e.Id));
++            dbQuery = context.BaseItems.AsNoTrackingWithIdentityResolution().Where(e => groupedIds.Contains(e.Id));
+         }
+         else if (filter.GroupBySeriesPresentationUniqueKey)
+         {
+             var groupedIds = dbQuery.GroupBy(e => e.SeriesPresentationUniqueKey).Select(e => e.Min(x => x.Id));
+-            dbQuery = context.BaseItems.AsNoTracking().Where(e => groupedIds.Contains(e.Id));
++            dbQuery = context.BaseItems.AsNoTrackingWithIdentityResolution().Where(e => groupedIds.Contains(e.Id));
+         }
+         else
+         {
+@@ -158,7 +166,7 @@ public sealed partial class BaseItemRepository
+             .Distinct();
+ 
+         var collapsedIds = nonCollapsibleIds.Union(collapsibleNotInBoxSet).Union(boxSetIds);
+-        return context.BaseItems.AsNoTracking().Where(e => collapsedIds.Contains(e.Id));
++        return context.BaseItems.AsNoTrackingWithIdentityResolution().Where(e => collapsedIds.Contains(e.Id));
+     }
+ 
+     private static IQueryable<BaseItemEntity> ApplyBoxSetCollapsingAll(
+@@ -187,7 +195,7 @@ public sealed partial class BaseItemRepository
+             .Where(id => !childrenInBoxSet.Contains(id));
+ 
+         var collapsedIds = notInBoxSet.Union(boxSetIds);
+-        return context.BaseItems.AsNoTracking().Where(e => collapsedIds.Contains(e.Id));
++        return context.BaseItems.AsNoTrackingWithIdentityResolution().Where(e => collapsedIds.Contains(e.Id));
+     }
+ 
+     private static IQueryable<BaseItemEntity> ApplyNameFilters(IQueryable<BaseItemEntity> dbQuery, InternalItemsQuery filter)
+diff --git a/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs b/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs
+index b10f7c527e..73b3877f3d 100644
+--- a/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs
++++ b/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs
+@@ -171,7 +171,12 @@ public class ItemPersistenceService : IItemPersistenceService
+     {
+         ArgumentNullException.ThrowIfNull(item);
+ 
+-        var images = item.ImageInfos.Select(e => BaseItemMapper.MapImageToEntity(item.Id, e)).ToArray();
++        // Guard against duplicate image entries (same type + path) ever being persisted.
++        // Without this, duplicates in the in-memory ImageInfos collection would be inserted
++        // verbatim and accumulate over time (BaseItemImageInfos uses a random GUID PK).
++        var images = BaseItemMapper.DeduplicateImageInfos(item.ImageInfos)
++            .Select(e => BaseItemMapper.MapImageToEntity(item.Id, e))
++            .ToArray();
+ 
+         var context = await _dbProvider.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+         await using (context.ConfigureAwait(false))
+@@ -276,7 +281,7 @@ public class ItemPersistenceService : IItemPersistenceService
+ 
+                 if (entity.Images is { Count: > 0 })
+                 {
+-                    context.BaseItemImageInfos.AddRange(entity.Images);
++                    context.BaseItemImageInfos.AddRange(BaseItemMapper.DeduplicateImageEntities(entity.Images));
+                 }
+ 
+                 if (entity.LockedFields is { Count: > 0 })
+diff --git a/Jellyfin.Server/Migrations/Routines/20260719120000_DeduplicateBaseItemImageInfos.cs b/Jellyfin.Server/Migrations/Routines/20260719120000_DeduplicateBaseItemImageInfos.cs
+new file mode 100644
+index 0000000000..ffa77592db
+--- /dev/null
++++ b/Jellyfin.Server/Migrations/Routines/20260719120000_DeduplicateBaseItemImageInfos.cs
+@@ -0,0 +1,73 @@
++#pragma warning disable RS0030 // Do not use banned APIs
++
++using System.Threading;
++using System.Threading.Tasks;
++using Jellyfin.Database.Implementations;
++using Jellyfin.Server.ServerSetupApp;
++using Microsoft.EntityFrameworkCore;
++using Microsoft.Extensions.Logging;
++
++namespace Jellyfin.Server.Migrations.Routines;
++
++/// <summary>
++/// Removes duplicate <c>BaseItemImageInfos</c> rows that share the same item, image type and path.
++/// <para>
++/// A regression allowed the same logical image to be persisted many times for a single item (the
++/// count doubling on every library scan that re-saved images), because the item load query
++/// materialized duplicate navigation entries and <c>BaseItemImageInfos</c> uses a random
++/// surrogate GUID primary key that does not collapse duplicate inserts. This one-off cleanup
++/// keeps a single row per <c>(ItemId, ImageType, Path)</c> group and deletes the rest.
++/// </para>
++/// </summary>
++[JellyfinMigration("2026-07-19T12:00:00", nameof(DeduplicateBaseItemImageInfos))]
++[JellyfinMigrationBackup(JellyfinDb = true)]
++public class DeduplicateBaseItemImageInfos : IAsyncMigrationRoutine
++{
++    private const string DeduplicateSql =
++        """
++        DELETE FROM "BaseItemImageInfos"
++        WHERE "Id" IN (
++          SELECT "Id" FROM (
++            SELECT "Id",
++                   ROW_NUMBER() OVER (
++                     PARTITION BY "ItemId", "ImageType", "Path"
++                     ORDER BY
++                       CASE WHEN "Width" > 0 AND "Height" > 0 THEN 0 ELSE 1 END,
++                       CASE WHEN "Blurhash" IS NOT NULL THEN 0 ELSE 1 END,
++                       "Id"
++                   ) AS rn
++            FROM "BaseItemImageInfos"
++          ) t WHERE rn > 1
++        );
++        """;
++
++    private readonly IStartupLogger<DeduplicateBaseItemImageInfos> _logger;
++    private readonly IDbContextFactory<JellyfinDbContext> _dbContextFactory;
++
++    /// <summary>
++    /// Initializes a new instance of the <see cref="DeduplicateBaseItemImageInfos"/> class.
++    /// </summary>
++    /// <param name="logger">The startup logger.</param>
++    /// <param name="dbContextFactory">The database context factory.</param>
++    public DeduplicateBaseItemImageInfos(
++        IStartupLogger<DeduplicateBaseItemImageInfos> logger,
++        IDbContextFactory<JellyfinDbContext> dbContextFactory)
++    {
++        _logger = logger;
++        _dbContextFactory = dbContextFactory;
++    }
++
++    /// <inheritdoc/>
++    public async Task PerformAsync(CancellationToken cancellationToken)
++    {
++        var context = await _dbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
++        await using (context.ConfigureAwait(false))
++        {
++            _logger.LogInformation("Removing duplicate BaseItemImageInfos rows");
++            var removed = await context.Database
++                .ExecuteSqlRawAsync(DeduplicateSql, cancellationToken)
++                .ConfigureAwait(false);
++            _logger.LogInformation("Removed {Count} duplicate BaseItemImageInfos rows", removed);
++        }
++    }
++}
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemImageInfoConfiguration.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemImageInfoConfiguration.cs
+index 79262e4c8d..95ca9b865c 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemImageInfoConfiguration.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemImageInfoConfiguration.cs
+@@ -17,5 +17,9 @@ public class BaseItemImageInfoConfiguration : IEntityTypeConfiguration<BaseItemI
+ 
+         // Composite index for filtering by item and image type (also covers ItemId-only lookups)
+         builder.HasIndex(e => new { e.ItemId, e.ImageType });
++
++        // One logical image per item: prevents silent exponential duplication when
++        // delete-then-insert persistence is fed a cartesian-duplicated ImageInfos collection.
++        builder.HasIndex(e => new { e.ItemId, e.ImageType, e.Path }).IsUnique();
+     }
+ }
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260719130000_AddUniqueBaseItemImageInfosIndex.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260719130000_AddUniqueBaseItemImageInfosIndex.cs
+new file mode 100644
+index 0000000000..e43afb399d
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260719130000_AddUniqueBaseItemImageInfosIndex.cs
+@@ -0,0 +1,48 @@
++using Microsoft.EntityFrameworkCore.Migrations;
++
++#nullable disable
++
++namespace Jellyfin.Database.Providers.Sqlite.Migrations
++{
++    /// <inheritdoc />
++    public partial class AddUniqueBaseItemImageInfosIndex : Migration
++    {
++        /// <inheritdoc />
++        protected override void Up(MigrationBuilder migrationBuilder)
++        {
++            // Collapse any remaining duplicates before the unique index is applied.
++            // Prefer rows with dimensions and blurhash populated.
++            migrationBuilder.Sql(
++                """
++                DELETE FROM "BaseItemImageInfos"
++                WHERE "Id" IN (
++                  SELECT "Id" FROM (
++                    SELECT "Id",
++                           ROW_NUMBER() OVER (
++                             PARTITION BY "ItemId", "ImageType", "Path"
++                             ORDER BY
++                               CASE WHEN "Width" > 0 AND "Height" > 0 THEN 0 ELSE 1 END,
++                               CASE WHEN "Blurhash" IS NOT NULL THEN 0 ELSE 1 END,
++                               "Id"
++                           ) AS rn
++                    FROM "BaseItemImageInfos"
++                  ) t WHERE rn > 1
++                );
++                """);
++
++            migrationBuilder.CreateIndex(
++                name: "IX_BaseItemImageInfos_ItemId_ImageType_Path",
++                table: "BaseItemImageInfos",
++                columns: new[] { "ItemId", "ImageType", "Path" },
++                unique: true);
++        }
++
++        /// <inheritdoc />
++        protected override void Down(MigrationBuilder migrationBuilder)
++        {
++            migrationBuilder.DropIndex(
++                name: "IX_BaseItemImageInfos_ItemId_ImageType_Path",
++                table: "BaseItemImageInfos");
++        }
++    }
++}
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
+index fd18c035e6..f604d99f18 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
+@@ -466,6 +466,9 @@ namespace Jellyfin.Server.Implementations.Migrations
+ 
+                     b.HasIndex("ItemId", "ImageType");
+ 
++                    b.HasIndex("ItemId", "ImageType", "Path")
++                        .IsUnique();
++
+                     b.ToTable("BaseItemImageInfos");
+ 
+                     b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
+diff --git a/tests/Jellyfin.Server.Implementations.Tests/Item/BaseItemMapperImageDedupeTests.cs b/tests/Jellyfin.Server.Implementations.Tests/Item/BaseItemMapperImageDedupeTests.cs
+new file mode 100644
+index 0000000000..3ca07935b0
+--- /dev/null
++++ b/tests/Jellyfin.Server.Implementations.Tests/Item/BaseItemMapperImageDedupeTests.cs
+@@ -0,0 +1,99 @@
++using System;
++using System.Linq;
++using System.Text;
++using Jellyfin.Database.Implementations.Entities;
++using Jellyfin.Server.Implementations.Item;
++using MediaBrowser.Controller.Entities;
++using MediaBrowser.Model.Entities;
++using Xunit;
++
++namespace Jellyfin.Server.Implementations.Tests.Item;
++
++public class BaseItemMapperImageDedupeTests
++{
++    [Fact]
++    public void DeduplicateImageInfos_CollapsesSameTypeAndPath_PreferringPopulatedRow()
++    {
++        var blank = new ItemImageInfo
++        {
++            Type = ImageType.Primary,
++            Path = "/media/poster.jpg",
++            Width = 0,
++            Height = 0,
++            BlurHash = null
++        };
++        var populated = new ItemImageInfo
++        {
++            Type = ImageType.Primary,
++            Path = "/media/poster.jpg",
++            Width = 1920,
++            Height = 1080,
++            BlurHash = "LKO2?U%2Tw=w"
++        };
++        var backdrop = new ItemImageInfo
++        {
++            Type = ImageType.Backdrop,
++            Path = "/media/backdrop.jpg",
++            Width = 1280,
++            Height = 720
++        };
++
++        var result = BaseItemMapper.DeduplicateImageInfos([blank, populated, blank, backdrop]).ToArray();
++
++        Assert.Equal(2, result.Length);
++        var primary = Assert.Single(result, i => i.Type == ImageType.Primary);
++        Assert.Equal(1920, primary.Width);
++        Assert.Equal(1080, primary.Height);
++        Assert.Equal("LKO2?U%2Tw=w", primary.BlurHash);
++        Assert.Contains(result, i => i.Type == ImageType.Backdrop);
++    }
++
++    [Fact]
++    public void DeduplicateImageEntities_CollapsesSameTypeAndPath_PreferringPopulatedRow()
++    {
++        var itemId = Guid.NewGuid();
++        var blank = new BaseItemImageInfo
++        {
++            Id = Guid.NewGuid(),
++            ItemId = itemId,
++            Path = "/media/poster.jpg",
++            ImageType = ImageInfoImageType.Primary,
++            Width = 0,
++            Height = 0,
++            Blurhash = null,
++            Item = null!
++        };
++        var populated = new BaseItemImageInfo
++        {
++            Id = Guid.NewGuid(),
++            ItemId = itemId,
++            Path = "/media/poster.jpg",
++            ImageType = ImageInfoImageType.Primary,
++            Width = 600,
++            Height = 900,
++            Blurhash = Encoding.UTF8.GetBytes("hash"),
++            Item = null!
++        };
++
++        var result = BaseItemMapper.DeduplicateImageEntities([blank, populated, blank]).ToArray();
++
++        var kept = Assert.Single(result);
++        Assert.Equal(600, kept.Width);
++        Assert.Equal(900, kept.Height);
++        Assert.NotNull(kept.Blurhash);
++    }
++
++    [Fact]
++    public void DeduplicateImageInfos_AllowsSameTypeWithDifferentPaths()
++    {
++        var images = new[]
++        {
++            new ItemImageInfo { Type = ImageType.Backdrop, Path = "/a.jpg", Width = 1, Height = 1 },
++            new ItemImageInfo { Type = ImageType.Backdrop, Path = "/b.jpg", Width = 1, Height = 1 },
++        };
++
++        var result = BaseItemMapper.DeduplicateImageInfos(images).ToArray();
++
++        Assert.Equal(2, result.Length);
++    }
++}
