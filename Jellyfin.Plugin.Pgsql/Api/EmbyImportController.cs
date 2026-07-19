@@ -18,7 +18,7 @@ public sealed class EmbyImportController : ControllerBase
 {
     private const string AdministratorRole = "Administrator";
     private const string UserIdClaim = "Jellyfin-UserId";
-    private const long MaxUploadBytes = 512L * 1024 * 1024;
+    private const long MaxChunkRequestBytes = EmbyImportSessionStore.ChunkSizeBytes + (2L * 1024 * 1024);
 
     private readonly EmbyUserDataImportService _importService;
 
@@ -32,20 +32,62 @@ public sealed class EmbyImportController : ControllerBase
     }
 
     /// <summary>
-    /// Uploads Emby <c>library.db</c> and <c>users.db</c> for a one-shot import session.
+    /// Starts a chunked upload of Emby <c>library.db</c> and <c>users.db</c>.
     /// </summary>
-    /// <param name="libraryDb">Emby library database.</param>
-    /// <param name="usersDb">Emby users database.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Session id and Emby users.</returns>
-    [HttpPost("Upload")]
-    [RequestSizeLimit(MaxUploadBytes)]
-    [RequestFormLimits(MultipartBodyLengthLimit = MaxUploadBytes)]
+    /// <param name="request">Declared file sizes.</param>
+    /// <returns>Session id and chunk size.</returns>
+    [HttpPost("Upload/Init")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<ActionResult<EmbyImportUploadResponse>> Upload(
-        [FromForm] IFormFile? libraryDb,
-        [FromForm] IFormFile? usersDb,
+    public ActionResult<EmbyImportUploadInitResponse> InitUpload([FromBody] EmbyImportUploadInitRequest? request)
+    {
+        if (!TryGetCallerUserId(out var callerUserId))
+        {
+            return Forbid();
+        }
+
+        if (request is null)
+        {
+            return BadRequest("Request body is required.");
+        }
+
+        try
+        {
+            var (sessionId, chunkSizeBytes) = _importService.InitUpload(
+                request.LibraryDbBytes,
+                request.UsersDbBytes,
+                callerUserId);
+            return Ok(new EmbyImportUploadInitResponse
+            {
+                SessionId = sessionId,
+                ChunkSizeBytes = chunkSizeBytes,
+            });
+        }
+        catch (EmbyImportException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Uploads one sequential chunk of an Emby database file.
+    /// </summary>
+    /// <param name="sessionId">Upload session id.</param>
+    /// <param name="file">Target file: <c>libraryDb</c> or <c>usersDb</c>.</param>
+    /// <param name="chunkIndex">Zero-based chunk index.</param>
+    /// <param name="chunk">Chunk payload.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>No content when accepted.</returns>
+    [HttpPut("Upload/Chunk")]
+    [RequestSizeLimit(MaxChunkRequestBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxChunkRequestBytes)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult> UploadChunk(
+        [FromForm] string? sessionId,
+        [FromForm] string? file,
+        [FromForm] int chunkIndex,
+        [FromForm] IFormFile? chunk,
         CancellationToken cancellationToken)
     {
         if (!TryGetCallerUserId(out var callerUserId))
@@ -53,22 +95,69 @@ public sealed class EmbyImportController : ControllerBase
             return Forbid();
         }
 
-        if (libraryDb is null || libraryDb.Length == 0)
+        if (string.IsNullOrWhiteSpace(sessionId))
         {
-            return BadRequest("library.db is required.");
+            return BadRequest("sessionId is required.");
         }
 
-        if (usersDb is null || usersDb.Length == 0)
+        if (!TryParseFileKind(file, out var fileKind))
         {
-            return BadRequest("users.db is required.");
+            return BadRequest("file must be libraryDb or usersDb.");
+        }
+
+        if (chunk is null || chunk.Length == 0)
+        {
+            return BadRequest("chunk is required.");
         }
 
         try
         {
-            await using var libraryStream = libraryDb.OpenReadStream();
-            await using var usersStream = usersDb.OpenReadStream();
+            await using var stream = chunk.OpenReadStream();
+            await _importService
+                .AppendChunkAsync(
+                    sessionId,
+                    callerUserId,
+                    fileKind,
+                    chunkIndex,
+                    stream,
+                    chunk.Length,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return NoContent();
+        }
+        catch (EmbyImportException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Finalizes a chunked upload and returns Emby users for selection.
+    /// </summary>
+    /// <param name="request">Session id.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Session id and Emby users.</returns>
+    [HttpPost("Upload/Complete")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<EmbyImportUploadResponse>> CompleteUpload(
+        [FromBody] EmbyImportUploadCompleteRequest? request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCallerUserId(out var callerUserId))
+        {
+            return Forbid();
+        }
+
+        if (request is null)
+        {
+            return BadRequest("Request body is required.");
+        }
+
+        try
+        {
             var (sessionId, users) = await _importService
-                .UploadAsync(libraryStream, usersStream, callerUserId, cancellationToken)
+                .CompleteUploadAsync(request.SessionId, callerUserId, cancellationToken)
                 .ConfigureAwait(false);
 
             return Ok(new EmbyImportUploadResponse
@@ -184,6 +273,24 @@ public sealed class EmbyImportController : ControllerBase
         }
 
         return NoContent();
+    }
+
+    private static bool TryParseFileKind(string? file, out EmbyUploadFileKind fileKind)
+    {
+        if (string.Equals(file, "libraryDb", StringComparison.OrdinalIgnoreCase))
+        {
+            fileKind = EmbyUploadFileKind.LibraryDb;
+            return true;
+        }
+
+        if (string.Equals(file, "usersDb", StringComparison.OrdinalIgnoreCase))
+        {
+            fileKind = EmbyUploadFileKind.UsersDb;
+            return true;
+        }
+
+        fileKind = default;
+        return false;
     }
 
     private bool TryGetCallerUserId(out Guid userId)

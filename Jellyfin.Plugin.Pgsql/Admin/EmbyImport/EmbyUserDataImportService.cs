@@ -49,20 +49,63 @@ public sealed class EmbyUserDataImportService
     }
 
     /// <summary>
-    /// Accepts uploaded databases and returns Emby users for selection.
+    /// Starts a chunked upload session.
     /// </summary>
-    /// <param name="libraryDb">Library database stream.</param>
-    /// <param name="usersDb">Users database stream.</param>
-    /// <param name="createdByUserId">Administrator who uploaded the databases.</param>
+    /// <param name="libraryDbBytes">Declared library.db size.</param>
+    /// <param name="usersDbBytes">Declared users.db size.</param>
+    /// <param name="createdByUserId">Administrator who started the upload.</param>
+    /// <returns>Session id and chunk size.</returns>
+    public (string SessionId, int ChunkSizeBytes) InitUpload(
+        long libraryDbBytes,
+        long usersDbBytes,
+        Guid createdByUserId)
+    {
+        var session = _sessionStore.CreatePending(libraryDbBytes, usersDbBytes, createdByUserId);
+        return (session.SessionId, EmbyImportSessionStore.ChunkSizeBytes);
+    }
+
+    /// <summary>
+    /// Appends one sequential chunk to a pending upload.
+    /// </summary>
+    /// <param name="sessionId">Session id.</param>
+    /// <param name="callerUserId">Authenticated administrator.</param>
+    /// <param name="fileKind">Which file the chunk belongs to.</param>
+    /// <param name="chunkIndex">Zero-based chunk index.</param>
+    /// <param name="chunk">Chunk stream.</param>
+    /// <param name="chunkLength">Declared chunk length.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task representing the operation.</returns>
+    public Task AppendChunkAsync(
+        string sessionId,
+        Guid callerUserId,
+        EmbyUploadFileKind fileKind,
+        int chunkIndex,
+        System.IO.Stream chunk,
+        long chunkLength,
+        CancellationToken cancellationToken)
+        => _sessionStore.AppendChunkAsync(
+            sessionId,
+            callerUserId,
+            fileKind,
+            chunkIndex,
+            chunk,
+            chunkLength,
+            cancellationToken);
+
+    /// <summary>
+    /// Finalizes a chunked upload and returns Emby users for selection.
+    /// </summary>
+    /// <param name="sessionId">Session id.</param>
+    /// <param name="callerUserId">Authenticated administrator.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Session id and Emby users.</returns>
-    public async Task<(string SessionId, IReadOnlyList<EmbyUserInfo> Users)> UploadAsync(
-        System.IO.Stream libraryDb,
-        System.IO.Stream usersDb,
-        Guid createdByUserId,
+    public async Task<(string SessionId, IReadOnlyList<EmbyUserInfo> Users)> CompleteUploadAsync(
+        string sessionId,
+        Guid callerUserId,
         CancellationToken cancellationToken)
     {
-        var session = await _sessionStore.CreateAsync(libraryDb, usersDb, createdByUserId, cancellationToken)
+        var session = await _sessionStore
+            .FinalizeAsync(sessionId, callerUserId, cancellationToken)
             .ConfigureAwait(false);
         try
         {
