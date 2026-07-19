@@ -1,3 +1,4 @@
+# Playback stats dashboard: deduped Overview fan-out, DirectStream KPI, TranscodeReasons Delivery tab.
 diff --git a/package-lock.json b/package-lock.json
 index c86e30b60d..8ef90aad59 100644
 --- a/package-lock.json
@@ -1819,10 +1820,10 @@ index 0000000000..088a0e7af1
 +export default BreakdownTab;
 diff --git a/src/apps/dashboard/features/playbackStatistics/components/tabs/DeliveryTab.tsx b/src/apps/dashboard/features/playbackStatistics/components/tabs/DeliveryTab.tsx
 new file mode 100644
-index 0000000000..8a3cdb7a29
+index 0000000000..cfdd133929
 --- /dev/null
 +++ b/src/apps/dashboard/features/playbackStatistics/components/tabs/DeliveryTab.tsx
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,99 @@
 +import React from 'react';
 +import Alert from '@mui/material/Alert';
 +import Box from '@mui/material/Box';
@@ -1840,11 +1841,12 @@ index 0000000000..8a3cdb7a29
 +const DeliveryTab = () => {
 +    const { apiFilters, filters, toggleClient, togglePlaybackMethod } = usePlaybackStatsFilters();
 +    const methods = usePlaybackDimensions('Method', apiFilters);
++    const reasons = usePlaybackDimensions('TranscodeReason', apiFilters);
 +    const clients = usePlaybackDimensions('Client', apiFilters);
 +    const devices = usePlaybackDimensions('Device', apiFilters);
 +
-+    const isLoading = methods.isLoading || clients.isLoading || devices.isLoading;
-+    const isError = methods.isError || clients.isError || devices.isError;
++    const isLoading = methods.isLoading || reasons.isLoading || clients.isLoading || devices.isLoading;
++    const isError = methods.isError || reasons.isError || clients.isError || devices.isError;
 +
 +    if (isLoading) {
 +        return (
@@ -1879,6 +1881,20 @@ index 0000000000..8a3cdb7a29
 +                />
 +            </Paper>
 +
++            <Paper sx={{ p: 2 }}>
++                <Typography variant='subtitle1' gutterBottom>
++                    {globalize.translate('PlaybackStatsTranscodeReasons')}
++                </Typography>
++                <Typography variant='body2' color='text.secondary' sx={{ mb: 1 }}>
++                    {globalize.translate('PlaybackStatsTranscodeReasonsHelp')}
++                </Typography>
++                <RankedBarList
++                    items={toItems(reasons.data)}
++                    valueFormatter={filters.metric === 'PlayCount' ? String : formatTicks}
++                    height={280}
++                />
++            </Paper>
++
 +            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
 +                <Paper sx={{ p: 2, flex: 1 }}>
 +                    <Typography variant='subtitle1' gutterBottom>
@@ -1909,10 +1925,10 @@ index 0000000000..8a3cdb7a29
 +export default DeliveryTab;
 diff --git a/src/apps/dashboard/features/playbackStatistics/components/tabs/OverviewTab.tsx b/src/apps/dashboard/features/playbackStatistics/components/tabs/OverviewTab.tsx
 new file mode 100644
-index 0000000000..93774f3562
+index 0000000000..d7e5cc110b
 --- /dev/null
 +++ b/src/apps/dashboard/features/playbackStatistics/components/tabs/OverviewTab.tsx
-@@ -0,0 +1,175 @@
+@@ -0,0 +1,181 @@
 +import React, { useMemo } from 'react';
 +import Alert from '@mui/material/Alert';
 +import Box from '@mui/material/Box';
@@ -1927,10 +1943,10 @@ index 0000000000..93774f3562
 +import {
 +    usePlaybackDaily,
 +    usePlaybackOverview,
-+    useServerPlaybackStats,
 +    useServerPlaybackStatsByUser
 +} from '../../api/usePlaybackStats';
 +import { usePlaybackStatsFilters } from '../../context/PlaybackStatsFilterContext';
++import type { PlaybackStatRow } from '../../types';
 +import { buildUserRows } from '../../utils/buildUserRows';
 +import { formatTicks } from '../../utils/formatTicks';
 +import CalendarHeatmap from '../charts/CalendarHeatmap';
@@ -1940,20 +1956,20 @@ index 0000000000..93774f3562
 +
 +interface OverviewTabProps {
 +    userNameById: Record<string, string>;
++    mediaStats?: PlaybackStatRow[];
 +}
 +
-+const OverviewTab = ({ userNameById }: OverviewTabProps) => {
++const OverviewTab = ({ userNameById, mediaStats }: OverviewTabProps) => {
 +    const theme = useTheme();
 +    const { apiFilters, filters, toggleUserId } = usePlaybackStatsFilters();
 +    const overview = usePlaybackOverview(apiFilters);
-+    const mediaStats = useServerPlaybackStats(apiFilters);
 +    const userStats = useServerPlaybackStatsByUser(apiFilters);
 +    const daily = usePlaybackDaily({ ...apiFilters, groupBy: 'MediaType' });
 +    const dailyForCalendar = usePlaybackDaily({ ...apiFilters, groupBy: 'None' });
 +
 +    const { userRows } = useMemo(() => buildUserRows(userStats.data), [ userStats.data ]);
-+    const isLoading = overview.isLoading || mediaStats.isLoading || userStats.isLoading || daily.isLoading;
-+    const isError = overview.isError || mediaStats.isError || userStats.isError || daily.isError;
++    const isLoading = overview.isLoading || userStats.isLoading || daily.isLoading;
++    const isError = overview.isError || userStats.isError || daily.isError;
 +
 +    if (isLoading) {
 +        return (
@@ -1968,7 +1984,7 @@ index 0000000000..93774f3562
 +    }
 +
 +    const { Current, Prior } = overview.data;
-+    const pieData = (mediaStats.data ?? [])
++    const pieData = (mediaStats ?? [])
 +        .filter(row => row.TotalTicks > 0)
 +        .map((row, index) => ({
 +            id: index,
@@ -2011,6 +2027,12 @@ index 0000000000..93774f3562
 +                    current={Current.DirectPlayPercent ?? 0}
 +                    prior={Prior.DirectPlayPercent ?? 0}
 +                />
++                <KpiCard
++                    label={globalize.translate('PlaybackStatsDirectStream')}
++                    value={`${Current.DirectStreamPercent ?? 0}%`}
++                    current={Current.DirectStreamPercent ?? 0}
++                    prior={Prior.DirectStreamPercent ?? 0}
++                />
 +            </Stack>
 +
 +            <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2}>
@@ -2045,7 +2067,7 @@ index 0000000000..93774f3562
 +                        />
 +                    ) : (
 +                        <RankedBarList
-+                            items={(mediaStats.data ?? []).map(row => ({
++                            items={(mediaStats ?? []).map(row => ({
 +                                id: row.MediaType,
 +                                label: row.MediaType,
 +                                value: row.TotalTicks,
@@ -2728,10 +2750,10 @@ index 0000000000..249a73d13f
 +};
 diff --git a/src/apps/dashboard/features/playbackStatistics/types.ts b/src/apps/dashboard/features/playbackStatistics/types.ts
 new file mode 100644
-index 0000000000..74e5bf195d
+index 0000000000..77692b1d15
 --- /dev/null
 +++ b/src/apps/dashboard/features/playbackStatistics/types.ts
-@@ -0,0 +1,122 @@
+@@ -0,0 +1,125 @@
 +export interface PlaybackStatRow {
 +    MediaType: string;
 +    TotalTicks: number;
@@ -2764,6 +2786,7 @@ index 0000000000..74e5bf195d
 +    ActiveUsers?: number;
 +    AvgSessionTicks: number;
 +    DirectPlayPercent?: number;
++    DirectStreamPercent?: number;
 +}
 +
 +export interface PlaybackOverviewResponse {
@@ -2820,6 +2843,8 @@ index 0000000000..74e5bf195d
 +    DatePlayed: string;
 +    ItemSubGroup: string;
 +    PlaybackMethod?: string | null;
++    PlayMethod?: number | null;
++    TranscodeReasons?: string | null;
 +    ClientName?: string | null;
 +    DeviceName?: string | null;
 +}
@@ -2832,7 +2857,7 @@ index 0000000000..74e5bf195d
 +
 +export type PlaybackDailyGroupBy = 'User' | 'MediaType' | 'None';
 +export type PlaybackItemGroupBy = 'Item' | 'Series';
-+export type PlaybackDimension = 'Client' | 'Device' | 'Method' | 'Genre' | 'MediaType';
++export type PlaybackDimension = 'Client' | 'Device' | 'Method' | 'TranscodeReason' | 'Genre' | 'MediaType';
 +export type PlaybackMetric = 'PlayTime' | 'PlayCount';
 +
 +export interface PlaybackStatsFilters {
@@ -3351,23 +3376,26 @@ index e8411bdc27..425be2f9d6 100644
      { path: 'users', type: AppType.Dashboard },
 diff --git a/src/apps/dashboard/routes/reports/playback.tsx b/src/apps/dashboard/routes/reports/playback.tsx
 new file mode 100644
-index 0000000000..c5147adbee
+index 0000000000..f7916f7fe6
 --- /dev/null
 +++ b/src/apps/dashboard/routes/reports/playback.tsx
-@@ -0,0 +1,158 @@
+@@ -0,0 +1,174 @@
 +import React, { useCallback, useMemo } from 'react';
 +import Box from '@mui/material/Box';
 +import Tab from '@mui/material/Tab';
 +import Tabs from '@mui/material/Tabs';
 +import Typography from '@mui/material/Typography';
 +import Page from 'components/Page';
++import { useApi } from 'hooks/useApi';
 +import { useUsersDetails } from 'hooks/useUsers';
 +import globalize from 'lib/globalize';
 +
 +import {
-+    usePlaybackDaily,
++    fetchPlaybackDaily,
++    fetchPlaybackRecent
++} from 'apps/dashboard/features/playbackStatistics/api/playbackStatsApi';
++import {
 +    usePlaybackDimensions,
-+    usePlaybackRecent,
 +    useServerPlaybackStats
 +} from 'apps/dashboard/features/playbackStatistics/api/usePlaybackStats';
 +import PlaybackStatsFiltersBar from 'apps/dashboard/features/playbackStatistics/components/PlaybackStatsFilters';
@@ -3382,7 +3410,7 @@ index 0000000000..c5147adbee
 +    PlaybackStatsFilterProvider,
 +    usePlaybackStatsFilters
 +} from 'apps/dashboard/features/playbackStatistics/context/PlaybackStatsFilterContext';
-+import type { PlaybackStatsTab } from 'apps/dashboard/features/playbackStatistics/types';
++import type { PlaybackStatRow, PlaybackStatsTab } from 'apps/dashboard/features/playbackStatistics/types';
 +import { exportCsv } from 'apps/dashboard/features/playbackStatistics/utils/exportCsv';
 +import { formatTicks } from 'apps/dashboard/features/playbackStatistics/utils/formatTicks';
 +
@@ -3397,12 +3425,12 @@ index 0000000000..c5147adbee
 +};
 +
 +const PlaybackStatisticsContent = () => {
++    const { api } = useApi();
 +    const { tab, setTab, apiFilters, filters } = usePlaybackStatsFilters();
 +    const { usersById: users } = useUsersDetails();
++    // Filter option sources only — export data is fetched on demand.
 +    const mediaStats = useServerPlaybackStats(apiFilters);
 +    const clients = usePlaybackDimensions('Client', apiFilters);
-+    const dailyExport = usePlaybackDaily({ ...apiFilters, groupBy: 'User' });
-+    const recentExport = usePlaybackRecent({ ...apiFilters, startIndex: 0, limit: 200 });
 +
 +    const userNameById = useMemo(() => {
 +        const map: Record<string, string> = {};
@@ -3432,12 +3460,17 @@ index 0000000000..c5147adbee
 +        [ clients.data ]
 +    );
 +
-+    const onExport = useCallback(() => {
++    const onExport = useCallback(async () => {
++        if (!api) {
++            return;
++        }
++
 +        if (tab === 'recent') {
++            const recent = await fetchPlaybackRecent(api, { ...apiFilters, startIndex: 0, limit: 200 });
 +            exportCsv(
 +                `playback-recent-${filters.startDate}-${filters.endDate}.csv`,
 +                [ 'Date', 'User', 'Item', 'Series', 'MediaType', 'Ticks', 'PlayMethod', 'Client', 'Device' ],
-+                (recentExport.data?.Items ?? []).map(item => [
++                (recent.Items ?? []).map(item => [
 +                    item.DatePlayed,
 +                    userNameById[item.UserId] || item.UserId,
 +                    item.ItemName,
@@ -3452,17 +3485,18 @@ index 0000000000..c5147adbee
 +            return;
 +        }
 +
++        const daily = await fetchPlaybackDaily(api, { ...apiFilters, groupBy: 'User' });
 +        exportCsv(
 +            `playback-daily-${filters.startDate}-${filters.endDate}.csv`,
 +            [ 'Date', 'User', 'Ticks', 'PlayCount' ],
-+            (dailyExport.data ?? []).map(row => [
++            (daily ?? []).map(row => [
 +                row.Date,
 +                row.UserId ? (userNameById[row.UserId] || row.UserId) : '',
 +                formatTicks(row.TotalTicks),
 +                row.PlayCount
 +            ])
 +        );
-+    }, [ dailyExport.data, filters.endDate, filters.startDate, recentExport.data?.Items, tab, userNameById ]);
++    }, [ api, apiFilters, filters.endDate, filters.startDate, tab, userNameById ]);
 +
 +    return (
 +        <Page
@@ -3479,7 +3513,9 @@ index 0000000000..c5147adbee
 +                    availableMediaTypes={availableMediaTypes}
 +                    availableClients={availableClients}
 +                    userOptions={userOptions}
-+                    onExport={onExport}
++                    onExport={() => {
++                        void onExport();
++                    }}
 +                />
 +
 +                <Tabs
@@ -3494,7 +3530,12 @@ index 0000000000..c5147adbee
 +                    ))}
 +                </Tabs>
 +
-+                {tab === 'overview' && <OverviewTab userNameById={userNameById} />}
++                {tab === 'overview' && (
++                    <OverviewTab
++                        userNameById={userNameById}
++                        mediaStats={mediaStats.data as PlaybackStatRow[] | undefined}
++                    />
++                )}
 +                {tab === 'trends' && <TrendsTab userNameById={userNameById} />}
 +                {tab === 'users' && <UsersTab usersById={users} />}
 +                {tab === 'breakdown' && <BreakdownTab />}
@@ -3544,7 +3585,7 @@ index 2c69784c58..2180c978c8 100644
                  )}
              </Box>
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 250a7a8d4f..af3226ca57 100755
+index e66b1b5131..36f7182a5f 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
 @@ -33,8 +33,8 @@
@@ -3558,7 +3599,7 @@ index 250a7a8d4f..af3226ca57 100755
      "AlwaysBurnInSubtitleWhenTranscoding": "Always burn in subtitle when transcoding",
      "AlwaysBurnInSubtitleWhenTranscodingHelp": "Burn in all subtitles when transcoding is triggered. This ensures subtitle synchronization after transcoding at the cost of reduced transcoding speed.",
      "LabelThrottleDelaySeconds": "Throttle after",
-@@ -516,6 +516,7 @@
+@@ -522,6 +522,7 @@
      "HeaderPlayAll": "Play All",
      "HeaderPlayback": "Media playback",
      "HeaderPlaybackError": "Playback Error",
@@ -3566,7 +3607,7 @@ index 250a7a8d4f..af3226ca57 100755
      "HeaderPlayOn": "Play On",
      "HeaderPleaseSignIn": "Please sign in",
      "HeaderPortRanges": "Firewall and Proxy Settings",
-@@ -529,6 +530,7 @@
+@@ -535,6 +536,7 @@
      "HeaderRemoteControl": "Remote Control",
      "HeaderRemoveMediaFolder": "Remove Media Folder",
      "HeaderRemoveMediaLocation": "Remove Media Location",
@@ -3574,7 +3615,7 @@ index 250a7a8d4f..af3226ca57 100755
      "HeaderRevisionHistory": "Revision History",
      "HeaderRunningTasks": "Running Tasks",
      "HeaderScenes": "Scenes",
-@@ -727,7 +729,7 @@
+@@ -733,7 +735,7 @@
      "LabelDownMixAudioScale": "Audio boost when downmixing",
      "LabelDownMixAudioScaleHelp": "Boost audio when downmixing. A value of one will preserve the original volume.",
      "LabelStereoDownmixAlgorithm": "Stereo Downmix Algorithm",
@@ -3583,7 +3624,7 @@ index 250a7a8d4f..af3226ca57 100755
      "LabelDropImageHere": "Drop image here, or click to browse.",
      "LabelDropLyricsHere": "Drop lyrics here, or click to browse.",
      "LabelDroppedFrames": "Dropped frames",
-@@ -823,6 +825,7 @@
+@@ -829,6 +831,7 @@
      "LabelMediaSegmentProviders": "Media segment providers",
      "LabelMediaSegmentsType": "{0} Segments",
      "LabelLineup": "Lineup",
@@ -3591,7 +3632,7 @@ index 250a7a8d4f..af3226ca57 100755
      "LabelLocalCustomCss": "Custom CSS code for styling which applies to this client only. You may want to disable server custom CSS code.",
      "LabelLocalHttpServerPortNumber": "Local HTTP port number",
      "LabelLocalHttpServerPortNumberHelp": "The TCP port number for the HTTP server.",
-@@ -895,6 +898,7 @@
+@@ -901,6 +904,7 @@
      "LabelPlayer": "Player",
      "LabelPlayerDimensions": "Player dimensions",
      "LabelPlaylist": "Playlist",
@@ -3599,7 +3640,7 @@ index 250a7a8d4f..af3226ca57 100755
      "LabelPlayMethod": "Play method",
      "LabelPleaseRestart": "Changes will take effect after manually reloading the web client.",
      "LabelPostProcessor": "Post-processing application",
-@@ -1071,6 +1075,7 @@
+@@ -1077,6 +1081,7 @@
      "LabelVideoRange": "Video range",
      "LabelVideoResolution": "Video resolution",
      "LabelSelectPreferredTranscodeVideoCodec": "Preferred transcode video codec",
@@ -3607,7 +3648,7 @@ index 250a7a8d4f..af3226ca57 100755
      "LabelWeb": "Web",
      "LabelWebVersion": "Web version",
      "LabelYear": "Year",
-@@ -1431,6 +1436,8 @@
+@@ -1437,6 +1442,8 @@
      "PlaybackErrorNoCompatibleStream": "This client isn't compatible with the media and the server isn't sending a compatible media format.",
      "PlaybackErrorPlaceHolder": "This is a placeholder for physical media that Jellyfin cannot play. Please insert the disc to play.",
      "PlaybackRate": "Playback Speed",
@@ -3616,7 +3657,7 @@ index 250a7a8d4f..af3226ca57 100755
      "PlayCount": "Play count",
      "Played": "Played",
      "PlayFromBeginning": "Play from beginning",
-@@ -1512,7 +1519,7 @@
+@@ -1518,7 +1525,7 @@
      "RefreshDialogHelp": "Metadata is refreshed based on settings and internet services that are enabled in the Dashboard.",
      "RefreshMetadata": "Refresh metadata",
      "RefreshQueued": "Refresh queued.",
@@ -3625,7 +3666,7 @@ index 250a7a8d4f..af3226ca57 100755
      "ReleaseDate": "Release date",
      "ReleaseGroup": "Release Group",
      "RememberAudioSelections": "Set audio track based on previous item",
-@@ -1562,7 +1569,7 @@
+@@ -1568,7 +1575,7 @@
      "ScreenResolution": "Screen Resolution",
      "Search": "Search",
      "SearchForCollectionInternetMetadata": "Search the internet for artwork and metadata",
@@ -3634,7 +3675,7 @@ index 250a7a8d4f..af3226ca57 100755
      "SearchForMissingMetadata": "Search for missing metadata",
      "SearchForSubtitles": "Search for Subtitles",
      "SearchResults": "Search Results",
-@@ -1672,6 +1679,7 @@
+@@ -1678,6 +1685,7 @@
      "TabNfoSettings": "NFO Settings",
      "TabOther": "Other",
      "TabParentalControl": "Parental Control",
@@ -3642,7 +3683,7 @@ index 250a7a8d4f..af3226ca57 100755
      "TabPlugins": "Plugins",
      "TabRepositories": "Repositories",
      "TabScheduledTasks": "Scheduled Tasks",
-@@ -1944,5 +1952,36 @@
+@@ -1950,5 +1958,39 @@
      "LabelProgressAndSpeed": "Progress / speed",
      "LabelReasons": "Reasons",
      "LabelPlayerSizes": "Player sizes",
@@ -3661,6 +3702,9 @@ index 250a7a8d4f..af3226ca57 100755
 +    "PlaybackStatsDailyTrend": "Daily playback",
 +    "PlaybackStatsDayOfWeek": "Day of week",
 +    "PlaybackStatsDirectPlay": "Direct play",
++    "PlaybackStatsDirectStream": "Direct stream",
++    "PlaybackStatsTranscodeReasons": "Transcode reasons",
++    "PlaybackStatsTranscodeReasonsHelp": "Ranked reasons for forced transcodes. Use this to choose a DirectPlay/DirectStream fix.",
 +    "PlaybackStatsExportCsv": "Export CSV",
 +    "PlaybackStatsGroupBy": "Group by",
 +    "PlaybackStatsHourlyHeatmap": "Hourly usage heatmap",

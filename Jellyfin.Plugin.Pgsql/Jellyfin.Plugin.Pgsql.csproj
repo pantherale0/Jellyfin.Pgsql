@@ -81,6 +81,10 @@
     <None Update="meta.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Jellyfin.Plugin.Pgsql.Tests" />
+  </ItemGroup>
+
   <!-- Host-shared Jellyfin assemblies must not ship in the plugin package.
        PluginManager loads every DLL into the plugin ALC; a private
        Jellyfin.Database.Implementations makes entity types (e.g. User on

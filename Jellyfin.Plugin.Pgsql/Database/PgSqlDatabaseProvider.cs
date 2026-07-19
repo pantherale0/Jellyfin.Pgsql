@@ -141,8 +141,16 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
 
             entity.HasIndex(e => new { e.UserId, e.DatePlayed });
             entity.HasIndex(e => new { e.ItemId, e.DatePlayed });
+            entity.HasIndex(e => e.DatePlayed);
+            entity.HasIndex(e => new { e.DatePlayed, e.PlayMethod });
             entity.HasIndex(e => e.DeviceId)
                 .HasFilter("\"DeviceId\" IS NOT NULL");
+        });
+
+        modelBuilder.Entity<PlaybackActivityDaily>(entity =>
+        {
+            entity.ToTable("PlaybackActivityDaily");
+            entity.HasKey(e => e.Date);
         });
 
         modelBuilder.Entity<UserTasteProfile>(entity =>

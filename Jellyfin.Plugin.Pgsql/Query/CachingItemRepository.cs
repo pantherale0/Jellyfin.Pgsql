@@ -21,6 +21,7 @@ internal sealed class CachingItemRepository : IItemRepository
 {
     private readonly IItemRepository _inner;
     private readonly IQueryResultCache _cache;
+    private readonly IQueryCacheVersionStore _versions;
     private readonly CachedItemLoader _loader;
     private readonly PgLatestQueryService _latestQueries;
     private readonly QueryRuntimeStats _stats;
@@ -31,6 +32,7 @@ internal sealed class CachingItemRepository : IItemRepository
     /// </summary>
     /// <param name="inner">The core item repository.</param>
     /// <param name="cache">The query result cache.</param>
+    /// <param name="versions">The query cache version store.</param>
     /// <param name="loader">The cached item loader.</param>
     /// <param name="latestQueries">The PostgreSQL Latest query optimisers.</param>
     /// <param name="stats">The runtime stats collector.</param>
@@ -38,6 +40,7 @@ internal sealed class CachingItemRepository : IItemRepository
     public CachingItemRepository(
         IItemRepository inner,
         IQueryResultCache cache,
+        IQueryCacheVersionStore versions,
         CachedItemLoader loader,
         PgLatestQueryService latestQueries,
         QueryRuntimeStats stats,
@@ -45,6 +48,7 @@ internal sealed class CachingItemRepository : IItemRepository
     {
         _inner = inner;
         _cache = cache;
+        _versions = versions;
         _loader = loader;
         _latestQueries = latestQueries;
         _stats = stats;
@@ -60,7 +64,12 @@ internal sealed class CachingItemRepository : IItemRepository
             return GetLatestUncached(filter, collectionType);
         }
 
-        var key = QueryCacheKeyBuilder.BuildLatestKey(filter, collectionType);
+        var userId = QueryCacheKeyBuilder.GetVersionUserId(filter);
+        var key = QueryCacheKeyBuilder.BuildLatestKey(
+            filter,
+            collectionType,
+            _versions.GetLibraryVersion(),
+            _versions.GetUserVersion(userId));
         if (key is null)
         {
             return GetLatestUncached(filter, collectionType);
@@ -96,7 +105,11 @@ internal sealed class CachingItemRepository : IItemRepository
             return _inner.GetItemList(filter);
         }
 
-        var key = QueryCacheKeyBuilder.BuildResumeKey(filter);
+        var userId = QueryCacheKeyBuilder.GetVersionUserId(filter);
+        var key = QueryCacheKeyBuilder.BuildResumeKey(
+            filter,
+            _versions.GetLibraryVersion(),
+            _versions.GetUserVersion(userId));
         if (key is null)
         {
             return _inner.GetItemList(filter);

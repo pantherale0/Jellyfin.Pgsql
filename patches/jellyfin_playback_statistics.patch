@@ -1,5 +1,6 @@
+# PlaybackActivity analytics: PlayMethod/TranscodeReasons, SQL session buckets, Overview KPIs, daily rollups.
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 19823dff37..24c28555f1 100644
+index d853d19845..5a3aaaae52 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -11,6 +11,7 @@ using Jellyfin.Data;
@@ -18,7 +19,7 @@ index 19823dff37..24c28555f1 100644
          private readonly IUserDataManager _userDataManager;
          private readonly IServerConfigurationManager _config;
          private readonly ILogger<SessionManager> _logger;
-@@ -89,6 +91,7 @@ namespace Emby.Server.Implementations.Session
+@@ -98,6 +100,7 @@ namespace Emby.Server.Implementations.Session
          /// <param name="deviceManager">Instance of <see cref="IDeviceManager"/> interface.</param>
          /// <param name="mediaSourceManager">Instance of <see cref="IMediaSourceManager"/> interface.</param>
          /// <param name="hostApplicationLifetime">Instance of <see cref="IHostApplicationLifetime"/> interface.</param>
@@ -26,7 +27,7 @@ index 19823dff37..24c28555f1 100644
          public SessionManager(
              ILogger<SessionManager> logger,
              IEventManager eventManager,
-@@ -102,7 +105,8 @@ namespace Emby.Server.Implementations.Session
+@@ -111,7 +114,8 @@ namespace Emby.Server.Implementations.Session
              IServerApplicationHost appHost,
              IDeviceManager deviceManager,
              IMediaSourceManager mediaSourceManager,
@@ -36,7 +37,7 @@ index 19823dff37..24c28555f1 100644
          {
              _logger = logger;
              _eventManager = eventManager;
-@@ -119,6 +123,7 @@ namespace Emby.Server.Implementations.Session
+@@ -128,6 +132,7 @@ namespace Emby.Server.Implementations.Session
              _shutdownCallback = hostApplicationLifetime.ApplicationStopping.Register(OnApplicationStopping);
  
              _deviceManager.DeviceOptionsUpdated += OnDeviceManagerDeviceOptionsUpdated;
@@ -44,7 +45,7 @@ index 19823dff37..24c28555f1 100644
          }
  
          /// <summary>
-@@ -1091,6 +1096,69 @@ namespace Emby.Server.Implementations.Session
+@@ -1139,6 +1144,75 @@ namespace Emby.Server.Implementations.Session
                  {
                      playedToCompletion = OnPlaybackStopped(user, libraryItem, info.PositionTicks, info.Failed);
                  }
@@ -54,6 +55,10 @@ index 19823dff37..24c28555f1 100644
 +                    using var dbContext = await _dbProvider.CreateDbContextAsync().ConfigureAwait(false);
 +
 +                    var playbackMethod = FormatPlaybackMethod(session);
++                    var playMethod = session.PlayState?.PlayMethod is { } method
++                        ? (int?)method
++                        : null;
++                    var transcodeReasons = FormatTranscodeReasons(session);
 +                    var clientName = session.Client;
 +                    var deviceName = session.DeviceName;
 +
@@ -104,6 +109,8 @@ index 19823dff37..24c28555f1 100644
 +                            DatePlayed = DateTime.UtcNow,
 +                            ItemSubGroup = genre,
 +                            PlaybackMethod = playbackMethod,
++                            PlayMethod = playMethod,
++                            TranscodeReasons = transcodeReasons,
 +                            ClientName = clientName,
 +                            DeviceName = deviceName
 +                        });
@@ -114,7 +121,7 @@ index 19823dff37..24c28555f1 100644
              }
  
              if (!string.IsNullOrEmpty(info.LiveStreamId))
-@@ -1118,6 +1186,24 @@ namespace Emby.Server.Implementations.Session
+@@ -1166,6 +1240,36 @@ namespace Emby.Server.Implementations.Session
              EventHelper.QueueEventIfNotNull(PlaybackStopped, this, eventArgs, _logger);
          }
  
@@ -134,6 +141,18 @@ index 19823dff37..24c28555f1 100644
 +            }
 +
 +            return playMethod;
++        }
++
++        private static string FormatTranscodeReasons(SessionInfo session)
++        {
++            if (session.PlayState?.PlayMethod != PlayMethod.Transcode
++                || session.TranscodingInfo is null
++                || session.TranscodingInfo.TranscodeReasons == default)
++            {
++                return null;
++            }
++
++            return session.TranscodingInfo.TranscodeReasons.ToString();
 +        }
 +
          private bool OnPlaybackStopped(User user, BaseItem item, long? positionTicks, bool playbackFailed)
@@ -370,10 +389,10 @@ index 0000000000..25cc4d577e
 +}
 diff --git a/Jellyfin.Api/Controllers/ServerPlaybackStatsController.cs b/Jellyfin.Api/Controllers/ServerPlaybackStatsController.cs
 new file mode 100644
-index 0000000000..cb3a13df24
+index 0000000000..4d7bf07583
 --- /dev/null
 +++ b/Jellyfin.Api/Controllers/ServerPlaybackStatsController.cs
-@@ -0,0 +1,699 @@
+@@ -0,0 +1,772 @@
 +using System;
 +using System.Collections.Generic;
 +using System.Linq;
@@ -382,6 +401,7 @@ index 0000000000..cb3a13df24
 +using Jellyfin.Database.Implementations;
 +using Jellyfin.Database.Implementations.Entities;
 +using MediaBrowser.Common.Api;
++using MediaBrowser.Model.Session;
 +using Microsoft.AspNetCore.Authorization;
 +using Microsoft.AspNetCore.Http;
 +using Microsoft.AspNetCore.Mvc;
@@ -821,6 +841,13 @@ index 0000000000..cb3a13df24
 +                .OrderByDescending(r => r.TotalTicks)
 +                .ToListAsync()
 +                .ConfigureAwait(false),
++            "transcodereason" => await query
++                .Where(p => p.PlayMethod == (int)PlayMethod.Transcode && p.TranscodeReasons != null && p.TranscodeReasons != string.Empty)
++                .GroupBy(p => p.TranscodeReasons!)
++                .Select(g => new { Key = g.Key, TotalTicks = g.Sum(p => p.PlayedTicks), PlayCount = g.Count() })
++                .OrderByDescending(r => r.TotalTicks)
++                .ToListAsync()
++                .ConfigureAwait(false),
 +            "genre" => await query
 +                .GroupBy(p => p.ItemSubGroup)
 +                .Select(g => new { Key = g.Key, TotalTicks = g.Sum(p => p.PlayedTicks), PlayCount = g.Count() })
@@ -861,22 +888,32 @@ index 0000000000..cb3a13df24
 +    {
 +        using var dbContext = await _dbProvider.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
 +        var query = ApplyFilters(dbContext.PlaybackActivity.AsNoTracking(), startDate, endDate, userIds, mediaTypes, clients, playbackMethods);
-+        var ticks = await query.Select(p => p.PlayedTicks).ToListAsync().ConfigureAwait(false);
++
++        var edge0 = SessionBucketEdgesTicks[0];
++        var edge1 = SessionBucketEdgesTicks[1];
++        var edge2 = SessionBucketEdgesTicks[2];
++        var edge3 = SessionBucketEdgesTicks[3];
++        var edge4 = SessionBucketEdgesTicks[4];
++
++        var grouped = await query
++            .GroupBy(p =>
++                p.PlayedTicks < edge0 ? 0
++                : p.PlayedTicks < edge1 ? 1
++                : p.PlayedTicks < edge2 ? 2
++                : p.PlayedTicks < edge3 ? 3
++                : p.PlayedTicks < edge4 ? 4
++                : 5)
++            .Select(g => new { Index = g.Key, PlayCount = g.Count() })
++            .ToListAsync()
++            .ConfigureAwait(false);
 +
 +        var counts = new int[SessionBucketLabels.Length];
-+        foreach (var value in ticks)
++        foreach (var row in grouped)
 +        {
-+            var index = SessionBucketEdgesTicks.Length;
-+            for (var i = 0; i < SessionBucketEdgesTicks.Length; i++)
++            if (row.Index >= 0 && row.Index < counts.Length)
 +            {
-+                if (value < SessionBucketEdgesTicks[i])
-+                {
-+                    index = i;
-+                    break;
-+                }
++                counts[row.Index] = row.PlayCount;
 +            }
-+
-+            counts[index]++;
 +        }
 +
 +        var result = SessionBucketLabels.Select((label, i) => new
@@ -936,6 +973,8 @@ index 0000000000..cb3a13df24
 +                p.DatePlayed,
 +                p.ItemSubGroup,
 +                p.PlaybackMethod,
++                p.PlayMethod,
++                p.TranscodeReasons,
 +                p.ClientName,
 +                p.DeviceName
 +            })
@@ -959,6 +998,44 @@ index 0000000000..cb3a13df24
 +        string[]? clients,
 +        string[]? playbackMethods)
 +    {
++        var hasDimensionFilters = (userIds is { Length: > 0 })
++            || (mediaTypes is { Length: > 0 })
++            || (clients is { Length: > 0 })
++            || (playbackMethods is { Length: > 0 });
++
++        if (!hasDimensionFilters)
++        {
++            var rollup = await dbContext.PlaybackActivityDaily.AsNoTracking()
++                .Where(d => d.Date >= start && d.Date < endExclusive)
++                .GroupBy(_ => 1)
++                .Select(g => new
++                {
++                    TotalTicks = g.Sum(d => d.TotalTicks),
++                    PlayCount = g.Sum(d => d.PlayCount),
++                    DirectPlayCount = g.Sum(d => d.DirectPlayCount),
++                    DirectStreamCount = g.Sum(d => d.DirectStreamCount)
++                })
++                .FirstOrDefaultAsync()
++                .ConfigureAwait(false);
++
++            if (rollup is not null && rollup.PlayCount > 0)
++            {
++                var activeUsersFromRollup = await dbContext.PlaybackActivity.AsNoTracking()
++                    .Where(p => p.DatePlayed >= start && p.DatePlayed < endExclusive)
++                    .Select(p => p.UserId)
++                    .Distinct()
++                    .CountAsync()
++                    .ConfigureAwait(false);
++
++                return BuildOverviewAggregate(
++                    rollup.TotalTicks,
++                    rollup.PlayCount,
++                    activeUsersFromRollup,
++                    rollup.DirectPlayCount,
++                    rollup.DirectStreamCount);
++            }
++        }
++
 +        var query = ApplyFilters(
 +            dbContext.PlaybackActivity.AsNoTracking(),
 +            start,
@@ -968,26 +1045,40 @@ index 0000000000..cb3a13df24
 +            clients,
 +            playbackMethods);
 +
++        var directPlay = (int)PlayMethod.DirectPlay;
++        var directStream = (int)PlayMethod.DirectStream;
++
 +        var totals = await query
 +            .GroupBy(_ => 1)
 +            .Select(g => new
 +            {
 +                TotalTicks = g.Sum(p => p.PlayedTicks),
 +                PlayCount = g.Count(),
-+                ActiveUsers = g.Select(p => p.UserId).Distinct().Count()
++                ActiveUsers = g.Select(p => p.UserId).Distinct().Count(),
++                DirectPlayCount = g.Count(p => p.PlayMethod == directPlay),
++                DirectStreamCount = g.Count(p => p.PlayMethod == directStream)
 +            })
 +            .FirstOrDefaultAsync()
 +            .ConfigureAwait(false);
 +
-+        var directPlayCount = await query
-+            .CountAsync(p => p.PlaybackMethod != null && p.PlaybackMethod.Contains("DirectPlay"))
-+            .ConfigureAwait(false);
++        return BuildOverviewAggregate(
++            totals?.TotalTicks ?? 0L,
++            totals?.PlayCount ?? 0,
++            totals?.ActiveUsers ?? 0,
++            totals?.DirectPlayCount ?? 0,
++            totals?.DirectStreamCount ?? 0);
++    }
 +
-+        var playCount = totals?.PlayCount ?? 0;
-+        var totalTicks = totals?.TotalTicks ?? 0L;
-+        var activeUsers = totals?.ActiveUsers ?? 0;
++    private static object BuildOverviewAggregate(
++        long totalTicks,
++        int playCount,
++        int activeUsers,
++        int directPlayCount,
++        int directStreamCount)
++    {
 +        var avgSessionTicks = playCount > 0 ? totalTicks / playCount : 0L;
 +        var directPlayPercent = playCount > 0 ? Math.Round(100.0 * directPlayCount / playCount, 1) : 0.0;
++        var directStreamPercent = playCount > 0 ? Math.Round(100.0 * directStreamCount / playCount, 1) : 0.0;
 +
 +        return new
 +        {
@@ -995,7 +1086,8 @@ index 0000000000..cb3a13df24
 +            PlayCount = playCount,
 +            ActiveUsers = activeUsers,
 +            AvgSessionTicks = avgSessionTicks,
-+            DirectPlayPercent = directPlayPercent
++            DirectPlayPercent = directPlayPercent,
++            DirectStreamPercent = directStreamPercent
 +        };
 +    }
 +
@@ -1075,10 +1167,10 @@ index 0000000000..cb3a13df24
 +}
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivity.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivity.cs
 new file mode 100644
-index 0000000000..6eff326109
+index 0000000000..16e12bd0ae
 --- /dev/null
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivity.cs
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,100 @@
 +using System;
 +using Jellyfin.Database.Implementations.Entities.Security;
 +
@@ -1160,6 +1252,16 @@ index 0000000000..6eff326109
 +    public string? PlaybackMethod { get; set; }
 +
 +    /// <summary>
++    /// Gets or sets the play method enum value (MediaBrowser.Model.Session.PlayMethod).
++    /// </summary>
++    public int? PlayMethod { get; set; }
++
++    /// <summary>
++    /// Gets or sets the transcode reason flags snapshot when the session was a transcode.
++    /// </summary>
++    public string? TranscodeReasons { get; set; }
++
++    /// <summary>
 +    /// Gets or sets the client name snapshot.
 +    /// </summary>
 +    public string? ClientName { get; set; }
@@ -1169,11 +1271,61 @@ index 0000000000..6eff326109
 +    /// </summary>
 +    public string? DeviceName { get; set; }
 +}
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivityDaily.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivityDaily.cs
+new file mode 100644
+index 0000000000..da9cd00aa9
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivityDaily.cs
+@@ -0,0 +1,44 @@
++using System;
++
++namespace Jellyfin.Database.Implementations.Entities;
++
++/// <summary>
++/// Daily rollup of playback activity for Overview KPIs.
++/// </summary>
++public class PlaybackActivityDaily
++{
++    /// <summary>
++    /// Gets or sets the UTC calendar date for this rollup row.
++    /// </summary>
++    public DateTime Date { get; set; }
++
++    /// <summary>
++    /// Gets or sets the number of playback sessions.
++    /// </summary>
++    public int PlayCount { get; set; }
++
++    /// <summary>
++    /// Gets or sets the total played ticks.
++    /// </summary>
++    public long TotalTicks { get; set; }
++
++    /// <summary>
++    /// Gets or sets the count of distinct users.
++    /// </summary>
++    public int UniqueUsers { get; set; }
++
++    /// <summary>
++    /// Gets or sets the DirectPlay session count.
++    /// </summary>
++    public int DirectPlayCount { get; set; }
++
++    /// <summary>
++    /// Gets or sets the DirectStream session count.
++    /// </summary>
++    public int DirectStreamCount { get; set; }
++
++    /// <summary>
++    /// Gets or sets the Transcode session count.
++    /// </summary>
++    public int TranscodeCount { get; set; }
++}
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
-index b0c12bf592..f440b1cb95 100644
+index b0c12bf592..0388e09077 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
-@@ -173,6 +173,11 @@ public class JellyfinDbContext(DbContextOptions<JellyfinDbContext> options, ILog
+@@ -173,6 +173,16 @@ public class JellyfinDbContext(DbContextOptions<JellyfinDbContext> options, ILog
      /// </summary>
      public DbSet<KeyframeData> KeyframeData => Set<KeyframeData>();
  
@@ -1181,6 +1333,11 @@ index b0c12bf592..f440b1cb95 100644
 +    /// Gets the <see cref="DbSet{TEntity}"/> containing the playback activity.
 +    /// </summary>
 +    public DbSet<PlaybackActivity> PlaybackActivity => Set<PlaybackActivity>();
++
++    /// <summary>
++    /// Gets the <see cref="DbSet{TEntity}"/> containing daily playback activity rollups.
++    /// </summary>
++    public DbSet<PlaybackActivityDaily> PlaybackActivityDaily => Set<PlaybackActivityDaily>();
 +
      /*public DbSet<Artwork> Artwork => Set<Artwork>();
  

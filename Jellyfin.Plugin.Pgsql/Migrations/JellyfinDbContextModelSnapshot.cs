@@ -1112,6 +1112,9 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<int?>("PlayMethod")
+                        .HasColumnType("integer");
+
                     b.Property<string>("PlaybackMethod")
                         .HasColumnType("text");
 
@@ -1124,10 +1127,15 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Property<string>("SeriesName")
                         .HasColumnType("text");
 
+                    b.Property<string>("TranscodeReasons")
+                        .HasColumnType("text");
+
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("DatePlayed");
 
                     b.HasIndex("DeviceId")
                         .HasFilter("\"DeviceId\" IS NOT NULL");
@@ -1139,7 +1147,37 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasIndex("UserId", "DatePlayed");
 
+                    b.HasIndex("DatePlayed", "PlayMethod");
+
                     b.ToTable("PlaybackActivity");
+                });
+
+            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.PlaybackActivityDaily", b =>
+                {
+                    b.Property<DateTime>("Date")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("DirectPlayCount")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("DirectStreamCount")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("PlayCount")
+                        .HasColumnType("integer");
+
+                    b.Property<long>("TotalTicks")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("TranscodeCount")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("UniqueUsers")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Date");
+
+                    b.ToTable("PlaybackActivityDaily");
                 });
 
             modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.TasteModelEvalRun", b =>
