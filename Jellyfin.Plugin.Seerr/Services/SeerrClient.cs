@@ -209,7 +209,8 @@ public sealed class SeerrClient
         var genres = NormalizeGenreIds(genreIds);
         if (genres.Count > 0)
         {
-            path += "&genre=" + string.Join(',', genres.Select(id => id.ToString(CultureInfo.InvariantCulture)));
+            var genreValue = string.Join(',', genres.Select(id => id.ToString(CultureInfo.InvariantCulture)));
+            path += "&genre=" + Uri.EscapeDataString(genreValue);
         }
 
         if (voteAverageGte is > 0 and <= 10)
