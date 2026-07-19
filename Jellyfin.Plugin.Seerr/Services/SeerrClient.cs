@@ -9,6 +9,7 @@ using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Seerr.Models;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.Seerr.Services;
@@ -25,17 +26,23 @@ public sealed class SeerrClient
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
+    private static readonly TimeSpan RatingCacheDuration = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan RatingFailureCacheDuration = TimeSpan.FromMinutes(1);
+
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IMemoryCache _cache;
     private readonly ILogger<SeerrClient> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SeerrClient"/> class.
     /// </summary>
     /// <param name="httpClientFactory">HTTP client factory.</param>
+    /// <param name="cache">Memory cache for rating lookups.</param>
     /// <param name="logger">Logger.</param>
-    public SeerrClient(IHttpClientFactory httpClientFactory, ILogger<SeerrClient> logger)
+    public SeerrClient(IHttpClientFactory httpClientFactory, IMemoryCache cache, ILogger<SeerrClient> logger)
     {
         _httpClientFactory = httpClientFactory;
+        _cache = cache;
         _logger = logger;
     }
 
@@ -64,7 +71,7 @@ public sealed class SeerrClient
     }
 
     /// <summary>
-    /// Searches Seerr and maps results to gateway DTOs.
+    /// Searches Seerr and maps results to gateway DTOs (unrestricted path).
     /// </summary>
     /// <param name="query">Search term.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -73,10 +80,28 @@ public sealed class SeerrClient
     {
         var config = Plugin.Instance!.Configuration;
         var limit = Math.Clamp(config.SearchLimit, 1, 50);
+        var candidates = await SearchPageAsync(query, page: 1, cancellationToken).ConfigureAwait(false);
+        return candidates.Take(limit).Select(c => c.Item).ToList();
+    }
+
+    /// <summary>
+    /// Searches a single Seerr results page without applying <c>SearchLimit</c>.
+    /// </summary>
+    /// <param name="query">Search term.</param>
+    /// <param name="page">1-based page number.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Search candidates including adult flags.</returns>
+    public async Task<IReadOnlyList<SeerrSearchCandidate>> SearchPageAsync(
+        string query,
+        int page,
+        CancellationToken cancellationToken)
+    {
+        var config = Plugin.Instance!.Configuration;
         var path = string.Format(
             CultureInfo.InvariantCulture,
-            "search?query={0}&page=1",
-            Uri.EscapeDataString(query));
+            "search?query={0}&page={1}",
+            Uri.EscapeDataString(query),
+            page);
 
         using var response = await SendAsync(HttpMethod.Get, path, null, cancellationToken).ConfigureAwait(false);
         var payload = await response.Content.ReadFromJsonAsync<SeerrSearchDto>(JsonOptions, cancellationToken).ConfigureAwait(false);
@@ -85,14 +110,9 @@ public sealed class SeerrClient
             return [];
         }
 
-        var items = new List<SeerrSearchItem>(limit);
+        var items = new List<SeerrSearchCandidate>(payload.Results.Count);
         foreach (var result in payload.Results)
         {
-            if (items.Count >= limit)
-            {
-                break;
-            }
-
             if (!IsMovieOrTv(result.MediaType))
             {
                 continue;
@@ -114,24 +134,84 @@ public sealed class SeerrClient
                 year = parsedYear;
             }
 
-            items.Add(new SeerrSearchItem
+            items.Add(new SeerrSearchCandidate
             {
-                MediaType = result.MediaType!,
-                MediaId = result.Id,
-                Title = title,
-                Year = year,
-                Overview = result.Overview,
-                PosterUrl = BuildPosterUrl(result.PosterPath),
-                Status = status,
-                CanRequest = status is not SeerrMediaStatus.Available
-                    and not SeerrMediaStatus.Pending
-                    and not SeerrMediaStatus.Processing
-                    and not SeerrMediaStatus.Blocklisted
-                    and not SeerrMediaStatus.Deleted
+                Adult = result.Adult,
+                Item = new SeerrSearchItem
+                {
+                    MediaType = result.MediaType!,
+                    MediaId = result.Id,
+                    Title = title,
+                    Year = year,
+                    Overview = result.Overview,
+                    PosterUrl = BuildPosterUrl(result.PosterPath),
+                    Status = status,
+                    CanRequest = status is not SeerrMediaStatus.Available
+                        and not SeerrMediaStatus.Pending
+                        and not SeerrMediaStatus.Processing
+                        and not SeerrMediaStatus.Blocklisted
+                        and not SeerrMediaStatus.Deleted
+                }
             });
         }
 
         return items;
+    }
+
+    /// <summary>
+    /// Loads adult/certification metadata for a title (cached).
+    /// </summary>
+    /// <param name="mediaType"><c>movie</c> or <c>tv</c>.</param>
+    /// <param name="mediaId">TMDB id.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Resolved rating metadata.</returns>
+    public async Task<SeerrMediaRating> GetMediaRatingAsync(
+        string mediaType,
+        int mediaId,
+        CancellationToken cancellationToken)
+    {
+        var cacheKey = string.Create(
+            CultureInfo.InvariantCulture,
+            $"seerr-rating:{mediaType}:{mediaId}");
+
+        if (_cache.TryGetValue(cacheKey, out SeerrMediaRating? cached) && cached is not null)
+        {
+            return cached;
+        }
+
+        try
+        {
+            SeerrMediaRating rating;
+            if (string.Equals(mediaType, "movie", StringComparison.OrdinalIgnoreCase))
+            {
+                rating = await FetchMovieRatingAsync(mediaId, cancellationToken).ConfigureAwait(false);
+            }
+            else if (string.Equals(mediaType, "tv", StringComparison.OrdinalIgnoreCase))
+            {
+                rating = await FetchTvRatingAsync(mediaId, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                rating = SeerrMediaRating.Failed;
+            }
+
+            _cache.Set(
+                cacheKey,
+                rating,
+                rating.LookupFailed ? RatingFailureCacheDuration : RatingCacheDuration);
+            return rating;
+        }
+        catch (SeerrApiException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to load Seerr rating for {MediaType}/{MediaId}",
+                SanitizeForLog(mediaType),
+                mediaId);
+            var failed = SeerrMediaRating.Failed;
+            _cache.Set(cacheKey, failed, RatingFailureCacheDuration);
+            return failed;
+        }
     }
 
     /// <summary>
@@ -185,6 +265,107 @@ public sealed class SeerrClient
         var payload = await response.Content.ReadFromJsonAsync<SeerrUserResultsDto>(JsonOptions, cancellationToken).ConfigureAwait(false);
         return payload?.Results ?? [];
     }
+
+    private async Task<SeerrMediaRating> FetchMovieRatingAsync(int mediaId, CancellationToken cancellationToken)
+    {
+        var path = string.Create(CultureInfo.InvariantCulture, $"movie/{mediaId}");
+        using var response = await SendAsync(HttpMethod.Get, path, null, cancellationToken).ConfigureAwait(false);
+        var details = await response.Content
+            .ReadFromJsonAsync<SeerrMovieDetailsDto>(JsonOptions, cancellationToken)
+            .ConfigureAwait(false);
+        if (details is null)
+        {
+            return SeerrMediaRating.Failed;
+        }
+
+        return new SeerrMediaRating
+        {
+            Adult = details.Adult,
+            Certification = ExtractMovieCertification(details)
+        };
+    }
+
+    private async Task<SeerrMediaRating> FetchTvRatingAsync(int mediaId, CancellationToken cancellationToken)
+    {
+        var path = string.Create(CultureInfo.InvariantCulture, $"tv/{mediaId}");
+        using var response = await SendAsync(HttpMethod.Get, path, null, cancellationToken).ConfigureAwait(false);
+        var details = await response.Content
+            .ReadFromJsonAsync<SeerrTvDetailsDto>(JsonOptions, cancellationToken)
+            .ConfigureAwait(false);
+        if (details is null)
+        {
+            return SeerrMediaRating.Failed;
+        }
+
+        return new SeerrMediaRating
+        {
+            Adult = details.Adult,
+            Certification = ExtractTvCertification(details)
+        };
+    }
+
+    /// <summary>
+    /// Picks a preferred movie certification (US first) from Seerr movie details.
+    /// </summary>
+    /// <param name="details">Deserialized movie details.</param>
+    /// <returns>Certification string or null.</returns>
+    internal static string? ExtractMovieCertification(SeerrMovieDetailsDto details)
+    {
+        var results = details.Releases?.Results;
+        if (results is null || results.Count == 0)
+        {
+            return null;
+        }
+
+        foreach (var country in OrderCountries(results, c => c.Iso31661))
+        {
+            if (country.ReleaseDates is not null)
+            {
+                foreach (var entry in country.ReleaseDates)
+                {
+                    if (!string.IsNullOrWhiteSpace(entry.Certification))
+                    {
+                        return entry.Certification.Trim();
+                    }
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(country.Rating))
+            {
+                return country.Rating.Trim();
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Picks a preferred TV content rating (US first) from Seerr TV details.
+    /// </summary>
+    /// <param name="details">Deserialized TV details.</param>
+    /// <returns>Rating string or null.</returns>
+    internal static string? ExtractTvCertification(SeerrTvDetailsDto details)
+    {
+        var results = details.ContentRatings?.Results;
+        if (results is null || results.Count == 0)
+        {
+            return null;
+        }
+
+        foreach (var entry in OrderCountries(results, c => c.Iso31661))
+        {
+            if (!string.IsNullOrWhiteSpace(entry.Rating))
+            {
+                return entry.Rating.Trim();
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<T> OrderCountries<T>(IEnumerable<T> countries, Func<T, string?> isoSelector)
+        => countries.OrderBy(c =>
+            string.Equals(isoSelector(c), "US", StringComparison.OrdinalIgnoreCase) ? 0 : 1);
 
     private async Task<HttpResponseMessage> SendAsync(
         HttpMethod method,
