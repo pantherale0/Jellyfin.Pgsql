@@ -470,6 +470,9 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasIndex("ItemId", "ImageType");
 
+                    b.HasIndex("ItemId", "ImageType", "Path")
+                        .IsUnique();
+
                     b.ToTable("BaseItemImageInfos");
                 });
 
