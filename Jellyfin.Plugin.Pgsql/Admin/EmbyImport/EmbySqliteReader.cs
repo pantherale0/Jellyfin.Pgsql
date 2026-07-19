@@ -11,22 +11,22 @@ using Microsoft.Data.Sqlite;
 namespace Jellyfin.Plugin.Pgsql.Admin.EmbyImport;
 
 /// <summary>
-/// Emby <c>library.db</c> UserDatas layout variants.
-/// </summary>
-file enum EmbyUserDataSchema
-{
-    /// <summary>Older Emby with a <c>key</c> column on UserDatas.</summary>
-    LegacyKeyColumn,
-
-    /// <summary>Current Emby with keys in UserDataKeys2.</summary>
-    KeyTableV2,
-}
-
-/// <summary>
 /// Reads Emby <c>users.db</c> and <c>library.db</c> UserDatas.
 /// </summary>
 public sealed class EmbySqliteReader
 {
+    /// <summary>
+    /// Emby <c>library.db</c> UserDatas layout variants.
+    /// </summary>
+    private enum UserDataSchema
+    {
+        /// <summary>Older Emby with a <c>key</c> column on UserDatas.</summary>
+        LegacyKeyColumn,
+
+        /// <summary>Current Emby with keys in UserDataKeys2.</summary>
+        KeyTableV2,
+    }
+
     /// <summary>
     /// Lists Emby users with UserData counts from an upload session.
     /// </summary>
@@ -105,13 +105,13 @@ public sealed class EmbySqliteReader
         await using var command = connection.CreateCommand();
         // Schema is detected from fixed table/column names; SQL is never built from upload content.
         // Assign compile-time literal SQL per branch (CA2100).
-        if (schema == EmbyUserDataSchema.LegacyKeyColumn)
+        if (schema == UserDataSchema.LegacyKeyColumn)
         {
             command.CommandText =
                 "SELECT key, userId, rating, played, playCount, isFavorite, playbackPositionTicks, " +
                 "lastPlayedDate, AudioStreamIndex, SubtitleStreamIndex FROM UserDatas";
         }
-        else if (schema == EmbyUserDataSchema.KeyTableV2)
+        else if (schema == UserDataSchema.KeyTableV2)
         {
             command.CommandText =
                 "SELECT k.UserDataKey, d.userId, d.rating, d.played, d.playCount, d.isFavorite, " +
@@ -181,14 +181,14 @@ public sealed class EmbySqliteReader
         _ = await DetectUserDataSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<EmbyUserDataSchema> DetectUserDataSchemaAsync(
+    private static async Task<UserDataSchema> DetectUserDataSchemaAsync(
         SqliteConnection connection,
         CancellationToken cancellationToken)
     {
         // Older Emby: UserDatas.key + lastPlayedDate.
         if (await ColumnExistsAsync(connection, "UserDatas", "key", cancellationToken).ConfigureAwait(false))
         {
-            return EmbyUserDataSchema.LegacyKeyColumn;
+            return UserDataSchema.LegacyKeyColumn;
         }
 
         // Current Emby: UserDatas.UserDataKeyId → UserDataKeys2.UserDataKey (+ LastPlayedDateInt).
@@ -198,7 +198,7 @@ public sealed class EmbySqliteReader
             && await ColumnExistsAsync(connection, "UserDataKeys2", "UserDataKey", cancellationToken)
                 .ConfigureAwait(false))
         {
-            return EmbyUserDataSchema.KeyTableV2;
+            return UserDataSchema.KeyTableV2;
         }
 
         throw new EmbyImportException(
