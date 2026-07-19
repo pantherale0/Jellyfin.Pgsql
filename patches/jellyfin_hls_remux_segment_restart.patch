@@ -1,0 +1,250 @@
+diff --git a/Jellyfin.Api/Controllers/DynamicHlsController.cs b/Jellyfin.Api/Controllers/DynamicHlsController.cs
+index 838f48949d..d5ccaeacde 100644
+--- a/Jellyfin.Api/Controllers/DynamicHlsController.cs
++++ b/Jellyfin.Api/Controllers/DynamicHlsController.cs
+@@ -1480,23 +1480,48 @@ public class DynamicHlsController : BaseJellyfinApiController
+ 
+             if (segmentId == -1)
+             {
+-                _logger.LogDebug("Starting transcoding because fmp4 init file is being requested");
++                _logger.LogInformation("Starting HLS transcoding because fmp4 init file is being requested");
+                 startTranscoding = true;
+                 segmentId = 0;
+             }
+             else if (currentTranscodingIndex is null)
+             {
+-                _logger.LogDebug("Starting transcoding because currentTranscodingIndex=null");
++                _logger.LogInformation("Starting HLS transcoding because currentTranscodingIndex=null for segment {SegmentId}", segmentId);
+                 startTranscoding = true;
+             }
+             else if (segmentId < currentTranscodingIndex.Value)
+             {
+-                _logger.LogDebug("Starting transcoding because requestedIndex={0} and currentTranscodingIndex={1}", segmentId, currentTranscodingIndex);
+-                startTranscoding = true;
++                // currentTranscodingIndex is the latest written segment. Only restart when the
++                // request is before the earliest segment this job has produced (true backward
++                // seek). Missing segments inside [min, current] wait on the running job instead
++                // of thrash-restarting with a new -ss/-start_number (jellyfin#13668).
++                var minTranscodingIndex = GetMinTranscodingIndex(playlistPath, segmentExtension);
++                if (minTranscodingIndex is null || segmentId < minTranscodingIndex.Value)
++                {
++                    _logger.LogInformation(
++                        "Restarting HLS transcoding because requestedIndex={RequestedIndex} is before produced range [{MinIndex}, {CurrentIndex}]",
++                        segmentId,
++                        minTranscodingIndex,
++                        currentTranscodingIndex);
++                    startTranscoding = true;
++                }
++                else
++                {
++                    _logger.LogInformation(
++                        "Waiting for missing HLS segment {RequestedIndex} within produced range [{MinIndex}, {CurrentIndex}] instead of restarting",
++                        segmentId,
++                        minTranscodingIndex,
++                        currentTranscodingIndex);
++                }
+             }
+             else if (segmentId - currentTranscodingIndex.Value > segmentGapRequiringTranscodingChange)
+             {
+-                _logger.LogDebug("Starting transcoding because segmentGap is {0} and max allowed gap is {1}. requestedIndex={2}", segmentId - currentTranscodingIndex.Value, segmentGapRequiringTranscodingChange, segmentId);
++                _logger.LogInformation(
++                    "Restarting HLS transcoding because segmentGap is {SegmentGap} and max allowed gap is {MaxGap}. requestedIndex={RequestedIndex}, currentTranscodingIndex={CurrentIndex}",
++                    segmentId - currentTranscodingIndex.Value,
++                    segmentGapRequiringTranscodingChange,
++                    segmentId,
++                    currentTranscodingIndex);
+                 startTranscoding = true;
+             }
+ 
+@@ -2017,11 +2042,39 @@ public class DynamicHlsController : BaseJellyfinApiController
+             return null;
+         }
+ 
++        return TryParseSegmentIndex(playlist, file.Name);
++    }
++
++    private int? GetMinTranscodingIndex(string playlist, string segmentExtension)
++    {
++        var job = _transcodeManager.GetTranscodingJob(playlist, TranscodingJobType);
++
++        if (job is null || job.HasExited)
++        {
++            return null;
++        }
++
++        var file = GetFirstTranscodingFile(playlist, segmentExtension, _fileSystem);
++
++        if (file is null)
++        {
++            return null;
++        }
++
++        return TryParseSegmentIndex(playlist, file.Name);
++    }
++
++    private static int? TryParseSegmentIndex(string playlist, string fileName)
++    {
+         var playlistFilename = Path.GetFileNameWithoutExtension(playlist.AsSpan());
++        var indexString = Path.GetFileNameWithoutExtension(fileName.AsSpan()).Slice(playlistFilename.Length);
+ 
+-        var indexString = Path.GetFileNameWithoutExtension(file.Name.AsSpan()).Slice(playlistFilename.Length);
++        if (int.TryParse(indexString, NumberStyles.Integer, CultureInfo.InvariantCulture, out var index))
++        {
++            return index;
++        }
+ 
+-        return int.Parse(indexString, NumberStyles.Integer, CultureInfo.InvariantCulture);
++        return null;
+     }
+ 
+     private static FileSystemMetadata? GetLastTranscodingFile(string playlist, string segmentExtension, IFileSystem fileSystem)
+@@ -2032,8 +2085,10 @@ public class DynamicHlsController : BaseJellyfinApiController
+ 
+         try
+         {
++            // Exclude fMP4 init segments (index -1) from the "current" position.
+             return fileSystem.GetFiles(folder, new[] { segmentExtension }, true, false)
+                 .Where(i => Path.GetFileNameWithoutExtension(i.Name).StartsWith(filePrefix, StringComparison.OrdinalIgnoreCase))
++                .Where(i => (TryParseSegmentIndex(playlist, i.Name) ?? -1) >= 0)
+                 .MaxBy(fileSystem.GetLastWriteTimeUtc);
+         }
+         catch (IOException)
+@@ -2042,6 +2097,26 @@ public class DynamicHlsController : BaseJellyfinApiController
+         }
+     }
+ 
++    private static FileSystemMetadata? GetFirstTranscodingFile(string playlist, string segmentExtension, IFileSystem fileSystem)
++    {
++        var folder = Path.GetDirectoryName(playlist) ?? throw new ArgumentException("Path can't be a root directory.", nameof(playlist));
++
++        var filePrefix = Path.GetFileNameWithoutExtension(playlist);
++
++        try
++        {
++            // Exclude fMP4 init segments (index -1) so backward-seek detection uses real media segments.
++            return fileSystem.GetFiles(folder, new[] { segmentExtension }, true, false)
++                .Where(i => Path.GetFileNameWithoutExtension(i.Name).StartsWith(filePrefix, StringComparison.OrdinalIgnoreCase))
++                .Where(i => (TryParseSegmentIndex(playlist, i.Name) ?? -1) >= 0)
++                .MinBy(i => TryParseSegmentIndex(playlist, i.Name) ?? int.MaxValue);
++        }
++        catch (IOException)
++        {
++            return null;
++        }
++    }
++
+     private async Task DeleteLastFile(string playlistPath, string segmentExtension, int retryCount)
+     {
+         var file = GetLastTranscodingFile(playlistPath, segmentExtension, _fileSystem);
+diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
+index 847f4cf187..2bbff3e283 100644
+--- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
++++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
+@@ -7349,14 +7349,13 @@ namespace MediaBrowser.Controller.MediaEncoding
+                 readrate = 1;
+                 inputModifier += " -re";
+             }
+-            else if (encodingOptions.EnableSegmentDeletion
+-                && state.VideoStream is not null
++            else if (state.VideoStream is not null
+                 && state.TranscodingType == TranscodingJobType.Hls
+                 && IsCopyCodec(state.OutputVideoCodec)
+                 && _mediaEncoder.EncoderVersion >= _minFFmpegReadrateOption)
+             {
+-                // Set an input read rate limit 10x for using SegmentDeletion with stream-copy
+-                // to prevent ffmpeg from exiting prematurely (due to fast drive)
++                // Pace HLS stream-copy remuxes so ffmpeg does not race far ahead of the playhead
++                // (or exit early on fast storage). Previously gated on EnableSegmentDeletion only.
+                 readrate = 10;
+                 inputModifier += $" -readrate {readrate}";
+             }
+diff --git a/src/Jellyfin.MediaEncoding.Hls/Playlist/DynamicHlsPlaylistGenerator.cs b/src/Jellyfin.MediaEncoding.Hls/Playlist/DynamicHlsPlaylistGenerator.cs
+index c970fd8a61..043418fda4 100644
+--- a/src/Jellyfin.MediaEncoding.Hls/Playlist/DynamicHlsPlaylistGenerator.cs
++++ b/src/Jellyfin.MediaEncoding.Hls/Playlist/DynamicHlsPlaylistGenerator.cs
+@@ -1,14 +1,10 @@
+ using System;
+ using System.Collections.Generic;
+-using System.Diagnostics.CodeAnalysis;
+ using System.Globalization;
+ using System.IO;
+ using System.Linq;
+ using System.Text;
+-using Jellyfin.MediaEncoding.Hls.Extractors;
+ using Jellyfin.MediaEncoding.Keyframes;
+-using MediaBrowser.Common.Configuration;
+-using MediaBrowser.Controller.Configuration;
+ using MediaBrowser.Controller.MediaEncoding;
+ 
+ namespace Jellyfin.MediaEncoding.Hls.Playlist;
+@@ -16,35 +12,13 @@ namespace Jellyfin.MediaEncoding.Hls.Playlist;
+ /// <inheritdoc />
+ public class DynamicHlsPlaylistGenerator : IDynamicHlsPlaylistGenerator
+ {
+-    private readonly IServerConfigurationManager _serverConfigurationManager;
+-    private readonly IKeyframeExtractor[] _extractors;
+-
+-    /// <summary>
+-    /// Initializes a new instance of the <see cref="DynamicHlsPlaylistGenerator"/> class.
+-    /// </summary>
+-    /// <param name="serverConfigurationManager">An instance of the see <see cref="IServerConfigurationManager"/> interface.</param>
+-    /// <param name="extractors">An instance of <see cref="IEnumerable{IKeyframeExtractor}"/>.</param>
+-    public DynamicHlsPlaylistGenerator(IServerConfigurationManager serverConfigurationManager, IEnumerable<IKeyframeExtractor> extractors)
+-    {
+-        _serverConfigurationManager = serverConfigurationManager;
+-        _extractors = extractors.Where(e => e.IsMetadataBased).ToArray();
+-    }
+-
+     /// <inheritdoc />
+     public string CreateMainPlaylist(CreateMainPlaylistRequest request)
+     {
+-        IReadOnlyList<double> segments;
+-        // For video transcodes it is sufficient with equal length segments as ffmpeg will create new keyframes
+-        if (request.IsRemuxingVideo
+-            && request.MediaSourceId is not null
+-            && TryExtractKeyframes(request.MediaSourceId.Value, request.FilePath, out var keyframeData))
+-        {
+-            segments = ComputeSegments(keyframeData, request.DesiredSegmentLengthMs);
+-        }
+-        else
+-        {
+-            segments = ComputeEqualLengthSegments(request.DesiredSegmentLengthMs, request.TotalRuntimeTicks);
+-        }
++        // Always use equal-length segments so playlist indices match ffmpeg's fixed -hls_time
++        // output. Keyframe-based remux playlists diverge from on-disk segment numbers and cause
++        // DynamicHlsController to thrash-restart ffmpeg near EOF (jellyfin#13668).
++        IReadOnlyList<double> segments = ComputeEqualLengthSegments(request.DesiredSegmentLengthMs, request.TotalRuntimeTicks);
+ 
+         var segmentExtension = EncodingHelper.GetSegmentFileExtension(request.SegmentContainer);
+ 
+@@ -106,30 +80,6 @@ public class DynamicHlsPlaylistGenerator : IDynamicHlsPlaylistGenerator
+         return builder.ToString();
+     }
+ 
+-    private bool TryExtractKeyframes(Guid itemId, string filePath, [NotNullWhen(true)] out KeyframeData? keyframeData)
+-    {
+-        keyframeData = null;
+-        if (!IsExtractionAllowedForFile(filePath, _serverConfigurationManager.GetEncodingOptions().AllowOnDemandMetadataBasedKeyframeExtractionForExtensions))
+-        {
+-            return false;
+-        }
+-
+-        var len = _extractors.Length;
+-        for (var i = 0; i < len; i++)
+-        {
+-            var extractor = _extractors[i];
+-            if (!extractor.TryExtractKeyframes(itemId, filePath, out var result))
+-            {
+-                continue;
+-            }
+-
+-            keyframeData = result;
+-            return true;
+-        }
+-
+-        return false;
+-    }
+-
+     internal static bool IsExtractionAllowedForFile(ReadOnlySpan<char> filePath, IReadOnlyList<string> allowedExtensions)
+     {
+         var extension = Path.GetExtension(filePath);
