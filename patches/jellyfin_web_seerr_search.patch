@@ -1,8 +1,5 @@
-diff --git a/src/apps/stable/features/search/api/seerrTypes.ts b/src/apps/stable/features/search/api/seerrTypes.ts
-new file mode 100644
-index 0000000000..98054162ce
---- /dev/null
-+++ b/src/apps/stable/features/search/api/seerrTypes.ts
+--- a/src/lib/seerr/seerrTypes.ts
++++ b/src/lib/seerr/seerrTypes.ts
 @@ -0,0 +1,74 @@
 +export type SeerrMediaStatus =
 +    | 'Unknown'
@@ -78,21 +75,16 @@ index 0000000000..98054162ce
 +
 +export const getSeerrSearchItems = (data?: SeerrSearchResponse | null): NormalizedSeerrSearchItem[] =>
 +    (data?.items ?? data?.Items ?? []).map(normalizeSeerrSearchItem);
-diff --git a/src/apps/stable/features/search/api/useSeerrSearch.ts b/src/apps/stable/features/search/api/useSeerrSearch.ts
-new file mode 100644
-index 0000000000..b8897135ae
---- /dev/null
-+++ b/src/apps/stable/features/search/api/useSeerrSearch.ts
-@@ -0,0 +1,68 @@
-+import { useQuery } from '@tanstack/react-query';
+--- a/src/lib/seerr/seerrApi.ts
++++ b/src/lib/seerr/seerrApi.ts
+@@ -0,0 +1,73 @@
 +import type { ApiClient } from 'jellyfin-apiclient';
-+import { useApi } from 'hooks/useApi';
++
 +import type { SeerrSearchResponse, SeerrStatusResponse } from './seerrTypes';
-+import { isSeerrEnabled } from './seerrTypes';
 +
-+const CamelCaseAccept = 'application/json; profile="CamelCase"';
++export const CamelCaseAccept = 'application/json; profile="CamelCase"';
 +
-+const fetchSeerrStatus = async (apiClient: ApiClient): Promise<SeerrStatusResponse> => {
++export const fetchSeerrStatus = async (apiClient: ApiClient): Promise<SeerrStatusResponse> => {
 +    return apiClient.ajax({
 +        type: 'GET',
 +        url: apiClient.getUrl('Seerr/Status'),
@@ -101,7 +93,7 @@ index 0000000000..b8897135ae
 +    });
 +};
 +
-+const fetchSeerrSearch = async (
++export const fetchSeerrSearch = async (
 +    apiClient: ApiClient,
 +    query: string
 +): Promise<SeerrSearchResponse> => {
@@ -112,6 +104,158 @@ index 0000000000..b8897135ae
 +        headers: { accept: CamelCaseAccept }
 +    });
 +};
++
++export interface SeerrDiscoverParams {
++    mediaType: 'movie' | 'tv';
++    genreIds?: number[];
++    voteAverageGte?: number;
++    limit?: number;
++}
++
++export const fetchSeerrDiscover = async (
++    apiClient: ApiClient,
++    params: SeerrDiscoverParams
++): Promise<SeerrSearchResponse> => {
++    const query: Record<string, string | number> = {
++        mediaType: params.mediaType,
++        limit: params.limit ?? 16
++    };
++
++    if (params.genreIds?.length) {
++        query.genreIds = params.genreIds.join(',');
++    }
++
++    if (params.voteAverageGte != null && params.voteAverageGte > 0) {
++        query.voteAverageGte = params.voteAverageGte;
++    }
++
++    return apiClient.ajax({
++        type: 'GET',
++        url: apiClient.getUrl('Seerr/Discover', query),
++        dataType: 'json',
++        headers: { accept: CamelCaseAccept }
++    });
++};
++
++export const requestSeerrMedia = async (
++    apiClient: ApiClient,
++    mediaType: string,
++    mediaId: number
++) => {
++    return apiClient.ajax({
++        type: 'POST',
++        url: apiClient.getUrl('Seerr/Request'),
++        data: JSON.stringify({ mediaType, mediaId }),
++        contentType: 'application/json',
++        dataType: 'json',
++        headers: { accept: CamelCaseAccept }
++    });
++};
+--- a/src/lib/seerr/tmdbGenres.ts
++++ b/src/lib/seerr/tmdbGenres.ts
+@@ -0,0 +1,75 @@
++/**
++ * Maps Jellyfin taste genre CleanValues / title-cased labels to TMDB genre ids.
++ * Unknown labels are skipped.
++ */
++const GENRE_NAME_TO_TMDB_ID: Record<string, number> = {
++    action: 28,
++    adventure: 12,
++    animation: 16,
++    comedy: 35,
++    crime: 80,
++    documentary: 99,
++    drama: 18,
++    family: 10751,
++    fantasy: 14,
++    history: 36,
++    horror: 27,
++    music: 10402,
++    mystery: 9648,
++    romance: 10749,
++    'science fiction': 878,
++    'sci fi': 878,
++    'scifi': 878,
++    thriller: 53,
++    war: 10752,
++    western: 37,
++    'tv movie': 10770,
++    'action adventure': 10759,
++    'action and adventure': 10759,
++    kids: 10762,
++    news: 10763,
++    reality: 10764,
++    soap: 10766,
++    talk: 10767,
++    'war politics': 10768,
++    'war and politics': 10768,
++    'sci fi fantasy': 10765,
++    'science fiction fantasy': 10765
++};
++
++export function normalizeGenreLabel(label: string): string {
++    return label
++        .normalize('NFD')
++        .replace(/[\u0300-\u036f]/g, '')
++        .toLowerCase()
++        .replace(/&/g, ' and ')
++        .replace(/[^a-z0-9\s]/g, ' ')
++        .replace(/\s+/g, ' ')
++        .trim();
++}
++
++export function mapGenreLabelToTmdbId(label: string): number | null {
++    const key = normalizeGenreLabel(label);
++    if (!key) {
++        return null;
++    }
++
++    return GENRE_NAME_TO_TMDB_ID[key] ?? null;
++}
++
++export function mapGenreLabelsToTmdbIds(labels: string[], max = 5): number[] {
++    const ids: number[] = [];
++    for (const label of labels) {
++        const id = mapGenreLabelToTmdbId(label);
++        if (id == null || ids.includes(id)) {
++            continue;
++        }
++
++        ids.push(id);
++        if (ids.length >= max) {
++            break;
++        }
++    }
++
++    return ids;
++}
+--- a/src/apps/stable/features/search/api/seerrTypes.ts
++++ b/src/apps/stable/features/search/api/seerrTypes.ts
+@@ -0,0 +1,11 @@
++export {
++    type SeerrMediaStatus,
++    type SeerrStatusResponse,
++    type SeerrSearchItem,
++    type SeerrSearchResponse,
++    type SeerrRequestResponse,
++    type NormalizedSeerrSearchItem,
++    isSeerrEnabled,
++    normalizeSeerrSearchItem,
++    getSeerrSearchItems
++} from 'lib/seerr/seerrTypes';
+--- a/src/apps/stable/features/search/api/useSeerrSearch.ts
++++ b/src/apps/stable/features/search/api/useSeerrSearch.ts
+@@ -0,0 +1,35 @@
++import { useQuery } from '@tanstack/react-query';
++import { useApi } from 'hooks/useApi';
++import {
++    fetchSeerrSearch,
++    fetchSeerrStatus,
++    requestSeerrMedia
++} from 'lib/seerr/seerrApi';
++import { isSeerrEnabled } from 'lib/seerr/seerrTypes';
++
++export { requestSeerrMedia };
 +
 +export const useSeerrStatus = () => {
 +    const { __legacyApiClient__: apiClient } = useApi();
@@ -137,70 +281,7 @@ index 0000000000..b8897135ae
 +        retry: false
 +    });
 +};
-+
-+export const requestSeerrMedia = async (
-+    apiClient: ApiClient,
-+    mediaType: string,
-+    mediaId: number
-+) => {
-+    return apiClient.ajax({
-+        type: 'POST',
-+        url: apiClient.getUrl('Seerr/Request'),
-+        data: JSON.stringify({ mediaType, mediaId }),
-+        contentType: 'application/json',
-+        dataType: 'json',
-+        headers: { accept: CamelCaseAccept }
-+    });
-+};
-diff --git a/src/apps/stable/features/search/components/SearchResults.tsx b/src/apps/stable/features/search/components/SearchResults.tsx
-index b96910fe80..af7ba3d52f 100644
---- a/src/apps/stable/features/search/components/SearchResults.tsx
-+++ b/src/apps/stable/features/search/components/SearchResults.tsx
-@@ -1,8 +1,11 @@
- import React, { type FC } from 'react';
- import { useSearchItems } from '../api/useSearchItems';
-+import { useSeerrSearch } from '../api/useSeerrSearch';
-+import { getSeerrSearchItems } from '../api/seerrTypes';
- import globalize from 'lib/globalize';
- import Loading from 'components/loading/LoadingComponent';
- import SearchResultsRow from './SearchResultsRow';
-+import SeerrRequestResults from './SeerrRequestResults';
- import { CardShape } from 'components/cardbuilder/utils/shape';
- import { CollectionType } from '@jellyfin/sdk/lib/generated-client/models/collection-type';
- import { Section } from '../types';
-@@ -22,11 +25,14 @@ const SearchResults: FC<SearchResultsProps> = ({
-     collectionType,
-     query
- }) => {
--    const { data, isPending } = useSearchItems(parentId, collectionType, query?.trim());
-+    const trimmedQuery = query?.trim();
-+    const { data, isPending } = useSearchItems(parentId, collectionType, trimmedQuery);
-+    const { data: seerrData, isPending: isSeerrPending } = useSeerrSearch(trimmedQuery);
-+    const seerrItems = getSeerrSearchItems(seerrData).filter(item => item.canRequest);
- 
-     if (isPending) return <Loading />;
- 
--    if (!data?.length) {
-+    if (!data?.length && !seerrItems.length && !isSeerrPending) {
-         return (
-             <div className='noItemsMessage centerMessage'>
-                 {globalize.translate('SearchResultsEmpty', query)}
-@@ -63,7 +69,10 @@ const SearchResults: FC<SearchResultsProps> = ({
- 
-     return (
-         <div className={'searchResults padded-top padded-bottom-page'}>
--            {data.map((section, index) => renderSection(section, index))}
-+            {data?.map((section, index) => renderSection(section, index))}
-+            {!isSeerrPending && seerrItems.length > 0 && (
-+                <SeerrRequestResults items={seerrItems} />
-+            )}
-         </div>
-     );
- };
-diff --git a/src/apps/stable/features/search/components/SeerrRequestResults.tsx b/src/apps/stable/features/search/components/SeerrRequestResults.tsx
-new file mode 100644
-index 0000000000..1b74e5f5cb
---- /dev/null
+--- a/src/apps/stable/features/search/components/SeerrRequestResults.tsx
 +++ b/src/apps/stable/features/search/components/SeerrRequestResults.tsx
 @@ -0,0 +1,117 @@
 +import React, { type FC, useCallback, useState } from 'react';
@@ -320,10 +401,7 @@ index 0000000000..1b74e5f5cb
 +};
 +
 +export default SeerrRequestResults;
-diff --git a/src/apps/stable/features/search/components/seerrRequestResults.scss b/src/apps/stable/features/search/components/seerrRequestResults.scss
-new file mode 100644
-index 0000000000..51e4abe985
---- /dev/null
+--- a/src/apps/stable/features/search/components/seerrRequestResults.scss
 +++ b/src/apps/stable/features/search/components/seerrRequestResults.scss
 @@ -0,0 +1,75 @@
 +.seerrRequestList {
@@ -401,11 +479,52 @@ index 0000000000..51e4abe985
 +        width: 100%;
 +    }
 +}
-diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index f6129d18a6..c8f97a8920 100755
+--- a/src/apps/stable/features/search/components/SearchResults.tsx
++++ b/src/apps/stable/features/search/components/SearchResults.tsx
+@@ -1,8 +1,11 @@
+ import React, { type FC } from 'react';
+ import { useSearchItems } from '../api/useSearchItems';
++import { useSeerrSearch } from '../api/useSeerrSearch';
++import { getSeerrSearchItems } from '../api/seerrTypes';
+ import globalize from 'lib/globalize';
+ import Loading from 'components/loading/LoadingComponent';
+ import SearchResultsRow from './SearchResultsRow';
++import SeerrRequestResults from './SeerrRequestResults';
+ import { CardShape } from 'components/cardbuilder/utils/shape';
+ import { CollectionType } from '@jellyfin/sdk/lib/generated-client/models/collection-type';
+ import { Section } from '../types';
+@@ -22,11 +25,14 @@
+     collectionType,
+     query
+ }) => {
+-    const { data, isPending } = useSearchItems(parentId, collectionType, query?.trim());
++    const trimmedQuery = query?.trim();
++    const { data, isPending } = useSearchItems(parentId, collectionType, trimmedQuery);
++    const { data: seerrData, isPending: isSeerrPending } = useSeerrSearch(trimmedQuery);
++    const seerrItems = getSeerrSearchItems(seerrData).filter(item => item.canRequest);
+ 
+     if (isPending) return <Loading />;
+ 
+-    if (!data?.length) {
++    if (!data?.length && !seerrItems.length && !isSeerrPending) {
+         return (
+             <div className='noItemsMessage centerMessage'>
+                 {globalize.translate('SearchResultsEmpty', query)}
+@@ -63,7 +69,10 @@
+ 
+     return (
+         <div className={'searchResults padded-top padded-bottom-page'}>
+-            {data.map((section, index) => renderSection(section, index))}
++            {data?.map((section, index) => renderSection(section, index))}
++            {!isSeerrPending && seerrItems.length > 0 && (
++                <SeerrRequestResults items={seerrItems} />
++            )}
+         </div>
+     );
+ };
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -1560,6 +1560,12 @@
+@@ -1563,6 +1563,12 @@
      "SearchForSubtitles": "Search for Subtitles",
      "SearchResults": "Search Results",
      "SearchResultsEmpty": "Sorry! No results found for \"{0}\"",

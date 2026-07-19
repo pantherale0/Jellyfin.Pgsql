@@ -96,7 +96,6 @@ public sealed class SeerrClient
         int page,
         CancellationToken cancellationToken)
     {
-        var config = Plugin.Instance!.Configuration;
         var path = string.Format(
             CultureInfo.InvariantCulture,
             "search?query={0}&page={1}",
@@ -105,15 +104,220 @@ public sealed class SeerrClient
 
         using var response = await SendAsync(HttpMethod.Get, path, null, cancellationToken).ConfigureAwait(false);
         var payload = await response.Content.ReadFromJsonAsync<SeerrSearchDto>(JsonOptions, cancellationToken).ConfigureAwait(false);
-        if (payload?.Results is null || payload.Results.Count == 0)
+        return MapSearchResults(payload?.Results, fallbackMediaType: null);
+    }
+
+    /// <summary>
+    /// Discovers requestable titles from Seerr (unrestricted path).
+    /// </summary>
+    /// <param name="mediaType"><c>movie</c> or <c>tv</c>.</param>
+    /// <param name="genreIds">TMDB genre ids (max 5).</param>
+    /// <param name="voteAverageGte">Optional vote-average floor.</param>
+    /// <param name="limit">Max requestable items to return.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Requestable discover items.</returns>
+    public async Task<IReadOnlyList<SeerrSearchItem>> DiscoverAsync(
+        string mediaType,
+        IReadOnlyList<int> genreIds,
+        float? voteAverageGte,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        limit = Math.Clamp(limit <= 0 ? 16 : limit, 1, 24);
+        var items = new List<SeerrSearchItem>(limit);
+
+        for (var page = 1; page <= 2 && items.Count < limit; page++)
+        {
+            var candidates = await DiscoverPageAsync(
+                    mediaType,
+                    genreIds,
+                    voteAverageGte,
+                    page,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (candidates.Count == 0)
+            {
+                break;
+            }
+
+            foreach (var candidate in candidates)
+            {
+                if (!candidate.Item.CanRequest)
+                {
+                    continue;
+                }
+
+                items.Add(candidate.Item);
+                if (items.Count >= limit)
+                {
+                    break;
+                }
+            }
+        }
+
+        return items;
+    }
+
+    /// <summary>
+    /// Discovers a single Seerr results page without applying the response limit.
+    /// </summary>
+    /// <param name="mediaType"><c>movie</c> or <c>tv</c>.</param>
+    /// <param name="genreIds">TMDB genre ids (max 5).</param>
+    /// <param name="voteAverageGte">Optional vote-average floor.</param>
+    /// <param name="page">1-based page number.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Discover candidates including adult flags.</returns>
+    public async Task<IReadOnlyList<SeerrSearchCandidate>> DiscoverPageAsync(
+        string mediaType,
+        IReadOnlyList<int> genreIds,
+        float? voteAverageGte,
+        int page,
+        CancellationToken cancellationToken)
+    {
+        var normalizedType = NormalizeDiscoverMediaType(mediaType)
+            ?? throw new ArgumentException("mediaType must be 'movie' or 'tv'.", nameof(mediaType));
+
+        var path = BuildDiscoverPath(normalizedType, genreIds, voteAverageGte, page);
+        using var response = await SendAsync(HttpMethod.Get, path, null, cancellationToken).ConfigureAwait(false);
+        var payload = await response.Content.ReadFromJsonAsync<SeerrSearchDto>(JsonOptions, cancellationToken).ConfigureAwait(false);
+        return MapSearchResults(payload?.Results, fallbackMediaType: normalizedType);
+    }
+
+    /// <summary>
+    /// Builds the relative Seerr discover path (for unit tests).
+    /// </summary>
+    /// <param name="mediaType"><c>movie</c> or <c>tv</c>.</param>
+    /// <param name="genreIds">TMDB genre ids.</param>
+    /// <param name="voteAverageGte">Optional vote-average floor.</param>
+    /// <param name="page">1-based page.</param>
+    /// <returns>Relative API path.</returns>
+    internal static string BuildDiscoverPath(
+        string mediaType,
+        IReadOnlyList<int>? genreIds,
+        float? voteAverageGte,
+        int page)
+    {
+        var segment = string.Equals(mediaType, "tv", StringComparison.OrdinalIgnoreCase)
+            ? "tv"
+            : "movies";
+        page = Math.Max(1, page);
+
+        var path = string.Create(
+            CultureInfo.InvariantCulture,
+            $"discover/{segment}?page={page}&sortBy=popularity.desc");
+
+        var genres = NormalizeGenreIds(genreIds);
+        if (genres.Count > 0)
+        {
+            path += "&genre=" + string.Join(',', genres.Select(id => id.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        if (voteAverageGte is > 0 and <= 10)
+        {
+            path += string.Create(
+                CultureInfo.InvariantCulture,
+                $"&voteAverageGte={voteAverageGte.Value}");
+        }
+
+        return path;
+    }
+
+    /// <summary>
+    /// Parses and clamps comma-separated TMDB genre ids.
+    /// </summary>
+    /// <param name="genreIds">Raw query value.</param>
+    /// <returns>Up to 5 positive genre ids.</returns>
+    internal static IReadOnlyList<int> ParseGenreIds(string? genreIds)
+    {
+        if (string.IsNullOrWhiteSpace(genreIds))
         {
             return [];
         }
 
-        var items = new List<SeerrSearchCandidate>(payload.Results.Count);
-        foreach (var result in payload.Results)
+        var parsed = new List<int>(5);
+        foreach (var part in genreIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            if (!IsMovieOrTv(result.MediaType))
+            if (!int.TryParse(part, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id) || id <= 0)
+            {
+                continue;
+            }
+
+            if (!parsed.Contains(id))
+            {
+                parsed.Add(id);
+            }
+
+            if (parsed.Count >= 5)
+            {
+                break;
+            }
+        }
+
+        return parsed;
+    }
+
+    /// <summary>
+    /// Normalizes discover media type to <c>movie</c> or <c>tv</c>.
+    /// </summary>
+    /// <param name="mediaType">Caller media type.</param>
+    /// <returns>Normalized type, or null when invalid.</returns>
+    internal static string? NormalizeDiscoverMediaType(string? mediaType)
+    {
+        if (string.Equals(mediaType, "movie", StringComparison.OrdinalIgnoreCase))
+        {
+            return "movie";
+        }
+
+        if (string.Equals(mediaType, "tv", StringComparison.OrdinalIgnoreCase))
+        {
+            return "tv";
+        }
+
+        return null;
+    }
+
+    private static List<int> NormalizeGenreIds(IReadOnlyList<int>? genreIds)
+    {
+        if (genreIds is null || genreIds.Count == 0)
+        {
+            return [];
+        }
+
+        var normalized = new List<int>(Math.Min(5, genreIds.Count));
+        foreach (var id in genreIds)
+        {
+            if (id <= 0 || normalized.Contains(id))
+            {
+                continue;
+            }
+
+            normalized.Add(id);
+            if (normalized.Count >= 5)
+            {
+                break;
+            }
+        }
+
+        return normalized;
+    }
+
+    private static List<SeerrSearchCandidate> MapSearchResults(
+        List<SeerrSearchResultDto>? results,
+        string? fallbackMediaType)
+    {
+        if (results is null || results.Count == 0)
+        {
+            return [];
+        }
+
+        var config = Plugin.Instance!.Configuration;
+        var items = new List<SeerrSearchCandidate>(results.Count);
+        foreach (var result in results)
+        {
+            var mediaType = IsMovieOrTv(result.MediaType)
+                ? result.MediaType!
+                : fallbackMediaType;
+            if (!IsMovieOrTv(mediaType))
             {
                 continue;
             }
@@ -139,24 +343,32 @@ public sealed class SeerrClient
                 Adult = result.Adult,
                 Item = new SeerrSearchItem
                 {
-                    MediaType = result.MediaType!,
+                    MediaType = mediaType!,
                     MediaId = result.Id,
                     Title = title,
                     Year = year,
                     Overview = result.Overview,
                     PosterUrl = BuildPosterUrl(result.PosterPath),
                     Status = status,
-                    CanRequest = status is not SeerrMediaStatus.Available
-                        and not SeerrMediaStatus.Pending
-                        and not SeerrMediaStatus.Processing
-                        and not SeerrMediaStatus.Blocklisted
-                        and not SeerrMediaStatus.Deleted
+                    CanRequest = IsRequestable(status)
                 }
             });
         }
 
         return items;
     }
+
+    /// <summary>
+    /// Returns whether a media status is requestable.
+    /// </summary>
+    /// <param name="status">Normalized Seerr status.</param>
+    /// <returns><c>true</c> when the title can be requested.</returns>
+    internal static bool IsRequestable(SeerrMediaStatus status)
+        => status is not SeerrMediaStatus.Available
+            and not SeerrMediaStatus.Pending
+            and not SeerrMediaStatus.Processing
+            and not SeerrMediaStatus.Blocklisted
+            and not SeerrMediaStatus.Deleted;
 
     /// <summary>
     /// Loads adult/certification metadata for a title (cached).

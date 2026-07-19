@@ -1,0 +1,14 @@
+--- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/HomeSectionType.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/HomeSectionType.cs
+@@ -58,5 +58,10 @@
+     /// <summary>
+     /// For You taste recommendations.
+     /// </summary>
+-    ForYou = 10
++    ForYou = 10,
++
++    /// <summary>
++    /// Beyond Your Library — requestable titles from Seerr.
++    /// </summary>
++    BeyondYourLibrary = 11
+ }
