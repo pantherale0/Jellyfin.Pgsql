@@ -1,0 +1,384 @@
+diff --git a/Emby.Server.Implementations/Collections/CollectionImageProvider.cs b/Emby.Server.Implementations/Collections/CollectionImageProvider.cs
+index c31bb4fb97..a99c739313 100644
+--- a/Emby.Server.Implementations/Collections/CollectionImageProvider.cs
++++ b/Emby.Server.Implementations/Collections/CollectionImageProvider.cs
+@@ -7,6 +7,7 @@ using MediaBrowser.Controller.Entities;
+ using MediaBrowser.Controller.Entities.Audio;
+ using MediaBrowser.Controller.Entities.Movies;
+ using MediaBrowser.Controller.Entities.TV;
++using MediaBrowser.Controller.Library;
+ using MediaBrowser.Controller.Providers;
+ using MediaBrowser.Model.Entities;
+ using MediaBrowser.Model.IO;
+@@ -18,6 +19,8 @@ namespace Emby.Server.Implementations.Collections
+     /// </summary>
+     public class CollectionImageProvider : BaseDynamicImageProvider<BoxSet>
+     {
++        private readonly IUserManager _userManager;
++
+         /// <summary>
+         /// Initializes a new instance of the <see cref="CollectionImageProvider"/> class.
+         /// </summary>
+@@ -25,13 +28,16 @@ namespace Emby.Server.Implementations.Collections
+         /// <param name="providerManager">The provider manager.</param>
+         /// <param name="applicationPaths">The application paths.</param>
+         /// <param name="imageProcessor">The image processor.</param>
++        /// <param name="userManager">The user manager.</param>
+         public CollectionImageProvider(
+             IFileSystem fileSystem,
+             IProviderManager providerManager,
+             IApplicationPaths applicationPaths,
+-            IImageProcessor imageProcessor)
++            IImageProcessor imageProcessor,
++            IUserManager userManager)
+             : base(fileSystem, providerManager, applicationPaths, imageProcessor)
+         {
++            _userManager = userManager;
+         }
+ 
+         /// <inheritdoc />
+@@ -51,7 +57,7 @@ namespace Emby.Server.Implementations.Collections
+         {
+             var playlist = (BoxSet)item;
+ 
+-            return playlist.Children.Concat(playlist.GetLinkedChildren())
++            var itemsWithImages = playlist.Children.Concat(playlist.GetLinkedChildren())
+                 .Select(i =>
+                 {
+                     var subItem = i;
+@@ -85,6 +91,8 @@ namespace Emby.Server.Implementations.Collections
+                 .GroupBy(x => x!.Id) // We removed the null values
+                 .Select(x => x.First())
+                 .ToList()!; // Again... the list doesn't contain any null values
++
++            return LibraryImageParentalFilter.FilterItemsSafeForAllUsers(_userManager, itemsWithImages!);
+         }
+ 
+         /// <inheritdoc />
+diff --git a/Emby.Server.Implementations/Images/CollectionFolderImageProvider.cs b/Emby.Server.Implementations/Images/CollectionFolderImageProvider.cs
+index 095934f896..83f2c39fb4 100644
+--- a/Emby.Server.Implementations/Images/CollectionFolderImageProvider.cs
++++ b/Emby.Server.Implementations/Images/CollectionFolderImageProvider.cs
+@@ -5,12 +5,14 @@
+ using System;
+ using System.Collections.Generic;
+ using System.IO;
++using System.Linq;
+ using Jellyfin.Data.Enums;
+ using Jellyfin.Database.Implementations.Enums;
+ using MediaBrowser.Common.Configuration;
+ using MediaBrowser.Controller.Drawing;
+ using MediaBrowser.Controller.Dto;
+ using MediaBrowser.Controller.Entities;
++using MediaBrowser.Controller.Library;
+ using MediaBrowser.Controller.Providers;
+ using MediaBrowser.Model.Entities;
+ using MediaBrowser.Model.IO;
+@@ -20,8 +22,20 @@ namespace Emby.Server.Implementations.Images
+ {
+     public class CollectionFolderImageProvider : BaseDynamicImageProvider<CollectionFolder>
+     {
+-        public CollectionFolderImageProvider(IFileSystem fileSystem, IProviderManager providerManager, IApplicationPaths applicationPaths, IImageProcessor imageProcessor) : base(fileSystem, providerManager, applicationPaths, imageProcessor)
++        private const int CandidateLimit = 48;
++        private const int CollageItemLimit = 8;
++
++        private readonly IUserManager _userManager;
++
++        public CollectionFolderImageProvider(
++            IFileSystem fileSystem,
++            IProviderManager providerManager,
++            IApplicationPaths applicationPaths,
++            IImageProcessor imageProcessor,
++            IUserManager userManager)
++            : base(fileSystem, providerManager, applicationPaths, imageProcessor)
+         {
++            _userManager = userManager;
+         }
+ 
+         protected override IReadOnlyList<BaseItem> GetItemsWithImages(BaseItem item)
+@@ -62,19 +76,23 @@ namespace Emby.Server.Implementations.Images
+ 
+             var recursive = viewType != CollectionType.playlists;
+ 
+-            return view.GetItemList(new InternalItemsQuery
++            var candidates = view.GetItemList(new InternalItemsQuery
+             {
+                 CollapseBoxSetItems = false,
+                 Recursive = recursive,
+                 DtoOptions = new DtoOptions(false),
+                 ImageTypes = new[] { ImageType.Primary },
+-                Limit = 8,
++                Limit = CandidateLimit,
+                 OrderBy = new[]
+                 {
+                     (ItemSortBy.Random, SortOrder.Ascending)
+                 },
+                 IncludeItemTypes = includeItemTypes
+             });
++
++            return LibraryImageParentalFilter.FilterItemsSafeForAllUsers(_userManager, candidates)
++                .Take(CollageItemLimit)
++                .ToList();
+         }
+ 
+         protected override bool Supports(BaseItem item)
+diff --git a/Emby.Server.Implementations/Images/LibraryImageParentalFilter.cs b/Emby.Server.Implementations/Images/LibraryImageParentalFilter.cs
+new file mode 100644
+index 0000000000..8a9c86a5d6
+--- /dev/null
++++ b/Emby.Server.Implementations/Images/LibraryImageParentalFilter.cs
+@@ -0,0 +1,32 @@
++using System.Collections.Generic;
++using System.Linq;
++using MediaBrowser.Controller.Entities;
++using MediaBrowser.Controller.Library;
++
++namespace Emby.Server.Implementations.Images;
++
++/// <summary>
++/// Filters collage/splashscreen source items so shared library artwork never includes
++/// titles blocked by any user's parental controls (ratings and tags).
++/// </summary>
++public static class LibraryImageParentalFilter
++{
++    /// <summary>
++    /// Returns items that are parental-allowed for every user on the server.
++    /// </summary>
++    /// <param name="userManager">The user manager.</param>
++    /// <param name="items">Candidate items.</param>
++    /// <returns>Items safe for all users; unchanged when there are no users.</returns>
++    public static IReadOnlyList<BaseItem> FilterItemsSafeForAllUsers(IUserManager userManager, IEnumerable<BaseItem> items)
++    {
++        var users = userManager.GetUsers().ToArray();
++        if (users.Length == 0)
++        {
++            return items as IReadOnlyList<BaseItem> ?? items.ToList();
++        }
++
++        return items
++            .Where(item => users.All(user => item.IsParentalAllowed(user, skipAllowedTagsCheck: false)))
++            .ToList();
++    }
++}
+diff --git a/Emby.Server.Implementations/Library/SplashscreenPostScanTask.cs b/Emby.Server.Implementations/Library/SplashscreenPostScanTask.cs
+index 7c605036cf..37be6a4377 100644
+--- a/Emby.Server.Implementations/Library/SplashscreenPostScanTask.cs
++++ b/Emby.Server.Implementations/Library/SplashscreenPostScanTask.cs
+@@ -3,6 +3,7 @@ using System.Collections.Generic;
+ using System.Linq;
+ using System.Threading;
+ using System.Threading.Tasks;
++using Emby.Server.Implementations.Images;
+ using Jellyfin.Data.Enums;
+ using Jellyfin.Database.Implementations.Enums;
+ using MediaBrowser.Controller.Drawing;
+@@ -20,8 +21,12 @@ namespace Emby.Server.Implementations.Library;
+ /// </summary>
+ public class SplashscreenPostScanTask : ILibraryPostScanTask
+ {
++    private const int CandidateLimit = 90;
++    private const int ResultLimit = 30;
++
+     private readonly IItemRepository _itemRepository;
+     private readonly IImageEncoder _imageEncoder;
++    private readonly IUserManager _userManager;
+     private readonly ILogger<SplashscreenPostScanTask> _logger;
+ 
+     /// <summary>
+@@ -29,14 +34,17 @@ public class SplashscreenPostScanTask : ILibraryPostScanTask
+     /// </summary>
+     /// <param name="itemRepository">Instance of the <see cref="IItemRepository"/> interface.</param>
+     /// <param name="imageEncoder">Instance of the <see cref="IImageEncoder"/> interface.</param>
++    /// <param name="userManager">Instance of the <see cref="IUserManager"/> interface.</param>
+     /// <param name="logger">Instance of the <see cref="ILogger{SplashscreenPostScanTask}"/> interface.</param>
+     public SplashscreenPostScanTask(
+         IItemRepository itemRepository,
+         IImageEncoder imageEncoder,
++        IUserManager userManager,
+         ILogger<SplashscreenPostScanTask> logger)
+     {
+         _itemRepository = itemRepository;
+         _imageEncoder = imageEncoder;
++        _userManager = userManager;
+         _logger = logger;
+     }
+ 
+@@ -72,20 +80,22 @@ public class SplashscreenPostScanTask : ILibraryPostScanTask
+     private IReadOnlyList<BaseItem> GetItemsWithImageType(ImageType imageType)
+     {
+         // TODO make included libraries configurable
+-        return _itemRepository.GetItemList(new InternalItemsQuery
++        var candidates = _itemRepository.GetItemList(new InternalItemsQuery
+         {
+             CollapseBoxSetItems = false,
+             Recursive = true,
+             DtoOptions = new DtoOptions(false),
+             ImageTypes = [imageType],
+-            Limit = 30,
+-            // TODO max parental rating configurable
+-            MaxParentalRating = new(13, null),
++            Limit = CandidateLimit,
+             OrderBy =
+             [
+                 (ItemSortBy.Random, SortOrder.Ascending)
+             ],
+             IncludeItemTypes = [BaseItemKind.Movie, BaseItemKind.Series]
+         });
++
++        return LibraryImageParentalFilter.FilterItemsSafeForAllUsers(_userManager, candidates)
++            .Take(ResultLimit)
++            .ToList();
+     }
+ }
+diff --git a/Jellyfin.Server.Implementations/Events/Consumers/Library/LibraryImageParentalRefreshNotifier.cs b/Jellyfin.Server.Implementations/Events/Consumers/Library/LibraryImageParentalRefreshNotifier.cs
+new file mode 100644
+index 0000000000..452027ba63
+--- /dev/null
++++ b/Jellyfin.Server.Implementations/Events/Consumers/Library/LibraryImageParentalRefreshNotifier.cs
+@@ -0,0 +1,95 @@
++using System.Threading.Tasks;
++using Jellyfin.Data.Enums;
++using Jellyfin.Data.Events.Users;
++using MediaBrowser.Controller.Dto;
++using MediaBrowser.Controller.Entities;
++using MediaBrowser.Controller.Entities.Movies;
++using MediaBrowser.Controller.Events;
++using MediaBrowser.Controller.Library;
++using MediaBrowser.Controller.Providers;
++using MediaBrowser.Model.IO;
++using Microsoft.Extensions.Logging;
++
++namespace Jellyfin.Server.Implementations.Events.Consumers.Library;
++
++/// <summary>
++/// Regenerates shared library/collection images when parental controls change
++/// so My Media artwork does not keep restricted titles until the weekly refresh.
++/// </summary>
++public class LibraryImageParentalRefreshNotifier :
++    IEventConsumer<UserUpdatedEventArgs>,
++    IEventConsumer<UserDeletedEventArgs>
++{
++    private readonly ILibraryManager _libraryManager;
++    private readonly IProviderManager _providerManager;
++    private readonly IFileSystem _fileSystem;
++    private readonly ILogger<LibraryImageParentalRefreshNotifier> _logger;
++
++    /// <summary>
++    /// Initializes a new instance of the <see cref="LibraryImageParentalRefreshNotifier"/> class.
++    /// </summary>
++    /// <param name="libraryManager">The library manager.</param>
++    /// <param name="providerManager">The provider manager.</param>
++    /// <param name="fileSystem">The file system.</param>
++    /// <param name="logger">The logger.</param>
++    public LibraryImageParentalRefreshNotifier(
++        ILibraryManager libraryManager,
++        IProviderManager providerManager,
++        IFileSystem fileSystem,
++        ILogger<LibraryImageParentalRefreshNotifier> logger)
++    {
++        _libraryManager = libraryManager;
++        _providerManager = providerManager;
++        _fileSystem = fileSystem;
++        _logger = logger;
++    }
++
++    /// <inheritdoc />
++    public Task OnEvent(UserUpdatedEventArgs eventArgs)
++    {
++        QueueLibraryImageRefresh();
++        return Task.CompletedTask;
++    }
++
++    /// <inheritdoc />
++    public Task OnEvent(UserDeletedEventArgs eventArgs)
++    {
++        QueueLibraryImageRefresh();
++        return Task.CompletedTask;
++    }
++
++    private void QueueLibraryImageRefresh()
++    {
++        var refreshOptions = new MetadataRefreshOptions(new DirectoryService(_fileSystem))
++        {
++            MetadataRefreshMode = MetadataRefreshMode.FullRefresh,
++            ImageRefreshMode = MetadataRefreshMode.FullRefresh,
++            ForceSave = true
++        };
++
++        var items = _libraryManager.GetItemList(new InternalItemsQuery
++        {
++            IncludeItemTypes = [BaseItemKind.CollectionFolder, BaseItemKind.BoxSet],
++            Recursive = true,
++            DtoOptions = new DtoOptions(false)
++        });
++
++        var queued = 0;
++        foreach (var item in items)
++        {
++            // Only CollectionFolder and locked BoxSets use the dynamic parental-aware providers.
++            if (item is CollectionFolder || (item is BoxSet boxSet && boxSet.IsLocked))
++            {
++                _providerManager.QueueRefresh(item.Id, refreshOptions, RefreshPriority.Normal);
++                queued++;
++            }
++        }
++
++        if (queued > 0)
++        {
++            _logger.LogInformation(
++                "Queued image refresh for {Count} library/collection items after user parental-access change",
++                queued);
++        }
++    }
++}
+diff --git a/Jellyfin.Server.Implementations/Events/EventingServiceCollectionExtensions.cs b/Jellyfin.Server.Implementations/Events/EventingServiceCollectionExtensions.cs
+index 87de4ed79c..26e7250cf6 100644
+--- a/Jellyfin.Server.Implementations/Events/EventingServiceCollectionExtensions.cs
++++ b/Jellyfin.Server.Implementations/Events/EventingServiceCollectionExtensions.cs
+@@ -33,6 +33,8 @@ namespace Jellyfin.Server.Implementations.Events
+             // Library consumers
+             collection.AddScoped<IEventConsumer<LyricDownloadFailureEventArgs>, LyricDownloadFailureLogger>();
+             collection.AddScoped<IEventConsumer<SubtitleDownloadFailureEventArgs>, SubtitleDownloadFailureLogger>();
++            collection.AddScoped<IEventConsumer<UserUpdatedEventArgs>, LibraryImageParentalRefreshNotifier>();
++            collection.AddScoped<IEventConsumer<UserDeletedEventArgs>, LibraryImageParentalRefreshNotifier>();
+ 
+             // Security consumers
+             collection.AddScoped<IEventConsumer<AuthenticationRequestEventArgs>, AuthenticationFailedLogger>();
+diff --git a/Jellyfin.Server.Implementations/Users/UserManager.cs b/Jellyfin.Server.Implementations/Users/UserManager.cs
+index 9be2eac4a1..7466de3db6 100644
+--- a/Jellyfin.Server.Implementations/Users/UserManager.cs
++++ b/Jellyfin.Server.Implementations/Users/UserManager.cs
+@@ -813,6 +813,12 @@ namespace Jellyfin.Server.Implementations.Users
+                         _ => policy.LoginAttemptsBeforeLockout
+                     };
+ 
++                    var previousMaxParentalRating = user.MaxParentalRatingScore;
++                    var previousMaxParentalSubRating = user.MaxParentalRatingSubScore;
++                    var previousBlockedTags = user.GetPreference(PreferenceKind.BlockedTags);
++                    var previousAllowedTags = user.GetPreference(PreferenceKind.AllowedTags);
++                    var previousBlockUnratedItems = user.GetPreference(PreferenceKind.BlockUnratedItems);
++
+                     user.MaxParentalRatingScore = policy.MaxParentalRating;
+                     user.MaxParentalRatingSubScore = policy.MaxParentalSubRating;
+                     user.EnableUserPreferenceAccess = policy.EnableUserPreferenceAccess;
+@@ -865,6 +871,20 @@ namespace Jellyfin.Server.Implementations.Users
+ 
+                     dbContext.Update(user);
+                     await dbContext.SaveChangesAsync().ConfigureAwait(false);
++
++                    var parentalControlsChanged =
++                        previousMaxParentalRating != user.MaxParentalRatingScore
++                        || previousMaxParentalSubRating != user.MaxParentalRatingSubScore
++                        || !previousBlockedTags.SequenceEqual(user.GetPreference(PreferenceKind.BlockedTags))
++                        || !previousAllowedTags.SequenceEqual(user.GetPreference(PreferenceKind.AllowedTags))
++                        || !previousBlockUnratedItems.SequenceEqual(user.GetPreference(PreferenceKind.BlockUnratedItems));
++
++                    if (parentalControlsChanged)
++                    {
++                        var eventArgs = new UserUpdatedEventArgs(user);
++                        await _eventManager.PublishAsync(eventArgs).ConfigureAwait(false);
++                        OnUserUpdated?.Invoke(this, eventArgs);
++                    }
+                 }
+             }
+         }
