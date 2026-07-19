@@ -1,18 +1,18 @@
 diff --git a/src/apps/stable/features/search/api/useSeerrSearch.ts b/src/apps/stable/features/search/api/useSeerrSearch.ts
-index 2f992a03d3..27d400015b 100644
+index 2f992a03d3..c934d71843 100644
 --- a/src/apps/stable/features/search/api/useSeerrSearch.ts
 +++ b/src/apps/stable/features/search/api/useSeerrSearch.ts
 @@ -6,16 +6,18 @@ import {
      requestSeerrMedia
  } from 'lib/seerr/seerrApi';
  import { isSeerrEnabled } from 'lib/seerr/seerrTypes';
-+import { isTvClient } from 'scripts/browser';
++import browser from 'scripts/browser';
  
  export { requestSeerrMedia };
  
  export const useSeerrStatus = () => {
      const { __legacyApiClient__: apiClient } = useApi();
-+    const seerrAllowed = !isTvClient();
++    const seerrAllowed = !browser.isTvClient;
  
      return useQuery({
          queryKey: ['Seerr', 'Status'],
@@ -26,7 +26,7 @@ index 2f992a03d3..27d400015b 100644
      const { __legacyApiClient__: apiClient } = useApi();
      const { data: status } = useSeerrStatus();
      const query = searchTerm?.trim();
-+    const seerrAllowed = !isTvClient();
++    const seerrAllowed = !browser.isTvClient;
  
      return useQuery({
          queryKey: ['Seerr', 'Search', query],
@@ -37,14 +37,14 @@ index 2f992a03d3..27d400015b 100644
      });
  };
 diff --git a/src/apps/stable/features/search/components/SearchResults.tsx b/src/apps/stable/features/search/components/SearchResults.tsx
-index 093f59760a..2417cef922 100644
+index 093f59760a..2ca080abe4 100644
 --- a/src/apps/stable/features/search/components/SearchResults.tsx
 +++ b/src/apps/stable/features/search/components/SearchResults.tsx
 @@ -10,6 +10,7 @@ import { CardShape } from 'components/cardbuilder/utils/shape';
  import { CollectionType } from '@jellyfin/sdk/lib/generated-client/models/collection-type';
  import { Section } from '../types';
  import { Link } from 'react-router-dom';
-+import { isTvClient } from 'scripts/browser';
++import browser from 'scripts/browser';
  import * as userSettings from 'scripts/settings/userSettings';
  
  interface SearchResultsProps {
@@ -54,7 +54,7 @@ index 093f59760a..2417cef922 100644
      } = useSearchItems(parentId, collectionType, trimmedQuery);
 -    const { data: seerrData, isPending: isSeerrPending } = useSeerrSearch(trimmedQuery);
 -    const seerrItems = getSeerrSearchItems(seerrData).filter(item => item.canRequest);
-+    const seerrOnTv = isTvClient();
++    const seerrOnTv = !!browser.isTvClient;
 +    const { data: seerrData, isPending: isSeerrPending } = useSeerrSearch(
 +        seerrOnTv ? undefined : trimmedQuery
 +    );
@@ -83,14 +83,14 @@ index 093f59760a..2417cef922 100644
              )}
              {isFetchingNextPage && <Loading />}
 diff --git a/src/apps/stable/routes/routes.tsx b/src/apps/stable/routes/routes.tsx
-index 3174798293..5cc21a21e0 100644
+index 3174798293..e3262cd832 100644
 --- a/src/apps/stable/routes/routes.tsx
 +++ b/src/apps/stable/routes/routes.tsx
 @@ -6,11 +6,25 @@ import { toAsyncPageRoute } from 'components/router/AsyncRoute';
  import { toViewManagerPageRoute } from 'components/router/LegacyRoute';
  import ErrorBoundary from 'components/router/ErrorBoundary';
  import FallbackRoute from 'components/router/FallbackRoute';
-+import { isTvClient } from 'scripts/browser';
++import browser from 'scripts/browser';
  
  import AppLayout from '../AppLayout';
  
@@ -99,7 +99,7 @@ index 3174798293..5cc21a21e0 100644
 +// Eager search on TV avoids Chromium 68 / webOS ChunkLoadError from lazy chunks.
 +import SearchPage from './search';
 +
-+const tvClient = isTvClient();
++const tvClient = !!browser.isTvClient;
 +
 +const asyncUserRoutes = (tvClient
 +    ? ASYNC_USER_ROUTES.filter((route) => route.path !== 'search')
@@ -123,14 +123,14 @@ index 3174798293..5cc21a21e0 100644
                  ],
                  ErrorBoundary
 diff --git a/src/components/homesections/homesections.js b/src/components/homesections/homesections.js
-index df1a88c10e..8953492993 100644
+index df1a88c10e..a2dc60417d 100644
 --- a/src/components/homesections/homesections.js
 +++ b/src/components/homesections/homesections.js
 @@ -2,6 +2,7 @@ import layoutManager from 'components/layoutManager';
  import { DEFAULT_SECTIONS, HomeSectionType } from 'constants/homeSectionType';
  import { getUserViewsQuery } from 'hooks/api/useUserViews';
  import globalize from 'lib/globalize';
-+import browser, { isTvClient } from 'scripts/browser';
++import browser from 'scripts/browser';
  import Dashboard from 'utils/dashboard';
  import { toApi } from 'utils/jellyfin-apiclient/compat';
  import { queryClient } from 'utils/query/queryClient';
@@ -142,7 +142,7 @@ index df1a88c10e..8953492993 100644
 -const MAX_ACTIVE_SECTIONS_TV = 4;
 +
 +function isConstrainedTv() {
-+    return isTvClient() || !!(browser.tv || browser.web0s) || layoutManager.tv;
++    return !!(browser.isTvClient || browser.tv || browser.web0s) || layoutManager.tv;
 +}
  
  export function getDefaultSection(index) {
@@ -207,14 +207,14 @@ index df1a88c10e..8953492993 100644
                      : MAX_SECTIONS;
                  for (let i = 0; i < totalSectionCount; i++) {
 diff --git a/src/components/homesections/sections/beyondYourLibrary.ts b/src/components/homesections/sections/beyondYourLibrary.ts
-index 49e354cd16..06642edebf 100644
+index 49e354cd16..e98e3a38c3 100644
 --- a/src/components/homesections/sections/beyondYourLibrary.ts
 +++ b/src/components/homesections/sections/beyondYourLibrary.ts
 @@ -14,6 +14,7 @@ import {
  } from 'lib/seerr/seerrTypes';
  import { mapGenreLabelsToTmdbIds } from 'lib/seerr/tmdbGenres';
  import globalize from 'lib/globalize';
-+import { isTvClient } from 'scripts/browser';
++import browser from 'scripts/browser';
  
  import type { SectionOptions } from './section';
  
@@ -223,7 +223,7 @@ index 49e354cd16..06642edebf 100644
      elem.innerHTML = '';
  
 +    // Skip Seerr discover rows on constrained TV clients (webOS / Chromium 68).
-+    if (isTvClient()) {
++    if (browser.isTvClient) {
 +        elem.classList.add('hide');
 +        return;
 +    }
@@ -232,10 +232,10 @@ index 49e354cd16..06642edebf 100644
          const status = await fetchSeerrStatus(apiClient);
          if (!isSeerrEnabled(status)) {
 diff --git a/src/scripts/browser.js b/src/scripts/browser.js
-index b020d197db..0f12334f7f 100644
+index b020d197db..e5df52b413 100644
 --- a/src/scripts/browser.js
 +++ b/src/scripts/browser.js
-@@ -344,7 +344,17 @@ export const detectBrowser = (userAgent = navigator.userAgent) => {
+@@ -344,6 +344,9 @@ export const detectBrowser = (userAgent = navigator.userAgent) => {
          }
      }
  
@@ -245,34 +245,16 @@ index b020d197db..0f12334f7f 100644
      return browser;
  };
  
--export default detectBrowser();
-+const browserInstance = detectBrowser();
-+
-+/** @returns {boolean} */
-+export function isTvClient() {
-+    return !!browserInstance.isTvClient;
-+}
-+
-+export default browserInstance;
 diff --git a/src/scripts/settings/userSettings.js b/src/scripts/settings/userSettings.js
-index 7b9babf816..f8c01361b6 100644
+index 7b9babf816..2599b34d9f 100644
 --- a/src/scripts/settings/userSettings.js
 +++ b/src/scripts/settings/userSettings.js
-@@ -7,7 +7,7 @@ import { toApi } from 'utils/jellyfin-apiclient/compat';
- import { queryClient } from 'utils/query/queryClient';
- import { toBoolean } from 'utils/string';
- 
--import browser from '../browser';
-+import browser, { isTvClient } from '../browser';
- import appSettings from './appSettings';
- 
- const DISPLAY_PREFERENCES_ID = 'usersettings';
 @@ -539,6 +539,11 @@ export class UserSettings {
              return this.set('enableInfiniteScroll', val.toString(), false);
          }
  
 +        // Chromium 68 / webOS: force classic paging — never grow unbounded card trees.
-+        if (isTvClient() || browser.tv || browser.web0s) {
++        if (browser.isTvClient || browser.tv || browser.web0s) {
 +            return false;
 +        }
 +
