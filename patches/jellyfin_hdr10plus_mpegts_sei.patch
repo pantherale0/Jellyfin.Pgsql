@@ -1,0 +1,195 @@
+diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
+index 847f4cf187..af2adf8896 100644
+--- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
++++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
+@@ -20,6 +20,7 @@ using Jellyfin.Extensions;
+ using MediaBrowser.Common.Configuration;
+ using MediaBrowser.Controller.Extensions;
+ using MediaBrowser.Controller.IO;
++using MediaBrowser.Controller.Streaming;
+ using MediaBrowser.Model.Configuration;
+ using MediaBrowser.Model.Dlna;
+ using MediaBrowser.Model.Dto;
+@@ -1408,6 +1409,29 @@ namespace MediaBrowser.Controller.MediaEncoding
+                        or VideoRangeType.DOVIWithELHDR10Plus;
+         }
+ 
++        /// <summary>
++        /// Whether the encoding job remuxes into MPEG-TS (progressive TS/M2TS or HLS mpegts segments).
++        /// HLS uses <see cref="StreamingRequestDto.SegmentContainer"/>; progressive uses <see cref="EncodingJobInfo.OutputContainer"/>.
++        /// </summary>
++        private static bool IsMpegTsRemuxOutput(EncodingJobInfo state)
++        {
++            if (state.TranscodingType == TranscodingJobType.Progressive)
++            {
++                return string.Equals(state.OutputContainer, "ts", StringComparison.OrdinalIgnoreCase)
++                       || string.Equals(state.OutputContainer, "m2ts", StringComparison.OrdinalIgnoreCase);
++            }
++
++            // HLS / LiveHLS: segment container selects mpegts vs fmp4 (default .ts).
++            var segmentContainer = state.BaseRequest is StreamingRequestDto streamingRequest
++                ? streamingRequest.SegmentContainer
++                : null;
++
++            return string.Equals(
++                GetSegmentFileExtension(segmentContainer).TrimStart('.'),
++                "ts",
++                StringComparison.OrdinalIgnoreCase);
++        }
++
+         /// <summary>
+         /// Check if dynamic HDR metadata should be removed during stream copy.
+         /// Please note this check assumes the range check has already been done
+@@ -1421,10 +1445,17 @@ namespace MediaBrowser.Controller.MediaEncoding
+                 return DynamicHdrMetadataRemovalPlan.None;
+             }
+ 
++            // MPEG-TS cannot safely carry HDR10+ SEI (PREFIX_SEI NAL 39). After hevc_mp4toannexb,
++            // SEI payloads may contain Annex-B start codes that break Android ExoPlayer PES demux
++            // (jellyfin#16823). Strip HDR10+ whenever remuxing to MPEG-TS.
++            var isMpegTsOutput = IsMpegTsRemuxOutput(state);
++
+             var requestedRangeTypes = state.GetRequestedRangeTypes(state.VideoStream.Codec);
+             if (requestedRangeTypes.Length == 0)
+             {
+-                return DynamicHdrMetadataRemovalPlan.None;
++                return isMpegTsOutput && IsHdr10Plus(videoStream)
++                    ? DynamicHdrMetadataRemovalPlan.RemoveHdr10Plus
++                    : DynamicHdrMetadataRemovalPlan.None;
+             }
+ 
+             var requestHasHDR10 = requestedRangeTypes.Contains(VideoRangeType.HDR10.ToString(), StringComparison.OrdinalIgnoreCase);
+@@ -1456,6 +1487,10 @@ namespace MediaBrowser.Controller.MediaEncoding
+ 
+             // If the client is a Dolby Vision Player, remove the HDR10+ metadata to avoid playback issues
+             shouldRemoveHdr10Plus = shouldRemoveHdr10Plus || (requestHasDOVI && videoStream.VideoRangeType == VideoRangeType.DOVIWithHDR10Plus);
++
++            // MPEG-TS remux of plain/hybrid HDR10+ (jellyfin#16823)
++            shouldRemoveHdr10Plus = shouldRemoveHdr10Plus || (isMpegTsOutput && IsHdr10Plus(videoStream));
++
+             return shouldRemoveHdr10Plus ? DynamicHdrMetadataRemovalPlan.RemoveHdr10Plus : DynamicHdrMetadataRemovalPlan.None;
+         }
+ 
+diff --git a/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs b/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs
+index 71b6551d0f..e105919fd0 100644
+--- a/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs
++++ b/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs
+@@ -223,6 +223,56 @@ public class EncodingHelperTests
+         Assert.Contains("-ar " + expectedSampleRate, args, StringComparison.Ordinal);
+     }
+ 
++    [Fact]
++    public void GetBitStreamArgs_Hdr10PlusHlsMpegTs_RemovesHdr10Plus()
++    {
++        var state = BuildHdr10PlusHevcState(TranscodingJobType.Hls, segmentContainer: "ts", outputContainer: "m3u8");
++        var args = CreateHelper(supportsHdr10PlusRemoval: true).GetBitStreamArgs(state, MediaStreamType.Video);
++
++        Assert.Equal("-bsf:v hevc_mp4toannexb,hevc_metadata=remove_hdr10plus=1", args);
++        Assert.True(CreateHelper(supportsHdr10PlusRemoval: true).IsHdr10PlusRemoved(state));
++    }
++
++    [Fact]
++    public void GetBitStreamArgs_Hdr10PlusHlsDefaultSegmentContainer_RemovesHdr10Plus()
++    {
++        // Empty SegmentContainer defaults to .ts for HLS.
++        var state = BuildHdr10PlusHevcState(TranscodingJobType.Hls, segmentContainer: null, outputContainer: "m3u8");
++        var args = CreateHelper(supportsHdr10PlusRemoval: true).GetBitStreamArgs(state, MediaStreamType.Video);
++
++        Assert.Equal("-bsf:v hevc_mp4toannexb,hevc_metadata=remove_hdr10plus=1", args);
++    }
++
++    [Fact]
++    public void GetBitStreamArgs_Hdr10PlusHlsFmp4_KeepsHdr10Plus()
++    {
++        var state = BuildHdr10PlusHevcState(TranscodingJobType.Hls, segmentContainer: "mp4", outputContainer: "m3u8");
++        var args = CreateHelper(supportsHdr10PlusRemoval: true).GetBitStreamArgs(state, MediaStreamType.Video);
++
++        Assert.Equal("-bsf:v hevc_mp4toannexb", args);
++        Assert.False(CreateHelper(supportsHdr10PlusRemoval: true).IsHdr10PlusRemoved(state));
++    }
++
++    [Fact]
++    public void GetBitStreamArgs_Hdr10PlusProgressiveTs_RemovesHdr10Plus()
++    {
++        var state = BuildHdr10PlusHevcState(TranscodingJobType.Progressive, segmentContainer: null, outputContainer: "ts");
++        var args = CreateHelper(supportsHdr10PlusRemoval: true).GetBitStreamArgs(state, MediaStreamType.Video);
++
++        Assert.Equal("-bsf:v hevc_mp4toannexb,hevc_metadata=remove_hdr10plus=1", args);
++    }
++
++    [Fact]
++    public void GetBitStreamArgs_Hdr10HevcHlsMpegTs_DoesNotRemoveHdr10Plus()
++    {
++        var state = BuildHdr10PlusHevcState(TranscodingJobType.Hls, segmentContainer: "ts", outputContainer: "m3u8");
++        state.VideoStream.Hdr10PlusPresentFlag = false;
++        var args = CreateHelper(supportsHdr10PlusRemoval: true).GetBitStreamArgs(state, MediaStreamType.Video);
++
++        Assert.Equal("-bsf:v hevc_mp4toannexb", args);
++        Assert.False(CreateHelper(supportsHdr10PlusRemoval: true).IsHdr10PlusRemoved(state));
++    }
++
+     private static EncodingJobInfo BuildAudioState(string audioCodec, int requestedSampleRate)
+     {
+         var audio = new MediaStream { Index = 0, Type = MediaStreamType.Audio, Codec = "flac", SampleRate = 96000 };
+@@ -248,6 +298,46 @@ public class EncodingHelperTests
+         };
+     }
+ 
++    private static EncodingJobInfo BuildHdr10PlusHevcState(
++        TranscodingJobType jobType,
++        string? segmentContainer,
++        string outputContainer)
++    {
++        var video = new MediaStream
++        {
++            Index = 0,
++            Type = MediaStreamType.Video,
++            Codec = "hevc",
++            ColorTransfer = "smpte2084",
++            Hdr10PlusPresentFlag = true,
++            NalLengthSize = "4",
++        };
++        var audio = new MediaStream { Index = 1, Type = MediaStreamType.Audio, Codec = "eac3" };
++
++        return new EncodingJobInfo(jobType)
++        {
++            MediaSource = new MediaSourceInfo
++            {
++                Container = "mkv",
++                MediaStreams = new List<MediaStream> { video, audio },
++                Path = "/media/movie.mkv",
++                Protocol = MediaProtocol.File,
++            },
++            VideoStream = video,
++            AudioStream = audio,
++            OutputVideoCodec = "copy",
++            OutputContainer = outputContainer,
++            BaseRequest = new VideoRequestDto
++            {
++                VideoCodec = "hevc",
++                VideoRangeType = VideoRangeType.HDR10.ToString(),
++                SegmentContainer = segmentContainer,
++            },
++            IsVideoRequest = true,
++            IsInputVideo = true,
++        };
++    }
++
+     private static EncodingJobInfo BuildState(
+         MediaStream? subtitle,
+         SubtitleDeliveryMethod? deliveryMethod,
+@@ -283,10 +373,13 @@ public class EncodingHelperTests
+         };
+     }
+ 
+-    private static EncodingHelper CreateHelper()
++    private static EncodingHelper CreateHelper(bool supportsHdr10PlusRemoval = false)
+     {
+         var appPaths = Mock.Of<IApplicationPaths>();
+         var mediaEncoder = new Mock<IMediaEncoder>();
++        mediaEncoder
++            .Setup(e => e.SupportsBitStreamFilterWithOption(BitStreamFilterOptionType.HevcMetadataRemoveHdr10Plus))
++            .Returns(supportsHdr10PlusRemoval);
+         var subtitleEncoder = new Mock<ISubtitleEncoder>();
+         var config = new Mock<IConfiguration>();
+         var configurationManager = new Mock<IConfigurationManager>();
