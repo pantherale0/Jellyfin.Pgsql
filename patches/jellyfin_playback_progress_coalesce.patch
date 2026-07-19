@@ -1,9 +1,20 @@
 # Coalesce PlaybackProgress UserData writes (30s / seek threshold) to cut DB load during watch.
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 19823dff37..d853d19845 100644
+index 19823dff37..b2a6caa8a3 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
-@@ -67,6 +67,15 @@ namespace Emby.Server.Implementations.Session
+@@ -48,6 +48,10 @@ namespace Emby.Server.Implementations.Session
+     /// </summary>
+     public sealed class SessionManager : ISessionManager, IAsyncDisposable
+     {
++        private const long ProgressPersistSeekThresholdTicks = TimeSpan.TicksPerSecond * 30;
++
++        private static readonly TimeSpan ProgressPersistMinInterval = TimeSpan.FromSeconds(30);
++
+         private readonly IUserDataManager _userDataManager;
+         private readonly IServerConfigurationManager _config;
+         private readonly ILogger<SessionManager> _logger;
+@@ -67,6 +71,12 @@ namespace Emby.Server.Implementations.Session
          private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, string>> _activeLiveStreamSessions
              = new(StringComparer.OrdinalIgnoreCase);
  
@@ -13,22 +24,18 @@ index 19823dff37..d853d19845 100644
 +        private readonly ConcurrentDictionary<(Guid UserId, Guid ItemId), (DateTime Utc, long PositionTicks)> _lastProgressPersist
 +            = new();
 +
-+        private static readonly TimeSpan ProgressPersistMinInterval = TimeSpan.FromSeconds(30);
-+        private const long ProgressPersistSeekThresholdTicks = TimeSpan.TicksPerSecond * 30;
-+
          private Timer _idleTimer;
          private Timer _inactiveTimer;
  
-@@ -953,10 +962,49 @@ namespace Emby.Server.Implementations.Session
+@@ -953,12 +963,51 @@ namespace Emby.Server.Implementations.Session
                  changed = true;
              }
  
 -            if (changed)
 +            if (!changed)
-             {
--                _userDataManager.SaveUserData(user, item, data, UserDataSaveReason.PlaybackProgress, CancellationToken.None);
++            {
 +                return;
-             }
++            }
 +
 +            // Coalesce progress saves: client check-ins arrive ~every 10s; full-row UserData
 +            // rewrites (plus preference reloads) are expensive. Persist at most every 30s unless
@@ -42,11 +49,12 @@ index 19823dff37..d853d19845 100644
 +            _userDataManager.SaveUserData(user, item, data, UserDataSaveReason.PlaybackProgress, CancellationToken.None);
 +
 +            if (positionTicks.HasValue)
-+            {
+             {
+-                _userDataManager.SaveUserData(user, item, data, UserDataSaveReason.PlaybackProgress, CancellationToken.None);
 +                _lastProgressPersist[(user.Id, item.Id)] = (DateTime.UtcNow, positionTicks.Value);
-+            }
-+        }
-+
+             }
+         }
+ 
 +        /// <summary>
 +        /// Returns whether a playback progress position should be written to UserData.
 +        /// </summary>
@@ -68,10 +76,12 @@ index 19823dff37..d853d19845 100644
 +
 +            var delta = Math.Abs(positionTicks - last.PositionTicks);
 +            return delta >= ProgressPersistSeekThresholdTicks;
-         }
- 
++        }
++
          private static bool UpdatePlaybackSettings(User user, PlaybackProgressInfo info, UserItemData data)
-@@ -1141,6 +1189,7 @@ namespace Emby.Server.Implementations.Session
+         {
+             var changed = false;
+@@ -1141,6 +1190,7 @@ namespace Emby.Server.Implementations.Session
              }
  
              _userDataManager.SaveUserData(user, item, data, UserDataSaveReason.PlaybackFinished, CancellationToken.None);

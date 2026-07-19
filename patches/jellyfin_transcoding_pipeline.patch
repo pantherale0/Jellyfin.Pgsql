@@ -24,9 +24,9 @@ index 79fb233382..a9e616a190 100644
  using MediaBrowser.Controller.Net;
  using MediaBrowser.Controller.Session;
  using MediaBrowser.Model.Dto;
-@@ -50,6 +51,7 @@ namespace Emby.Server.Implementations.Session
-     public sealed class SessionManager : ISessionManager, IAsyncDisposable
-     {
+@@ -54,6 +55,7 @@ namespace Emby.Server.Implementations.Session
+         private static readonly TimeSpan ProgressPersistMinInterval = TimeSpan.FromSeconds(30);
+ 
          private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
 +        private readonly ITranscodingPipelineProbe _pipelineProbe;
          private readonly IUserDataManager _userDataManager;

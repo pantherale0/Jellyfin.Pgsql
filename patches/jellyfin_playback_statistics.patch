@@ -11,10 +11,9 @@ index d853d19845..5a3aaaae52 100644
  using Jellyfin.Database.Implementations.Entities;
  using Jellyfin.Database.Implementations.Entities.Security;
  using Jellyfin.Database.Implementations.Enums;
-@@ -48,6 +49,7 @@ namespace Emby.Server.Implementations.Session
-     /// </summary>
-     public sealed class SessionManager : ISessionManager, IAsyncDisposable
-     {
+@@ -52,5 +53,6 @@ namespace Emby.Server.Implementations.Session
+         private static readonly TimeSpan ProgressPersistMinInterval = TimeSpan.FromSeconds(30);
+ 
 +        private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
          private readonly IUserDataManager _userDataManager;
          private readonly IServerConfigurationManager _config;
