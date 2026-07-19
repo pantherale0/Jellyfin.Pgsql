@@ -1,0 +1,328 @@
+# Fix Live TV startup delay (jellyfin#9813): configurable probe delay/analyzeduration/probesize
+# Must apply after jellyfin_livetv_stream_buffer.patch (EncodingOptions LiveStreamKeepSeconds)
+#
+diff --git a/Emby.Server.Implementations/Library/LiveStreamHelper.cs b/Emby.Server.Implementations/Library/LiveStreamHelper.cs
+index 0ebfe3ae71..2b7df3e41e 100644
+--- a/Emby.Server.Implementations/Library/LiveStreamHelper.cs
++++ b/Emby.Server.Implementations/Library/LiveStreamHelper.cs
+@@ -26,18 +26,29 @@ namespace Emby.Server.Implementations.Library
+         private readonly IMediaEncoder _mediaEncoder;
+         private readonly ILogger _logger;
+         private readonly IApplicationPaths _appPaths;
++        private readonly IConfigurationManager _configurationManager;
+         private readonly JsonSerializerOptions _jsonOptions = JsonDefaults.Options;
+ 
+-        public LiveStreamHelper(IMediaEncoder mediaEncoder, ILogger logger, IApplicationPaths appPaths)
++        public LiveStreamHelper(
++            IMediaEncoder mediaEncoder,
++            ILogger logger,
++            IApplicationPaths appPaths,
++            IConfigurationManager configurationManager)
+         {
+             _mediaEncoder = mediaEncoder;
+             _logger = logger;
+             _appPaths = appPaths;
++            _configurationManager = configurationManager;
+         }
+ 
+         public async Task AddMediaInfoWithProbe(MediaSourceInfo mediaSource, bool isAudio, string? cacheKey, bool addProbeDelay, CancellationToken cancellationToken)
+         {
+             var originalRuntime = mediaSource.RunTimeTicks;
++            var encodingOptions = _configurationManager.GetEncodingOptions();
++            // Nullables stay null when older encoding.json omits these keys; apply safe defaults.
++            var analyzeDurationMs = Math.Max(0, encodingOptions.LiveStreamAnalyzeDurationMs ?? 3000);
++            var probeDelayMs = Math.Max(0, encodingOptions.LiveStreamProbeDelayMs ?? 500);
++            var probeSize = encodingOptions.LiveStreamProbeSize ?? "10M";
+ 
+             var now = DateTime.UtcNow;
+ 
+@@ -68,15 +79,13 @@ namespace Emby.Server.Implementations.Library
+ 
+             if (mediaInfo is null)
+             {
+-                if (addProbeDelay)
++                if (addProbeDelay && probeDelayMs > 0)
+                 {
+-                    var delayMs = mediaSource.AnalyzeDurationMs ?? 0;
+-                    delayMs = Math.Max(3000, delayMs);
+-                    _logger.LogInformation("Waiting {0}ms before probing the live stream", delayMs);
+-                    await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
++                    _logger.LogInformation("Waiting {0}ms before probing the live stream", probeDelayMs);
++                    await Task.Delay(probeDelayMs, cancellationToken).ConfigureAwait(false);
+                 }
+ 
+-                mediaSource.AnalyzeDurationMs = 3000;
++                ApplyLiveStreamProbeSettings(mediaSource, analyzeDurationMs, probeSize);
+ 
+                 mediaInfo = await _mediaEncoder.GetMediaInfo(
+                     new MediaInfoRequest
+@@ -177,7 +186,8 @@ namespace Emby.Server.Implementations.Library
+                 videoStream.IsAVC = null;
+             }
+ 
+-            mediaSource.AnalyzeDurationMs = 3000;
++            // Keep live analyze/probesize on the media source for the subsequent ffmpeg job
++            ApplyLiveStreamProbeSettings(mediaSource, analyzeDurationMs, probeSize);
+ 
+             // Try to estimate this
+             mediaSource.InferTotalBitrate(true);
+@@ -187,5 +197,15 @@ namespace Emby.Server.Implementations.Library
+         {
+             return AddMediaInfoWithProbe(mediaSource, isAudio, null, addProbeDelay, cancellationToken);
+         }
++
++        private static void ApplyLiveStreamProbeSettings(MediaSourceInfo mediaSource, int analyzeDurationMs, string probeSize)
++        {
++            mediaSource.AnalyzeDurationMs = analyzeDurationMs;
++            // Empty string means "use global FFmpeg probesize"; non-empty overrides it.
++            if (probeSize.Length > 0)
++            {
++                mediaSource.ProbeSize = probeSize;
++            }
++        }
+     }
+ }
+diff --git a/Emby.Server.Implementations/Library/MediaSourceManager.cs b/Emby.Server.Implementations/Library/MediaSourceManager.cs
+index c369fb0957..c95f7217ce 100644
+--- a/Emby.Server.Implementations/Library/MediaSourceManager.cs
++++ b/Emby.Server.Implementations/Library/MediaSourceManager.cs
+@@ -58,6 +58,7 @@ namespace Emby.Server.Implementations.Library
+         private readonly IDirectoryService _directoryService;
+         private readonly IMediaStreamRepository _mediaStreamRepository;
+         private readonly IMediaAttachmentRepository _mediaAttachmentRepository;
++        private readonly IConfigurationManager _configurationManager;
+         private readonly ConcurrentDictionary<string, ILiveStream> _openStreams = new ConcurrentDictionary<string, ILiveStream>(StringComparer.OrdinalIgnoreCase);
+         private readonly AsyncNonKeyedLocker _liveStreamLocker = new(1);
+         private readonly JsonSerializerOptions _jsonOptions = JsonDefaults.Options;
+@@ -77,7 +78,8 @@ namespace Emby.Server.Implementations.Library
+             IMediaEncoder mediaEncoder,
+             IDirectoryService directoryService,
+             IMediaStreamRepository mediaStreamRepository,
+-            IMediaAttachmentRepository mediaAttachmentRepository)
++            IMediaAttachmentRepository mediaAttachmentRepository,
++            IConfigurationManager configurationManager)
+         {
+             _appHost = appHost;
+             _itemRepo = itemRepo;
+@@ -92,6 +94,7 @@ namespace Emby.Server.Implementations.Library
+             _directoryService = directoryService;
+             _mediaStreamRepository = mediaStreamRepository;
+             _mediaAttachmentRepository = mediaAttachmentRepository;
++            _configurationManager = configurationManager;
+         }
+ 
+         public void AddParts(IEnumerable<IMediaSourceProvider> providers)
+@@ -611,7 +614,7 @@ namespace Emby.Server.Implementations.Library
+                     // hack - these two values were taken from LiveTVMediaSourceProvider
+                     string cacheKey = request.OpenToken;
+ 
+-                    await new LiveStreamHelper(_mediaEncoder, _logger, _appPaths)
++                    await new LiveStreamHelper(_mediaEncoder, _logger, _appPaths, _configurationManager)
+                         .AddMediaInfoWithProbe(mediaSource, false, cacheKey, true, cancellationToken)
+                         .ConfigureAwait(false);
+                 }
+@@ -724,7 +727,13 @@ namespace Emby.Server.Implementations.Library
+ 
+         public async Task AddMediaInfoWithProbe(MediaSourceInfo mediaSource, bool isAudio, string cacheKey, bool addProbeDelay, bool isLiveStream, CancellationToken cancellationToken)
+         {
+-            var originalRuntime = mediaSource.RunTimeTicks;
++            if (isLiveStream)
++            {
++                await new LiveStreamHelper(_mediaEncoder, _logger, _appPaths, _configurationManager)
++                    .AddMediaInfoWithProbe(mediaSource, isAudio, cacheKey, addProbeDelay, cancellationToken)
++                    .ConfigureAwait(false);
++                return;
++            }
+ 
+             var now = DateTime.UtcNow;
+ 
+@@ -757,11 +766,6 @@ namespace Emby.Server.Implementations.Library
+                     await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
+                 }
+ 
+-                if (isLiveStream)
+-                {
+-                    mediaSource.AnalyzeDurationMs = 3000;
+-                }
+-
+                 mediaInfo = await _mediaEncoder.GetMediaInfo(
+                     new MediaInfoRequest
+                     {
+@@ -786,21 +790,6 @@ namespace Emby.Server.Implementations.Library
+ 
+             var mediaStreams = mediaInfo.MediaStreams;
+ 
+-            if (isLiveStream && !string.IsNullOrEmpty(cacheKey))
+-            {
+-                var newList = new List<MediaStream>();
+-                newList.AddRange(mediaStreams.Where(i => i.Type == MediaStreamType.Video).Take(1));
+-                newList.AddRange(mediaStreams.Where(i => i.Type == MediaStreamType.Audio).Take(1));
+-
+-                foreach (var stream in newList)
+-                {
+-                    stream.Index = -1;
+-                    stream.Language = null;
+-                }
+-
+-                mediaStreams = newList;
+-            }
+-
+             _logger.LogInformation("Live tv media info probe took {0} seconds", (DateTime.UtcNow - now).TotalSeconds.ToString(CultureInfo.InvariantCulture));
+ 
+             mediaSource.Bitrate = mediaInfo.Bitrate;
+@@ -815,15 +804,6 @@ namespace Emby.Server.Implementations.Library
+ 
+             mediaSource.DefaultSubtitleStreamIndex = null;
+ 
+-            if (isLiveStream)
+-            {
+-                // Null this out so that it will be treated like a live stream
+-                if (!originalRuntime.HasValue)
+-                {
+-                    mediaSource.RunTimeTicks = null;
+-                }
+-            }
+-
+             var audioStream = mediaStreams.FirstOrDefault(i => i.Type == MediaStreamType.Audio);
+ 
+             if (audioStream is null || audioStream.Index == -1)
+@@ -864,11 +844,6 @@ namespace Emby.Server.Implementations.Library
+                 videoStream.IsAVC = null;
+             }
+ 
+-            if (isLiveStream)
+-            {
+-                mediaSource.AnalyzeDurationMs = 3000;
+-            }
+-
+             // Try to estimate this
+             mediaSource.InferTotalBitrate(true);
+         }
+@@ -930,7 +905,7 @@ namespace Emby.Server.Implementations.Library
+                 IgnoreIndex = true
+             };
+ 
+-            await new LiveStreamHelper(_mediaEncoder, _logger, _appPaths)
++            await new LiveStreamHelper(_mediaEncoder, _logger, _appPaths, _configurationManager)
+                 .AddMediaInfoWithProbe(stream, false, false, cancellationToken).ConfigureAwait(false);
+ 
+             return [stream];
+diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
+index 847f4cf187..547d3a3353 100644
+--- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
++++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
+@@ -1300,7 +1300,7 @@ namespace MediaBrowser.Controller.MediaEncoding
+                 }
+ 
+                 // Apply probesize, too, if configured
+-                var ffmpegProbeSizeArgument = GetFfmpegProbesizeArg();
++                var ffmpegProbeSizeArgument = GetFfmpegProbesizeArg(state);
+                 if (!string.IsNullOrEmpty(ffmpegProbeSizeArgument))
+                 {
+                     arg.Append(' ').Append(ffmpegProbeSizeArgument);
+@@ -7274,13 +7274,15 @@ namespace MediaBrowser.Controller.MediaEncoding
+             return analyzeDurationArgument;
+         }
+ 
+-        private string GetFfmpegProbesizeArg()
++        private string GetFfmpegProbesizeArg(EncodingJobInfo state)
+         {
+-            var ffmpegProbeSize = _config.GetFFmpegProbeSize();
++            var probeSize = !string.IsNullOrEmpty(state.MediaSource?.ProbeSize)
++                ? state.MediaSource.ProbeSize
++                : _config.GetFFmpegProbeSize();
+ 
+-            if (!string.IsNullOrEmpty(ffmpegProbeSize))
++            if (!string.IsNullOrEmpty(probeSize))
+             {
+-                return $"-probesize {ffmpegProbeSize}";
++                return $"-probesize {probeSize}";
+             }
+ 
+             return string.Empty;
+@@ -7299,7 +7301,7 @@ namespace MediaBrowser.Controller.MediaEncoding
+             inputModifier = inputModifier.Trim();
+ 
+             // Apply -probesize if configured
+-            var ffmpegProbeSizeArgument = GetFfmpegProbesizeArg();
++            var ffmpegProbeSizeArgument = GetFfmpegProbesizeArg(state);
+ 
+             if (!string.IsNullOrEmpty(ffmpegProbeSizeArgument))
+             {
+diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
+index ed06261462..1f293ae8be 100644
+--- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
++++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
+@@ -467,9 +467,12 @@ namespace MediaBrowser.MediaEncoding.Encoder
+                 extraArgs = analyzeDuration;
+             }
+ 
+-            if (!string.IsNullOrEmpty(ffmpegProbeSize))
++            var probeSize = !string.IsNullOrEmpty(request.MediaSource.ProbeSize)
++                ? request.MediaSource.ProbeSize
++                : ffmpegProbeSize;
++            if (!string.IsNullOrEmpty(probeSize))
+             {
+-                extraArgs += " -probesize " + ffmpegProbeSize;
++                extraArgs += " -probesize " + probeSize;
+             }
+ 
+             if (request.MediaSource.RequiredHttpHeaders.TryGetValue("User-Agent", out var userAgent))
+diff --git a/MediaBrowser.Model/Configuration/EncodingOptions.cs b/MediaBrowser.Model/Configuration/EncodingOptions.cs
+index 0688546fe6..11251b5d91 100644
+--- a/MediaBrowser.Model/Configuration/EncodingOptions.cs
++++ b/MediaBrowser.Model/Configuration/EncodingOptions.cs
+@@ -26,6 +26,9 @@ public class EncodingOptions
+         EnableSegmentDeletion = false;
+         SegmentKeepSeconds = 720;
+         LiveStreamKeepSeconds = 300;
++        LiveStreamProbeDelayMs = 500;
++        LiveStreamAnalyzeDurationMs = 3000;
++        LiveStreamProbeSize = "10M";
+         EncodingThreadCount = -1;
+         // This is a DRM device that is almost guaranteed to be there on every intel platform,
+         // plus it's the default one in ffmpeg if you don't specify anything
+@@ -134,6 +137,26 @@ public class EncodingOptions
+     /// </summary>
+     public int LiveStreamKeepSeconds { get; set; }
+ 
++    /// <summary>
++    /// Gets or sets the delay in milliseconds before probing a newly opened live stream.
++    /// Allows the tuner buffer to accumulate data. Set to 0 to probe immediately.
++    /// When null (unset in saved config), the server default of 500ms is used.
++    /// </summary>
++    public int? LiveStreamProbeDelayMs { get; set; }
++
++    /// <summary>
++    /// Gets or sets the FFmpeg/ffprobe <c>-analyzeduration</c> value in milliseconds for live streams.
++    /// When null (unset in saved config), the server default of 3000ms is used.
++    /// </summary>
++    public int? LiveStreamAnalyzeDurationMs { get; set; }
++
++    /// <summary>
++    /// Gets or sets the FFmpeg/ffprobe <c>-probesize</c> value for live streams (for example <c>10M</c>).
++    /// When null (unset in saved config), the server default of <c>10M</c> is used.
++    /// Set to an empty string to use the global FFmpeg probesize instead.
++    /// </summary>
++    public string LiveStreamProbeSize { get; set; }
++
+     /// <summary>
+     /// Gets or sets the hardware acceleration type.
+     /// </summary>
+diff --git a/MediaBrowser.Model/Dto/MediaSourceInfo.cs b/MediaBrowser.Model/Dto/MediaSourceInfo.cs
+index 75ccdcf276..b7cc2e6de6 100644
+--- a/MediaBrowser.Model/Dto/MediaSourceInfo.cs
++++ b/MediaBrowser.Model/Dto/MediaSourceInfo.cs
+@@ -116,6 +116,12 @@ namespace MediaBrowser.Model.Dto
+ 
+         public int? AnalyzeDurationMs { get; set; }
+ 
++        /// <summary>
++        /// Gets or sets the FFmpeg/ffprobe <c>-probesize</c> for this media source (for example <c>10M</c>).
++        /// When set, overrides the global FFmpeg probesize for probe and transcode of this source.
++        /// </summary>
++        public string ProbeSize { get; set; }
++
+         [JsonIgnore]
+         public TranscodeReason TranscodeReasons { get; set; }
+ 
