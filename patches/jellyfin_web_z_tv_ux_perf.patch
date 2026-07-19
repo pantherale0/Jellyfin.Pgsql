@@ -1,0 +1,335 @@
+diff --git a/src/components/homesections/homesections.js b/src/components/homesections/homesections.js
+index b7379aa13b..df1a88c10e 100644
+--- a/src/components/homesections/homesections.js
++++ b/src/components/homesections/homesections.js
+@@ -24,7 +24,8 @@ import 'elements/emby-button/emby-button';
+ import './homesections.scss';
+ 
+ const MAX_SECTIONS = 10;
+-const MAX_SECTIONS_TV = MAX_SECTIONS + 1; // TV layout can have an extra section to ensure a library section is always visible
++/** Cap active home rows on TV to limit API + image pressure on low-RAM clients (webOS). */
++const MAX_ACTIVE_SECTIONS_TV = 4;
+ 
+ export function getDefaultSection(index) {
+     if (index < 0 || index > DEFAULT_SECTIONS.length) return '';
+@@ -48,10 +49,12 @@ function getAllSectionsToShow(userSettings) {
+             && !sections.includes(HomeSectionType.SmallLibraryTiles)
+             && !sections.includes(HomeSectionType.LibraryButtons)
+     ) {
+-        return [
+-            HomeSectionType.SmallLibraryTiles,
+-            ...sections
+-        ];
++        sections.unshift(HomeSectionType.SmallLibraryTiles);
++    }
++
++    if (layoutManager.tv) {
++        const active = sections.filter((section) => section && section !== HomeSectionType.None);
++        return active.slice(0, MAX_ACTIVE_SECTIONS_TV);
+     }
+ 
+     return sections;
+@@ -66,8 +69,10 @@ export function loadSections(elem, apiClient, user, userSettings) {
+             let html = '';
+ 
+             if (userViews.length) {
+-                // TV layout can have an extra section to ensure libraries are visible
+-                const totalSectionCount = layoutManager.tv ? MAX_SECTIONS_TV : MAX_SECTIONS;
++                const sectionsToShow = getAllSectionsToShow(userSettings);
++                const totalSectionCount = layoutManager.tv
++                    ? sectionsToShow.length
++                    : MAX_SECTIONS;
+                 for (let i = 0; i < totalSectionCount; i++) {
+                     html += '<div class="verticalSection section' + i + '"></div>';
+                 }
+@@ -75,7 +80,7 @@ export function loadSections(elem, apiClient, user, userSettings) {
+                 elem.innerHTML = html;
+                 elem.classList.add('homeSectionsContainer');
+ 
+-                const promises = getAllSectionsToShow(userSettings)
++                const promises = sectionsToShow
+                     .map((section, index) => (
+                         loadSection(elem, apiClient, user, userSettings, userViews, section, index)
+                     ));
+diff --git a/src/components/images/imageLoader.js b/src/components/images/imageLoader.js
+index c41b0d59ff..06c76662be 100644
+--- a/src/components/images/imageLoader.js
++++ b/src/components/images/imageLoader.js
+@@ -137,29 +137,62 @@ function fillImageElement(elem, url) {
+ 
+ function emptyImageElement(elem) {
+     elem.removeEventListener('animationend', onAnimationEnd);
+-    const canvas = elem.previousSibling;
+-    if (canvas?.tagName === 'CANVAS') {
+-        canvas.classList.remove('lazy-hidden');
+-    }
+ 
+-    // HACK: Unhide the content of the card padder
+-    elem.parentNode?.querySelector('.cardPadder')?.classList.remove('lazy-hidden-children');
++    const parent = elem.parentNode;
++    if (parent) {
++        // Drop blurhash canvases on unload so they do not accumulate in long lists.
++        for (const canvas of parent.querySelectorAll('canvas.blurhash-canvas')) {
++            canvas.remove();
++        }
++        const prev = elem.previousSibling;
++        if (prev?.tagName === 'CANVAS') {
++            prev.remove();
++        }
++
++        // HACK: Unhide the content of the card padder
++        parent.querySelector('.cardPadder')?.classList.remove('lazy-hidden-children');
++    }
+ 
+     let url;
+ 
+     if (elem.tagName !== 'IMG') {
+-        url = elem.style.backgroundImage.slice(4, -1).replace(/"/g, '');
++        const bg = elem.style.backgroundImage;
++        url = (bg && bg !== 'none') ? bg.slice(4, -1).replace(/"/g, '') : elem.getAttribute('data-src');
+         elem.style.backgroundImage = 'none';
+     } else {
+-        url = elem.getAttribute('src');
++        url = elem.getAttribute('src') || elem.getAttribute('data-src');
+         elem.setAttribute('src', '');
+     }
+-    elem.setAttribute('data-src', url);
+ 
+-    elem.classList.remove('lazy-image-fadein-fast', 'lazy-image-fadein');
++    if (url) {
++        elem.setAttribute('data-src', url);
++    }
++
++    elem.classList.remove('lazy-image-fadein-fast', 'lazy-image-fadein', 'blurhashed');
+     elem.classList.add('lazy-hidden');
+ }
+ 
++/**
++ * Unload decoded images under a root while keeping layout shells for focus/scroll.
++ * @param {Element} root
++ */
++export function unloadLazyImages(root) {
++    if (!root) {
++        return;
++    }
++
++    for (const elem of root.querySelectorAll('.lazy')) {
++        const hasBitmap = (elem.tagName === 'IMG' && elem.getAttribute('src'))
++            || (elem.style.backgroundImage && elem.style.backgroundImage !== 'none' && elem.style.backgroundImage !== '');
++        const hasCanvas = elem.previousSibling?.tagName === 'CANVAS'
++            || elem.parentNode?.querySelector('canvas.blurhash-canvas');
++
++        if (hasBitmap || hasCanvas) {
++            emptyImageElement(elem);
++        }
++    }
++}
++
+ export function lazyChildren(elem) {
+     if (userSettings.enableBlurhash()) {
+         for (const lazyElem of elem.querySelectorAll('.lazy')) {
+@@ -252,5 +285,6 @@ export default {
+     fillImage: fillImage,
+     lazyImage: lazyImage,
+     lazyChildren: lazyChildren,
++    unloadLazyImages: unloadLazyImages,
+     getPrimaryImageAspectRatio: getPrimaryImageAspectRatio
+ };
+diff --git a/src/components/lazyLoader/lazyLoaderIntersectionObserver.js b/src/components/lazyLoader/lazyLoaderIntersectionObserver.js
+index 8a3835d890..340ed5cd32 100644
+--- a/src/components/lazyLoader/lazyLoaderIntersectionObserver.js
++++ b/src/components/lazyLoader/lazyLoaderIntersectionObserver.js
+@@ -1,3 +1,13 @@
++import browser from '../../scripts/browser';
++
++function getRootMargin() {
++    // TVs keep far fewer decoded images in memory when the unload margin is tight.
++    if (browser.tv || browser.slow) {
++        return '200px 0px';
++    }
++
++    return '50%';
++}
+ 
+ export class LazyLoader {
+     constructor(options) {
+@@ -14,7 +24,7 @@ export class LazyLoader {
+                 });
+             },
+             {
+-                rootMargin: '50%',
++                rootMargin: getRootMargin(),
+                 threshold: 0
+             });
+ 
+diff --git a/src/scripts/infiniteScrollHelper.js b/src/scripts/infiniteScrollHelper.js
+index d6b3192fe8..bb83ced347 100644
+--- a/src/scripts/infiniteScrollHelper.js
++++ b/src/scripts/infiniteScrollHelper.js
+@@ -1,6 +1,10 @@
+ import browser from './browser';
++import { unloadLazyImages } from '../components/images/imageLoader';
+ import * as userSettings from './settings/userSettings';
+ 
++const TV_MAX_HYDRATED_CARDS = 180;
++const RECYCLE_THROTTLE_MS = 120;
++
+ /**
+  * Minimum page size for infinite scroll. TVs need larger chunks to avoid
+  * frequent DOM updates on slow Chromium builds (e.g. webOS 5).
+@@ -43,6 +47,100 @@ export function isNearScrollBottom(threshold = getScrollPrefetchThreshold()) {
+     return ((scrollTop / denom) * 100) >= threshold;
+ }
+ 
++function getCardElements(itemsContainer) {
++    const cards = itemsContainer.querySelectorAll('.card[data-id], button.card, [data-id].card');
++    if (cards.length) {
++        return Array.from(cards);
++    }
++
++    return Array.from(itemsContainer.querySelectorAll('[data-id]'));
++}
++
++function collapseCardToPlaceholder(card) {
++    if (card.dataset.tvPlaceholder === '1') {
++        return;
++    }
++
++    unloadLazyImages(card);
++
++    const footer = card.querySelector('.cardFooter');
++    if (footer && !footer.classList.contains('hide')) {
++        card.dataset.tvFooterHtml = footer.innerHTML;
++        footer.innerHTML = '';
++        footer.classList.add('hide');
++    }
++
++    card.dataset.tvPlaceholder = '1';
++}
++
++function restoreCardPlaceholder(card) {
++    if (card.dataset.tvPlaceholder !== '1') {
++        return;
++    }
++
++    const footer = card.querySelector('.cardFooter');
++    if (footer && card.dataset.tvFooterHtml != null) {
++        footer.innerHTML = card.dataset.tvFooterHtml;
++        footer.classList.remove('hide');
++        delete card.dataset.tvFooterHtml;
++    }
++
++    delete card.dataset.tvPlaceholder;
++}
++
++/**
++ * Unload off-screen card images (and lightly collapse far-above cards on TV).
++ * Keeps outer card shells so D-pad focus / scroll height stay stable.
++ * @param {Element} itemsContainer
++ */
++export function recycleOffscreenCards(itemsContainer) {
++    if (!itemsContainer || !(browser.tv || browser.slow)) {
++        return;
++    }
++
++    const cards = getCardElements(itemsContainer);
++    if (!cards.length) {
++        return;
++    }
++
++    const viewportTop = window.scrollY || window.pageYOffset;
++    const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
++    const bufferTop = viewportTop - viewportHeight;
++    const bufferBottom = viewportTop + (viewportHeight * 2);
++    const active = document.activeElement;
++    const focusedCard = active ? (active.closest?.('[data-id], .card') || null) : null;
++
++    const excess = Math.max(0, cards.length - TV_MAX_HYDRATED_CARDS);
++    let farAboveCount = 0;
++
++    for (const card of cards) {
++        if (focusedCard && (card === focusedCard || card.contains(focusedCard))) {
++            restoreCardPlaceholder(card);
++            continue;
++        }
++
++        const rect = card.getBoundingClientRect();
++        const absoluteTop = rect.top + viewportTop;
++        const absoluteBottom = absoluteTop + rect.height;
++        const inBuffer = absoluteBottom >= bufferTop && absoluteTop <= bufferBottom;
++
++        if (inBuffer) {
++            restoreCardPlaceholder(card);
++            continue;
++        }
++
++        if (absoluteBottom < bufferTop) {
++            unloadLazyImages(card);
++            farAboveCount++;
++            if (excess > 0 && farAboveCount <= excess) {
++                collapseCardToPlaceholder(card);
++            }
++        } else if (absoluteTop > bufferBottom) {
++            unloadLazyImages(card);
++        }
++    }
++}
++
+ /**
+  * Bind window scroll + focus-near-end listeners for infinite scroll.
+  * @param {{
+@@ -68,6 +166,22 @@ export function bindInfiniteScroll(options) {
+         scrollController.abort();
+     }, { signal: scrollController.signal });
+ 
++    let recycleTimer = null;
++    const scheduleRecycle = () => {
++        if (!(browser.tv || browser.slow)) {
++            return;
++        }
++
++        if (recycleTimer) {
++            return;
++        }
++
++        recycleTimer = window.setTimeout(() => {
++            recycleTimer = null;
++            recycleOffscreenCards(itemsContainer);
++        }, RECYCLE_THROTTLE_MS);
++    };
++
+     const maybeLoad = () => {
+         if (!shouldLoadMore()) {
+             return;
+@@ -78,15 +192,19 @@ export function bindInfiniteScroll(options) {
+         }
+ 
+         onLoadMore();
++        scheduleRecycle();
+     };
+ 
+     window.addEventListener('scroll', () => {
++        scheduleRecycle();
+         if (isNearScrollBottom()) {
+             maybeLoad();
+         }
+     }, { signal: scrollController.signal, passive: true });
+ 
+     itemsContainer.addEventListener('focusin', (e) => {
++        scheduleRecycle();
++
+         const cards = itemsContainer.querySelectorAll('[data-id]');
+         if (!cards.length) {
+             return;
+@@ -98,4 +216,11 @@ export function bindInfiniteScroll(options) {
+             maybeLoad();
+         }
+     }, { signal: scrollController.signal });
++
++    scrollController.signal.addEventListener('abort', () => {
++        if (recycleTimer) {
++            clearTimeout(recycleTimer);
++            recycleTimer = null;
++        }
++    });
+ }
