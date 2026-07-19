@@ -35,7 +35,7 @@ index d6ddf8f5c8..1842a9b0a0 100644
          IOrderedQueryable<BaseItemEntity>? orderedQuery = null;
  
          if (hasSearch)
-@@ -372,6 +389,27 @@ public sealed partial class BaseItemRepository
+@@ -372,6 +389,39 @@ public sealed partial class BaseItemRepository
              : joined.OrderByDescending(x => x.MaxDate).ThenBy(x => x.Item.SortName).Select(x => x.Item);
      }
  
@@ -46,8 +46,20 @@ index d6ddf8f5c8..1842a9b0a0 100644
 +        (ItemSortBy OrderBy, SortOrder SortOrder)[] orderBy)
 +    {
 +        var userId = filter.User!.Id;
++
++        // Aggregate to one row per item so multi-key UserData does not fan out Continue Watching.
++        var resumableUserData = context.UserData
++            .AsNoTracking()
++            .Where(ud => ud.UserId == userId && ud.PlaybackPositionTicks > 0)
++            .GroupBy(ud => ud.ItemId)
++            .Select(g => new
++            {
++                ItemId = g.Key,
++                LastPlayedDate = g.Max(x => x.LastPlayedDate)
++            });
++
 +        var joined = query.Join(
-+            context.UserData.AsNoTracking().Where(ud => ud.UserId == userId && ud.PlaybackPositionTicks > 0),
++            resumableUserData,
 +            item => item.Id,
 +            ud => ud.ItemId,
 +            (item, ud) => new { Item = item, LastPlayedDate = ud.LastPlayedDate });
