@@ -758,14 +758,15 @@ index 8657cb7dbb..8325f5b599 100644
                  return authInfo;
 diff --git a/Jellyfin.Server.Implementations/Security/MediaShareLinkService.cs b/Jellyfin.Server.Implementations/Security/MediaShareLinkService.cs
 new file mode 100644
-index 0000000000..1e30352542
+index 0000000000..980d064974
 --- /dev/null
 +++ b/Jellyfin.Server.Implementations/Security/MediaShareLinkService.cs
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,147 @@
 +using System;
 +using System.Security.Cryptography;
 +using System.Text;
 +using System.Text.Json;
++using Jellyfin.Extensions;
 +using MediaBrowser.Controller;
 +using MediaBrowser.Controller.Security;
 +
@@ -816,7 +817,7 @@ index 0000000000..1e30352542
 +    }
 +
 +    /// <inheritdoc />
-+    public bool TryValidate(string token, out MediaShareLinkInfo info)
++    public bool TryValidate(string? token, out MediaShareLinkInfo info)
 +    {
 +        info = default;
 +        if (string.IsNullOrEmpty(token) || !token.StartsWith(TokenPrefix, StringComparison.Ordinal))
@@ -862,7 +863,7 @@ index 0000000000..1e30352542
 +            return false;
 +        }
 +
-+        if (payload is null || payload.UserId == Guid.Empty || payload.ItemId == Guid.Empty)
++        if (payload is null || payload.UserId.IsEmpty() || payload.ItemId.IsEmpty())
 +        {
 +            return false;
 +        }
@@ -943,7 +944,7 @@ index dd5eb9a01d..b54554fad0 100644
          /// </summary>
 diff --git a/MediaBrowser.Controller/Security/IMediaShareLinkService.cs b/MediaBrowser.Controller/Security/IMediaShareLinkService.cs
 new file mode 100644
-index 0000000000..8f904f2ea3
+index 0000000000..3d29c4d39a
 --- /dev/null
 +++ b/MediaBrowser.Controller/Security/IMediaShareLinkService.cs
 @@ -0,0 +1,26 @@
@@ -971,7 +972,7 @@ index 0000000000..8f904f2ea3
 +    /// <param name="token">The token.</param>
 +    /// <param name="info">The validated share info when successful.</param>
 +    /// <returns><c>true</c> if the token is valid and not expired.</returns>
-+    bool TryValidate(string token, out MediaShareLinkInfo info);
++    bool TryValidate(string? token, out MediaShareLinkInfo info);
 +}
 diff --git a/MediaBrowser.Controller/Security/MediaShareLinkInfo.cs b/MediaBrowser.Controller/Security/MediaShareLinkInfo.cs
 new file mode 100644
