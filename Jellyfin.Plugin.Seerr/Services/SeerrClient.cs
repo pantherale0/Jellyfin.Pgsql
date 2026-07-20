@@ -534,12 +534,9 @@ public sealed class SeerrClient
         {
             if (country.ReleaseDates is not null)
             {
-                foreach (var entry in country.ReleaseDates)
+                foreach (var entry in country.ReleaseDates.Where(e => !string.IsNullOrWhiteSpace(e.Certification)))
                 {
-                    if (!string.IsNullOrWhiteSpace(entry.Certification))
-                    {
-                        return entry.Certification.Trim();
-                    }
+                    return entry.Certification.Trim();
                 }
             }
 
@@ -565,12 +562,9 @@ public sealed class SeerrClient
             return null;
         }
 
-        foreach (var entry in OrderCountries(results, c => c.Iso31661))
+        foreach (var entry in OrderCountries(results, c => c.Iso31661).Where(e => !string.IsNullOrWhiteSpace(e.Rating)))
         {
-            if (!string.IsNullOrWhiteSpace(entry.Rating))
-            {
-                return entry.Rating.Trim();
-            }
+            return entry.Rating.Trim();
         }
 
         return null;
