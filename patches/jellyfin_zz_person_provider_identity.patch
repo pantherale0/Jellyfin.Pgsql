@@ -366,7 +366,7 @@ diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQu
 index 14719bb..150e572 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-@@ -364,14 +364,29 @@ public sealed partial class BaseItemRepository
+@@ -364,14 +364,32 @@ public sealed partial class BaseItemRepository
  
          if (filter.PersonIds.Length > 0)
          {
@@ -374,13 +374,16 @@ index 14719bb..150e572 100644
 -                .WhereOneOrMany(filter.PersonIds, b => b.Id)
 -                .Select(b => b.Name);
 +            var personItemIds = filter.PersonIds;
++            // PersonIds is typically one id; avoid WhereOneOrMany inside correlated
++            // subqueries - EF cannot translate that custom method call.
++            string[] personProviderIds = ["Tmdb", "Imdb", "Tvdb"];
 +
 +            // Prefer provider-key identity so same-name people do not share filmographies.
 +            var keyedPeopleIds = context.Peoples
 +                .Where(p => p.ProviderKey != null
 +                    && context.BaseItemProviders.Any(bp =>
 +                        personItemIds.Contains(bp.ItemId)
-+                        && (bp.ProviderId == "Tmdb" || bp.ProviderId == "Imdb" || bp.ProviderId == "Tvdb")
++                        && personProviderIds.Contains(bp.ProviderId)
 +                        && p.ProviderKey == bp.ProviderId + ":" + bp.ProviderValue))
 +                .Select(p => p.Id);
  
@@ -388,12 +391,12 @@ index 14719bb..150e572 100644
 -                .Where(p => personNames.Contains(p.Name))
 +            var nameOnlyPeopleIds = context.Peoples
 +                .Where(p => p.ProviderKey == null
-+                    && context.BaseItems
-+                        .WhereOneOrMany(personItemIds, b => b.Id)
-+                        .Any(b => b.Name == p.Name
-+                            && !context.BaseItemProviders.Any(bp =>
-+                                bp.ItemId == b.Id
-+                                && (bp.ProviderId == "Tmdb" || bp.ProviderId == "Imdb" || bp.ProviderId == "Tvdb"))))
++                    && context.BaseItems.Any(b =>
++                        personItemIds.Contains(b.Id)
++                        && b.Name == p.Name
++                        && !context.BaseItemProviders.Any(bp =>
++                            bp.ItemId == b.Id
++                            && personProviderIds.Contains(bp.ProviderId))))
                  .Select(p => p.Id);
  
 +            var peopleEntityIds = keyedPeopleIds.Union(nameOnlyPeopleIds);
