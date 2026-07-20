@@ -4,6 +4,18 @@ An experimental Jellyfin database plugin that adds PostgreSQL support. This repo
 
 **Status:** highly experimental — use at your own risk.
 
+## Documentation
+
+Deep documentation (benefits/drawbacks, architecture, features, full patch catalog, known issues) lives under [`docs/`](docs/README.md):
+
+| Doc | Description |
+|---|---|
+| [Overview](docs/overview.md) | Fork purpose, benefits, and drawbacks |
+| [Architecture](docs/architecture.md) | Plugins, submodules, and how patches are applied |
+| [Features](docs/features.md) | Operator feature map (SSO, cache, taste, Seerr, …) |
+| [Patches](docs/patches.md) | What / why / where / how for every file in `patches/` |
+| [Known issues](docs/known-issues.md) | Fork tracker items and inherited Postgres caveats |
+
 ## Contributing, issues, and pull requests
 
 Issues and pull requests on this repository are **locked to collaborators only** (primarily for automated CI/CD, such as migration sync). This is intentional: the project is not set up for open contribution via PRs or issue trackers.
