@@ -215,13 +215,11 @@ public sealed partial class EmbyImportSessionStore
                 throw new EmbyImportException($"{label} upload exceeds the declared size.");
             }
 
-            if (chunkIndex == 0)
+            if (chunkIndex == 0
+                && (buffer.Length < SqliteHeaderBytes.Length
+                    || !buffer.AsSpan(0, SqliteHeaderBytes.Length).SequenceEqual(SqliteHeaderBytes)))
             {
-                if (buffer.Length < SqliteHeaderBytes.Length
-                    || !buffer.AsSpan(0, SqliteHeaderBytes.Length).SequenceEqual(SqliteHeaderBytes))
-                {
-                    throw new EmbyImportException($"{label} is not a valid SQLite database.");
-                }
+                throw new EmbyImportException($"{label} is not a valid SQLite database.");
             }
 
             await using (var file = new FileStream(
