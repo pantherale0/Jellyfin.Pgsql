@@ -652,11 +652,12 @@ index 8657cb7dbb..8325f5b599 100644
          }
  
          public Task<AuthorizationInfo> GetAuthorizationInfo(HttpContext requestContext)
-@@ -215,6 +219,28 @@ namespace Jellyfin.Server.Implementations.Security
+@@ -215,6 +219,29 @@ namespace Jellyfin.Server.Implementations.Security
  
                          authInfo.IsApiKey = true;
                      }
-+                    else if (_mediaShareLinkService.TryValidate(token, out var shareInfo))
++                    else if (!string.IsNullOrEmpty(token)
++                        && _mediaShareLinkService.TryValidate(token, out var shareInfo))
 +                    {
 +                        authInfo.IsAuthenticated = true;
 +                        authInfo.IsMediaShareLink = true;
@@ -683,14 +684,15 @@ index 8657cb7dbb..8325f5b599 100644
                  return authInfo;
 diff --git a/Jellyfin.Server.Implementations/Security/MediaShareLinkService.cs b/Jellyfin.Server.Implementations/Security/MediaShareLinkService.cs
 new file mode 100644
-index 0000000000..1e30352542
+index 0000000000..b2c3d4e5f6
 --- /dev/null
 +++ b/Jellyfin.Server.Implementations/Security/MediaShareLinkService.cs
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,147 @@
 +using System;
 +using System.Security.Cryptography;
 +using System.Text;
 +using System.Text.Json;
++using Jellyfin.Extensions;
 +using MediaBrowser.Controller;
 +using MediaBrowser.Controller.Security;
 +
@@ -787,7 +789,7 @@ index 0000000000..1e30352542
 +            return false;
 +        }
 +
-+        if (payload is null || payload.UserId == Guid.Empty || payload.ItemId == Guid.Empty)
++        if (payload is null || payload.UserId.IsEmpty() || payload.ItemId.IsEmpty())
 +        {
 +            return false;
 +        }
