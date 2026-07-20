@@ -1,9 +1,8 @@
-# PlaybackActivity analytics: LiveTV programme segments, PlayMethod/TranscodeReasons, SQL session buckets, Overview KPIs, daily rollups.
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 1111111111..2222222222 100644
+index b2a6caa8a3..2abfb7a535 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
-@@ -11,6 +11,7 @@
+@@ -11,6 +11,7 @@ using Jellyfin.Data;
  using Jellyfin.Data.Enums;
  using Jellyfin.Data.Events;
  using Jellyfin.Data.Queries;
@@ -11,7 +10,7 @@ index 1111111111..2222222222 100644
  using Jellyfin.Database.Implementations.Entities;
  using Jellyfin.Database.Implementations.Entities.Security;
  using Jellyfin.Database.Implementations.Enums;
-@@ -28,6 +29,7 @@
+@@ -28,6 +29,7 @@ using MediaBrowser.Controller.Events;
  using MediaBrowser.Controller.Events.Authentication;
  using MediaBrowser.Controller.Events.Session;
  using MediaBrowser.Controller.Library;
@@ -19,7 +18,7 @@ index 1111111111..2222222222 100644
  using MediaBrowser.Controller.Net;
  using MediaBrowser.Controller.Session;
  using MediaBrowser.Model.Dto;
-@@ -49,9 +51,12 @@
+@@ -49,9 +51,12 @@ namespace Emby.Server.Implementations.Session
      public sealed class SessionManager : ISessionManager, IAsyncDisposable
      {
          private const long ProgressPersistSeekThresholdTicks = TimeSpan.TicksPerSecond * 30;
@@ -32,7 +31,7 @@ index 1111111111..2222222222 100644
          private readonly IUserDataManager _userDataManager;
          private readonly IServerConfigurationManager _config;
          private readonly ILogger<SessionManager> _logger;
-@@ -77,6 +82,12 @@
+@@ -77,6 +82,12 @@ namespace Emby.Server.Implementations.Session
          private readonly ConcurrentDictionary<(Guid UserId, Guid ItemId), (DateTime Utc, long PositionTicks)> _lastProgressPersist
              = new();
  
@@ -45,7 +44,7 @@ index 1111111111..2222222222 100644
          private Timer _idleTimer;
          private Timer _inactiveTimer;
  
-@@ -99,6 +110,7 @@
+@@ -99,6 +110,7 @@ namespace Emby.Server.Implementations.Session
          /// <param name="deviceManager">Instance of <see cref="IDeviceManager"/> interface.</param>
          /// <param name="mediaSourceManager">Instance of <see cref="IMediaSourceManager"/> interface.</param>
          /// <param name="hostApplicationLifetime">Instance of <see cref="IHostApplicationLifetime"/> interface.</param>
@@ -53,7 +52,7 @@ index 1111111111..2222222222 100644
          public SessionManager(
              ILogger<SessionManager> logger,
              IEventManager eventManager,
-@@ -112,7 +124,8 @@
+@@ -112,7 +124,8 @@ namespace Emby.Server.Implementations.Session
              IServerApplicationHost appHost,
              IDeviceManager deviceManager,
              IMediaSourceManager mediaSourceManager,
@@ -63,7 +62,7 @@ index 1111111111..2222222222 100644
          {
              _logger = logger;
              _eventManager = eventManager;
-@@ -129,6 +142,7 @@
+@@ -129,6 +142,7 @@ namespace Emby.Server.Implementations.Session
              _shutdownCallback = hostApplicationLifetime.ApplicationStopping.Register(OnApplicationStopping);
  
              _deviceManager.DeviceOptionsUpdated += OnDeviceManagerDeviceOptionsUpdated;
@@ -71,7 +70,7 @@ index 1111111111..2222222222 100644
          }
  
          /// <summary>
-@@ -781,6 +795,18 @@
+@@ -781,6 +795,18 @@ namespace Emby.Server.Implementations.Session
                  UpdateLiveStreamActiveSessionMappings(info.LiveStreamId, info.SessionId, info.PlaySessionId);
              }
  
@@ -90,7 +89,7 @@ index 1111111111..2222222222 100644
              var eventArgs = new PlaybackStartEventArgs
              {
                  Item = libraryItem,
-@@ -915,6 +941,20 @@
+@@ -915,6 +941,20 @@ namespace Emby.Server.Implementations.Session
                  UpdateLiveStreamActiveSessionMappings(info.LiveStreamId, info.SessionId, info.PlaySessionId);
              }
  
@@ -111,7 +110,7 @@ index 1111111111..2222222222 100644
              var eventArgs = new PlaybackProgressEventArgs
              {
                  Item = libraryItem,
-@@ -1140,6 +1180,89 @@
+@@ -1140,6 +1180,89 @@ namespace Emby.Server.Implementations.Session
                  {
                      playedToCompletion = OnPlaybackStopped(user, libraryItem, info.PositionTicks, info.Failed);
                  }
@@ -201,7 +200,7 @@ index 1111111111..2222222222 100644
              }
  
              if (!string.IsNullOrEmpty(info.LiveStreamId))
-@@ -1167,6 +1290,342 @@
+@@ -1167,6 +1290,253 @@ namespace Emby.Server.Implementations.Session
              EventHelper.QueueEventIfNotNull(PlaybackStopped, this, eventArgs, _logger);
          }
  
@@ -328,7 +327,7 @@ index 1111111111..2222222222 100644
 +            }
 +        }
 +
-+        private LiveTvProgramSnapshot? ResolveCurrentLiveTvProgram(BaseItem channelItem)
++        private LiveTvProgramSnapshot ResolveCurrentLiveTvProgram(BaseItem channelItem)
 +        {
 +            var now = DateTime.UtcNow;
 +            var programs = _libraryManager.GetItemList(new InternalItemsQuery
@@ -452,6 +451,14 @@ index 1111111111..2222222222 100644
 +            await dbContext.SaveChangesAsync().ConfigureAwait(false);
 +        }
 +
+         private bool OnPlaybackStopped(User user, BaseItem item, long? positionTicks, bool playbackFailed)
+         {
+             if (playbackFailed)
+@@ -2193,5 +2563,95 @@ namespace Emby.Server.Implementations.Session
+             _activeConnections.Clear();
+             _activeLiveStreamSessions.Clear();
+         }
++
 +        private sealed class LiveTvProgramSnapshot
 +        {
 +            public Guid ItemId { get; set; }
@@ -541,12 +548,11 @@ index 1111111111..2222222222 100644
 +            }
 +        }
 +
-         private bool OnPlaybackStopped(User user, BaseItem item, long? positionTicks, bool playbackFailed)
-         {
-             if (playbackFailed)
+     }
+ }
 diff --git a/Jellyfin.Api/Controllers/PlaybackActivityController.cs b/Jellyfin.Api/Controllers/PlaybackActivityController.cs
 new file mode 100644
-index 0000000000..1111111111
+index 0000000000..25cc4d577e
 --- /dev/null
 +++ b/Jellyfin.Api/Controllers/PlaybackActivityController.cs
 @@ -0,0 +1,223 @@
@@ -775,7 +781,7 @@ index 0000000000..1111111111
 +}
 diff --git a/Jellyfin.Api/Controllers/ServerPlaybackStatsController.cs b/Jellyfin.Api/Controllers/ServerPlaybackStatsController.cs
 new file mode 100644
-index 0000000000..1111111111
+index 0000000000..6d438b076f
 --- /dev/null
 +++ b/Jellyfin.Api/Controllers/ServerPlaybackStatsController.cs
 @@ -0,0 +1,783 @@
@@ -1564,7 +1570,7 @@ index 0000000000..1111111111
 +}
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivity.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivity.cs
 new file mode 100644
-index 0000000000..1111111111
+index 0000000000..cd3e7e81ec
 --- /dev/null
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivity.cs
 @@ -0,0 +1,125 @@
@@ -1695,7 +1701,7 @@ index 0000000000..1111111111
 +}
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivityDaily.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivityDaily.cs
 new file mode 100644
-index 0000000000..1111111111
+index 0000000000..da9cd00aa9
 --- /dev/null
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivityDaily.cs
 @@ -0,0 +1,44 @@
@@ -1744,10 +1750,10 @@ index 0000000000..1111111111
 +    public int TranscodeCount { get; set; }
 +}
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
-index 1111111111..2222222222 100644
+index b0c12bf592..0388e09077 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
-@@ -173,6 +173,16 @@
+@@ -173,6 +173,16 @@ public class JellyfinDbContext(DbContextOptions<JellyfinDbContext> options, ILog
      /// </summary>
      public DbSet<KeyframeData> KeyframeData => Set<KeyframeData>();
  
@@ -1765,7 +1771,7 @@ index 1111111111..2222222222 100644
  
      public DbSet<Book> Books => Set<Book>();
 diff --git a/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs b/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
-index 1111111111..2222222222 100644
+index a5a67046d1..3a971a163d 100644
 --- a/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
 +++ b/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
 @@ -1,5 +1,6 @@
@@ -1775,7 +1781,7 @@ index 1111111111..2222222222 100644
  using Jellyfin.Database.Implementations.Entities;
  using MediaBrowser.Controller;
  using MediaBrowser.Controller.Configuration;
-@@ -36,7 +37,8 @@
+@@ -36,7 +37,8 @@ public class SessionManagerTests
              Mock.Of<IServerApplicationHost>(),
              Mock.Of<IDeviceManager>(),
              Mock.Of<IMediaSourceManager>(),
@@ -1785,7 +1791,7 @@ index 1111111111..2222222222 100644
  
          await Assert.ThrowsAsync(exceptionType, () => sessionManager.GetAuthorizationToken(
              new User("test", "default", "default"),
-@@ -63,7 +65,8 @@
+@@ -63,7 +65,8 @@ public class SessionManagerTests
              Mock.Of<IServerApplicationHost>(),
              Mock.Of<IDeviceManager>(),
              Mock.Of<IMediaSourceManager>(),
