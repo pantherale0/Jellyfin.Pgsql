@@ -13,26 +13,26 @@ index 81be5d3c37..e967b13db1 100644
              serviceCollection.AddSingleton<ITranscodeManager, TranscodeManager>();
              serviceCollection.AddScoped<MediaInfoHelper>();
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 79fb233382..a9e616a190 100644
+index 1111111111..2222222222 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
-@@ -29,6 +29,7 @@ using MediaBrowser.Controller.Events;
- using MediaBrowser.Controller.Events.Authentication;
+@@ -30,6 +30,7 @@
  using MediaBrowser.Controller.Events.Session;
  using MediaBrowser.Controller.Library;
+ using MediaBrowser.Controller.LiveTv;
 +using MediaBrowser.Controller.MediaEncoding;
  using MediaBrowser.Controller.Net;
  using MediaBrowser.Controller.Session;
  using MediaBrowser.Model.Dto;
-@@ -54,6 +55,7 @@ namespace Emby.Server.Implementations.Session
-         private static readonly TimeSpan ProgressPersistMinInterval = TimeSpan.FromSeconds(30);
+@@ -57,6 +58,7 @@
+         private static readonly TimeSpan LiveTvProgramLookupMinInterval = TimeSpan.FromSeconds(30);
  
          private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
 +        private readonly ITranscodingPipelineProbe _pipelineProbe;
          private readonly IUserDataManager _userDataManager;
          private readonly IServerConfigurationManager _config;
          private readonly ILogger<SessionManager> _logger;
-@@ -101,6 +103,7 @@ namespace Emby.Server.Implementations.Session
+@@ -111,6 +113,7 @@
          /// <param name="mediaSourceManager">Instance of <see cref="IMediaSourceManager"/> interface.</param>
          /// <param name="hostApplicationLifetime">Instance of <see cref="IHostApplicationLifetime"/> interface.</param>
          /// <param name="dbProvider">Instance of <see cref="IDbContextFactory{JellyfinDbContext}"/> interface.</param>
@@ -40,7 +40,7 @@ index 79fb233382..a9e616a190 100644
          public SessionManager(
              ILogger<SessionManager> logger,
              IEventManager eventManager,
-@@ -115,7 +118,8 @@ namespace Emby.Server.Implementations.Session
+@@ -125,7 +128,8 @@
              IDeviceManager deviceManager,
              IMediaSourceManager mediaSourceManager,
              IHostApplicationLifetime hostApplicationLifetime,
@@ -50,7 +50,7 @@ index 79fb233382..a9e616a190 100644
          {
              _logger = logger;
              _eventManager = eventManager;
-@@ -133,6 +137,7 @@ namespace Emby.Server.Implementations.Session
+@@ -143,6 +147,7 @@
  
              _deviceManager.DeviceOptionsUpdated += OnDeviceManagerDeviceOptionsUpdated;
              _dbProvider = dbProvider;
@@ -58,7 +58,7 @@ index 79fb233382..a9e616a190 100644
          }
  
          /// <summary>
-@@ -2156,12 +2161,31 @@ namespace Emby.Server.Implementations.Session
+@@ -2530,12 +2535,31 @@
  
              if (!userIsAdmin)
              {
@@ -2019,10 +2019,10 @@ index 0000000000..2a05a1cf44
 +    }
 +}
 diff --git a/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs b/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
-index 3a971a163d..a6ca2fccab 100644
+index 1111111111..2222222222 100644
 --- a/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
 +++ b/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
-@@ -9,6 +9,7 @@ using MediaBrowser.Controller.Drawing;
+@@ -9,6 +9,7 @@
  using MediaBrowser.Controller.Dto;
  using MediaBrowser.Controller.Events;
  using MediaBrowser.Controller.Library;
@@ -2030,7 +2030,7 @@ index 3a971a163d..a6ca2fccab 100644
  using MediaBrowser.Controller.Session;
  using Microsoft.Extensions.Hosting;
  using Microsoft.Extensions.Logging.Abstractions;
-@@ -38,7 +39,8 @@ public class SessionManagerTests
+@@ -38,7 +39,8 @@
              Mock.Of<IDeviceManager>(),
              Mock.Of<IMediaSourceManager>(),
              Mock.Of<IHostApplicationLifetime>(),
@@ -2040,7 +2040,7 @@ index 3a971a163d..a6ca2fccab 100644
  
          await Assert.ThrowsAsync(exceptionType, () => sessionManager.GetAuthorizationToken(
              new User("test", "default", "default"),
-@@ -66,7 +68,8 @@ public class SessionManagerTests
+@@ -66,7 +68,8 @@
              Mock.Of<IDeviceManager>(),
              Mock.Of<IMediaSourceManager>(),
              Mock.Of<IHostApplicationLifetime>(),

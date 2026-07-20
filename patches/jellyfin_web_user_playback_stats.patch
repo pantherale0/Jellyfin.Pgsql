@@ -1641,7 +1641,7 @@ index 0000000000..2f2a1ec436
 +export default StackedDailyChart;
 diff --git a/src/apps/dashboard/features/playbackStatistics/components/tabs/BreakdownTab.tsx b/src/apps/dashboard/features/playbackStatistics/components/tabs/BreakdownTab.tsx
 new file mode 100644
-index 0000000000..088a0e7af1
+index 0000000000..1111111111
 --- /dev/null
 +++ b/src/apps/dashboard/features/playbackStatistics/components/tabs/BreakdownTab.tsx
 @@ -0,0 +1,173 @@
@@ -1743,11 +1743,11 @@ index 0000000000..088a0e7af1
 +                const playSlices = (rows ?? []).map((row, index) => ({
 +                    id: index,
 +                    value: row.PlayCount,
-+                    label: row.ItemName
++                    label: row.ChannelName ? `${row.ItemName} (${row.ChannelName})` : row.ItemName
 +                }));
 +                const timeItems = (rows ?? []).map(row => ({
 +                    id: row.ItemId || row.ItemName,
-+                    label: row.ItemName,
++                    label: row.ChannelName ? `${row.ItemName} (${row.ChannelName})` : row.ItemName,
 +                    value: filters.metric === 'PlayCount' ? row.PlayCount : row.TotalTicks,
 +                    secondaryLabel: `${row.PlayCount} · ${formatTicks(row.TotalTicks)}`
 +                }));
@@ -1787,7 +1787,7 @@ index 0000000000..088a0e7af1
 +                                <RankedBarList
 +                                    items={(rows ?? []).map(row => ({
 +                                        id: `${row.ItemId || row.ItemName}-time`,
-+                                        label: row.ItemName,
++                                        label: row.ChannelName ? `${row.ItemName} (${row.ChannelName})` : row.ItemName,
 +                                        value: row.TotalTicks
 +                                    }))}
 +                                    valueFormatter={formatTicks}
@@ -2215,10 +2215,10 @@ index 0000000000..ebdcb31a91
 +export default PatternsTab;
 diff --git a/src/apps/dashboard/features/playbackStatistics/components/tabs/RecentTab.tsx b/src/apps/dashboard/features/playbackStatistics/components/tabs/RecentTab.tsx
 new file mode 100644
-index 0000000000..5ae0cebe3c
+index 0000000000..1111111111
 --- /dev/null
 +++ b/src/apps/dashboard/features/playbackStatistics/components/tabs/RecentTab.tsx
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,96 @@
 +import React, { useState } from 'react';
 +import Alert from '@mui/material/Alert';
 +import Box from '@mui/material/Box';
@@ -2279,12 +2279,16 @@ index 0000000000..5ae0cebe3c
 +                            <UserAvatarButton user={user as never} />
 +                            <Box sx={{ flex: 1, minWidth: 0 }}>
 +                                <Typography variant='subtitle1' noWrap>
-+                                    {item.SeriesName ? `${item.SeriesName} — ${item.ItemName}` : item.ItemName}
++                                    {item.EpisodeTitle
++                                        ? `${item.ItemName} — ${item.EpisodeTitle}`
++                                        : item.SeriesName && item.SeriesName !== item.ItemName
++                                            ? `${item.SeriesName} — ${item.ItemName}`
++                                            : item.ItemName}
 +                                </Typography>
 +                                <Typography variant='body2' color='text.secondary'>
 +                                    {user?.Name || item.UserId}
 +                                    {' · '}
-+                                    {item.MediaType}
++                                    {item.ChannelName ? `${item.ChannelName} · ${item.MediaType}` : item.MediaType}
 +                                    {' · '}
 +                                    {formatTicks(item.PlayedTicks)}
 +                                    {item.ClientName ? ` · ${item.ClientName}` : ''}
@@ -2750,10 +2754,10 @@ index 0000000000..249a73d13f
 +};
 diff --git a/src/apps/dashboard/features/playbackStatistics/types.ts b/src/apps/dashboard/features/playbackStatistics/types.ts
 new file mode 100644
-index 0000000000..77692b1d15
+index 0000000000..1111111111
 --- /dev/null
 +++ b/src/apps/dashboard/features/playbackStatistics/types.ts
-@@ -0,0 +1,125 @@
+@@ -0,0 +1,131 @@
 +export interface PlaybackStatRow {
 +    MediaType: string;
 +    TotalTicks: number;
@@ -2815,6 +2819,7 @@ index 0000000000..77692b1d15
 +    MediaType: string;
 +    ItemId?: string | null;
 +    ItemName: string;
++    ChannelName?: string | null;
 +    TotalTicks: number;
 +    PlayCount: number;
 +    IsOther?: boolean;
@@ -2847,6 +2852,11 @@ index 0000000000..77692b1d15
 +    TranscodeReasons?: string | null;
 +    ClientName?: string | null;
 +    DeviceName?: string | null;
++    ChannelId?: string | null;
++    ChannelName?: string | null;
++    ShowId?: string | null;
++    EpisodeTitle?: string | null;
++    Genres?: string | null;
 +}
 +
 +export interface PlaybackRecentResponse {
@@ -3376,10 +3386,10 @@ index e8411bdc27..425be2f9d6 100644
      { path: 'users', type: AppType.Dashboard },
 diff --git a/src/apps/dashboard/routes/reports/playback.tsx b/src/apps/dashboard/routes/reports/playback.tsx
 new file mode 100644
-index 0000000000..f7916f7fe6
+index 0000000000..1111111111
 --- /dev/null
 +++ b/src/apps/dashboard/routes/reports/playback.tsx
-@@ -0,0 +1,174 @@
+@@ -0,0 +1,175 @@
 +import React, { useCallback, useMemo } from 'react';
 +import Box from '@mui/material/Box';
 +import Tab from '@mui/material/Tab';
@@ -3469,12 +3479,13 @@ index 0000000000..f7916f7fe6
 +            const recent = await fetchPlaybackRecent(api, { ...apiFilters, startIndex: 0, limit: 200 });
 +            exportCsv(
 +                `playback-recent-${filters.startDate}-${filters.endDate}.csv`,
-+                [ 'Date', 'User', 'Item', 'Series', 'MediaType', 'Ticks', 'PlayMethod', 'Client', 'Device' ],
++                [ 'Date', 'User', 'Item', 'Series', 'Channel', 'MediaType', 'Ticks', 'PlayMethod', 'Client', 'Device' ],
 +                (recent.Items ?? []).map(item => [
 +                    item.DatePlayed,
 +                    userNameById[item.UserId] || item.UserId,
-+                    item.ItemName,
++                    item.EpisodeTitle ? `${item.ItemName} — ${item.EpisodeTitle}` : item.ItemName,
 +                    item.SeriesName || '',
++                    item.ChannelName || '',
 +                    item.MediaType,
 +                    formatTicks(item.PlayedTicks),
 +                    item.PlaybackMethod || '',
