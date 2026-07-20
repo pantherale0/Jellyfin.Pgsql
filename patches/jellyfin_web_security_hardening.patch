@@ -75,47 +75,6 @@ index b5509f8b5a..df0038e235 100644
          return importModule(apiUrl).then((ControllerFactory) => {
              options.controllerFactory = ControllerFactory;
          });
-diff --git a/src/lib/jellyfin-apiclient/ServerConnections.js b/src/lib/jellyfin-apiclient/ServerConnections.js
-index c88e038478..e0b1380086 100644
---- a/src/lib/jellyfin-apiclient/ServerConnections.js
-+++ b/src/lib/jellyfin-apiclient/ServerConnections.js
-@@ -10,10 +10,16 @@ import { createApiClient } from 'utils/jellyfin-apiclient/createApiClient';
- 
- import ConnectionManager from './connectionManager';
- 
--const normalizeImageOptions = options => {
-+const normalizeImageOptions = (options, apiClient) => {
-     if (!options.quality && (options.maxWidth || options.width || options.maxHeight || options.height || options.fillWidth || options.fillHeight)) {
-         options.quality = 90;
-     }
-+
-+    // Authenticated image GETs require a query token (browsers cannot send Authorization on <img>).
-+    const token = apiClient?.accessToken?.();
-+    if (token) {
-+        options.ApiKey = token;
-+    }
- };
- 
- const getMaxBandwidth = () => {
-@@ -51,7 +57,17 @@ class ServerConnections extends ConnectionManager {
- 
-         Events.on(this, 'apiclientcreated', (_e, apiClient) => {
-             apiClient.getMaxBandwidth = getMaxBandwidth;
--            apiClient.normalizeImageOptions = normalizeImageOptions;
-+            apiClient.normalizeImageOptions = (options) => normalizeImageOptions(options, apiClient);
-+
-+            // getImageUrl does not call normalizeImageOptions; ensure ApiKey is still attached.
-+            const originalGetImageUrl = apiClient.getImageUrl.bind(apiClient);
-+            apiClient.getImageUrl = (itemId, options = {}) => {
-+                const token = apiClient.accessToken();
-+                if (token) {
-+                    options.ApiKey = token;
-+                }
-+                return originalGetImageUrl(itemId, options);
-+            };
- 
-             const api = this.getApi(apiClient.serverId());
- 
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
 index c18c3ebd40..449f1e3106 100755
 --- a/src/strings/en-us.json
