@@ -534,9 +534,12 @@ public sealed class SeerrClient
         {
             if (country.ReleaseDates is not null)
             {
-                foreach (var entry in country.ReleaseDates.Where(e => !string.IsNullOrWhiteSpace(e.Certification)))
+                var certification = country.ReleaseDates
+                    .Select(e => e.Certification?.Trim())
+                    .FirstOrDefault(c => !string.IsNullOrWhiteSpace(c));
+                if (certification is not null)
                 {
-                    return entry.Certification.Trim();
+                    return certification;
                 }
             }
 
@@ -562,12 +565,9 @@ public sealed class SeerrClient
             return null;
         }
 
-        foreach (var entry in OrderCountries(results, c => c.Iso31661).Where(e => !string.IsNullOrWhiteSpace(e.Rating)))
-        {
-            return entry.Rating.Trim();
-        }
-
-        return null;
+        return OrderCountries(results, c => c.Iso31661)
+            .Select(e => e.Rating?.Trim())
+            .FirstOrDefault(r => !string.IsNullOrWhiteSpace(r));
     }
 
     private static IEnumerable<T> OrderCountries<T>(IEnumerable<T> countries, Func<T, string?> isoSelector)
