@@ -1,9 +1,9 @@
-# PlaybackActivity analytics: PlayMethod/TranscodeReasons, SQL session buckets, Overview KPIs, daily rollups.
+# PlaybackActivity analytics: LiveTV programme segments, PlayMethod/TranscodeReasons, SQL session buckets, Overview KPIs, daily rollups.
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index d853d19845..5a3aaaae52 100644
+index 1111111111..2222222222 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
-@@ -11,6 +11,7 @@ using Jellyfin.Data;
+@@ -11,6 +11,7 @@
  using Jellyfin.Data.Enums;
  using Jellyfin.Data.Events;
  using Jellyfin.Data.Queries;
@@ -11,14 +11,41 @@ index d853d19845..5a3aaaae52 100644
  using Jellyfin.Database.Implementations.Entities;
  using Jellyfin.Database.Implementations.Entities.Security;
  using Jellyfin.Database.Implementations.Enums;
-@@ -52,5 +53,6 @@ namespace Emby.Server.Implementations.Session
+@@ -28,6 +29,7 @@
+ using MediaBrowser.Controller.Events.Authentication;
+ using MediaBrowser.Controller.Events.Session;
+ using MediaBrowser.Controller.Library;
++using MediaBrowser.Controller.LiveTv;
+ using MediaBrowser.Controller.Net;
+ using MediaBrowser.Controller.Session;
+ using MediaBrowser.Model.Dto;
+@@ -49,9 +51,12 @@
+     public sealed class SessionManager : ISessionManager, IAsyncDisposable
+     {
+         private const long ProgressPersistSeekThresholdTicks = TimeSpan.TicksPerSecond * 30;
++        private const long LiveTvMinSegmentTicks = TimeSpan.TicksPerSecond * 5;
+ 
          private static readonly TimeSpan ProgressPersistMinInterval = TimeSpan.FromSeconds(30);
++        private static readonly TimeSpan LiveTvProgramLookupMinInterval = TimeSpan.FromSeconds(30);
  
 +        private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
          private readonly IUserDataManager _userDataManager;
          private readonly IServerConfigurationManager _config;
          private readonly ILogger<SessionManager> _logger;
-@@ -98,6 +100,7 @@ namespace Emby.Server.Implementations.Session
+@@ -77,6 +82,12 @@
+         private readonly ConcurrentDictionary<(Guid UserId, Guid ItemId), (DateTime Utc, long PositionTicks)> _lastProgressPersist
+             = new();
+ 
++        /// <summary>
++        /// In-progress Live TV programme segments keyed by session id.
++        /// </summary>
++        private readonly ConcurrentDictionary<string, LiveTvPlaybackSegmentState> _liveTvPlaybackSegments
++            = new(StringComparer.OrdinalIgnoreCase);
++
+         private Timer _idleTimer;
+         private Timer _inactiveTimer;
+ 
+@@ -99,6 +110,7 @@
          /// <param name="deviceManager">Instance of <see cref="IDeviceManager"/> interface.</param>
          /// <param name="mediaSourceManager">Instance of <see cref="IMediaSourceManager"/> interface.</param>
          /// <param name="hostApplicationLifetime">Instance of <see cref="IHostApplicationLifetime"/> interface.</param>
@@ -26,7 +53,7 @@ index d853d19845..5a3aaaae52 100644
          public SessionManager(
              ILogger<SessionManager> logger,
              IEventManager eventManager,
-@@ -111,7 +114,8 @@ namespace Emby.Server.Implementations.Session
+@@ -112,7 +124,8 @@
              IServerApplicationHost appHost,
              IDeviceManager deviceManager,
              IMediaSourceManager mediaSourceManager,
@@ -36,7 +63,7 @@ index d853d19845..5a3aaaae52 100644
          {
              _logger = logger;
              _eventManager = eventManager;
-@@ -128,6 +132,7 @@ namespace Emby.Server.Implementations.Session
+@@ -129,6 +142,7 @@
              _shutdownCallback = hostApplicationLifetime.ApplicationStopping.Register(OnApplicationStopping);
  
              _deviceManager.DeviceOptionsUpdated += OnDeviceManagerDeviceOptionsUpdated;
@@ -44,83 +71,137 @@ index d853d19845..5a3aaaae52 100644
          }
  
          /// <summary>
-@@ -1139,6 +1144,75 @@ namespace Emby.Server.Implementations.Session
+@@ -781,6 +795,18 @@
+                 UpdateLiveStreamActiveSessionMappings(info.LiveStreamId, info.SessionId, info.PlaySessionId);
+             }
+ 
++            if (libraryItem is LiveTvChannel)
++            {
++                await TrackLiveTvPlaybackSegmentAsync(
++                        session,
++                        libraryItem,
++                        users,
++                        info.PositionTicks ?? 0,
++                        forceLookup: true,
++                        isStop: false)
++                    .ConfigureAwait(false);
++            }
++
+             var eventArgs = new PlaybackStartEventArgs
+             {
+                 Item = libraryItem,
+@@ -915,6 +941,20 @@
+                 UpdateLiveStreamActiveSessionMappings(info.LiveStreamId, info.SessionId, info.PlaySessionId);
+             }
+ 
++            if (!isAutomated
++                && libraryItem is LiveTvChannel
++                && info.PositionTicks.HasValue)
++            {
++                await TrackLiveTvPlaybackSegmentAsync(
++                        session,
++                        libraryItem,
++                        users,
++                        info.PositionTicks.Value,
++                        forceLookup: false,
++                        isStop: false)
++                    .ConfigureAwait(false);
++            }
++
+             var eventArgs = new PlaybackProgressEventArgs
+             {
+                 Item = libraryItem,
+@@ -1140,6 +1180,89 @@
                  {
                      playedToCompletion = OnPlaybackStopped(user, libraryItem, info.PositionTicks, info.Failed);
                  }
 +
 +                if (info.PositionTicks.HasValue && info.PositionTicks.Value > 0)
 +                {
-+                    using var dbContext = await _dbProvider.CreateDbContextAsync().ConfigureAwait(false);
-+
-+                    var playbackMethod = FormatPlaybackMethod(session);
-+                    var playMethod = session.PlayState?.PlayMethod is { } method
-+                        ? (int?)method
-+                        : null;
-+                    var transcodeReasons = FormatTranscodeReasons(session);
-+                    var clientName = session.Client;
-+                    var deviceName = session.DeviceName;
-+
-+                    foreach (var user in users)
++                    if (libraryItem is LiveTvChannel)
 +                    {
-+                        var genre = libraryItem.Genres?.FirstOrDefault() ?? "Unknown";
-+
-+                        int? deviceId = null;
-+                        if (!string.IsNullOrEmpty(session.DeviceId))
-+                        {
-+                            var resolvedDeviceId = await dbContext.Devices
-+                                .Where(d => d.UserId.Equals(user.Id) && d.DeviceId == session.DeviceId)
-+                                .OrderByDescending(d => d.DateLastActivity)
-+                                .Select(d => d.Id)
-+                                .FirstOrDefaultAsync()
-+                                .ConfigureAwait(false);
-+
-+                            if (resolvedDeviceId != 0)
-+                            {
-+                                deviceId = resolvedDeviceId;
-+                            }
-+                        }
-+
-+                        Guid? seriesId = null;
-+                        string seriesName = null;
-+                        if (libraryItem is Episode episode)
-+                        {
-+                            var resolvedSeriesId = episode.SeriesId.IsEmpty() ? episode.FindSeriesId() : episode.SeriesId;
-+                            seriesId = resolvedSeriesId.IsEmpty() ? null : resolvedSeriesId;
-+                            seriesName = episode.FindSeriesName();
-+                            if (string.IsNullOrWhiteSpace(seriesName))
-+                            {
-+                                seriesName = episode.SeriesName;
-+                            }
-+                        }
-+
-+                        dbContext.PlaybackActivity.Add(new PlaybackActivity
-+                        {
-+                            Id = Guid.NewGuid(),
-+                            UserId = user.Id,
-+                            DeviceId = deviceId,
-+                            ItemId = info.ItemId,
-+                            ItemName = libraryItem.Name ?? string.Empty,
-+                            SeriesId = seriesId,
-+                            SeriesName = seriesName,
-+                            MediaType = libraryItem.GetType().Name,
-+                            PlayedTicks = info.PositionTicks.Value,
-+                            DatePlayed = DateTime.UtcNow,
-+                            ItemSubGroup = genre,
-+                            PlaybackMethod = playbackMethod,
-+                            PlayMethod = playMethod,
-+                            TranscodeReasons = transcodeReasons,
-+                            ClientName = clientName,
-+                            DeviceName = deviceName
-+                        });
++                        await TrackLiveTvPlaybackSegmentAsync(
++                                session,
++                                libraryItem,
++                                users,
++                                info.PositionTicks.Value,
++                                forceLookup: true,
++                                isStop: true)
++                            .ConfigureAwait(false);
 +                    }
++                    else
++                    {
++                        using var dbContext = await _dbProvider.CreateDbContextAsync().ConfigureAwait(false);
 +
-+                    await dbContext.SaveChangesAsync().ConfigureAwait(false);
++                        var playbackMethod = FormatPlaybackMethod(session);
++                        var playMethod = session.PlayState?.PlayMethod is { } method
++                            ? (int?)method
++                            : null;
++                        var transcodeReasons = FormatTranscodeReasons(session);
++                        var clientName = session.Client;
++                        var deviceName = session.DeviceName;
++
++                        foreach (var user in users)
++                        {
++                            var genre = libraryItem.Genres?.FirstOrDefault() ?? "Unknown";
++
++                            int? deviceId = null;
++                            if (!string.IsNullOrEmpty(session.DeviceId))
++                            {
++                                var resolvedDeviceId = await dbContext.Devices
++                                    .Where(d => d.UserId.Equals(user.Id) && d.DeviceId == session.DeviceId)
++                                    .OrderByDescending(d => d.DateLastActivity)
++                                    .Select(d => d.Id)
++                                    .FirstOrDefaultAsync()
++                                    .ConfigureAwait(false);
++
++                                if (resolvedDeviceId != 0)
++                                {
++                                    deviceId = resolvedDeviceId;
++                                }
++                            }
++
++                            Guid? seriesId = null;
++                            string seriesName = null;
++                            if (libraryItem is Episode episode)
++                            {
++                                var resolvedSeriesId = episode.SeriesId.IsEmpty() ? episode.FindSeriesId() : episode.SeriesId;
++                                seriesId = resolvedSeriesId.IsEmpty() ? null : resolvedSeriesId;
++                                seriesName = episode.FindSeriesName();
++                                if (string.IsNullOrWhiteSpace(seriesName))
++                                {
++                                    seriesName = episode.SeriesName;
++                                }
++                            }
++
++                            dbContext.PlaybackActivity.Add(new PlaybackActivity
++                            {
++                                Id = Guid.NewGuid(),
++                                UserId = user.Id,
++                                DeviceId = deviceId,
++                                ItemId = info.ItemId,
++                                ItemName = libraryItem.Name ?? string.Empty,
++                                SeriesId = seriesId,
++                                SeriesName = seriesName,
++                                MediaType = libraryItem.GetType().Name,
++                                PlayedTicks = info.PositionTicks.Value,
++                                DatePlayed = DateTime.UtcNow,
++                                ItemSubGroup = genre,
++                                PlaybackMethod = playbackMethod,
++                                PlayMethod = playMethod,
++                                TranscodeReasons = transcodeReasons,
++                                ClientName = clientName,
++                                DeviceName = deviceName
++                            });
++                        }
++
++                        await dbContext.SaveChangesAsync().ConfigureAwait(false);
++                    }
 +                }
              }
  
              if (!string.IsNullOrEmpty(info.LiveStreamId))
-@@ -1166,6 +1240,36 @@ namespace Emby.Server.Implementations.Session
+@@ -1167,6 +1290,342 @@
              EventHelper.QueueEventIfNotNull(PlaybackStopped, this, eventArgs, _logger);
          }
  
@@ -154,12 +235,318 @@ index d853d19845..5a3aaaae52 100644
 +            return session.TranscodingInfo.TranscodeReasons.ToString();
 +        }
 +
++        private async Task TrackLiveTvPlaybackSegmentAsync(
++            SessionInfo session,
++            BaseItem channelItem,
++            List<User> users,
++            long positionTicks,
++            bool forceLookup,
++            bool isStop)
++        {
++            if (users.Count == 0)
++            {
++                if (isStop)
++                {
++                    _liveTvPlaybackSegments.TryRemove(session.Id, out _);
++                }
++
++                return;
++            }
++
++            var now = DateTime.UtcNow;
++            var state = _liveTvPlaybackSegments.GetOrAdd(session.Id, _ => new LiveTvPlaybackSegmentState
++            {
++                ChannelId = channelItem.Id,
++                ChannelName = channelItem.Name ?? string.Empty,
++                SegmentStartPositionTicks = 0,
++                LastLookupUtc = DateTime.MinValue
++            });
++
++            state.ChannelId = channelItem.Id;
++            state.ChannelName = channelItem.Name ?? string.Empty;
++
++            var shouldLookup = forceLookup
++                || isStop
++                || !state.HasSnapshot
++                || (state.ProgramEndDate.HasValue && state.ProgramEndDate.Value <= now)
++                || (!state.ProgramEndDate.HasValue && now - state.LastLookupUtc >= LiveTvProgramLookupMinInterval);
++
++            LiveTvProgramSnapshot snapshot = state.HasSnapshot
++                ? state.ToSnapshot()
++                : CreateChannelOnlySnapshot(channelItem);
++
++            if (shouldLookup)
++            {
++                snapshot = ResolveCurrentLiveTvProgram(channelItem) ?? CreateChannelOnlySnapshot(channelItem);
++                state.LastLookupUtc = now;
++            }
++
++            var programChanged = state.HasSnapshot && !SnapshotsEqual(state.ToSnapshot(), snapshot);
++            if (programChanged)
++            {
++                var deltaTicks = positionTicks - state.SegmentStartPositionTicks;
++                if (deltaTicks >= LiveTvMinSegmentTicks)
++                {
++                    await WriteLiveTvPlaybackSegmentsAsync(
++                            session,
++                            users,
++                            state.ToSnapshot(),
++                            deltaTicks)
++                        .ConfigureAwait(false);
++                }
++
++                state.ApplySnapshot(snapshot);
++                state.SegmentStartPositionTicks = positionTicks;
++            }
++            else if (!state.HasSnapshot)
++            {
++                state.ApplySnapshot(snapshot);
++                // Stop without prior progress: attribute the whole session. Otherwise start
++                // the segment at the current stream position so reconnects do not overcount.
++                state.SegmentStartPositionTicks = isStop ? 0 : positionTicks;
++            }
++            else if (shouldLookup)
++            {
++                // Refresh cached metadata (e.g. end date) without resetting the segment.
++                state.ApplySnapshot(snapshot);
++            }
++
++            if (isStop)
++            {
++                var finalDelta = positionTicks - state.SegmentStartPositionTicks;
++                if (finalDelta >= LiveTvMinSegmentTicks)
++                {
++                    await WriteLiveTvPlaybackSegmentsAsync(
++                            session,
++                            users,
++                            state.ToSnapshot(),
++                            finalDelta)
++                        .ConfigureAwait(false);
++                }
++
++                _liveTvPlaybackSegments.TryRemove(session.Id, out _);
++            }
++        }
++
++        private LiveTvProgramSnapshot? ResolveCurrentLiveTvProgram(BaseItem channelItem)
++        {
++            var now = DateTime.UtcNow;
++            var programs = _libraryManager.GetItemList(new InternalItemsQuery
++            {
++                IncludeItemTypes = [BaseItemKind.LiveTvProgram],
++                ChannelIds = [channelItem.Id],
++                MaxStartDate = now,
++                MinEndDate = now,
++                Limit = 1,
++                OrderBy = [(ItemSortBy.StartDate, SortOrder.Ascending)]
++            });
++
++            if (programs.Count == 0 || programs[0] is not LiveTvProgram program)
++            {
++                return null;
++            }
++
++            var genres = program.Genres ?? Array.Empty<string>();
++            return new LiveTvProgramSnapshot
++            {
++                ItemId = program.Id,
++                ItemName = program.Name ?? string.Empty,
++                MediaType = nameof(LiveTvProgram),
++                SeriesName = string.IsNullOrWhiteSpace(program.SeriesName) ? null : program.SeriesName,
++                ShowId = string.IsNullOrWhiteSpace(program.ShowId) ? null : program.ShowId,
++                EpisodeTitle = string.IsNullOrWhiteSpace(program.EpisodeTitle) ? null : program.EpisodeTitle,
++                Genres = genres.Length > 0 ? string.Join('|', genres) : null,
++                ItemSubGroup = genres.FirstOrDefault() ?? "Unknown",
++                ChannelId = channelItem.Id,
++                ChannelName = channelItem.Name ?? string.Empty,
++                ProgramEndDate = program.EndDate
++            };
++        }
++
++        private static LiveTvProgramSnapshot CreateChannelOnlySnapshot(BaseItem channelItem)
++        {
++            var genres = channelItem.Genres ?? Array.Empty<string>();
++            return new LiveTvProgramSnapshot
++            {
++                ItemId = channelItem.Id,
++                ItemName = channelItem.Name ?? string.Empty,
++                MediaType = channelItem.GetType().Name,
++                SeriesName = null,
++                ShowId = null,
++                EpisodeTitle = null,
++                Genres = genres.Length > 0 ? string.Join('|', genres) : null,
++                ItemSubGroup = genres.FirstOrDefault() ?? "Unknown",
++                ChannelId = channelItem.Id,
++                ChannelName = channelItem.Name ?? string.Empty,
++                ProgramEndDate = null
++            };
++        }
++
++        private static bool SnapshotsEqual(LiveTvProgramSnapshot left, LiveTvProgramSnapshot right)
++        {
++            return left.ItemId.Equals(right.ItemId)
++                && string.Equals(left.MediaType, right.MediaType, StringComparison.Ordinal);
++        }
++
++        private async Task WriteLiveTvPlaybackSegmentsAsync(
++            SessionInfo session,
++            List<User> users,
++            LiveTvProgramSnapshot snapshot,
++            long playedTicks)
++        {
++            using var dbContext = await _dbProvider.CreateDbContextAsync().ConfigureAwait(false);
++
++            var playbackMethod = FormatPlaybackMethod(session);
++            var playMethod = session.PlayState?.PlayMethod is { } method
++                ? (int?)method
++                : null;
++            var transcodeReasons = FormatTranscodeReasons(session);
++            var clientName = session.Client;
++            var deviceName = session.DeviceName;
++            var datePlayed = DateTime.UtcNow;
++
++            foreach (var user in users)
++            {
++                int? deviceId = null;
++                if (!string.IsNullOrEmpty(session.DeviceId))
++                {
++                    var resolvedDeviceId = await dbContext.Devices
++                        .Where(d => d.UserId.Equals(user.Id) && d.DeviceId == session.DeviceId)
++                        .OrderByDescending(d => d.DateLastActivity)
++                        .Select(d => d.Id)
++                        .FirstOrDefaultAsync()
++                        .ConfigureAwait(false);
++
++                    if (resolvedDeviceId != 0)
++                    {
++                        deviceId = resolvedDeviceId;
++                    }
++                }
++
++                dbContext.PlaybackActivity.Add(new PlaybackActivity
++                {
++                    Id = Guid.NewGuid(),
++                    UserId = user.Id,
++                    DeviceId = deviceId,
++                    ItemId = snapshot.ItemId,
++                    ItemName = snapshot.ItemName,
++                    SeriesId = null,
++                    SeriesName = snapshot.SeriesName,
++                    MediaType = snapshot.MediaType,
++                    PlayedTicks = playedTicks,
++                    DatePlayed = datePlayed,
++                    ItemSubGroup = snapshot.ItemSubGroup,
++                    PlaybackMethod = playbackMethod,
++                    PlayMethod = playMethod,
++                    TranscodeReasons = transcodeReasons,
++                    ClientName = clientName,
++                    DeviceName = deviceName,
++                    ChannelId = snapshot.ChannelId,
++                    ChannelName = snapshot.ChannelName,
++                    ShowId = snapshot.ShowId,
++                    EpisodeTitle = snapshot.EpisodeTitle,
++                    Genres = snapshot.Genres
++                });
++            }
++
++            await dbContext.SaveChangesAsync().ConfigureAwait(false);
++        }
++
++        private sealed class LiveTvProgramSnapshot
++        {
++            public Guid ItemId { get; set; }
++
++            public string ItemName { get; set; } = string.Empty;
++
++            public string MediaType { get; set; } = string.Empty;
++
++            public string SeriesName { get; set; }
++
++            public string ShowId { get; set; }
++
++            public string EpisodeTitle { get; set; }
++
++            public string Genres { get; set; }
++
++            public string ItemSubGroup { get; set; } = "Unknown";
++
++            public Guid ChannelId { get; set; }
++
++            public string ChannelName { get; set; } = string.Empty;
++
++            public DateTime? ProgramEndDate { get; set; }
++        }
++
++        private sealed class LiveTvPlaybackSegmentState
++        {
++            public Guid ChannelId { get; set; }
++
++            public string ChannelName { get; set; } = string.Empty;
++
++            public Guid ItemId { get; set; }
++
++            public string ItemName { get; set; } = string.Empty;
++
++            public string MediaType { get; set; }
++
++            public string SeriesName { get; set; }
++
++            public string ShowId { get; set; }
++
++            public string EpisodeTitle { get; set; }
++
++            public string Genres { get; set; }
++
++            public string ItemSubGroup { get; set; } = "Unknown";
++
++            public DateTime? ProgramEndDate { get; set; }
++
++            public long SegmentStartPositionTicks { get; set; }
++
++            public DateTime LastLookupUtc { get; set; }
++
++            public bool HasSnapshot => !string.IsNullOrEmpty(MediaType);
++
++            public LiveTvProgramSnapshot ToSnapshot()
++            {
++                return new LiveTvProgramSnapshot
++                {
++                    ItemId = ItemId,
++                    ItemName = ItemName,
++                    MediaType = MediaType,
++                    SeriesName = SeriesName,
++                    ShowId = ShowId,
++                    EpisodeTitle = EpisodeTitle,
++                    Genres = Genres,
++                    ItemSubGroup = ItemSubGroup,
++                    ChannelId = ChannelId,
++                    ChannelName = ChannelName,
++                    ProgramEndDate = ProgramEndDate
++                };
++            }
++
++            public void ApplySnapshot(LiveTvProgramSnapshot snapshot)
++            {
++                ItemId = snapshot.ItemId;
++                ItemName = snapshot.ItemName;
++                MediaType = snapshot.MediaType;
++                SeriesName = snapshot.SeriesName;
++                ShowId = snapshot.ShowId;
++                EpisodeTitle = snapshot.EpisodeTitle;
++                Genres = snapshot.Genres;
++                ItemSubGroup = snapshot.ItemSubGroup;
++                ChannelId = snapshot.ChannelId;
++                ChannelName = snapshot.ChannelName;
++                ProgramEndDate = snapshot.ProgramEndDate;
++            }
++        }
++
          private bool OnPlaybackStopped(User user, BaseItem item, long? positionTicks, bool playbackFailed)
          {
              if (playbackFailed)
 diff --git a/Jellyfin.Api/Controllers/PlaybackActivityController.cs b/Jellyfin.Api/Controllers/PlaybackActivityController.cs
 new file mode 100644
-index 0000000000..25cc4d577e
+index 0000000000..1111111111
 --- /dev/null
 +++ b/Jellyfin.Api/Controllers/PlaybackActivityController.cs
 @@ -0,0 +1,223 @@
@@ -388,10 +775,10 @@ index 0000000000..25cc4d577e
 +}
 diff --git a/Jellyfin.Api/Controllers/ServerPlaybackStatsController.cs b/Jellyfin.Api/Controllers/ServerPlaybackStatsController.cs
 new file mode 100644
-index 0000000000..4d7bf07583
+index 0000000000..1111111111
 --- /dev/null
 +++ b/Jellyfin.Api/Controllers/ServerPlaybackStatsController.cs
-@@ -0,0 +1,772 @@
+@@ -0,0 +1,783 @@
 +using System;
 +using System.Collections.Generic;
 +using System.Linq;
@@ -735,6 +1122,7 @@ index 0000000000..4d7bf07583
 +                    MediaType = g.Key.MediaType,
 +                    ItemId = g.Key.SeriesId,
 +                    ItemName = g.Key.Name,
++                    ChannelName = g.Max(p => p.ChannelName),
 +                    TotalTicks = g.Sum(p => p.PlayedTicks),
 +                    PlayCount = g.Count()
 +                })
@@ -750,6 +1138,7 @@ index 0000000000..4d7bf07583
 +                    MediaType = g.Key.MediaType,
 +                    ItemId = g.Key.ItemId,
 +                    ItemName = g.Key.ItemName,
++                    ChannelName = g.Max(p => p.ChannelName),
 +                    TotalTicks = g.Sum(p => p.PlayedTicks),
 +                    PlayCount = g.Count()
 +                })
@@ -769,6 +1158,7 @@ index 0000000000..4d7bf07583
 +                    row.MediaType,
 +                    row.ItemId,
 +                    row.ItemName,
++                    row.ChannelName,
 +                    row.TotalTicks,
 +                    row.PlayCount,
 +                    IsOther = false
@@ -783,6 +1173,7 @@ index 0000000000..4d7bf07583
 +                    MediaType = mediaGroup.Key,
 +                    ItemId = (Guid?)null,
 +                    ItemName = "Other",
++                    ChannelName = (string?)null,
 +                    TotalTicks = other.Sum(r => r.TotalTicks),
 +                    PlayCount = other.Sum(r => r.PlayCount),
 +                    IsOther = true
@@ -975,7 +1366,12 @@ index 0000000000..4d7bf07583
 +                p.PlayMethod,
 +                p.TranscodeReasons,
 +                p.ClientName,
-+                p.DeviceName
++                p.DeviceName,
++                p.ChannelId,
++                p.ChannelName,
++                p.ShowId,
++                p.EpisodeTitle,
++                p.Genres
 +            })
 +            .ToListAsync()
 +            .ConfigureAwait(false);
@@ -1159,6 +1555,8 @@ index 0000000000..4d7bf07583
 +
 +        public string ItemName { get; set; } = string.Empty;
 +
++        public string? ChannelName { get; set; }
++
 +        public long TotalTicks { get; set; }
 +
 +        public int PlayCount { get; set; }
@@ -1166,10 +1564,10 @@ index 0000000000..4d7bf07583
 +}
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivity.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivity.cs
 new file mode 100644
-index 0000000000..16e12bd0ae
+index 0000000000..1111111111
 --- /dev/null
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivity.cs
-@@ -0,0 +1,100 @@
+@@ -0,0 +1,125 @@
 +using System;
 +using Jellyfin.Database.Implementations.Entities.Security;
 +
@@ -1269,10 +1667,35 @@ index 0000000000..16e12bd0ae
 +    /// Gets or sets the device name snapshot.
 +    /// </summary>
 +    public string? DeviceName { get; set; }
++
++    /// <summary>
++    /// Gets or sets the Live TV channel identifier when this row is a Live TV segment.
++    /// </summary>
++    public Guid? ChannelId { get; set; }
++
++    /// <summary>
++    /// Gets or sets the Live TV channel name when this row is a Live TV segment.
++    /// </summary>
++    public string? ChannelName { get; set; }
++
++    /// <summary>
++    /// Gets or sets the EPG show identifier for Live TV programmes.
++    /// </summary>
++    public string? ShowId { get; set; }
++
++    /// <summary>
++    /// Gets or sets the episode title for Live TV programmes.
++    /// </summary>
++    public string? EpisodeTitle { get; set; }
++
++    /// <summary>
++    /// Gets or sets pipe-separated genres snapshot (full list for Live TV programmes).
++    /// </summary>
++    public string? Genres { get; set; }
 +}
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivityDaily.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivityDaily.cs
 new file mode 100644
-index 0000000000..da9cd00aa9
+index 0000000000..1111111111
 --- /dev/null
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/PlaybackActivityDaily.cs
 @@ -0,0 +1,44 @@
@@ -1321,10 +1744,10 @@ index 0000000000..da9cd00aa9
 +    public int TranscodeCount { get; set; }
 +}
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
-index b0c12bf592..0388e09077 100644
+index 1111111111..2222222222 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
-@@ -173,6 +173,16 @@ public class JellyfinDbContext(DbContextOptions<JellyfinDbContext> options, ILog
+@@ -173,6 +173,16 @@
      /// </summary>
      public DbSet<KeyframeData> KeyframeData => Set<KeyframeData>();
  
@@ -1342,7 +1765,7 @@ index b0c12bf592..0388e09077 100644
  
      public DbSet<Book> Books => Set<Book>();
 diff --git a/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs b/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
-index a5a67046d1..3a971a163d 100644
+index 1111111111..2222222222 100644
 --- a/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
 +++ b/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
 @@ -1,5 +1,6 @@
@@ -1352,7 +1775,7 @@ index a5a67046d1..3a971a163d 100644
  using Jellyfin.Database.Implementations.Entities;
  using MediaBrowser.Controller;
  using MediaBrowser.Controller.Configuration;
-@@ -36,7 +37,8 @@ public class SessionManagerTests
+@@ -36,7 +37,8 @@
              Mock.Of<IServerApplicationHost>(),
              Mock.Of<IDeviceManager>(),
              Mock.Of<IMediaSourceManager>(),
@@ -1362,7 +1785,7 @@ index a5a67046d1..3a971a163d 100644
  
          await Assert.ThrowsAsync(exceptionType, () => sessionManager.GetAuthorizationToken(
              new User("test", "default", "default"),
-@@ -63,7 +65,8 @@ public class SessionManagerTests
+@@ -63,7 +65,8 @@
              Mock.Of<IServerApplicationHost>(),
              Mock.Of<IDeviceManager>(),
              Mock.Of<IMediaSourceManager>(),
