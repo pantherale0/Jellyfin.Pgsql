@@ -1,8 +1,8 @@
 diff --git a/Jellyfin.Api/Auth/CustomAuthenticationHandler.cs b/Jellyfin.Api/Auth/CustomAuthenticationHandler.cs
-index f6f2f59c52..13f0b88d9c 100644
+index f6f2f59c52..a1b2c3d4e5 100644
 --- a/Jellyfin.Api/Auth/CustomAuthenticationHandler.cs
 +++ b/Jellyfin.Api/Auth/CustomAuthenticationHandler.cs
-@@ -5,6 +5,7 @@ using System.Threading.Tasks;
+@@ -5,6 +5,7 @@
  using Jellyfin.Api.Constants;
  using Jellyfin.Data;
  using Jellyfin.Database.Implementations.Enums;
@@ -10,7 +10,7 @@ index f6f2f59c52..13f0b88d9c 100644
  using MediaBrowser.Controller.Authentication;
  using MediaBrowser.Controller.Net;
  using Microsoft.AspNetCore.Authentication;
-@@ -51,8 +52,10 @@ namespace Jellyfin.Api.Auth
+@@ -51,8 +52,10 @@
                  }
  
                  var role = UserRoles.User;
@@ -23,7 +23,7 @@ index f6f2f59c52..13f0b88d9c 100644
                  {
                      role = UserRoles.Administrator;
                  }
-@@ -67,7 +70,11 @@ namespace Jellyfin.Api.Auth
+@@ -67,7 +70,11 @@
                      new Claim(InternalClaimTypes.Client, authorizationInfo.Client ?? string.Empty),
                      new Claim(InternalClaimTypes.Version, authorizationInfo.Version ?? string.Empty),
                      new Claim(InternalClaimTypes.Token, authorizationInfo.Token),
@@ -36,29 +36,50 @@ index f6f2f59c52..13f0b88d9c 100644
                  };
  
                  var identity = new ClaimsIdentity(claims, Scheme.Name);
-@@ -78,11 +85,21 @@ namespace Jellyfin.Api.Auth
+@@ -78,13 +85,41 @@
              }
              catch (AuthenticationException ex)
              {
 -                _logger.LogDebug(ex, "Error authenticating with {Handler}", nameof(CustomAuthenticationHandler));
 +                _logger.LogDebug(
 +                    ex,
-+                    "Error authenticating with {Handler} from {RemoteIP}",
++                    "Error authenticating with {Handler} for {Method} {Path} from {RemoteIP}",
 +                    nameof(CustomAuthenticationHandler),
++                    Request.Method,
++                    Request.Path.Value,
 +                    Context.GetNormalizedRemoteIP());
                  return AuthenticateResult.NoResult();
              }
              catch (SecurityException ex)
              {
-+                _logger.LogDebug(
-+                    ex,
-+                    "Authentication failed with {Handler} from {RemoteIP}: {Message}",
-+                    nameof(CustomAuthenticationHandler),
+-                return AuthenticateResult.Fail(ex);
++                // Path only (no query) — query may contain ApiKey. Failure message is also emitted by
++                // ASP.NET's "was not authenticated" Information log.
++                _logger.LogInformation(
++                    "Authentication failed for {Method} {Path} from {RemoteIP} ({UserAgent}): {Message}",
++                    Request.Method,
++                    Request.Path.Value,
 +                    Context.GetNormalizedRemoteIP(),
++                    Request.Headers.UserAgent.ToString(),
 +                    ex.Message);
-                 return AuthenticateResult.Fail(ex);
++                return AuthenticateResult.Fail($"{ex.Message} ({Request.Method} {Request.Path.Value})");
              }
          }
++
++        /// <inheritdoc />
++        protected override Task HandleChallengeAsync(AuthenticationProperties properties)
++        {
++            // ASP.NET only logs "was challenged" with no path; add request context for client debugging.
++            _logger.LogInformation(
++                "Authentication challenged for {Method} {Path} from {RemoteIP} ({UserAgent})",
++                Request.Method,
++                Request.Path.Value,
++                Context.GetNormalizedRemoteIP(),
++                Request.Headers.UserAgent.ToString());
++            return base.HandleChallengeAsync(properties);
++        }
+     }
+ }
 diff --git a/Jellyfin.Api/Auth/DefaultAuthorizationPolicy/DefaultAuthorizationHandler.cs b/Jellyfin.Api/Auth/DefaultAuthorizationPolicy/DefaultAuthorizationHandler.cs
 index 6b80d537fb..0b6d56db04 100644
 --- a/Jellyfin.Api/Auth/DefaultAuthorizationPolicy/DefaultAuthorizationHandler.cs
