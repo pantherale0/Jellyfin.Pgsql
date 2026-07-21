@@ -122,6 +122,43 @@ Admin-wide aggregates belong on a separate elevated controller (e.g. `PlaybackSt
 5. Error payloads cannot leak secrets or enable XSS.
 6. Server changes live in `patches/`; submodule left clean.
 
+### 8. Keep documentation current with code and patches
+
+Docs are part of the change, not a follow-up. When you add, rename, remove, or meaningfully change behaviour, update the matching docs **in the same work** (same PR/change set as the code/patches). Do not leave stale catalog entries or undocumented user-facing features.
+
+| Change | Update |
+|---|---|
+| New / changed / removed `patches/*.patch` | [`docs/patches.md`](docs/patches.md) — add, revise, or delete the entry; keep the **What / Why / Where / How / Related** table shape and section grouping |
+| User- or operator-visible capability (SSO, cache, taste, Seerr, Emby import, Live TV, playback stats, …) | [`docs/features.md`](docs/features.md) — feature map; cross-link patch anchors |
+| Patch routing, apply order, repo layout, Docker/plugin composition | [`docs/architecture.md`](docs/architecture.md) |
+| Benefits/drawbacks framing of the fork | [`docs/overview.md`](docs/overview.md) |
+| Operational caveats, regressions, tracker items | [`docs/known-issues.md`](docs/known-issues.md) |
+| Env vars, compose examples, SSO setup, SQLite migration, release/image usage | Root [`README.md`](README.md) (authoritative for operator how-to) |
+| New top-level doc file | [`docs/README.md`](docs/README.md) index table **and** the Documentation table in root `README.md` |
+
+**Patch catalog rules** (`docs/patches.md`):
+
+- Every file under `patches/` must have a catalog entry; removing a patch removes its entry.
+- Prefer verified issue/PR links only; otherwise write “No public issue.”
+- When a server and web patch are companions, cross-link them under **Related**.
+- If apply order / `z_` / `zz_` layering matters, note prerequisites (and mirror any `#` preamble in the patch).
+
+**Features rules** (`docs/features.md`):
+
+- Document what operators get, where it lives (plugin path and/or patch names), how to configure it, and point at `patches.md` anchors.
+- Do not duplicate full env-var tables here — link the README section that owns them.
+- Purely internal refactors with no operator-visible behaviour need no features entry; still update `patches.md` if a patch file changed.
+
+**Do not** invent docs for speculative work, or expand AGENTS.md with feature narrative (keep agent rules here; product docs under `docs/` + README).
+
+#### Checklist before finishing a change
+
+1. New/updated/removed patches reflected in `docs/patches.md`.
+2. Operator-visible behaviour reflected in `docs/features.md` (or explicitly N/A).
+3. New env vars / setup steps in root `README.md` when operators must configure them.
+4. New caveats or known failures in `docs/known-issues.md` when applicable.
+5. Architecture/index tables still accurate if layout or routing changed.
+
 ## Project map
 
 | Path | Role |
@@ -129,6 +166,7 @@ Admin-wide aggregates belong on a separate elevated controller (e.g. `PlaybackSt
 | `Jellyfin.Plugin.Pgsql/` | Plugin source, EF migrations, PostgreSQL provider |
 | `jellyfin/`, `jellyfin-web/` | Upstream submodules (patch targets only) |
 | `patches/` | All committed Jellyfin/Jellyfin-web diffs |
+| `docs/` | Overview, architecture, features, patch catalog, known issues |
 | `scripts/apply-patches.sh` | Applies patches by naming convention |
 | `scripts/start-dev.sh` | Dev stack entrypoint (user-run) |
 | `scripts/sync-jellyfin-migrations.sh` | Align plugin migrations with a Jellyfin release |
@@ -140,3 +178,4 @@ Admin-wide aggregates belong on a separate elevated controller (e.g. `PlaybackSt
 - Plugin behavior, migrations, caching → `Jellyfin.Plugin.Pgsql/`
 - Server or web UI behavior → edit submodule locally, then refresh the matching `patches/*.patch`; leave submodules clean
 - Dev/runtime wiring → `docker-compose.dev.yaml`, `scripts/`, `docker/` (not submodule trees)
+- Docs for the above → `docs/` (+ root `README.md` for operator how-to); see hard rule 8
