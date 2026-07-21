@@ -57,11 +57,11 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | | |
 |---|---|
 | **Target** | `jellyfin` |
-| **What** | Hardens auth claims and media endpoints so share links cannot elevate; scopes access with share metadata. |
+| **What** | Hardens auth claims and media endpoints so share links cannot elevate; scopes access with share metadata. Requires `[Authorize]` on legacy HLS segment routes. |
 | **Why** | Media share tokens must not grant Administrator; stream/image/subtitle routes need share-aware authorization. |
 | **Where** | `CustomAuthenticationHandler`, authorization handlers, `Audio`/`Videos`/`Hls`/`Image`/`LiveTv`/`Subtitle`/… controllers, `AuthorizationContext` |
 | **How** | Adds `IsMediaShareLink` / `ShareItemId` claims; blocks elevation for share auth; permission checks on media controllers. |
-| **Related** | Companion `jellyfin_web_security_hardening`. No public issue. |
+| **Related** | Companion `jellyfin_web_security_hardening`; requires `jellyfin_z_hls_live_playlist_apikey` so Live/EVENT playlists embed `ApiKey` on segment URIs (RFC 3986). No public issue. |
 
 ### `jellyfin_web_security_hardening.patch`
 
@@ -224,6 +224,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Where** | `DynamicHlsController.cs`, `EncodingHelper.cs`, `DynamicHlsPlaylistGenerator.cs` |
 | **How** | Smarter restart/playlist logic for remux jobs. |
 | **Related** | [jellyfin#13668](https://github.com/jellyfin/jellyfin/issues/13668). |
+
+### `jellyfin_z_hls_live_playlist_apikey.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Appends the request query string (`ApiKey`, etc.) to every URI in Live/EVENT HLS playlists served by `GetLivePlaylistText`. |
+| **Why** | After `jellyfin_security_hardening` requires `[Authorize]` on legacy `/Videos/.../hls/...` segments, clients 401 because RFC 3986 relative resolution does not inherit the playlist URL’s query (ffmpeg emits bare `hls/{id}/N.ts` lines). Dynamic `hls1` already forwarded `Request.QueryString`; live did not. |
+| **Where** | `HlsHelpers.cs`, `DynamicHlsController.cs`, comments on `HlsSegmentController` segment actions |
+| **How** | `AppendQueryStringToPlaylistUris` rewrites media URI lines and `#EXT-X-MAP` URIs; call site passes `Request.QueryString`. Apply-order `z_` so it runs after security hardening. |
+| **Related** | `jellyfin_security_hardening`. Upstream context [jellyfin#13984](https://github.com/jellyfin/jellyfin/issues/13984). |
 
 ### `jellyfin_hdr10plus_mpegts_sei.patch`
 
@@ -649,6 +660,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 |---|---|
 | `jellyfin_sso` | `jellyfin_web_rbac`, `jellyfin_web_tv_quickconnect_login`, `jellyfin_web_quickconnect_modal` |
 | `jellyfin_security_hardening` | `jellyfin_web_security_hardening` |
+| `jellyfin_z_hls_live_playlist_apikey` | (server-only; required by security hardening for Live/EVENT HLS) |
 | `jellyfin_transcoding_pipeline` | `jellyfin_web_transcoding_pipeline` |
 | `jellyfin_hwa_capabilities` | `jellyfin_web_hwa_capabilities` |
 | `jellyfin_livetv_stream_buffer` | `jellyfin_web_live_stream_keep_seconds` |
@@ -660,4 +672,4 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 
 ## File count
 
-**55** patches: **31** `jellyfin_*.patch` (server), **24** `jellyfin_web*.patch` (web).
+**57** patches: **33** `jellyfin_*.patch` (server), **24** `jellyfin_web*.patch` (web).
