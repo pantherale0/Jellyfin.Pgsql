@@ -159,11 +159,11 @@ A scheduled GitHub Actions workflow ([`.github/workflows/sync-migrations.yaml`](
 
 1. Detects new Jellyfin releases and SQLite schema migrations via the GitHub API
 2. Bumps NuGet refs, the Docker base image version, and both `jellyfin` / `jellyfin-web` submodule gitlinks to the same tag
-3. Verifies server and web patches apply on that tag (then leaves submodules clean)
+3. Verifies patches apply, builds the solution against patched jellyfin (catches new API surface even when no schema migration is needed), then leaves submodules clean
 4. **Only if** Jellyfin’s latest SQLite migration advanced: generates a PostgreSQL `Update_*` via model diff (SQLite migrations are **not** copied), post-processes PG-specific fixes, and validates against Postgres
 5. Opens a collaborator-only PR for review and merge
 
-Tag-only bumps (new release tag, same core migration id) skip EF so patch/fork schema is never folded into a stale `Update_*`. Fork schema changes belong in dedicated plugin migrations landed with the patch.
+Tag-only bumps (new release tag, same core migration id) skip EF so patch/fork schema is never folded into a stale `Update_*`. Fork schema changes belong in dedicated plugin migrations landed with the patch. Sync still fails the run if the plugin/tests no longer compile against the new Jellyfin APIs.
 
 Docker image builds are blocked until the sync PR is merged and [`.github/jellyfin-sync-state.json`](.github/jellyfin-sync-state.json) matches the target Jellyfin version.
 
