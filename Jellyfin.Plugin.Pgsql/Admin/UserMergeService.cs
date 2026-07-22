@@ -133,6 +133,8 @@ public sealed class UserMergeService
                 .ConfigureAwait(false);
             await RemoveSourceTasteProfileAsync(context, sourceUserId, counts, cancellationToken)
                 .ConfigureAwait(false);
+            await RemoveSourceTasteImpressionsAsync(context, sourceUserId, counts, cancellationToken)
+                .ConfigureAwait(false);
 
             await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -787,6 +789,19 @@ public sealed class UserMergeService
 
         context.UserTasteProfiles.Remove(row);
         counts.TasteProfileSourceRemoved = true;
+    }
+
+    private static async Task RemoveSourceTasteImpressionsAsync(
+        JellyfinDbContext context,
+        Guid sourceUserId,
+        UserMergeCounts counts,
+        CancellationToken cancellationToken)
+    {
+        var deleted = await context.UserTasteRecommendationImpressions
+            .Where(i => i.UserId == sourceUserId)
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+        counts.TasteImpressionsSourceRemoved = deleted;
     }
 
     private async Task RebuildTargetTasteAsync(

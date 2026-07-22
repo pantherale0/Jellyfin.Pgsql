@@ -10,6 +10,7 @@ using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Plugin.Pgsql.Query;
 using MediaBrowser.Controller.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.Pgsql.Taste;
 
@@ -41,6 +42,7 @@ public sealed class TasteRecommendationService
     private readonly UserTasteProfileStore _profileStore;
     private readonly IItemTypeLookup _itemTypeLookup;
     private readonly IQueryResultCache _cache;
+    private readonly ILogger<TasteRecommendationService> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TasteRecommendationService"/> class.
@@ -49,16 +51,19 @@ public sealed class TasteRecommendationService
     /// <param name="profileStore">Taste profile store.</param>
     /// <param name="itemTypeLookup">Item type name lookup.</param>
     /// <param name="cache">Query result cache (Redis/memory).</param>
+    /// <param name="logger">Logger.</param>
     public TasteRecommendationService(
         IDbContextFactory<JellyfinDbContext> dbProvider,
         UserTasteProfileStore profileStore,
         IItemTypeLookup itemTypeLookup,
-        IQueryResultCache cache)
+        IQueryResultCache cache,
+        ILogger<TasteRecommendationService> logger)
     {
         _dbProvider = dbProvider;
         _profileStore = profileStore;
         _itemTypeLookup = itemTypeLookup;
         _cache = cache;
+        _logger = logger;
     }
 
     /// <summary>
@@ -125,13 +130,77 @@ public sealed class TasteRecommendationService
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            if (playedIds.Count == 0)
+            IReadOnlyList<TasteMatchItem> result = playedIds.Count == 0
+                ? stored.Take(limit).ToList()
+                : stored.Where(s => !playedIds.Contains(s.ItemId)).Take(limit).ToList();
+
+            await TryRecordImpressionsAsync(context, userId, itemTypeKey, result, cancellationToken)
+                .ConfigureAwait(false);
+            return result;
+        }
+    }
+
+    private async Task TryRecordImpressionsAsync(
+        JellyfinDbContext context,
+        Guid userId,
+        string itemTypeKey,
+        IReadOnlyList<TasteMatchItem> items,
+        CancellationToken cancellationToken)
+    {
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var now = DateTime.UtcNow;
+            var dedupeSince = now.AddHours(-TasteEngagementWeights.ImpressionDedupeHours);
+            var candidateIds = items.Select(i => i.ItemId).ToList();
+            var recent = await context.UserTasteRecommendationImpressions.AsNoTracking()
+                .Where(i => i.UserId == userId
+                    && i.ServedAt >= dedupeSince
+                    && candidateIds.Contains(i.ItemId))
+                .Select(i => i.ItemId)
+                .Distinct()
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var recentSet = recent.ToHashSet();
+
+            var added = false;
+            for (var rank = 0; rank < items.Count; rank++)
             {
-                return stored.Take(limit).ToList();
+                var item = items[rank];
+                if (recentSet.Contains(item.ItemId))
+                {
+                    continue;
+                }
+
+                context.UserTasteRecommendationImpressions.Add(new UserTasteRecommendationImpression
+                {
+                    Id = Guid.NewGuid(),
+                    UserId = userId,
+                    ItemId = item.ItemId,
+                    ItemType = itemTypeKey,
+                    Rank = rank,
+                    ServedAt = now
+                });
+                added = true;
             }
 
-            var played = playedIds.ToHashSet();
-            return stored.Where(s => !played.Contains(s.ItemId)).Take(limit).ToList();
+            if (added)
+            {
+                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is DbUpdateException or InvalidOperationException or OperationCanceledException)
+        {
+            if (ex is OperationCanceledException && cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
+            _logger.LogWarning(ex, "Failed to record For You impressions for user {UserId}", userId);
         }
     }
 

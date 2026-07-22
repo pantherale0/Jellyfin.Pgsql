@@ -59,11 +59,11 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 ## Taste profiles, For You, and taste models
 
-**What:** Per-user taste profiles and precomputed recommendations; home “For You” section; user taste identity UI; admin shadow-eval reports for taste models.
+**What:** Per-user taste profiles and precomputed recommendations; home “For You” section; user taste identity UI; admin shadow-eval reports for taste models. Engagement weighting uses completion-aware playback (short abandons are negatives; deep watches/favorites are positives) and For You impression logs so recommended→engage is boosted and recommended→abandon is penalized more strongly. The neural model remains shadow-only (`UseNeuralForServing` off).
 
 **Where:**
 
-- DB entities: [`jellyfin_user_taste_profiles`](patches.md#jellyfin_user_taste_profilespatch), [`jellyfin_user_taste_recommendations`](patches.md#jellyfin_user_taste_recommendationspatch)
+- DB entities: [`jellyfin_user_taste_profiles`](patches.md#jellyfin_user_taste_profilespatch), [`jellyfin_user_taste_recommendations`](patches.md#jellyfin_user_taste_recommendationspatch), [`jellyfin_z_user_taste_recommendation_impressions`](patches.md#jellyfin_z_user_taste_recommendation_impressionspatch)
 - Home section enum + API: [`jellyfin_foryou_home_section`](patches.md#jellyfin_foryou_home_sectionpatch)
 - Plugin logic: [`Jellyfin.Plugin.Pgsql/Taste/`](../Jellyfin.Plugin.Pgsql/Taste/), `TasteProfileController` / `TasteAdminController`
 - Web: [`jellyfin_web_foryou_home`](patches.md#jellyfin_web_foryou_homepatch), [`jellyfin_web_taste_identity`](patches.md#jellyfin_web_taste_identitypatch), [`jellyfin_web_z_taste_models`](patches.md#jellyfin_web_z_taste_modelspatch)

@@ -101,6 +101,11 @@ public sealed class UserMergeCounts
     public bool TasteProfileTargetRebuilt { get; set; }
 
     /// <summary>
+    /// Gets or sets how many For You impression rows were removed from the source user.
+    /// </summary>
+    public int TasteImpressionsSourceRemoved { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether the source user was deleted.
     /// </summary>
     public bool SourceUserDeleted { get; set; }

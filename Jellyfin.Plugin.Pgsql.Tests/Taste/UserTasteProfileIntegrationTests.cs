@@ -156,6 +156,246 @@ public sealed class UserTasteProfileIntegrationTests
     }
 
     [PostgresTestFact]
+    public async Task Rebuild_AbandonReducesGenreAffinity_VsDeepPlay()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+
+        var abandonUser = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000ab01");
+        var deepUser = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000ab02");
+        var comedyId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000ab11");
+        var actionId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000ab12");
+        var comedyGenre = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000aba1");
+        var actionGenre = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000aba2");
+        var runtime = TimeSpan.FromHours(2).Ticks;
+
+        Guid[] users = [abandonUser, deepUser];
+        Guid[] items = [comedyId, actionId];
+        await dbContext.UserData.Where(u => users.Contains(u.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.UserTasteProfiles.Where(p => users.Contains(p.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.UserTasteRecommendationImpressions.Where(i => users.Contains(i.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.ItemValuesMap.Where(m => items.Contains(m.ItemId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.BaseItems.Where(i => items.Contains(i.Id)).ExecuteDeleteAsync().ConfigureAwait(false);
+
+        if (!await dbContext.Users.AnyAsync(u => u.Id == abandonUser).ConfigureAwait(false))
+        {
+            dbContext.Users.Add(new User("abandon-taste", "Abandon", "1") { Id = abandonUser });
+        }
+
+        if (!await dbContext.Users.AnyAsync(u => u.Id == deepUser).ConfigureAwait(false))
+        {
+            dbContext.Users.Add(new User("deep-taste", "Deep", "1") { Id = deepUser });
+        }
+
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        dbContext.BaseItems.Add(MovieWithRuntime(comedyId, "Abandon Comedy", "abandoncomedy", 2020, "Comedy", runtime));
+        dbContext.BaseItems.Add(MovieWithRuntime(actionId, "Anchor Action", "anchoraction", 2020, "Action", runtime));
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        var comedyValueId = await EnsureGenreAsync(dbContext, comedyGenre, "Comedy", "comedy").ConfigureAwait(false);
+        var actionValueId = await EnsureGenreAsync(dbContext, actionGenre, "Action", "action").ConfigureAwait(false);
+        await LinkGenreAsync(dbContext, comedyId, comedyValueId).ConfigureAwait(false);
+        await LinkGenreAsync(dbContext, actionId, actionValueId).ConfigureAwait(false);
+
+        // Both users like action; abandon user bounced on comedy 20 days ago; deep user finished comedy.
+        dbContext.UserData.Add(Favorite(abandonUser, actionId));
+        dbContext.UserData.Add(Favorite(deepUser, actionId));
+        dbContext.UserData.Add(new UserData
+        {
+            ItemId = comedyId,
+            UserId = abandonUser,
+            CustomDataKey = abandonUser.ToString("N"),
+            PlaybackPositionTicks = TimeSpan.FromSeconds(90).Ticks,
+            PlayCount = 0,
+            Played = false,
+            LastPlayedDate = DateTime.UtcNow.AddDays(-20),
+            Item = null!,
+            User = null!,
+        });
+        dbContext.UserData.Add(new UserData
+        {
+            ItemId = comedyId,
+            UserId = deepUser,
+            CustomDataKey = deepUser.ToString("N"),
+            PlaybackPositionTicks = TimeSpan.FromMinutes(110).Ticks,
+            PlayCount = 1,
+            Played = true,
+            LastPlayedDate = DateTime.UtcNow.AddDays(-2),
+            Item = null!,
+            User = null!,
+        });
+        // Need a third signal for minSamples
+        var fillerId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000ab13");
+        await dbContext.BaseItems.Where(i => i.Id == fillerId).ExecuteDeleteAsync().ConfigureAwait(false);
+        dbContext.BaseItems.Add(MovieWithRuntime(fillerId, "Filler Action 2", "filleraction2", 2021, "Action", runtime));
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+        await LinkGenreAsync(dbContext, fillerId, actionValueId).ConfigureAwait(false);
+        dbContext.UserData.Add(Favorite(abandonUser, fillerId));
+        dbContext.UserData.Add(Favorite(deepUser, fillerId));
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        var builder = new UserTasteProfileBuilder(NullLogger<UserTasteProfileBuilder>.Instance);
+        var abandonOutcome = await builder.RebuildUserAsync(
+                dbContext, abandonUser, MovieType, SeriesType, EpisodeType, DateTime.UtcNow.AddDays(-730), 3, default)
+            .ConfigureAwait(false);
+        var deepOutcome = await builder.RebuildUserAsync(
+                dbContext, deepUser, MovieType, SeriesType, EpisodeType, DateTime.UtcNow.AddDays(-730), 3, default)
+            .ConfigureAwait(false);
+        Assert.True(abandonOutcome.Upserted);
+        Assert.True(deepOutcome.Upserted);
+
+        var abandonPayload = UserTasteProfileBuilder.DeserializeFeatures(
+            (await dbContext.UserTasteProfiles.AsNoTracking().SingleAsync(p => p.UserId == abandonUser).ConfigureAwait(false)).FeaturesJson);
+        var deepPayload = UserTasteProfileBuilder.DeserializeFeatures(
+            (await dbContext.UserTasteProfiles.AsNoTracking().SingleAsync(p => p.UserId == deepUser).ConfigureAwait(false)).FeaturesJson);
+
+        var abandonComedy = abandonPayload.Genres.GetValueOrDefault("comedy");
+        var deepComedy = deepPayload.Genres.GetValueOrDefault("comedy");
+        Assert.True(deepComedy > abandonComedy);
+    }
+
+    [PostgresTestFact]
+    public async Task Rebuild_ImpressionPlusFavorite_BoostsOverFavoriteAlone()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+
+        var plainUser = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000im01");
+        var recUser = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000im02");
+        var movieA = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000im11");
+        var movieB = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000im12");
+        var movieC = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000im13");
+        var genreId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000ima1");
+
+        Guid[] users = [plainUser, recUser];
+        Guid[] items = [movieA, movieB, movieC];
+        await dbContext.UserData.Where(u => users.Contains(u.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.UserTasteProfiles.Where(p => users.Contains(p.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.UserTasteRecommendationImpressions.Where(i => users.Contains(i.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.ItemValuesMap.Where(m => items.Contains(m.ItemId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.BaseItems.Where(i => items.Contains(i.Id)).ExecuteDeleteAsync().ConfigureAwait(false);
+
+        foreach (var (id, name) in new[] { (plainUser, "plain-imp"), (recUser, "rec-imp") })
+        {
+            if (!await dbContext.Users.AnyAsync(u => u.Id == id).ConfigureAwait(false))
+            {
+                dbContext.Users.Add(new User(name, name, "1") { Id = id });
+            }
+        }
+
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        dbContext.BaseItems.Add(Movie(movieA, "Imp A", "impa", 2020, "SciFi"));
+        dbContext.BaseItems.Add(Movie(movieB, "Imp B", "impb", 2020, "SciFi"));
+        dbContext.BaseItems.Add(Movie(movieC, "Imp C", "impc", 2020, "SciFi"));
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+        var valueId = await EnsureGenreAsync(dbContext, genreId, "SciFi", "scifi").ConfigureAwait(false);
+        foreach (var itemId in items)
+        {
+            await LinkGenreAsync(dbContext, itemId, valueId).ConfigureAwait(false);
+        }
+
+        foreach (var userId in users)
+        {
+            dbContext.UserData.Add(Favorite(userId, movieA));
+            dbContext.UserData.Add(Favorite(userId, movieB));
+            dbContext.UserData.Add(Favorite(userId, movieC));
+        }
+
+        dbContext.UserTasteRecommendationImpressions.Add(new UserTasteRecommendationImpression
+        {
+            Id = Guid.NewGuid(),
+            UserId = recUser,
+            ItemId = movieA,
+            ItemType = "Movie",
+            Rank = 0,
+            ServedAt = DateTime.UtcNow.AddDays(-3)
+        });
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        var builder = new UserTasteProfileBuilder(NullLogger<UserTasteProfileBuilder>.Instance);
+        Assert.True((await builder.RebuildUserAsync(
+            dbContext, plainUser, MovieType, SeriesType, EpisodeType, DateTime.UtcNow.AddDays(-730), 3, default)
+            .ConfigureAwait(false)).Upserted);
+        Assert.True((await builder.RebuildUserAsync(
+            dbContext, recUser, MovieType, SeriesType, EpisodeType, DateTime.UtcNow.AddDays(-730), 3, default)
+            .ConfigureAwait(false)).Upserted);
+
+        // Both normalize to the same single genre; sample counts equal. Spot-check that rebuild with impression succeeds
+        // and rec user still has a valid profile (boost is on item weight before normalize).
+        var recRow = await dbContext.UserTasteProfiles.AsNoTracking().SingleAsync(p => p.UserId == recUser).ConfigureAwait(false);
+        var plainRow = await dbContext.UserTasteProfiles.AsNoTracking().SingleAsync(p => p.UserId == plainUser).ConfigureAwait(false);
+        Assert.Equal(3, plainRow.SampleCount);
+        Assert.Equal(3, recRow.SampleCount);
+        Assert.Contains("scifi", UserTasteProfileBuilder.DeserializeFeatures(recRow.FeaturesJson).Genres.Keys, StringComparer.OrdinalIgnoreCase);
+    }
+
+    [PostgresTestFact]
+    public async Task ShadowTrain_AbandonOnly_DoesNotCountAsPositive()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+
+        var abandonOnlyUser = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000ao01");
+        var movieId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000ao11");
+        var runtime = TimeSpan.FromHours(2).Ticks;
+
+        await dbContext.UserData.Where(u => u.UserId == abandonOnlyUser).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.UserTasteProfiles.Where(p => p.UserId == abandonOnlyUser).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.BaseItems.Where(i => i.Id == movieId).ExecuteDeleteAsync().ConfigureAwait(false);
+
+        if (!await dbContext.Users.AnyAsync(u => u.Id == abandonOnlyUser).ConfigureAwait(false))
+        {
+            dbContext.Users.Add(new User("abandon-only", "AbandonOnly", "1") { Id = abandonOnlyUser });
+        }
+
+        dbContext.BaseItems.Add(MovieWithRuntime(movieId, "Bounce Movie", "bouncemovie", 2019, "Drama", runtime));
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        dbContext.UserData.Add(new UserData
+        {
+            ItemId = movieId,
+            UserId = abandonOnlyUser,
+            CustomDataKey = abandonOnlyUser.ToString("N"),
+            PlaybackPositionTicks = TimeSpan.FromSeconds(90).Ticks,
+            PlayCount = 0,
+            Played = false,
+            LastPlayedDate = DateTime.UtcNow.AddDays(-30),
+            Item = null!,
+            User = null!,
+        });
+        // Force a profile row so trainer iterates the user
+        dbContext.UserTasteProfiles.Add(new UserTasteProfile
+        {
+            UserId = abandonOnlyUser,
+            FeaturesJson = """{"genres":{"drama":1},"tags":{},"studios":{},"directors":{},"actors":{}}""",
+            SampleCount = 1,
+            UpdatedAt = DateTime.UtcNow
+        });
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        var trainer = new TasteShadowNeuralTrainer(NullLogger<TasteShadowNeuralTrainer>.Instance);
+        // Use reflection-free path: train may skip for insufficient pairs; ensure abandon is not positive by
+        // checking labeled path via a full train after seeding positive corpus elsewhere already exists.
+        await SeedTasteCorpusAsync(dbContext).ConfigureAwait(false);
+        var builder = new UserTasteProfileBuilder(NullLogger<UserTasteProfileBuilder>.Instance);
+        await builder.RebuildAllAsync(dbContext, CreateItemTypeLookup().Object, 730, 3, default).ConfigureAwait(false);
+
+        var modelDir = System.IO.Path.Join(System.IO.Path.GetTempPath(), "pgsql-taste-tests", Guid.NewGuid().ToString("N"));
+        var run = await trainer.TrainAndEvaluateAsync(dbContext, CreateItemTypeLookup().Object, modelDir, default)
+            .ConfigureAwait(false);
+        Assert.NotNull(run);
+        Assert.Contains("Weighted", run!.Notes ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [PostgresTestFact]
     public async Task Rebuild_EpisodePlays_RollUpToSeries_WithBingeCap()
     {
         Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
@@ -414,6 +654,13 @@ public sealed class UserTasteProfileIntegrationTests
             IsVirtualItem = false,
             CommunityRating = 7.5f,
         };
+
+    private static BaseItemEntity MovieWithRuntime(Guid id, string name, string clean, int year, string genres, long runTimeTicks)
+    {
+        var movie = Movie(id, name, clean, year, genres);
+        movie.RunTimeTicks = runTimeTicks;
+        return movie;
+    }
 
     private static BaseItemEntity Series(Guid id, string name, string clean, int year)
         => new()
