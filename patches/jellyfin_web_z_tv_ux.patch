@@ -1,89 +1,14 @@
-diff --git a/src/apps/stable/features/search/api/useSearchItems.ts b/src/apps/stable/features/search/api/useSearchItems.ts
-index 81e72ce47f..b94fbcdeff 100644
---- a/src/apps/stable/features/search/api/useSearchItems.ts
-+++ b/src/apps/stable/features/search/api/useSearchItems.ts
-@@ -5,6 +5,7 @@ import { useInfiniteQuery } from '@tanstack/react-query';
- import { CardShape } from 'components/cardbuilder/utils/shape';
- import { useApi } from '../../../../../hooks/useApi';
- import * as userSettings from 'scripts/settings/userSettings';
-+import { getInfiniteScrollLimit } from 'scripts/infiniteScrollHelper';
- import { addSection, getCardOptionsFromType, getItemTypesFromCollectionType, getTitleFromType, isLivetv, isMovies, isMusic, isTVShows, sortSections } from '../utils/search';
- import { useArtistsSearch } from './useArtistsSearch';
- import { usePeopleSearch } from './usePeopleSearch';
-@@ -17,19 +18,13 @@ import { useProgramsSearch } from './useProgramsSearch';
- import { LIVETV_CARD_OPTIONS } from '../constants/liveTvCardOptions';
- 
- const DEFAULT_SEARCH_LIMIT = 800;
--const MIN_INFINITE_PAGE_SIZE = 40;
- 
- const getSearchPageSize = (infiniteScroll: boolean) => {
-     if (!infiniteScroll) {
-         return DEFAULT_SEARCH_LIMIT;
-     }
- 
--    const libraryPageSize = userSettings.libraryPageSize();
--    if (libraryPageSize > 0 && libraryPageSize < MIN_INFINITE_PAGE_SIZE) {
--        return MIN_INFINITE_PAGE_SIZE;
--    }
--
--    return libraryPageSize || 100;
-+    return getInfiniteScrollLimit(40) || 100;
- };
- 
- const dedupeItems = (items: BaseItemDto[]) => {
-diff --git a/src/components/toolbar/AppUserMenu.tsx b/src/components/toolbar/AppUserMenu.tsx
-index 029c0e4bb0..e4cebc990a 100644
---- a/src/components/toolbar/AppUserMenu.tsx
-+++ b/src/components/toolbar/AppUserMenu.tsx
-@@ -5,6 +5,7 @@ import DashboardIcon from '@mui/icons-material/Dashboard';
- import Download from '@mui/icons-material/Download';
- import Edit from '@mui/icons-material/Edit';
- import Logout from '@mui/icons-material/Logout';
-+import People from '@mui/icons-material/People';
- import PhonelinkLock from '@mui/icons-material/PhonelinkLock';
- import Settings from '@mui/icons-material/Settings';
- import Storage from '@mui/icons-material/Storage';
-@@ -60,6 +61,11 @@ const AppUserMenu: FC<AppUserMenuProps> = ({
-         onMenuClose();
-     }, [ onMenuClose ]);
- 
-+    const onSwitchUserClick = useCallback(() => {
-+        Dashboard.switchUser();
-+        onMenuClose();
-+    }, [ onMenuClose ]);
-+
-     const onSelectServerClick = useCallback(() => {
-         Dashboard.selectServer();
-         onMenuClose();
-@@ -201,6 +207,17 @@ const AppUserMenu: FC<AppUserMenuProps> = ({
-                 </MenuItem>
-             )}
- 
-+            <MenuItem
-+                onClick={onSwitchUserClick}
-+            >
-+                <ListItemIcon>
-+                    <People />
-+                </ListItemIcon>
-+                <ListItemText>
-+                    {globalize.translate('ButtonSwitchUser')}
-+                </ListItemText>
-+            </MenuItem>
-+
-             <MenuItem
-                 onClick={onLogoutClick}
-             >
-diff --git a/src/controllers/movies/movies.js b/src/controllers/movies/movies.js
-index f38469275d..42af1d3738 100644
---- a/src/controllers/movies/movies.js
-+++ b/src/controllers/movies/movies.js
+diff --git a/src/apps/legacy/controllers/movies/movies.js b/src/apps/legacy/controllers/movies/movies.js
+index a421f267a6..1e66654f7c 100644
+--- a/src/apps/legacy/controllers/movies/movies.js
++++ b/src/apps/legacy/controllers/movies/movies.js
 @@ -1,5 +1,6 @@
- import loading from '../../components/loading/loading';
- import * as userSettings from '../../scripts/settings/userSettings';
-+import { bindInfiniteScroll, getInfiniteScrollLimit } from '../../scripts/infiniteScrollHelper';
- import libraryBrowser from '../../scripts/libraryBrowser';
- import { AlphaPicker } from '../../components/alphaPicker/alphaPicker';
- import listView from '../../components/listview/listview';
+ import loading from 'components/loading/loading';
+ import * as userSettings from 'scripts/settings/userSettings';
++import { bindInfiniteScroll, getInfiniteScrollLimit } from 'scripts/infiniteScrollHelper';
+ import libraryBrowser from 'scripts/libraryBrowser';
+ import { AlphaPicker } from 'components/alphaPicker/alphaPicker';
+ import listView from 'components/listview/listview';
 @@ -54,6 +55,7 @@ export default function (view, params, tabContent, options) {
  
      const afterRefresh = (result) => {
@@ -102,14 +27,14 @@ index f38469275d..42af1d3738 100644
  
              // Keep scroll position only when appending the next page.
 @@ -141,22 +143,17 @@ export default function (view, params, tabContent, options) {
- 
+         isLoading = false;
          loading.hide();
  
--        import('../../components/autoFocuser').then(({ default: autoFocuser }) => {
+-        import('components/autoFocuser').then(({ default: autoFocuser }) => {
 -            autoFocuser.autoFocus(tabContent);
 -        });
 +        if (!isAppend) {
-+            import('../../components/autoFocuser').then(({ default: autoFocuser }) => {
++            import('components/autoFocuser').then(({ default: autoFocuser }) => {
 +                autoFocuser.autoFocus(tabContent);
 +            });
 +        }
@@ -176,18 +101,18 @@ index f38469275d..42af1d3738 100644
 +    query.Limit = getInfiniteScrollLimit(40);
  
      this.showFilterMenu = function () {
-         import('../../components/filterdialog/filterdialog').then(({ default: FilterDialog }) => {
-diff --git a/src/controllers/music/musicalbums.js b/src/controllers/music/musicalbums.js
-index 25b457bb9b..b0c08633ed 100644
---- a/src/controllers/music/musicalbums.js
-+++ b/src/controllers/music/musicalbums.js
-@@ -6,6 +6,7 @@ import AlphaPicker from '../../components/alphaPicker/alphaPicker';
- import listView from '../../components/listview/listview';
- import cardBuilder from '../../components/cardbuilder/cardBuilder';
- import * as userSettings from '../../scripts/settings/userSettings';
-+import { bindInfiniteScroll, getInfiniteScrollLimit } from '../../scripts/infiniteScrollHelper';
- import globalize from '../../lib/globalize';
- import Events from '../../utils/events.ts';
+         import('components/filterdialog/filterdialog').then(({ default: FilterDialog }) => {
+diff --git a/src/apps/legacy/controllers/music/musicalbums.js b/src/apps/legacy/controllers/music/musicalbums.js
+index 1ed4d399b9..2dccd37119 100644
+--- a/src/apps/legacy/controllers/music/musicalbums.js
++++ b/src/apps/legacy/controllers/music/musicalbums.js
+@@ -6,6 +6,7 @@ import AlphaPicker from 'components/alphaPicker/alphaPicker';
+ import listView from 'components/listview/listview';
+ import cardBuilder from 'components/cardbuilder/cardBuilder';
+ import * as userSettings from 'scripts/settings/userSettings';
++import { bindInfiniteScroll, getInfiniteScrollLimit } from 'scripts/infiniteScrollHelper';
+ import globalize from 'lib/globalize';
+ import Events from 'utils/events';
  import { setFilterStatus } from 'components/filterdialog/filterIndicator';
 @@ -86,11 +87,7 @@ export default function (view, params, tabContent) {
          loading.show();
@@ -211,22 +136,7 @@ index 25b457bb9b..b0c08633ed 100644
              } else {
                  itemsContainer.innerHTML = html;
              }
-@@ -214,9 +211,11 @@ export default function (view, params, tabContent) {
-             loading.hide();
-             isLoading = false;
- 
--            import('../../components/autoFocuser').then(({ default: autoFocuser }) => {
--                autoFocuser.autoFocus(tabContent);
--            });
-+            if (!append) {
-+                import('../../components/autoFocuser').then(({ default: autoFocuser }) => {
-+                    autoFocuser.autoFocus(tabContent);
-+                });
-+            }
-         });
-     };
- 
-@@ -324,23 +323,16 @@ export default function (view, params, tabContent) {
+@@ -323,23 +320,16 @@ export default function (view, params, tabContent) {
          });
  
          if (userSettings.enableInfiniteScroll()) {
@@ -258,16 +168,16 @@ index 25b457bb9b..b0c08633ed 100644
          }
  
          tabElement.querySelector('.btnPlayAll').addEventListener('click', playAll);
-diff --git a/src/controllers/music/musicartists.js b/src/controllers/music/musicartists.js
-index a3bfc340dd..1004bf4ae3 100644
---- a/src/controllers/music/musicartists.js
-+++ b/src/controllers/music/musicartists.js
-@@ -5,6 +5,7 @@ import { AlphaPicker } from '../../components/alphaPicker/alphaPicker';
- import listView from '../../components/listview/listview';
- import cardBuilder from '../../components/cardbuilder/cardBuilder';
- import * as userSettings from '../../scripts/settings/userSettings';
-+import { bindInfiniteScroll, getInfiniteScrollLimit } from '../../scripts/infiniteScrollHelper';
- import Events from '../../utils/events.ts';
+diff --git a/src/apps/legacy/controllers/music/musicartists.js b/src/apps/legacy/controllers/music/musicartists.js
+index 3c52233150..31ec808798 100644
+--- a/src/apps/legacy/controllers/music/musicartists.js
++++ b/src/apps/legacy/controllers/music/musicartists.js
+@@ -5,6 +5,7 @@ import { AlphaPicker } from 'components/alphaPicker/alphaPicker';
+ import listView from 'components/listview/listview';
+ import cardBuilder from 'components/cardbuilder/cardBuilder';
+ import * as userSettings from 'scripts/settings/userSettings';
++import { bindInfiniteScroll, getInfiniteScrollLimit } from 'scripts/infiniteScrollHelper';
+ import Events from 'utils/events';
  import { setFilterStatus } from 'components/filterdialog/filterIndicator';
  
 @@ -70,11 +71,7 @@ export default function (view, params, tabContent, options) {
@@ -292,22 +202,7 @@ index a3bfc340dd..1004bf4ae3 100644
              } else {
                  itemsContainer.innerHTML = html;
              }
-@@ -197,9 +194,11 @@ export default function (view, params, tabContent, options) {
-             loading.hide();
-             isLoading = false;
- 
--            import('../../components/autoFocuser').then(({ default: autoFocuser }) => {
--                autoFocuser.autoFocus(tabContent);
--            });
-+            if (!append) {
-+                import('../../components/autoFocuser').then(({ default: autoFocuser }) => {
-+                    autoFocuser.autoFocus(tabContent);
-+                });
-+            }
-         });
-     };
- 
-@@ -269,23 +268,16 @@ export default function (view, params, tabContent, options) {
+@@ -268,23 +265,16 @@ export default function (view, params, tabContent, options) {
              reloadItems();
          });
          if (userSettings.enableInfiniteScroll()) {
@@ -339,18 +234,18 @@ index a3bfc340dd..1004bf4ae3 100644
          }
      };
  
-diff --git a/src/controllers/music/songs.js b/src/controllers/music/songs.js
-index 4faf9d1bda..3a5f55c2c6 100644
---- a/src/controllers/music/songs.js
-+++ b/src/controllers/music/songs.js
-@@ -5,6 +5,7 @@ import listView from '../../components/listview/listview';
- import loading from '../../components/loading/loading';
- import { playbackManager } from '../../components/playback/playbackmanager';
- import * as userSettings from '../../scripts/settings/userSettings';
-+import { bindInfiniteScroll, getInfiniteScrollLimit } from '../../scripts/infiniteScrollHelper';
- import globalize from '../../lib/globalize';
- import Dashboard from '../../utils/dashboard';
- import Events from '../../utils/events.ts';
+diff --git a/src/apps/legacy/controllers/music/songs.js b/src/apps/legacy/controllers/music/songs.js
+index e2d47ecb14..2719126601 100644
+--- a/src/apps/legacy/controllers/music/songs.js
++++ b/src/apps/legacy/controllers/music/songs.js
+@@ -5,6 +5,7 @@ import listView from 'components/listview/listview';
+ import loading from 'components/loading/loading';
+ import { playbackManager } from 'components/playback/playbackmanager';
+ import * as userSettings from 'scripts/settings/userSettings';
++import { bindInfiniteScroll, getInfiniteScrollLimit } from 'scripts/infiniteScrollHelper';
+ import globalize from 'lib/globalize';
+ import Dashboard from 'utils/dashboard';
+ import Events from 'utils/events';
 @@ -56,11 +57,7 @@ export default function (view, params, tabContent) {
          loading.show();
          isLoading = true;
@@ -373,22 +268,7 @@ index 4faf9d1bda..3a5f55c2c6 100644
              } else {
                  itemsContainer.innerHTML = html;
              }
-@@ -161,9 +158,11 @@ export default function (view, params, tabContent) {
-             loading.hide();
-             isLoading = false;
- 
--            import('../../components/autoFocuser').then(({ default: autoFocuser }) => {
--                autoFocuser.autoFocus(page);
--            });
-+            if (!append) {
-+                import('../../components/autoFocuser').then(({ default: autoFocuser }) => {
-+                    autoFocuser.autoFocus(page);
-+                });
-+            }
-         });
-     }
- 
-@@ -244,23 +243,16 @@ export default function (view, params, tabContent) {
+@@ -243,23 +240,16 @@ export default function (view, params, tabContent) {
          });
  
          if (userSettings.enableInfiniteScroll()) {
@@ -420,24 +300,24 @@ index 4faf9d1bda..3a5f55c2c6 100644
          }
  
          tabElement.querySelector('.btnShuffle').addEventListener('click', shuffle);
-diff --git a/src/controllers/session/login/index.js b/src/controllers/session/login/index.js
-index dea26b28d3..b93f574ebd 100644
---- a/src/controllers/session/login/index.js
-+++ b/src/controllers/session/login/index.js
+diff --git a/src/apps/legacy/controllers/session/login/index.js b/src/apps/legacy/controllers/session/login/index.js
+index b70a0b4870..7307d3e310 100644
+--- a/src/apps/legacy/controllers/session/login/index.js
++++ b/src/apps/legacy/controllers/session/login/index.js
 @@ -6,6 +6,13 @@ import { ServerConnections } from 'lib/jellyfin-apiclient';
  
- import { appHost } from '../../../components/apphost';
- import appSettings from '../../../scripts/settings/appSettings';
+ import { appHost } from 'components/apphost';
+ import appSettings from 'scripts/settings/appSettings';
 +import {
 +    clearRememberedUserToken,
 +    getRememberedUser,
 +    getRememberedUsers,
 +    upsertRememberedUser
-+} from '../../../scripts/settings/rememberedUsers';
-+import { setUserInfo } from '../../../scripts/settings/userSettings';
- import dom from '../../../utils/dom';
- import loading from '../../../components/loading/loading';
- import layoutManager from '../../../components/layoutManager';
++} from 'scripts/settings/rememberedUsers';
++import { setUserInfo } from 'scripts/settings/userSettings';
+ import dom from 'utils/dom';
+ import loading from 'components/loading/loading';
+ import layoutManager from 'components/layoutManager';
 @@ -24,10 +31,26 @@ import './login.scss';
  
  const enableFocusTransform = !browser.slow && !browser.edge;
@@ -688,18 +568,18 @@ index dea26b28d3..b93f574ebd 100644
      });
  }
 -
-diff --git a/src/controllers/shows/episodes.js b/src/controllers/shows/episodes.js
-index f34c789e57..9ee020de65 100644
---- a/src/controllers/shows/episodes.js
-+++ b/src/controllers/shows/episodes.js
-@@ -4,6 +4,7 @@ import imageLoader from '../../components/images/imageLoader';
- import listView from '../../components/listview/listview';
- import cardBuilder from '../../components/cardbuilder/cardBuilder';
- import * as userSettings from '../../scripts/settings/userSettings';
-+import { bindInfiniteScroll, getInfiniteScrollLimit } from '../../scripts/infiniteScrollHelper';
- import globalize from '../../lib/globalize';
- import Dashboard from '../../utils/dashboard';
- import Events from '../../utils/events.ts';
+diff --git a/src/apps/legacy/controllers/shows/episodes.js b/src/apps/legacy/controllers/shows/episodes.js
+index 22cece3510..3fa4ad8bf6 100644
+--- a/src/apps/legacy/controllers/shows/episodes.js
++++ b/src/apps/legacy/controllers/shows/episodes.js
+@@ -4,6 +4,7 @@ import imageLoader from 'components/images/imageLoader';
+ import listView from 'components/listview/listview';
+ import cardBuilder from 'components/cardbuilder/cardBuilder';
+ import * as userSettings from 'scripts/settings/userSettings';
++import { bindInfiniteScroll, getInfiniteScrollLimit } from 'scripts/infiniteScrollHelper';
+ import globalize from 'lib/globalize';
+ import Dashboard from 'utils/dashboard';
+ import Events from 'utils/events';
 @@ -72,11 +73,7 @@ export default function (view, params, tabContent) {
          loading.show();
          isLoading = true;
@@ -722,22 +602,7 @@ index f34c789e57..9ee020de65 100644
              } else {
                  itemsContainer.innerHTML = html;
              }
-@@ -183,9 +180,11 @@ export default function (view, params, tabContent) {
-             loading.hide();
-             isLoading = false;
- 
--            import('../../components/autoFocuser').then(({ default: autoFocuser }) => {
--                autoFocuser.autoFocus(page);
--            });
-+            if (!append) {
-+                import('../../components/autoFocuser').then(({ default: autoFocuser }) => {
-+                    autoFocuser.autoFocus(page);
-+                });
-+            }
-         });
-     }
- 
-@@ -253,23 +252,16 @@ export default function (view, params, tabContent) {
+@@ -252,23 +249,16 @@ export default function (view, params, tabContent) {
          });
  
          if (userSettings.enableInfiniteScroll()) {
@@ -769,17 +634,17 @@ index f34c789e57..9ee020de65 100644
          }
  
          const btnSelectView = tabElement.querySelector('.btnSelectView');
-diff --git a/src/controllers/shows/tvshows.js b/src/controllers/shows/tvshows.js
-index 4a7feee266..bac98aa43f 100644
---- a/src/controllers/shows/tvshows.js
-+++ b/src/controllers/shows/tvshows.js
-@@ -5,6 +5,7 @@ import listView from '../../components/listview/listview';
- import cardBuilder from '../../components/cardbuilder/cardBuilder';
- import AlphaPicker from '../../components/alphaPicker/alphaPicker';
- import * as userSettings from '../../scripts/settings/userSettings';
-+import { bindInfiniteScroll, getInfiniteScrollLimit } from '../../scripts/infiniteScrollHelper';
- import globalize from '../../lib/globalize';
- import Events from '../../utils/events.ts';
+diff --git a/src/apps/legacy/controllers/shows/tvshows.js b/src/apps/legacy/controllers/shows/tvshows.js
+index 25761113e7..aadced00ed 100644
+--- a/src/apps/legacy/controllers/shows/tvshows.js
++++ b/src/apps/legacy/controllers/shows/tvshows.js
+@@ -5,6 +5,7 @@ import listView from 'components/listview/listview';
+ import cardBuilder from 'components/cardbuilder/cardBuilder';
+ import AlphaPicker from 'components/alphaPicker/alphaPicker';
+ import * as userSettings from 'scripts/settings/userSettings';
++import { bindInfiniteScroll, getInfiniteScrollLimit } from 'scripts/infiniteScrollHelper';
+ import globalize from 'lib/globalize';
+ import Events from 'utils/events';
  import { setFilterStatus } from 'components/filterdialog/filterIndicator';
 @@ -71,11 +72,7 @@ export default function (view, params, tabContent) {
          loading.show();
@@ -803,22 +668,7 @@ index 4a7feee266..bac98aa43f 100644
              } else {
                  itemsContainer.innerHTML = html;
              }
-@@ -225,9 +222,11 @@ export default function (view, params, tabContent) {
-             loading.hide();
-             isLoading = false;
- 
--            import('../../components/autoFocuser').then(({ default: autoFocuser }) => {
--                autoFocuser.autoFocus(page);
--            });
-+            if (!append) {
-+                import('../../components/autoFocuser').then(({ default: autoFocuser }) => {
-+                    autoFocuser.autoFocus(page);
-+                });
-+            }
-         });
-     };
- 
-@@ -333,23 +332,16 @@ export default function (view, params, tabContent) {
+@@ -332,23 +329,16 @@ export default function (view, params, tabContent) {
          });
  
          if (userSettings.enableInfiniteScroll()) {
@@ -850,6 +700,81 @@ index 4a7feee266..bac98aa43f 100644
          }
      };
  
+diff --git a/src/apps/legacy/features/search/api/useSearchItems.ts b/src/apps/legacy/features/search/api/useSearchItems.ts
+index 81e72ce47f..b94fbcdeff 100644
+--- a/src/apps/legacy/features/search/api/useSearchItems.ts
++++ b/src/apps/legacy/features/search/api/useSearchItems.ts
+@@ -5,6 +5,7 @@ import { useInfiniteQuery } from '@tanstack/react-query';
+ import { CardShape } from 'components/cardbuilder/utils/shape';
+ import { useApi } from '../../../../../hooks/useApi';
+ import * as userSettings from 'scripts/settings/userSettings';
++import { getInfiniteScrollLimit } from 'scripts/infiniteScrollHelper';
+ import { addSection, getCardOptionsFromType, getItemTypesFromCollectionType, getTitleFromType, isLivetv, isMovies, isMusic, isTVShows, sortSections } from '../utils/search';
+ import { useArtistsSearch } from './useArtistsSearch';
+ import { usePeopleSearch } from './usePeopleSearch';
+@@ -17,19 +18,13 @@ import { useProgramsSearch } from './useProgramsSearch';
+ import { LIVETV_CARD_OPTIONS } from '../constants/liveTvCardOptions';
+ 
+ const DEFAULT_SEARCH_LIMIT = 800;
+-const MIN_INFINITE_PAGE_SIZE = 40;
+ 
+ const getSearchPageSize = (infiniteScroll: boolean) => {
+     if (!infiniteScroll) {
+         return DEFAULT_SEARCH_LIMIT;
+     }
+ 
+-    const libraryPageSize = userSettings.libraryPageSize();
+-    if (libraryPageSize > 0 && libraryPageSize < MIN_INFINITE_PAGE_SIZE) {
+-        return MIN_INFINITE_PAGE_SIZE;
+-    }
+-
+-    return libraryPageSize || 100;
++    return getInfiniteScrollLimit(40) || 100;
+ };
+ 
+ const dedupeItems = (items: BaseItemDto[]) => {
+diff --git a/src/components/toolbar/AppUserMenu.tsx b/src/components/toolbar/AppUserMenu.tsx
+index 029c0e4bb0..e4cebc990a 100644
+--- a/src/components/toolbar/AppUserMenu.tsx
++++ b/src/components/toolbar/AppUserMenu.tsx
+@@ -5,6 +5,7 @@ import DashboardIcon from '@mui/icons-material/Dashboard';
+ import Download from '@mui/icons-material/Download';
+ import Edit from '@mui/icons-material/Edit';
+ import Logout from '@mui/icons-material/Logout';
++import People from '@mui/icons-material/People';
+ import PhonelinkLock from '@mui/icons-material/PhonelinkLock';
+ import Settings from '@mui/icons-material/Settings';
+ import Storage from '@mui/icons-material/Storage';
+@@ -60,6 +61,11 @@ const AppUserMenu: FC<AppUserMenuProps> = ({
+         onMenuClose();
+     }, [ onMenuClose ]);
+ 
++    const onSwitchUserClick = useCallback(() => {
++        Dashboard.switchUser();
++        onMenuClose();
++    }, [ onMenuClose ]);
++
+     const onSelectServerClick = useCallback(() => {
+         Dashboard.selectServer();
+         onMenuClose();
+@@ -201,6 +207,17 @@ const AppUserMenu: FC<AppUserMenuProps> = ({
+                 </MenuItem>
+             )}
+ 
++            <MenuItem
++                onClick={onSwitchUserClick}
++            >
++                <ListItemIcon>
++                    <People />
++                </ListItemIcon>
++                <ListItemText>
++                    {globalize.translate('ButtonSwitchUser')}
++                </ListItemText>
++            </MenuItem>
++
+             <MenuItem
+                 onClick={onLogoutClick}
+             >
 diff --git a/src/elements/emby-itemscontainer/emby-itemscontainer.js b/src/elements/emby-itemscontainer/emby-itemscontainer.js
 index a6e4158e8c..0692e56078 100644
 --- a/src/elements/emby-itemscontainer/emby-itemscontainer.js
@@ -978,10 +903,10 @@ index 0000000000..d6b3192fe8
 +    }, { signal: scrollController.signal });
 +}
 diff --git a/src/scripts/libraryMenu.js b/src/scripts/libraryMenu.js
-index 60a22d3408..43a0ad81d0 100644
+index 7b818d4687..783d61e0c7 100644
 --- a/src/scripts/libraryMenu.js
 +++ b/src/scripts/libraryMenu.js
-@@ -351,6 +351,7 @@ function refreshLibraryInfoInDrawer(user) {
+@@ -350,6 +350,7 @@ function refreshLibraryInfoInDrawer(user) {
          }
  
          html += `<a is="emby-linkbutton" class="navMenuOption lnkMediaFolder btnSettings" data-itemid="settings" href="#"><span class="material-icons navMenuOptionIcon settings" aria-hidden="true"></span><span class="navMenuOptionText">${globalize.translate('Settings')}</span></a>`;
@@ -989,7 +914,7 @@ index 60a22d3408..43a0ad81d0 100644
          html += `<a is="emby-linkbutton" class="navMenuOption lnkMediaFolder btnLogout" data-itemid="logout" href="#"><span class="material-icons navMenuOptionIcon exit_to_app" aria-hidden="true"></span><span class="navMenuOptionText">${globalize.translate('ButtonSignOut')}</span></a>`;
  
          if (appHost.supports(AppFeature.ExitMenu)) {
-@@ -378,6 +379,11 @@ function refreshLibraryInfoInDrawer(user) {
+@@ -377,6 +378,11 @@ function refreshLibraryInfoInDrawer(user) {
          btnExit.addEventListener('click', onExitAppClick);
      }
  
@@ -1001,7 +926,7 @@ index 60a22d3408..43a0ad81d0 100644
      const btnLogout = navDrawerScrollContainer.querySelector('.btnLogout');
      if (btnLogout) {
          btnLogout.addEventListener('click', onLogoutClick);
-@@ -511,6 +517,10 @@ function onExitAppClick() {
+@@ -512,6 +518,10 @@ function onExitAppClick() {
      appHost.exit();
  }
  
@@ -1133,10 +1058,10 @@ index 0000000000..285da85792
 +    clearRememberedUserToken
 +};
 diff --git a/src/scripts/settings/userSettings.js b/src/scripts/settings/userSettings.js
-index dec77a630e..7b9babf816 100644
+index 132e1781f0..caa049b4d3 100644
 --- a/src/scripts/settings/userSettings.js
 +++ b/src/scripts/settings/userSettings.js
-@@ -282,7 +282,9 @@ export class UserSettings {
+@@ -284,7 +284,9 @@ export class UserSettings {
              return this.set('fastFadein', val.toString(), false);
          }
  
@@ -1147,7 +1072,7 @@ index dec77a630e..7b9babf816 100644
      }
  
      /**
-@@ -295,7 +297,9 @@ export class UserSettings {
+@@ -297,7 +299,9 @@ export class UserSettings {
              return this.set('blurhash', val.toString(), false);
          }
  
@@ -1159,10 +1084,10 @@ index dec77a630e..7b9babf816 100644
  
      /**
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 7daf329bed..89f48bd698 100755
+index 9f98af9c59..b2e65b50ca 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -143,6 +143,7 @@
+@@ -148,6 +148,7 @@
      "ButtonShutdown": "Shutdown",
      "ButtonSignIn": "Sign In",
      "ButtonSignOut": "Sign Out",
@@ -1171,7 +1096,7 @@ index 7daf329bed..89f48bd698 100755
      "ButtonSpace": "Space",
      "ButtonSplit": "Split",
 diff --git a/src/utils/dashboard.js b/src/utils/dashboard.js
-index b7deb9f8d0..abf4a0d387 100644
+index 3390548ced..05e34241e4 100644
 --- a/src/utils/dashboard.js
 +++ b/src/utils/dashboard.js
 @@ -15,6 +15,11 @@ import { setBackdropTransparency } from '../components/backdrop/backdrop';
@@ -1267,7 +1192,7 @@ index b7deb9f8d0..abf4a0d387 100644
  export function getPluginUrl(name) {
      return 'configurationpage?name=' + encodeURIComponent(name);
  }
-@@ -243,6 +314,7 @@ const Dashboard = {
+@@ -266,6 +337,7 @@ const Dashboard = {
      getCurrentUserId,
      hideLoadingMsg,
      logout,

@@ -1,7 +1,7 @@
-diff --git a/src/apps/experimental/routes/legacyRoutes/user.ts b/src/apps/experimental/routes/legacyRoutes/user.ts
+diff --git a/src/apps/modern/routes/legacyRoutes/user.ts b/src/apps/modern/routes/legacyRoutes/user.ts
 index 2dd81a4b65..128809a254 100644
---- a/src/apps/experimental/routes/legacyRoutes/user.ts
-+++ b/src/apps/experimental/routes/legacyRoutes/user.ts
+--- a/src/apps/modern/routes/legacyRoutes/user.ts
++++ b/src/apps/modern/routes/legacyRoutes/user.ts
 @@ -37,6 +37,12 @@ export const LEGACY_USER_ROUTES: LegacyRoute[] = [
              controller: 'user/playback/index',
              view: 'user/playback/index.html'
@@ -15,10 +15,10 @@ index 2dd81a4b65..128809a254 100644
      }, {
          path: 'mypreferencessubtitles',
          pageProps: {
-diff --git a/src/apps/stable/routes/legacyRoutes/user.ts b/src/apps/stable/routes/legacyRoutes/user.ts
+diff --git a/src/apps/legacy/routes/legacyRoutes/user.ts b/src/apps/legacy/routes/legacyRoutes/user.ts
 index 612572a865..4aa60979d4 100644
---- a/src/apps/stable/routes/legacyRoutes/user.ts
-+++ b/src/apps/stable/routes/legacyRoutes/user.ts
+--- a/src/apps/legacy/routes/legacyRoutes/user.ts
++++ b/src/apps/legacy/routes/legacyRoutes/user.ts
 @@ -55,6 +55,12 @@ export const LEGACY_USER_ROUTES: LegacyRoute[] = [
              controller: 'user/playback/index',
              view: 'user/playback/index.html'
@@ -32,10 +32,10 @@ index 612572a865..4aa60979d4 100644
      }, {
          path: 'mypreferencessubtitles',
          pageProps: {
-diff --git a/src/apps/stable/routes/user/settings/index.tsx b/src/apps/stable/routes/user/settings/index.tsx
+diff --git a/src/apps/legacy/routes/user/settings/index.tsx b/src/apps/legacy/routes/user/settings/index.tsx
 index 5739dca4f8..ed5900e500 100644
---- a/src/apps/stable/routes/user/settings/index.tsx
-+++ b/src/apps/stable/routes/user/settings/index.tsx
+--- a/src/apps/legacy/routes/user/settings/index.tsx
++++ b/src/apps/legacy/routes/user/settings/index.tsx
 @@ -181,6 +181,25 @@ const UserSettingsPage: FC = () => {
                              </div>
                          </LinkButton>
@@ -198,10 +198,10 @@ index db0974df40..48962dfcd5 100644
      };
  };
  
-diff --git a/src/controllers/itemDetails/index.js b/src/controllers/itemDetails/index.js
+diff --git a/src/apps/legacy/controllers/itemDetails/index.js b/src/apps/legacy/controllers/itemDetails/index.js
 index 4913eda48f..e5c7d57778 100755
---- a/src/controllers/itemDetails/index.js
-+++ b/src/controllers/itemDetails/index.js
+--- a/src/apps/legacy/controllers/itemDetails/index.js
++++ b/src/apps/legacy/controllers/itemDetails/index.js
 @@ -37,6 +37,7 @@ import { renderComponent } from 'utils/reactUtils';
  import { download } from 'scripts/fileDownloader';
  import libraryMenu from 'scripts/libraryMenu';
@@ -267,10 +267,10 @@ index 4913eda48f..e5c7d57778 100755
          });
      }
  }
-diff --git a/src/controllers/movies/moviesrecommended.js b/src/controllers/movies/moviesrecommended.js
+diff --git a/src/apps/legacy/controllers/movies/moviesrecommended.js b/src/apps/legacy/controllers/movies/moviesrecommended.js
 index 2d350eb75e..462d8f5f28 100644
---- a/src/controllers/movies/moviesrecommended.js
-+++ b/src/controllers/movies/moviesrecommended.js
+--- a/src/apps/legacy/controllers/movies/moviesrecommended.js
++++ b/src/apps/legacy/controllers/movies/moviesrecommended.js
 @@ -11,6 +11,7 @@ import globalize from 'lib/globalize';
  import inputManager from 'scripts/inputManager';
  import libraryMenu from 'scripts/libraryMenu';
@@ -308,10 +308,10 @@ index 2d350eb75e..462d8f5f28 100644
      });
  }
  
-diff --git a/src/controllers/shows/tvrecommended.js b/src/controllers/shows/tvrecommended.js
+diff --git a/src/apps/legacy/controllers/shows/tvrecommended.js b/src/apps/legacy/controllers/shows/tvrecommended.js
 index 0a084f5a73..73841ebe14 100644
---- a/src/controllers/shows/tvrecommended.js
-+++ b/src/controllers/shows/tvrecommended.js
+--- a/src/apps/legacy/controllers/shows/tvrecommended.js
++++ b/src/apps/legacy/controllers/shows/tvrecommended.js
 @@ -10,6 +10,7 @@ import globalize from 'lib/globalize';
  import inputManager from 'scripts/inputManager';
  import libraryMenu from 'scripts/libraryMenu';
@@ -472,11 +472,11 @@ index 0a084f5a73..73841ebe14 100644
      });
  }
  
-diff --git a/src/controllers/user/taste/index.html b/src/controllers/user/taste/index.html
+diff --git a/src/apps/legacy/controllers/user/taste/index.html b/src/apps/legacy/controllers/user/taste/index.html
 new file mode 100644
 index 0000000000..dea05e8b3d
 --- /dev/null
-+++ b/src/controllers/user/taste/index.html
++++ b/src/apps/legacy/controllers/user/taste/index.html
 @@ -0,0 +1,22 @@
 +<div id="tastePreferencesPage" data-role="page" class="page libraryPage userPreferencesPage noSecondaryNavPage" data-title="Taste" data-backbutton="true">
 +    <div class="padded-left padded-right padded-bottom-page padded-top tastePreferencesContent">
@@ -500,11 +500,11 @@ index 0000000000..dea05e8b3d
 +        </div>
 +    </div>
 +</div>
-diff --git a/src/controllers/user/taste/index.js b/src/controllers/user/taste/index.js
+diff --git a/src/apps/legacy/controllers/user/taste/index.js b/src/apps/legacy/controllers/user/taste/index.js
 new file mode 100644
 index 0000000000..9500912571
 --- /dev/null
-+++ b/src/controllers/user/taste/index.js
++++ b/src/apps/legacy/controllers/user/taste/index.js
 @@ -0,0 +1,183 @@
 +import escapeHtml from 'escape-html';
 +
@@ -689,11 +689,11 @@ index 0000000000..9500912571
 +        });
 +    });
 +}
-diff --git a/src/controllers/user/taste/taste.scss b/src/controllers/user/taste/taste.scss
+diff --git a/src/apps/legacy/controllers/user/taste/taste.scss b/src/apps/legacy/controllers/user/taste/taste.scss
 new file mode 100644
 index 0000000000..fc49f8055e
 --- /dev/null
-+++ b/src/controllers/user/taste/taste.scss
++++ b/src/apps/legacy/controllers/user/taste/taste.scss
 @@ -0,0 +1,110 @@
 +.tasteHero {
 +    margin: 0 auto 1.75em;

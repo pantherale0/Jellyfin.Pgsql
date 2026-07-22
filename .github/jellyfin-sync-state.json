@@ -1,7 +1,7 @@
 {
-  "jellyfinVersion": "12.0-rc2",
-  "jellyfinSubmoduleTag": "v12.0-rc2",
-  "jellyfinSubmoduleCommit": "feef2403c49003761010656cfadaba55a278acd7",
+  "jellyfinVersion": "12.0-rc3",
+  "jellyfinSubmoduleTag": "v12.0-rc3",
+  "jellyfinSubmoduleCommit": "fc43f151a2418cc112e116050a99dd6318917ab0",
   "lastCoreMigration": "20260524120336_AddUniqueNormalizedUsernameIndex",
-  "lastPgMigration": "20260705211020_Update_12_0-rc2"
+  "lastPgMigration": "20260722110000_AddUserTasteRecommendationImpressions"
 }

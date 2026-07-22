@@ -75,7 +75,9 @@ During `docker build` ([`docker/Dockerfile`](../docker/Dockerfile)):
 3. Patched sources are compiled; plugins are packaged into the image.
 4. Entrypoint wires `POSTGRES_*` / optional Redis / optional SSO env vars and can run SQLite→PG migration.
 
-CI workflows (build, test, publish) apply jellyfin patches the same way. Migration sync applies jellyfin patches before generating PG migrations so schema changes introduced by patches (playback activity, taste entities, people provider key, indexes) are reflected in the plugin.
+CI workflows (build, test, publish) apply jellyfin patches the same way.
+
+**Migration sync and patches:** fork schema (playback activity, taste entities, people provider key, indexes, …) belongs in **dedicated** plugin migrations authored with the patch. Sync does **not** use `Update_*` to capture patch schema. On each sync it verifies patches apply on the target tag, then resets the submodule. It re-applies server patches only when generating an `Update_*` migration so the design-time model still includes those fork entities (otherwise EF would try to drop them).
 
 ## Plugin modules (high level)
 
@@ -96,7 +98,9 @@ Inside `Jellyfin.Plugin.Pgsql`:
 
 ## Migration sync (summary)
 
-A scheduled workflow detects new Jellyfin releases, bumps refs, generates a PostgreSQL EF migration via model diff (SQLite migrations are **not** copied), post-processes PG-specific fixes, and opens a collaborator-only PR. Docker publish is blocked until sync state matches the target version. Failures open/update issues labeled `migration-sync-failure` (see [known issues](known-issues.md)).
+A scheduled workflow detects new Jellyfin releases, bumps refs (including **both** `jellyfin` and `jellyfin-web` to the same tag), verifies patches apply, and opens a collaborator-only PR. Docker publish is blocked until sync state matches the target version. Failures open/update issues labeled `migration-sync-failure` (see [known issues](known-issues.md)).
+
+`Update_*` PostgreSQL migrations are generated **only when Jellyfin’s SQLite migration set advances**. Tag-only bumps (same latest core migration id) update version refs and submodule pointers and verify patches, but skip EF. When an `Update_*` is needed, SQLite migrations are **not** copied — EF diffs the patched design-time model against the existing PG snapshot (upstream delta only, assuming fork schema already has dedicated migrations), then post-processes PG-specific fixes and validates against Postgres.
 
 Operator-facing sync and release steps: [README — Release flow](../README.md#release-flow).
 

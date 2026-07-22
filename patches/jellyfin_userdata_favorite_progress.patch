@@ -4,7 +4,7 @@
 # so a stale progress snapshot cannot overwrite a concurrent favorite.
 #
 diff --git a/Emby.Server.Implementations/Library/UserDataManager.cs b/Emby.Server.Implementations/Library/UserDataManager.cs
-index 1281f1587f..e98bd2efd0 100644
+index f5c41e5670..e875208d06 100644
 --- a/Emby.Server.Implementations/Library/UserDataManager.cs
 +++ b/Emby.Server.Implementations/Library/UserDataManager.cs
 @@ -1,6 +1,7 @@
@@ -126,40 +126,47 @@ index 1281f1587f..e98bd2efd0 100644
          /// <inheritdoc />
          public void SaveUserData(User user, BaseItem item, UpdateUserItemDataDto userDataDto, UserDataSaveReason reason)
          {
-@@ -259,10 +308,14 @@ namespace Emby.Server.Implementations.Library
+@@ -352,11 +401,18 @@ namespace Emby.Server.Implementations.Library
          /// <inheritdoc />
          public UserItemData? GetUserData(User user, BaseItem item)
          {
--            return item.UserData?.Where(e => e.UserId.Equals(user.Id)).Select(Map).FirstOrDefault() ?? new UserItemData()
+-            var row = ResolveUserDataRow(item, item.UserData?.Where(e => e.UserId.Equals(user.Id)));
+-            return row is not null ? Map(row) : new UserItemData()
 -            {
 -                Key = item.GetUserDataKeys()[0],
 -            };
 +            var cacheKey = GetCacheKey(user.InternalId, item.Id);
 +            return _cache.GetOrAdd(
 +                cacheKey,
-+                (k, i) => i.UserData?.Where(e => e.UserId.Equals(user.Id)).Select(Map).FirstOrDefault() ?? new UserItemData()
++                (k, i) =>
 +                {
-+                    Key = i.GetUserDataKeys()[0],
++                    var row = ResolveUserDataRow(i, i.UserData?.Where(e => e.UserId.Equals(user.Id)));
++                    return row is not null ? Map(row) : new UserItemData()
++                    {
++                        Key = i.GetUserDataKeys()[0],
++                    };
 +                },
 +                item);
          }
  
-         /// <inheritdoc />
+         /// <summary>
 diff --git a/tests/Jellyfin.Server.Implementations.Tests/Library/UserDataManagerTests.cs b/tests/Jellyfin.Server.Implementations.Tests/Library/UserDataManagerTests.cs
-new file mode 100644
-index 0000000000..dae22be09f
---- /dev/null
+index bd14ca008d..54c2655c88 100644
+--- a/tests/Jellyfin.Server.Implementations.Tests/Library/UserDataManagerTests.cs
 +++ b/tests/Jellyfin.Server.Implementations.Tests/Library/UserDataManagerTests.cs
-@@ -0,0 +1,42 @@
-+using Emby.Server.Implementations.Library;
-+using MediaBrowser.Controller.Entities;
+@@ -8,6 +8,7 @@ using Jellyfin.Database.Providers.Sqlite;
+ using MediaBrowser.Controller.Configuration;
+ using MediaBrowser.Controller.Entities;
+ using MediaBrowser.Model.Configuration;
 +using MediaBrowser.Model.Entities;
-+using Xunit;
+ using Microsoft.Data.Sqlite;
+ using Microsoft.EntityFrameworkCore;
+ using Microsoft.Extensions.Logging.Abstractions;
+@@ -206,4 +207,37 @@ public sealed class UserDataManagerTests : IDisposable
+         Assert.Equal(222, result[fossilItem.Id].PlaybackPositionTicks);
+         Assert.Equal(333, result[retiredItem.Id].PlaybackPositionTicks);
+     }
 +
-+namespace Jellyfin.Server.Implementations.Tests.Library;
-+
-+public class UserDataManagerTests
-+{
 +    [Theory]
 +    [InlineData(UserDataSaveReason.PlaybackStart, true)]
 +    [InlineData(UserDataSaveReason.PlaybackProgress, true)]
@@ -192,4 +199,4 @@ index 0000000000..dae22be09f
 +        Assert.True(staleProgressSnapshot.Likes);
 +        Assert.Equal(1_000, staleProgressSnapshot.PlaybackPositionTicks);
 +    }
-+}
+ }
