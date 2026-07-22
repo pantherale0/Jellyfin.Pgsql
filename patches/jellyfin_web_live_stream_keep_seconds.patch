@@ -3,7 +3,7 @@
 # Incremental on top of existing jellyfin-web patches (esp. jellyfin_web_hwa_capabilities)
 #
 diff --git a/src/apps/dashboard/routes/playback/transcoding.tsx b/src/apps/dashboard/routes/playback/transcoding.tsx
-index c1d36799a3..407e22ec55 100644
+index d5a3be1dec..292c5aa41f 100644
 --- a/src/apps/dashboard/routes/playback/transcoding.tsx
 +++ b/src/apps/dashboard/routes/playback/transcoding.tsx
 @@ -21,7 +21,10 @@ import Alert from '@mui/material/Alert';
@@ -17,7 +17,7 @@ index c1d36799a3..407e22ec55 100644
 +type EncodingOptions = SdkEncodingOptions & { LiveStreamKeepSeconds?: number };
  import { HardwareAccelerationType } from '@jellyfin/sdk/lib/generated-client/models/hardware-acceleration-type';
  import { ServerConnections } from 'lib/jellyfin-apiclient';
- import { getConfigurationApi } from '@jellyfin/sdk/lib/utils/api/configuration-api';
+ import { getSystemApi } from '@jellyfin/sdk/lib/utils/api/system-api';
 @@ -990,6 +993,22 @@ export const Component = () => {
                                  }}
                              />
@@ -42,7 +42,7 @@ index c1d36799a3..407e22ec55 100644
                                  {globalize.translate('Save')}
                              </Button>
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 1353cc7f21..26eaff192d 100755
+index b3b71c260c..184345eefb 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
 @@ -41,6 +41,8 @@

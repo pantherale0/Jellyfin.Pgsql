@@ -1,6 +1,6 @@
 # Coalesce PlaybackProgress UserData writes (30s / seek threshold) to cut DB load during watch.
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 19823dff37..b2a6caa8a3 100644
+index 828bdd6859..03a2b4f41f 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -48,6 +48,10 @@ namespace Emby.Server.Implementations.Session
@@ -27,31 +27,46 @@ index 19823dff37..b2a6caa8a3 100644
          private Timer _idleTimer;
          private Timer _inactiveTimer;
  
-@@ -953,12 +963,51 @@ namespace Emby.Server.Implementations.Session
-                 changed = true;
-             }
+@@ -982,14 +992,31 @@ namespace Emby.Server.Implementations.Session
  
--            if (changed)
-+            if (!changed)
-+            {
-+                return;
-+            }
-+
-+            // Coalesce progress saves: client check-ins arrive ~every 10s; full-row UserData
-+            // rewrites (plus preference reloads) are expensive. Persist at most every 30s unless
-+            // the user seeks or track settings changed.
-+            if (!tracksChanged && positionTicks.HasValue
-+                && !ShouldPersistPlaybackProgress(user.Id, item.Id, positionTicks.Value))
-+            {
-+                return;
-+            }
-+
-+            _userDataManager.SaveUserData(user, item, data, UserDataSaveReason.PlaybackProgress, CancellationToken.None);
-+
-+            if (positionTicks.HasValue)
+             if (changed)
              {
 -                _userDataManager.SaveUserData(user, item, data, UserDataSaveReason.PlaybackProgress, CancellationToken.None);
-+                _lastProgressPersist[(user.Id, item.Id)] = (DateTime.UtcNow, positionTicks.Value);
+-
+-                // A completed version marks every alternate version played and clears their resume points, so the
+-                // whole movie leaves Continue Watching and reads as watched everywhere. (Per-version resume positions
+-                // only persist while nothing has been completed yet.)
+-                if (data.Played == true && item is Video playedVideo)
++                // Coalesce progress saves: client check-ins arrive ~every 10s; full-row UserData
++                // rewrites (plus preference reloads) are expensive. Persist at most every 30s unless
++                // the user seeks, track settings changed, or the item is marked played.
++                var forcePersist = tracksChanged || data.Played == true;
++                if (!forcePersist && positionTicks.HasValue
++                    && !ShouldPersistPlaybackProgress(user.Id, item.Id, positionTicks.Value))
+                 {
+-                    playedVideo.PropagatePlayedState(user, true);
++                    // Skip DB write; in-memory user data still reflects the latest position.
++                }
++                else
++                {
++                    _userDataManager.SaveUserData(user, item, data, UserDataSaveReason.PlaybackProgress, CancellationToken.None);
++
++                    // A completed version marks every alternate version played and clears their resume points, so the
++                    // whole movie leaves Continue Watching and reads as watched everywhere. (Per-version resume positions
++                    // only persist while nothing has been completed yet.)
++                    if (data.Played == true && item is Video playedVideo)
++                    {
++                        playedVideo.PropagatePlayedState(user, true);
++                    }
++
++                    if (positionTicks.HasValue)
++                    {
++                        _lastProgressPersist[(user.Id, item.Id)] = (DateTime.UtcNow, positionTicks.Value);
++                    }
+                 }
+             }
+ 
+@@ -1000,6 +1027,29 @@ namespace Emby.Server.Implementations.Session
              }
          }
  
@@ -81,11 +96,12 @@ index 19823dff37..b2a6caa8a3 100644
          private static bool UpdatePlaybackSettings(User user, PlaybackProgressInfo info, UserItemData data)
          {
              var changed = false;
-@@ -1141,6 +1190,7 @@ namespace Emby.Server.Implementations.Session
+@@ -1192,6 +1242,8 @@ namespace Emby.Server.Implementations.Session
+                 playedVideo.PropagatePlayedState(user, true);
              }
  
-             _userDataManager.SaveUserData(user, item, data, UserDataSaveReason.PlaybackFinished, CancellationToken.None);
 +            _lastProgressPersist.TryRemove((user.Id, item.Id), out _);
- 
++
              return playedToCompletion;
          }
+ 

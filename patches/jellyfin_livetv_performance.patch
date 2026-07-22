@@ -1912,10 +1912,10 @@ index d477bc3713..58d5c83ae8 100644
              return await _listingsManager.GetProgramsAsync(channel, startDateUtc, endDateUtc, cancellationToken)
                  .ConfigureAwait(false);
 diff --git a/src/Jellyfin.LiveTv/Guide/GuideManager.cs b/src/Jellyfin.LiveTv/Guide/GuideManager.cs
-index b8545cbb64..724410f6fc 100644
+index 4e1b62cdf9..4c90cefd3c 100644
 --- a/src/Jellyfin.LiveTv/Guide/GuideManager.cs
 +++ b/src/Jellyfin.LiveTv/Guide/GuideManager.cs
-@@ -240,12 +240,22 @@ public class GuideManager : IGuideManager
+@@ -241,12 +241,22 @@ public class GuideManager : IGuideManager
  
                  var channelPrograms = (await service.GetProgramsAsync(currentChannel.ExternalId, start, end, cancellationToken).ConfigureAwait(false)).ToList();
  
@@ -1944,7 +1944,7 @@ index b8545cbb64..724410f6fc 100644
  
                  var newPrograms = new List<LiveTvProgram>();
                  var updatedPrograms = new List<LiveTvProgram>();
-@@ -341,40 +351,47 @@ public class GuideManager : IGuideManager
+@@ -342,40 +352,47 @@ public class GuideManager : IGuideManager
              DtoOptions = new DtoOptions(false)
          });
  
@@ -2026,7 +2026,7 @@ index 15e20d6f64..5721cbf6f1 100644
  
          result = new EpgChannelData(channels);
 diff --git a/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs b/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs
-index 7088d1f0bf..ed5aff2ea0 100644
+index 0aeb7ad05d..24940d1d4d 100644
 --- a/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs
 +++ b/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs
 @@ -9,6 +9,7 @@ using System.Linq;
@@ -2061,7 +2061,7 @@ index 7088d1f0bf..ed5aff2ea0 100644
 +            }
  
 -            return reader.GetProgrammes(channelId, startDateUtc, endDateUtc, cancellationToken)
--                        .Select(p => GetProgramInfo(p, info));
+-                        .Select(p => GetProgramInfoWithEtag(p, info));
 +            return [];
 +        }
 +
@@ -2129,7 +2129,7 @@ index 7088d1f0bf..ed5aff2ea0 100644
 +                            programmesByChannel[programmeChannelId] = list;
 +                        }
 +
-+                        list.Add(GetProgramInfo(programme, info));
++                        list.Add(GetProgramInfoWithEtag(programme, info));
 +                    }
 +                    while (xmlReader.ReadToFollowing("programme"));
 +                }
@@ -2151,8 +2151,8 @@ index 7088d1f0bf..ed5aff2ea0 100644
 +            return programmesByChannel;
          }
  
-         private static ProgramInfo GetProgramInfo(XmlTvProgram program, ListingsProviderInfo info)
-@@ -297,5 +390,20 @@ namespace Jellyfin.LiveTv.Listings
+         private ProgramInfo GetProgramInfoWithEtag(XmlTvProgram program, ListingsProviderInfo info)
+@@ -319,5 +412,20 @@ namespace Jellyfin.LiveTv.Listings
                  Number = string.IsNullOrWhiteSpace(c.Number) ? c.Id : c.Number
              }).ToList();
          }

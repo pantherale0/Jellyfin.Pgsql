@@ -56,17 +56,18 @@ index c31bb4fb97..a99c739313 100644
  
          /// <inheritdoc />
 diff --git a/Emby.Server.Implementations/Images/CollectionFolderImageProvider.cs b/Emby.Server.Implementations/Images/CollectionFolderImageProvider.cs
-index 095934f896..83f2c39fb4 100644
+index 7cae2a671b..e6781d970c 100644
 --- a/Emby.Server.Implementations/Images/CollectionFolderImageProvider.cs
 +++ b/Emby.Server.Implementations/Images/CollectionFolderImageProvider.cs
-@@ -5,12 +5,14 @@
+@@ -5,6 +5,7 @@
  using System;
  using System.Collections.Generic;
  using System.IO;
 +using System.Linq;
+ using Jellyfin.Api.Extensions;
  using Jellyfin.Data.Enums;
  using Jellyfin.Database.Implementations.Enums;
- using MediaBrowser.Common.Configuration;
+@@ -12,6 +13,7 @@ using MediaBrowser.Common.Configuration;
  using MediaBrowser.Controller.Drawing;
  using MediaBrowser.Controller.Dto;
  using MediaBrowser.Controller.Entities;
@@ -96,9 +97,9 @@ index 095934f896..83f2c39fb4 100644
          }
  
          protected override IReadOnlyList<BaseItem> GetItemsWithImages(BaseItem item)
-@@ -62,19 +76,23 @@ namespace Emby.Server.Implementations.Images
- 
-             var recursive = viewType != CollectionType.playlists;
+@@ -37,16 +51,20 @@ namespace Emby.Server.Implementations.Images
+                 includeItemTypes = [BaseItemKind.MusicArtist];
+             }
  
 -            return view.GetItemList(new InternalItemsQuery
 +            var candidates = view.GetItemList(new InternalItemsQuery
@@ -106,13 +107,10 @@ index 095934f896..83f2c39fb4 100644
                  CollapseBoxSetItems = false,
                  Recursive = recursive,
                  DtoOptions = new DtoOptions(false),
-                 ImageTypes = new[] { ImageType.Primary },
+                 ImageTypes = [ImageType.Primary],
 -                Limit = 8,
 +                Limit = CandidateLimit,
-                 OrderBy = new[]
-                 {
-                     (ItemSortBy.Random, SortOrder.Ascending)
-                 },
+                 OrderBy = [(ItemSortBy.Random, SortOrder.Ascending)],
                  IncludeItemTypes = includeItemTypes
              });
 +
@@ -345,10 +343,10 @@ index 87de4ed79c..26e7250cf6 100644
              // Security consumers
              collection.AddScoped<IEventConsumer<AuthenticationRequestEventArgs>, AuthenticationFailedLogger>();
 diff --git a/Jellyfin.Server.Implementations/Users/UserManager.cs b/Jellyfin.Server.Implementations/Users/UserManager.cs
-index 9be2eac4a1..7466de3db6 100644
+index 81408d9aa8..8198ebce47 100644
 --- a/Jellyfin.Server.Implementations/Users/UserManager.cs
 +++ b/Jellyfin.Server.Implementations/Users/UserManager.cs
-@@ -813,6 +813,12 @@ namespace Jellyfin.Server.Implementations.Users
+@@ -820,6 +820,12 @@ namespace Jellyfin.Server.Implementations.Users
                          _ => policy.LoginAttemptsBeforeLockout
                      };
  
@@ -361,7 +359,7 @@ index 9be2eac4a1..7466de3db6 100644
                      user.MaxParentalRatingScore = policy.MaxParentalRating;
                      user.MaxParentalRatingSubScore = policy.MaxParentalSubRating;
                      user.EnableUserPreferenceAccess = policy.EnableUserPreferenceAccess;
-@@ -865,6 +871,20 @@ namespace Jellyfin.Server.Implementations.Users
+@@ -872,6 +878,20 @@ namespace Jellyfin.Server.Implementations.Users
  
                      dbContext.Update(user);
                      await dbContext.SaveChangesAsync().ConfigureAwait(false);

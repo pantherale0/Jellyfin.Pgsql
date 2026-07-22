@@ -1,5 +1,5 @@
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index b2a6caa8a3..9ebc3836b1 100644
+index 03a2b4f41f..23cf20ccbf 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -11,6 +11,7 @@ using Jellyfin.Data;
@@ -70,7 +70,7 @@ index b2a6caa8a3..9ebc3836b1 100644
          }
  
          /// <summary>
-@@ -781,6 +795,18 @@ namespace Emby.Server.Implementations.Session
+@@ -807,6 +821,18 @@ namespace Emby.Server.Implementations.Session
                  UpdateLiveStreamActiveSessionMappings(info.LiveStreamId, info.SessionId, info.PlaySessionId);
              }
  
@@ -89,7 +89,7 @@ index b2a6caa8a3..9ebc3836b1 100644
              var eventArgs = new PlaybackStartEventArgs
              {
                  Item = libraryItem,
-@@ -915,6 +941,20 @@ namespace Emby.Server.Implementations.Session
+@@ -942,6 +968,20 @@ namespace Emby.Server.Implementations.Session
                  UpdateLiveStreamActiveSessionMappings(info.LiveStreamId, info.SessionId, info.PlaySessionId);
              }
  
@@ -110,9 +110,9 @@ index b2a6caa8a3..9ebc3836b1 100644
              var eventArgs = new PlaybackProgressEventArgs
              {
                  Item = libraryItem,
-@@ -1140,6 +1180,89 @@ namespace Emby.Server.Implementations.Session
+@@ -1183,6 +1223,89 @@ namespace Emby.Server.Implementations.Session
                  {
-                     playedToCompletion = OnPlaybackStopped(user, libraryItem, info.PositionTicks, info.Failed);
+                     playedToCompletion = OnPlaybackStopped(user, progressItem, info.PositionTicks, info.Failed);
                  }
 +
 +                if (info.PositionTicks.HasValue && info.PositionTicks.Value > 0)
@@ -200,7 +200,7 @@ index b2a6caa8a3..9ebc3836b1 100644
              }
  
              if (!string.IsNullOrEmpty(info.LiveStreamId))
-@@ -1167,6 +1290,253 @@ namespace Emby.Server.Implementations.Session
+@@ -1210,6 +1333,253 @@ namespace Emby.Server.Implementations.Session
              EventHelper.QueueEventIfNotNull(PlaybackStopped, this, eventArgs, _logger);
          }
  
@@ -454,7 +454,7 @@ index b2a6caa8a3..9ebc3836b1 100644
          private bool OnPlaybackStopped(User user, BaseItem item, long? positionTicks, bool playbackFailed)
          {
              if (playbackFailed)
-@@ -2193,5 +2563,94 @@ namespace Emby.Server.Implementations.Session
+@@ -2245,5 +2615,94 @@ namespace Emby.Server.Implementations.Session
              _activeConnections.Clear();
              _activeLiveStreamSessions.Clear();
          }

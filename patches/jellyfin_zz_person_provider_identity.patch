@@ -1,8 +1,8 @@
 diff --git a/Emby.Server.Implementations/Dto/DtoService.cs b/Emby.Server.Implementations/Dto/DtoService.cs
-index 3cd72a8..c8d886a 100644
+index 8cbf42585d..f61b723123 100644
 --- a/Emby.Server.Implementations/Dto/DtoService.cs
 +++ b/Emby.Server.Implementations/Dto/DtoService.cs
-@@ -773,60 +773,55 @@ namespace Emby.Server.Implementations.Dto
+@@ -786,60 +786,55 @@ namespace Emby.Server.Implementations.Dto
  
              var list = new List<BaseItemPerson>();
  
@@ -93,7 +93,7 @@ index 3cd72a8..c8d886a 100644
  
              dto.People = list.ToArray();
 diff --git a/Emby.Server.Implementations/Library/LibraryManager.cs b/Emby.Server.Implementations/Library/LibraryManager.cs
-index b672df6..a7b5fbf 100644
+index 69d3b36c65..9f10c47d2e 100644
 --- a/Emby.Server.Implementations/Library/LibraryManager.cs
 +++ b/Emby.Server.Implementations/Library/LibraryManager.cs
 @@ -1204,6 +1204,53 @@ namespace Emby.Server.Implementations.Library
@@ -220,7 +220,7 @@ index b672df6..a7b5fbf 100644
  
                  if (!string.IsNullOrWhiteSpace(person.ImageUrl) && !personEntity.HasImage(ImageType.Primary))
 diff --git a/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs b/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
-index 15d6790..77d7f1b 100644
+index 15d67905f6..77d7f1b992 100644
 --- a/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
 +++ b/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
 @@ -49,12 +49,11 @@ public class PeopleValidator
@@ -255,13 +255,13 @@ index 15d6790..77d7f1b 100644
                  }
  
 diff --git a/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs b/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs
-index 3451c45..5a49a4c 100644
+index dff9a473af..a6e91da97c 100644
 --- a/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs
 +++ b/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs
-@@ -87,51 +87,68 @@ public class PeopleValidationTask : IScheduledTask, IConfigurableScheduledTask
+@@ -106,51 +106,68 @@ public class PeopleValidationTask : IScheduledTask, IConfigurableScheduledTask
          await using (context.ConfigureAwait(false))
          {
-             IProgress<double> subProgress = new Progress<double>((val) => progress.Report(val / 2));
+             IProgress<double> subProgress = new Progress<double>((val) => progress.Report(val / 3));
 -            var dupQuery = context.Peoples
 +            // Only merge true duplicates for the same identity. Provider-keyed rows must never
 +            // collapse with a different key (or with a different name-only person).
@@ -363,7 +363,7 @@ index 3451c45..5a49a4c 100644
                  .Where(p => !context.PeopleBaseItemMap.Any(m => m.PeopleId.Equals(p.Id)))
                  .ExecuteDeleteAsync(cancellationToken)
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-index 14719bb..150e572 100644
+index c7dbd841d2..5e9296e8ce 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 @@ -364,14 +364,32 @@ public sealed partial class BaseItemRepository
@@ -405,7 +405,7 @@ index 14719bb..150e572 100644
                  .Where(e => context.PeopleBaseItemMap
                      .Any(m => m.ItemId == e.Id && peopleEntityIds.Contains(m.PeopleId)));
 diff --git a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
-index eb87b52..9dea7d7 100644
+index eb87b525fe..9dea7d7781 100644
 --- a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
 +++ b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
 @@ -7,6 +7,7 @@ using Jellyfin.Database.Implementations.Entities;
@@ -565,7 +565,7 @@ index eb87b52..9dea7d7 100644
  
          return personInfo;
 diff --git a/MediaBrowser.Controller/Entities/PeopleHelper.cs b/MediaBrowser.Controller/Entities/PeopleHelper.cs
-index 24b1843..383b3ff 100644
+index 24b1843ce6..383b3ffd6e 100644
 --- a/MediaBrowser.Controller/Entities/PeopleHelper.cs
 +++ b/MediaBrowser.Controller/Entities/PeopleHelper.cs
 @@ -38,7 +38,10 @@ namespace MediaBrowser.Controller.Entities
@@ -673,10 +673,10 @@ index 24b1843..383b3ff 100644
          }
      }
 diff --git a/MediaBrowser.Controller/Entities/Person.cs b/MediaBrowser.Controller/Entities/Person.cs
-index 5cc4d32..9fb0bb4 100644
+index 14325d971a..f0fdacf27c 100644
 --- a/MediaBrowser.Controller/Entities/Person.cs
 +++ b/MediaBrowser.Controller/Entities/Person.cs
-@@ -86,12 +86,40 @@ namespace MediaBrowser.Controller.Entities
+@@ -97,12 +97,40 @@ namespace MediaBrowser.Controller.Entities
          }
  
          public static string GetPath(string name, bool normalizeName)
@@ -717,7 +717,7 @@ index 5cc4d32..9fb0bb4 100644
              string subFolderPrefix = null;
  
              foreach (char c in validFilename)
-@@ -112,7 +140,21 @@ namespace MediaBrowser.Controller.Entities
+@@ -123,7 +151,21 @@ namespace MediaBrowser.Controller.Entities
  
          private string GetRebasedPath()
          {
@@ -740,9 +740,9 @@ index 5cc4d32..9fb0bb4 100644
          }
  
          public override bool RequiresRefresh()
-diff --git a/jf-ours/MediaBrowser.Controller/Entities/PersonIdentity.cs b/MediaBrowser.Controller/Entities/PersonIdentity.cs
+diff --git a/MediaBrowser.Controller/Entities/PersonIdentity.cs b/MediaBrowser.Controller/Entities/PersonIdentity.cs
 new file mode 100644
-index 0000000..98f6e5e
+index 0000000000..98f6e5e00a
 --- /dev/null
 +++ b/MediaBrowser.Controller/Entities/PersonIdentity.cs
 @@ -0,0 +1,230 @@
@@ -977,7 +977,7 @@ index 0000000..98f6e5e
 +    }
 +}
 diff --git a/MediaBrowser.Controller/Extensions/XmlReaderExtensions.cs b/MediaBrowser.Controller/Extensions/XmlReaderExtensions.cs
-index b53210b..3d6cee9 100644
+index b53210b0b1..3d6cee96b5 100644
 --- a/MediaBrowser.Controller/Extensions/XmlReaderExtensions.cs
 +++ b/MediaBrowser.Controller/Extensions/XmlReaderExtensions.cs
 @@ -5,6 +5,7 @@ using System.Linq;
@@ -1040,7 +1040,7 @@ index b53210b..3d6cee9 100644
  
      /// <summary>
 diff --git a/MediaBrowser.Controller/Library/ILibraryManager.cs b/MediaBrowser.Controller/Library/ILibraryManager.cs
-index 063a46e..feac53a 100644
+index 6f71153fda..3e3f8e0bc3 100644
 --- a/MediaBrowser.Controller/Library/ILibraryManager.cs
 +++ b/MediaBrowser.Controller/Library/ILibraryManager.cs
 @@ -106,6 +106,13 @@ namespace MediaBrowser.Controller.Library
@@ -1058,7 +1058,7 @@ index 063a46e..feac53a 100644
          /// Finds the by path.
          /// </summary>
 diff --git a/MediaBrowser.XbmcMetadata/Savers/BaseNfoSaver.cs b/MediaBrowser.XbmcMetadata/Savers/BaseNfoSaver.cs
-index 78907a5..c58aeb1 100644
+index 78907a5e68..c58aeb141f 100644
 --- a/MediaBrowser.XbmcMetadata/Savers/BaseNfoSaver.cs
 +++ b/MediaBrowser.XbmcMetadata/Savers/BaseNfoSaver.cs
 @@ -960,9 +960,27 @@ namespace MediaBrowser.XbmcMetadata.Savers
@@ -1091,7 +1091,7 @@ index 78907a5..c58aeb1 100644
  
                      if (image is not null)
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/People.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/People.cs
-index 20cf3e2..d4fffc0 100644
+index 20cf3e2d9e..d4fffc075c 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/People.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/People.cs
 @@ -25,6 +25,12 @@ public class People
@@ -1108,7 +1108,7 @@ index 20cf3e2..d4fffc0 100644
      /// Gets or Sets the mapping of People to BaseItems.
      /// </summary>
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/PeopleConfiguration.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/PeopleConfiguration.cs
-index e8f77a8..078a3b1 100644
+index e8f77a8067..078a3b180f 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/PeopleConfiguration.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/PeopleConfiguration.cs
 @@ -14,6 +14,7 @@ public class PeopleConfiguration : IEntityTypeConfiguration<People>
@@ -1119,9 +1119,9 @@ index e8f77a8..078a3b1 100644
          builder.HasMany(e => e.BaseItems);
      }
  }
-diff --git a/jf-ours/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260719210000_AddPeopleProviderKey.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260719210000_AddPeopleProviderKey.cs
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260719210000_AddPeopleProviderKey.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260719210000_AddPeopleProviderKey.cs
 new file mode 100644
-index 0000000..bc0fe31
+index 0000000000..bc0fe31c98
 --- /dev/null
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260719210000_AddPeopleProviderKey.cs
 @@ -0,0 +1,41 @@
@@ -1167,7 +1167,7 @@ index 0000000..bc0fe31
 +    }
 +}
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
-index fe87cf0..033ad00 100644
+index fe87cf086a..033ad0005a 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
 @@ -1036,10 +1036,15 @@ namespace Jellyfin.Server.Implementations.Migrations
@@ -1186,9 +1186,9 @@ index fe87cf0..033ad00 100644
                      b.ToTable("Peoples");
  
                      b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
-diff --git a/jf-ours/tests/Jellyfin.Controller.Tests/Entities/PeopleHelperTests.cs b/tests/Jellyfin.Controller.Tests/Entities/PeopleHelperTests.cs
+diff --git a/tests/Jellyfin.Controller.Tests/Entities/PeopleHelperTests.cs b/tests/Jellyfin.Controller.Tests/Entities/PeopleHelperTests.cs
 new file mode 100644
-index 0000000..aa2c000
+index 0000000000..aa2c000683
 --- /dev/null
 +++ b/tests/Jellyfin.Controller.Tests/Entities/PeopleHelperTests.cs
 @@ -0,0 +1,58 @@
@@ -1250,9 +1250,9 @@ index 0000000..aa2c000
 +        Assert.Equal("1248", people[0].GetProviderId(MetadataProvider.Tmdb));
 +    }
 +}
-diff --git a/jf-ours/tests/Jellyfin.Controller.Tests/Entities/PersonIdentityTests.cs b/tests/Jellyfin.Controller.Tests/Entities/PersonIdentityTests.cs
+diff --git a/tests/Jellyfin.Controller.Tests/Entities/PersonIdentityTests.cs b/tests/Jellyfin.Controller.Tests/Entities/PersonIdentityTests.cs
 new file mode 100644
-index 0000000..0864d9f
+index 0000000000..0864d9fa08
 --- /dev/null
 +++ b/tests/Jellyfin.Controller.Tests/Entities/PersonIdentityTests.cs
 @@ -0,0 +1,57 @@

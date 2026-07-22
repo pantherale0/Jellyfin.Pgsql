@@ -1,9 +1,9 @@
-diff --git a/src/apps/stable/routes/quickConnect/index.tsx b/src/apps/stable/routes/quickConnect/index.tsx
-index 217b900ae2..77246a5527 100644
---- a/src/apps/stable/routes/quickConnect/index.tsx
-+++ b/src/apps/stable/routes/quickConnect/index.tsx
+diff --git a/src/apps/legacy/routes/quickConnect/index.tsx b/src/apps/legacy/routes/quickConnect/index.tsx
+index e042cf86ce..77246a5527 100644
+--- a/src/apps/legacy/routes/quickConnect/index.tsx
++++ b/src/apps/legacy/routes/quickConnect/index.tsx
 @@ -1,119 +1,30 @@
--import { getQuickConnectApi } from '@jellyfin/sdk/lib/utils/api/quick-connect-api';
+-import { getAuthenticationApi } from '@jellyfin/sdk/lib/utils/api/authentication-api';
 -import React, { FC, FormEvent, useCallback, useState } from 'react';
 -import { Link, useSearchParams } from 'react-router-dom';
 +import React, { FC, useCallback } from 'react';
@@ -59,7 +59,7 @@ index 217b900ae2..77246a5527 100644
 -        const normalizedCode = code.replace(/\s/g, '');
 -        console.log('[QuickConnect] authorizing code %s as user %s', normalizedCode, userId);
 -
--        getQuickConnectApi(api)
+-        getAuthenticationApi(api)
 -            .authorizeQuickConnect({
 -                code: normalizedCode,
 -                userId
@@ -142,23 +142,10 @@ index 217b900ae2..77246a5527 100644
      );
  };
  
-diff --git a/src/apps/stable/routes/quickConnect/quickConnect.scss b/src/apps/stable/routes/quickConnect/quickConnect.scss
-deleted file mode 100644
-index d81e715613..0000000000
---- a/src/apps/stable/routes/quickConnect/quickConnect.scss
-+++ /dev/null
-@@ -1,7 +0,0 @@
--.quickConnectError {
--    border-radius: 0.2em;
--    background-color: #160b0b;
--    color: #f4c7c3;
--    padding: 0.7em 0.5em;
--    margin-bottom: 1em;
--}
-diff --git a/src/apps/stable/routes/user/settings/index.tsx b/src/apps/stable/routes/user/settings/index.tsx
+diff --git a/src/apps/legacy/routes/user/settings/index.tsx b/src/apps/legacy/routes/user/settings/index.tsx
 index df5071f3c9..5739dca4f8 100644
---- a/src/apps/stable/routes/user/settings/index.tsx
-+++ b/src/apps/stable/routes/user/settings/index.tsx
+--- a/src/apps/legacy/routes/user/settings/index.tsx
++++ b/src/apps/legacy/routes/user/settings/index.tsx
 @@ -1,11 +1,12 @@
  import type { UserDto } from '@jellyfin/sdk/lib/generated-client/models/user-dto';
 -import React, { useEffect, useMemo, useState, type FC } from 'react';
@@ -219,11 +206,11 @@ index df5071f3c9..5739dca4f8 100644
  };
 diff --git a/src/components/QuickConnectDialog.tsx b/src/components/QuickConnectDialog.tsx
 new file mode 100644
-index 0000000000..6d27554ca5
+index 0000000000..4277f72e96
 --- /dev/null
 +++ b/src/components/QuickConnectDialog.tsx
 @@ -0,0 +1,158 @@
-+import { getQuickConnectApi } from '@jellyfin/sdk/lib/utils/api/quick-connect-api';
++import { getAuthenticationApi } from '@jellyfin/sdk/lib/utils/api/authentication-api';
 +import Alert from '@mui/material/Alert';
 +import Button from '@mui/material/Button';
 +import Dialog from '@mui/material/Dialog';
@@ -290,7 +277,7 @@ index 0000000000..6d27554ca5
 +        console.log('[QuickConnect] authorizing code %s as user %s', normalizedCode, authorizeUserId);
 +        setIsSubmitting(true);
 +
-+        getQuickConnectApi(api)
++        getAuthenticationApi(api)
 +            .authorizeQuickConnect({
 +                code: normalizedCode,
 +                userId: authorizeUserId

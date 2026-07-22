@@ -63,10 +63,10 @@ index 0000000000..e6134922fd
 +    HardwareEncoding: Record<string, HardwareEncodingCapabilities>;
 +}
 diff --git a/src/apps/dashboard/routes/playback/transcoding.tsx b/src/apps/dashboard/routes/playback/transcoding.tsx
-index 482b34b6ef..c1d36799a3 100644
+index 13da3e666b..d5a3be1dec 100644
 --- a/src/apps/dashboard/routes/playback/transcoding.tsx
 +++ b/src/apps/dashboard/routes/playback/transcoding.tsx
-@@ -28,10 +28,22 @@ import { getConfigurationApi } from '@jellyfin/sdk/lib/utils/api/configuration-a
+@@ -28,10 +28,22 @@ import { getSystemApi } from '@jellyfin/sdk/lib/utils/api/system-api';
  import { queryClient } from 'utils/query/queryClient';
  import { ActionData } from 'types/actionData';
  import { CODECS, HEVC_REXT_DECODING_TYPES, HEVC_VP9_HW_DECODING_TYPES } from 'apps/dashboard/features/playback/constants/codecs';
@@ -87,7 +87,7 @@ index 482b34b6ef..c1d36799a3 100644
 +];
 +
  export const action = async ({ request }: ActionFunctionArgs) => {
-     const api = ServerConnections.getCurrentApi();
+     const api = ServerConnections.getApi();
      if (!api) throw new Error('No Api instance available');
 @@ -52,6 +64,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
  
@@ -318,10 +318,10 @@ index 482b34b6ef..c1d36799a3 100644
                                          }
                                      />
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index c18c3ebd40..5103615685 100755
+index fb1fb8cd8f..a299004122 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -737,6 +737,10 @@
+@@ -745,6 +745,10 @@
      "LabelEnableAudioVbr": "Enable VBR audio encoding",
      "LabelEnableAudioVbrHelp": "Variable bitrate offers better quality to average bitrate ratio, but in some rare cases may cause buffering and compatibility issues.",
      "LabelEnableHardwareDecodingFor": "Enable hardware decoding for",

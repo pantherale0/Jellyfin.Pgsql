@@ -40,6 +40,10 @@ Notes:
   Run with --dry-run first when testing a new Jellyfin version.
   TargetFramework and Microsoft/Npgsql package versions are managed via Directory.Build.props
   and are updated automatically during sync.
+
+  Update_* migrations are generated only when Jellyfin's SQLite migration set advances.
+  Tag-only bumps (same latest core migration) update refs/submodules and verify patches,
+  but do not run EF — patch schema belongs in dedicated plugin migrations, not Update_*.
 EOF
 }
 
@@ -287,8 +291,34 @@ begin_sync_backup() {
     cp "${STATE_FILE}" "${SYNC_BACKUP_DIR}/"
     cp "${REPO_ROOT}/.config/dotnet-tools.json" "${SYNC_BACKUP_DIR}/"
     cp -a "${MIGRATIONS_DIR}" "${SYNC_BACKUP_DIR}/Migrations"
-    git -C "${REPO_ROOT}/jellyfin" rev-parse HEAD > "${SYNC_BACKUP_DIR}/submodule_commit"
+    git -C "${REPO_ROOT}/jellyfin" rev-parse HEAD > "${SYNC_BACKUP_DIR}/jellyfin_commit"
+    if [[ -d "${REPO_ROOT}/jellyfin-web/.git" ]] || [[ -f "${REPO_ROOT}/jellyfin-web/.git" ]]; then
+        git -C "${REPO_ROOT}/jellyfin-web" rev-parse HEAD > "${SYNC_BACKUP_DIR}/jellyfin_web_commit"
+    fi
     SYNC_STARTED=true
+}
+
+restore_submodule_commit() {
+    local name="$1"
+    local commit_file="$2"
+    if [[ ! -f "${commit_file}" ]]; then
+        return
+    fi
+    if [[ -d "${REPO_ROOT}/${name}/.git" ]] || [[ -f "${REPO_ROOT}/${name}/.git" ]]; then
+        local previous_commit
+        previous_commit="$(cat "${commit_file}")"
+        git -C "${REPO_ROOT}/${name}" reset --hard "${previous_commit}" >/dev/null 2>&1 || true
+        git -C "${REPO_ROOT}/${name}" clean -fd >/dev/null 2>&1 || true
+        git -C "${REPO_ROOT}" add "${name}" 2>/dev/null || true
+    fi
+}
+
+reset_submodule_clean() {
+    local name="$1"
+    if [[ -d "${REPO_ROOT}/${name}/.git" ]] || [[ -f "${REPO_ROOT}/${name}/.git" ]]; then
+        git -C "${REPO_ROOT}/${name}" reset --hard HEAD >/dev/null
+        git -C "${REPO_ROOT}/${name}" clean -fd >/dev/null
+    fi
 }
 
 rollback_sync() {
@@ -305,13 +335,8 @@ rollback_sync() {
     rm -rf "${MIGRATIONS_DIR}"
     cp -a "${SYNC_BACKUP_DIR}/Migrations" "${MIGRATIONS_DIR}"
 
-    local previous_commit
-    previous_commit="$(cat "${SYNC_BACKUP_DIR}/submodule_commit")"
-    if [[ -d "${REPO_ROOT}/jellyfin/.git" ]] || [[ -f "${REPO_ROOT}/jellyfin/.git" ]]; then
-        git -C "${REPO_ROOT}/jellyfin" reset --hard "${previous_commit}" >/dev/null 2>&1 || true
-        git -C "${REPO_ROOT}/jellyfin" clean -fd >/dev/null 2>&1 || true
-        git -C "${REPO_ROOT}" add jellyfin 2>/dev/null || true
-    fi
+    restore_submodule_commit jellyfin "${SYNC_BACKUP_DIR}/jellyfin_commit"
+    restore_submodule_commit jellyfin-web "${SYNC_BACKUP_DIR}/jellyfin_web_commit"
 
     rm -rf "${SYNC_BACKUP_DIR}"
     SYNC_STARTED=false
@@ -403,18 +428,46 @@ bump_version_refs() {
 }
 
 update_submodule() {
+    local name="$1"
+    local version="$2"
+    echo "[sync] Updating ${name} submodule to v${version}..."
+
+    git submodule update --init "${name}"
+    git -C "${REPO_ROOT}/${name}" fetch --tags origin
+    git -C "${REPO_ROOT}/${name}" checkout "v${version}"
+
+    git add "${name}"
+}
+
+update_submodules() {
     local version="$1"
-    echo "[sync] Updating jellyfin submodule to v${version}..."
-
-    git submodule update --init jellyfin
-    git -C "${REPO_ROOT}/jellyfin" fetch --tags origin
-    git -C "${REPO_ROOT}/jellyfin" checkout "v${version}"
-
-    git add jellyfin
+    update_submodule jellyfin "${version}"
+    if [[ -d "${REPO_ROOT}/jellyfin-web/.git" ]] || [[ -f "${REPO_ROOT}/jellyfin-web/.git" ]]; then
+        update_submodule jellyfin-web "${version}"
+    else
+        echo "[sync] WARNING: jellyfin-web submodule missing; skipped (server and web should share the same tag)." >&2
+    fi
 }
 
 get_submodule_commit() {
     git -C "${REPO_ROOT}/jellyfin" rev-parse HEAD
+}
+
+verify_patches() {
+    local target="$1"
+    echo "[sync] Verifying ${target} patches apply on v${TARGET_VERSION}..."
+    if ! bash "${SCRIPT_DIR}/apply-patches.sh" "${target}"; then
+        local hint="Rebase matching files under \`patches/\` onto v${TARGET_VERSION}, then re-run sync."
+        if [[ "${target}" == "jellyfin-web" ]]; then
+            hint="Rebase \`patches/jellyfin_web*.patch\` onto v${TARGET_VERSION}, then re-run sync."
+        else
+            hint="Rebase \`patches/jellyfin_*.patch\` (excluding jellyfin_web*) onto v${TARGET_VERSION}, then re-run sync."
+        fi
+        fail_sync "apply-patches" \
+            "Patches for \`${target}\` failed to apply on v${TARGET_VERSION}." \
+            "${hint}"
+    fi
+    reset_submodule_clean "${target}"
 }
 
 get_latest_pg_migration() {
@@ -498,16 +551,27 @@ LATEST_CORE="$(latest_migration_id "${LATEST_CORE_FILE}")"
 echo "[sync] Latest core migration: ${LATEST_CORE}"
 echo "[sync] State core migration:   ${STATE_CORE}"
 
+HAS_NEW_CORE_MIGRATIONS=false
+if migration_gt "${LATEST_CORE}" "${STATE_CORE}"; then
+    HAS_NEW_CORE_MIGRATIONS=true
+fi
+
 NEEDS_SYNC=false
 if version_gt "${TARGET_VERSION}" "${STATE_VERSION}"; then
     NEEDS_SYNC=true
     echo "[sync] New Jellyfin release detected (${STATE_VERSION} -> ${TARGET_VERSION})"
-elif migration_gt "${LATEST_CORE}" "${STATE_CORE}"; then
+elif [[ "${HAS_NEW_CORE_MIGRATIONS}" == "true" ]]; then
     NEEDS_SYNC=true
     echo "[sync] New core migrations detected (${STATE_CORE} -> ${LATEST_CORE})"
 elif [[ "${TARGET_VERSION}" != "${STATE_VERSION}" ]]; then
     NEEDS_SYNC=true
     echo "[sync] Version mismatch without newer core migrations"
+fi
+
+if [[ "${HAS_NEW_CORE_MIGRATIONS}" == "true" ]]; then
+    echo "[sync] Will generate Update_* migration (core migrations advanced)."
+else
+    echo "[sync] No new core migrations — will bump refs/submodules and verify patches only (skip EF)."
 fi
 
 if [[ "${NEEDS_SYNC}" == "false" ]] && [[ "${FORCE}" == "false" ]]; then
@@ -518,6 +582,11 @@ fi
 if [[ "${DRY_RUN}" == "true" ]]; then
     compute_plugin_stack "${TARGET_VERSION}" || exit 1
     echo "[sync] Dry run: would sync to ${TARGET_VERSION} (NuGet ${RESOLVED_NUGET_VERSION}, TFM ${RESOLVED_PLUGIN_TFM}, core: ${LATEST_CORE})"
+    if [[ "${HAS_NEW_CORE_MIGRATIONS}" == "true" ]]; then
+        echo "[sync] Dry run: would generate Update_${TARGET_VERSION//./_} (core migrations advanced)."
+    else
+        echo "[sync] Dry run: would skip EF migration generation (no new core migrations)."
+    fi
     if ! preflight_check "${TARGET_VERSION}"; then
         echo "[sync] Dry run: pre-flight failed — no changes were made."
         exit 1
@@ -538,86 +607,116 @@ rm -f "${WARNINGS_FILE}" "${SYNC_REPORT}" "${REPO_ROOT}/.sync-empty-migration"
 echo "# Migration sync report for Jellyfin ${TARGET_VERSION}" > "${SYNC_REPORT}"
 echo "" >> "${SYNC_REPORT}"
 echo "## New core migrations since last sync" >> "${SYNC_REPORT}"
+NEW_CORE_COUNT=0
 while IFS= read -r file; do
     id="${file%.cs}"
     if migration_gt "${id}" "${STATE_CORE}"; then
         echo "- ${file}" >> "${SYNC_REPORT}"
+        NEW_CORE_COUNT=$((NEW_CORE_COUNT + 1))
     fi
 done <<< "${CORE_MIGRATIONS}"
+if [[ "${NEW_CORE_COUNT}" -eq 0 ]]; then
+    echo "- (none)" >> "${SYNC_REPORT}"
+fi
 
 begin_sync_backup
 SYNC_STAGE="bump-versions"
 bump_version_refs "${TARGET_VERSION}"
 SYNC_STAGE="update-submodule"
-update_submodule "${TARGET_VERSION}"
+update_submodules "${TARGET_VERSION}"
 SUBMODULE_COMMIT="$(get_submodule_commit)"
 
+# Verify patches on the new tag with a clean tree, then reset. Patch schema must
+# live in dedicated plugin migrations — never rely on Update_* to capture it.
 SYNC_STAGE="apply-patches"
-echo "[sync] Applying jellyfin patches..."
-bash "${SCRIPT_DIR}/apply-patches.sh" jellyfin
+verify_patches jellyfin
+if [[ -d "${REPO_ROOT}/jellyfin-web/.git" ]] || [[ -f "${REPO_ROOT}/jellyfin-web/.git" ]]; then
+    verify_patches jellyfin-web
+fi
 
-SYNC_STAGE="restore-packages"
-echo "[sync] Restoring packages..."
-dotnet tool restore
-dotnet restore "${REPO_ROOT}/Jellyfin.Plugin.Pgsql.sln"
+PG_MIGRATION="$(get_latest_pg_migration)"
 
-MIGRATION_NAME="Update_${TARGET_VERSION//./_}"
-SYNC_STAGE="generate-migration"
-echo "[sync] Generating migration: ${MIGRATION_NAME}..."
+if [[ "${HAS_NEW_CORE_MIGRATIONS}" == "true" ]]; then
+    # Re-apply server patches so the design-time model still includes fork entities
+    # (PlaybackActivity, ProviderKey, etc.). Diff against the existing snapshot should
+    # then be upstream-only, assuming patch schema already has dedicated PG migrations.
+    SYNC_STAGE="apply-patches"
+    echo "[sync] Re-applying jellyfin patches for EF model generation..."
+    bash "${SCRIPT_DIR}/apply-patches.sh" jellyfin
 
-ef_output=""
-if ! ef_output="$(dotnet ef migrations add "${MIGRATION_NAME}" \
-    --project "${PROJECT}" \
-    -- --migration-provider Jellyfin-PgSql 2>&1)"; then
-    build_output="$(dotnet build "${PROJECT}" 2>&1 || true)"
-    fail_sync "generate-migration" \
-        "EF Core failed to generate migration \`${MIGRATION_NAME}\`." \
-        "${ef_output}
+    SYNC_STAGE="restore-packages"
+    echo "[sync] Restoring packages..."
+    dotnet tool restore
+    dotnet restore "${REPO_ROOT}/Jellyfin.Plugin.Pgsql.sln"
+
+    MIGRATION_NAME="Update_${TARGET_VERSION//./_}"
+    SYNC_STAGE="generate-migration"
+    echo "[sync] Generating migration: ${MIGRATION_NAME}..."
+
+    ef_output=""
+    if ! ef_output="$(dotnet ef migrations add "${MIGRATION_NAME}" \
+        --project "${PROJECT}" \
+        -- --migration-provider Jellyfin-PgSql 2>&1)"; then
+        build_output="$(dotnet build "${PROJECT}" 2>&1 || true)"
+        fail_sync "generate-migration" \
+            "EF Core failed to generate migration \`${MIGRATION_NAME}\`." \
+            "${ef_output}
 
 --- dotnet build ---
 
 ${build_output}"
-fi
+    fi
 
-SYNC_STAGE="postprocess"
-bash "${SCRIPT_DIR}/postprocess-migration.sh" "${WARNINGS_FILE}"
-remove_empty_migration
+    SYNC_STAGE="postprocess"
+    bash "${SCRIPT_DIR}/postprocess-migration.sh" "${WARNINGS_FILE}"
+    remove_empty_migration
 
-SYNC_STAGE="check-model"
-pending_output=""
-if pending_output="$(dotnet ef migrations has-pending-model-changes \
-    --project "${PROJECT}" \
-    -- --migration-provider Jellyfin-PgSql 2>&1)"; then
-    :
+    SYNC_STAGE="check-model"
+    pending_output=""
+    if pending_output="$(dotnet ef migrations has-pending-model-changes \
+        --project "${PROJECT}" \
+        -- --migration-provider Jellyfin-PgSql 2>&1)"; then
+        :
+    else
+        fail_sync "check-model" \
+            "EF model does not match the migration snapshot after post-processing." \
+            "${pending_output}"
+    fi
+
+    if [[ -f "${WARNINGS_FILE}" ]]; then
+        echo "" >> "${SYNC_REPORT}"
+        echo "## Warnings" >> "${SYNC_REPORT}"
+        cat "${WARNINGS_FILE}" >> "${SYNC_REPORT}"
+    fi
+
+    SYNC_STAGE="validate"
+    if ! validate_output="$(bash "${SCRIPT_DIR}/validate-migrations.sh" 2>&1)"; then
+        fail_sync "validate" "Migration validation failed." "${validate_output}"
+    fi
+
+    PG_MIGRATION="$(get_latest_pg_migration)"
+
+    # Patches are only needed for the build; restore a clean submodule tree for the PR.
+    reset_submodule_clean jellyfin
 else
-    fail_sync "check-model" \
-        "EF model does not match the migration snapshot after post-processing." \
-        "${pending_output}"
-fi
-
-if [[ -f "${WARNINGS_FILE}" ]]; then
+    echo "[sync] Skipping EF migration generation (no new core migrations)."
     echo "" >> "${SYNC_REPORT}"
-    echo "## Warnings" >> "${SYNC_REPORT}"
-    cat "${WARNINGS_FILE}" >> "${SYNC_REPORT}"
+    echo "## EF migration" >> "${SYNC_REPORT}"
+    echo "- Skipped: latest core migration unchanged (\`${LATEST_CORE}\`)." >> "${SYNC_REPORT}"
+    echo "- Patch schema is not folded into \`Update_*\`; use dedicated plugin migrations for fork entities." >> "${SYNC_REPORT}"
 fi
 
-SYNC_STAGE="validate"
-if ! validate_output="$(bash "${SCRIPT_DIR}/validate-migrations.sh" 2>&1)"; then
-    fail_sync "validate" "Migration validation failed." "${validate_output}"
-fi
-
-PG_MIGRATION="$(get_latest_pg_migration)"
 write_state "${TARGET_VERSION}" "${LATEST_CORE}" "${PG_MIGRATION}" "${SUBMODULE_COMMIT}"
-
-# Patches are only needed for the build; restore a clean submodule tree for the PR.
-git -C "${REPO_ROOT}/jellyfin" reset --hard HEAD >/dev/null
-git -C "${REPO_ROOT}/jellyfin" clean -fd >/dev/null
 
 echo "" >> "${SYNC_REPORT}"
 echo "## Result" >> "${SYNC_REPORT}"
 echo "- Submodule: v${TARGET_VERSION} (${SUBMODULE_COMMIT})" >> "${SYNC_REPORT}"
 echo "- PostgreSQL migration: ${PG_MIGRATION}" >> "${SYNC_REPORT}"
-echo "- Validation: passed" >> "${SYNC_REPORT}"
+if [[ "${HAS_NEW_CORE_MIGRATIONS}" == "true" ]]; then
+    echo "- Validation: passed" >> "${SYNC_REPORT}"
+else
+    echo "- Validation: skipped (no new migration)" >> "${SYNC_REPORT}"
+fi
 
 SYNC_STARTED=false
 rm -rf "${SYNC_BACKUP_DIR}"

@@ -1,7 +1,7 @@
-diff --git a/src/apps/stable/features/search/api/useSeerrSearch.ts b/src/apps/stable/features/search/api/useSeerrSearch.ts
+diff --git a/src/apps/legacy/features/search/api/useSeerrSearch.ts b/src/apps/legacy/features/search/api/useSeerrSearch.ts
 index 2f992a03d3..3b6e24814c 100644
---- a/src/apps/stable/features/search/api/useSeerrSearch.ts
-+++ b/src/apps/stable/features/search/api/useSeerrSearch.ts
+--- a/src/apps/legacy/features/search/api/useSeerrSearch.ts
++++ b/src/apps/legacy/features/search/api/useSeerrSearch.ts
 @@ -6,16 +6,18 @@ import {
      requestSeerrMedia
  } from 'lib/seerr/seerrApi';
@@ -36,10 +36,10 @@ index 2f992a03d3..3b6e24814c 100644
          retry: false
      });
  };
-diff --git a/src/apps/stable/features/search/components/SearchResults.tsx b/src/apps/stable/features/search/components/SearchResults.tsx
+diff --git a/src/apps/legacy/features/search/components/SearchResults.tsx b/src/apps/legacy/features/search/components/SearchResults.tsx
 index 093f59760a..64d6323cda 100644
---- a/src/apps/stable/features/search/components/SearchResults.tsx
-+++ b/src/apps/stable/features/search/components/SearchResults.tsx
+--- a/src/apps/legacy/features/search/components/SearchResults.tsx
++++ b/src/apps/legacy/features/search/components/SearchResults.tsx
 @@ -10,6 +10,7 @@ import { CardShape } from 'components/cardbuilder/utils/shape';
  import { CollectionType } from '@jellyfin/sdk/lib/generated-client/models/collection-type';
  import { Section } from '../types';
@@ -82,10 +82,10 @@ index 093f59760a..64d6323cda 100644
                  <SeerrRequestResults items={seerrItems} />
              )}
              {isFetchingNextPage && <Loading />}
-diff --git a/src/apps/stable/routes/routes.tsx b/src/apps/stable/routes/routes.tsx
-index 3174798293..878990ac47 100644
---- a/src/apps/stable/routes/routes.tsx
-+++ b/src/apps/stable/routes/routes.tsx
+diff --git a/src/apps/legacy/routes/routes.tsx b/src/apps/legacy/routes/routes.tsx
+index 970a45c33f..09f15d9acc 100644
+--- a/src/apps/legacy/routes/routes.tsx
++++ b/src/apps/legacy/routes/routes.tsx
 @@ -6,11 +6,25 @@ import { toAsyncPageRoute } from 'components/router/AsyncRoute';
  import { toViewManagerPageRoute } from 'components/router/LegacyRoute';
  import ErrorBoundary from 'components/router/ErrorBoundary';
@@ -110,9 +110,9 @@ index 3174798293..878990ac47 100644
 +    ? [{ path: 'search', Component: SearchPage }]
 +    : [];
  
- export const STABLE_APP_ROUTES: RouteObject[] = [
+ export const APP_ROUTES: RouteObject[] = [
      {
-@@ -23,7 +37,8 @@ export const STABLE_APP_ROUTES: RouteObject[] = [
+@@ -23,7 +37,8 @@ export const APP_ROUTES: RouteObject[] = [
                  /* User routes */
                  Component: ConnectionRequired,
                  children: [
@@ -123,17 +123,17 @@ index 3174798293..878990ac47 100644
                  ],
                  ErrorBoundary
 diff --git a/src/components/homesections/homesections.js b/src/components/homesections/homesections.js
-index df1a88c10e..80c507947f 100644
+index 99c40dc826..87a34dc1e4 100644
 --- a/src/components/homesections/homesections.js
 +++ b/src/components/homesections/homesections.js
-@@ -2,6 +2,7 @@ import layoutManager from 'components/layoutManager';
- import { DEFAULT_SECTIONS, HomeSectionType } from 'constants/homeSectionType';
+@@ -3,6 +3,7 @@ import { DEFAULT_SECTIONS, HomeSectionType } from 'constants/homeSectionType';
  import { getUserViewsQuery } from 'hooks/api/useUserViews';
  import globalize from 'lib/globalize';
+ import ServerConnections from 'lib/jellyfin-apiclient/ServerConnections';
 +import { isTvClient } from 'scripts/isTvClient';
  import Dashboard from 'utils/dashboard';
- import { toApi } from 'utils/jellyfin-apiclient/compat';
  import { queryClient } from 'utils/query/queryClient';
+ 
 @@ -24,8 +25,10 @@ import 'elements/emby-button/emby-button';
  import './homesections.scss';
  
@@ -197,7 +197,7 @@ index df1a88c10e..80c507947f 100644
      return sections;
  }
  
-@@ -70,7 +81,7 @@ export function loadSections(elem, apiClient, user, userSettings) {
+@@ -71,7 +82,7 @@ export function loadSections(elem, apiClient, user, userSettings) {
  
              if (userViews.length) {
                  const sectionsToShow = getAllSectionsToShow(userSettings);
@@ -252,7 +252,7 @@ index 0000000000..712f6c91da
 +
 +export default isTvClient;
 diff --git a/src/scripts/settings/userSettings.js b/src/scripts/settings/userSettings.js
-index 7b9babf816..d4098bcf54 100644
+index caa049b4d3..409e52ba94 100644
 --- a/src/scripts/settings/userSettings.js
 +++ b/src/scripts/settings/userSettings.js
 @@ -8,6 +8,7 @@ import { queryClient } from 'utils/query/queryClient';
@@ -263,7 +263,7 @@ index 7b9babf816..d4098bcf54 100644
  import appSettings from './appSettings';
  
  const DISPLAY_PREFERENCES_ID = 'usersettings';
-@@ -539,6 +540,11 @@ export class UserSettings {
+@@ -541,6 +542,11 @@ export class UserSettings {
              return this.set('enableInfiniteScroll', val.toString(), false);
          }
  

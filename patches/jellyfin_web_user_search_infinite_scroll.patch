@@ -1,7 +1,7 @@
-diff --git a/src/apps/stable/features/search/api/useSearchItems.ts b/src/apps/stable/features/search/api/useSearchItems.ts
+diff --git a/src/apps/legacy/features/search/api/useSearchItems.ts b/src/apps/legacy/features/search/api/useSearchItems.ts
 index 5a23dcb63a..81e72ce47f 100644
---- a/src/apps/stable/features/search/api/useSearchItems.ts
-+++ b/src/apps/stable/features/search/api/useSearchItems.ts
+--- a/src/apps/legacy/features/search/api/useSearchItems.ts
++++ b/src/apps/legacy/features/search/api/useSearchItems.ts
 @@ -1,9 +1,10 @@
  import { BaseItemKind } from '@jellyfin/sdk/lib/generated-client/models/base-item-kind';
  import type { BaseItemDto } from '@jellyfin/sdk/lib/generated-client/models/base-item-dto';
@@ -174,10 +174,10 @@ index 5a23dcb63a..81e72ce47f 100644
  
              return sortSections(sections);
          },
-diff --git a/src/apps/stable/features/search/components/SearchResults.tsx b/src/apps/stable/features/search/components/SearchResults.tsx
+diff --git a/src/apps/legacy/features/search/components/SearchResults.tsx b/src/apps/legacy/features/search/components/SearchResults.tsx
 index af7ba3d52f..093f59760a 100644
---- a/src/apps/stable/features/search/components/SearchResults.tsx
-+++ b/src/apps/stable/features/search/components/SearchResults.tsx
+--- a/src/apps/legacy/features/search/components/SearchResults.tsx
++++ b/src/apps/legacy/features/search/components/SearchResults.tsx
 @@ -1,4 +1,4 @@
 -import React, { type FC } from 'react';
 +import React, { type FC, useEffect } from 'react';

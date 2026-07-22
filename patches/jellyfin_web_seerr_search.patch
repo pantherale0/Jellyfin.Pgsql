@@ -229,8 +229,8 @@
 +
 +    return ids;
 +}
---- a/src/apps/stable/features/search/api/seerrTypes.ts
-+++ b/src/apps/stable/features/search/api/seerrTypes.ts
+--- a/src/apps/legacy/features/search/api/seerrTypes.ts
++++ b/src/apps/legacy/features/search/api/seerrTypes.ts
 @@ -0,0 +1,11 @@
 +export {
 +    type SeerrMediaStatus,
@@ -243,8 +243,8 @@
 +    normalizeSeerrSearchItem,
 +    getSeerrSearchItems
 +} from 'lib/seerr/seerrTypes';
---- a/src/apps/stable/features/search/api/useSeerrSearch.ts
-+++ b/src/apps/stable/features/search/api/useSeerrSearch.ts
+--- a/src/apps/legacy/features/search/api/useSeerrSearch.ts
++++ b/src/apps/legacy/features/search/api/useSeerrSearch.ts
 @@ -0,0 +1,35 @@
 +import { useQuery } from '@tanstack/react-query';
 +import { useApi } from 'hooks/useApi';
@@ -281,8 +281,8 @@
 +        retry: false
 +    });
 +};
---- a/src/apps/stable/features/search/components/SeerrRequestResults.tsx
-+++ b/src/apps/stable/features/search/components/SeerrRequestResults.tsx
+--- a/src/apps/legacy/features/search/components/SeerrRequestResults.tsx
++++ b/src/apps/legacy/features/search/components/SeerrRequestResults.tsx
 @@ -0,0 +1,117 @@
 +import React, { type FC, useCallback, useState } from 'react';
 +import globalize from 'lib/globalize';
@@ -401,8 +401,8 @@
 +};
 +
 +export default SeerrRequestResults;
---- a/src/apps/stable/features/search/components/seerrRequestResults.scss
-+++ b/src/apps/stable/features/search/components/seerrRequestResults.scss
+--- a/src/apps/legacy/features/search/components/seerrRequestResults.scss
++++ b/src/apps/legacy/features/search/components/seerrRequestResults.scss
 @@ -0,0 +1,75 @@
 +.seerrRequestList {
 +    display: flex;
@@ -479,8 +479,8 @@
 +        width: 100%;
 +    }
 +}
---- a/src/apps/stable/features/search/components/SearchResults.tsx
-+++ b/src/apps/stable/features/search/components/SearchResults.tsx
+--- a/src/apps/legacy/features/search/components/SearchResults.tsx
++++ b/src/apps/legacy/features/search/components/SearchResults.tsx
 @@ -1,8 +1,11 @@
  import React, { type FC } from 'react';
  import { useSearchItems } from '../api/useSearchItems';
