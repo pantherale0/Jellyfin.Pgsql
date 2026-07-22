@@ -9,7 +9,7 @@ index 0000000000..47c7c2ff08
 +import { ItemFields } from '@jellyfin/sdk/lib/generated-client/models/item-fields';
 +import { useQuery } from '@tanstack/react-query';
 +
-+import { getRecordingsQuery } from 'apps/stable/features/liveTv/api/useRecordings';
++import { getRecordingsQuery } from 'apps/legacy/features/liveTv/api/useRecordings';
 +import Cards from 'components/cardbuilder/Card/Cards';
 +import { CardShape } from 'components/cardbuilder/utils/shape';
 +import { ItemAction } from 'constants/itemAction';

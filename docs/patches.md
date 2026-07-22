@@ -347,7 +347,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **What** | Dashboard widget listing active Live TV recordings. |
 | **Why** | Operators need at-a-glance recording status on the home dashboard. |
 | **Where** | `ActiveRecordingsWidget.tsx`, dashboard `index.tsx` |
-| **How** | Widget fetches recording status and renders on dashboard. |
+| **How** | Widget fetches in-progress recordings via `apps/legacy/.../useRecordings` and renders on the dashboard. |
 | **Related** | No public issue. |
 
 ---
