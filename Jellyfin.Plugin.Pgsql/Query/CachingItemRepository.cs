@@ -7,6 +7,7 @@ using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Model.Dto;
+using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Querying;
 using Microsoft.Extensions.Logging;
 
@@ -183,6 +184,10 @@ internal sealed class CachingItemRepository : IItemRepository
 
     /// <inheritdoc/>
     public IReadOnlyList<string> GetAllArtistNames() => _inner.GetAllArtistNames();
+
+    /// <inheritdoc/>
+    public IReadOnlyList<string> GetMediaStreamLanguages(InternalItemsQuery filter, MediaStreamType mediaStreamType)
+        => _inner.GetMediaStreamLanguages(filter, mediaStreamType);
 
     /// <inheritdoc/>
     public QueryFiltersLegacy GetQueryFiltersLegacy(InternalItemsQuery filter) => _inner.GetQueryFiltersLegacy(filter);

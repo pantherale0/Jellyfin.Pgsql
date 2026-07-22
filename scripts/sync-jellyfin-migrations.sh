@@ -44,6 +44,8 @@ Notes:
   Update_* migrations are generated only when Jellyfin's SQLite migration set advances.
   Tag-only bumps (same latest core migration) update refs/submodules and verify patches,
   but do not run EF — patch schema belongs in dedicated plugin migrations, not Update_*.
+  Every sync still applies server patches and builds the solution so new Jellyfin API
+  surface (interface members, etc.) is caught even when no Update_* is generated.
 EOF
 }
 
@@ -455,6 +457,7 @@ get_submodule_commit() {
 
 verify_patches() {
     local target="$1"
+    local keep_applied="${2:-false}"
     echo "[sync] Verifying ${target} patches apply on v${TARGET_VERSION}..."
     if ! bash "${SCRIPT_DIR}/apply-patches.sh" "${target}"; then
         local hint="Rebase matching files under \`patches/\` onto v${TARGET_VERSION}, then re-run sync."
@@ -467,7 +470,20 @@ verify_patches() {
             "Patches for \`${target}\` failed to apply on v${TARGET_VERSION}." \
             "${hint}"
     fi
-    reset_submodule_clean "${target}"
+    if [[ "${keep_applied}" != "true" ]]; then
+        reset_submodule_clean "${target}"
+    fi
+}
+
+verify_solution_build() {
+    echo "[sync] Building solution against patched jellyfin (API surface check)..."
+    local build_output
+    if ! build_output="$(dotnet build "${REPO_ROOT}/Jellyfin.Plugin.Pgsql.sln" -c Release --no-restore 2>&1)"; then
+        fail_sync "build" \
+            "Solution failed to build against Jellyfin v${TARGET_VERSION}. Fix plugin/test compile breaks (new interface members, etc.), then re-run sync." \
+            "${build_output}"
+    fi
+    echo "[sync] Solution build passed."
 }
 
 get_latest_pg_migration() {
@@ -587,6 +603,7 @@ if [[ "${DRY_RUN}" == "true" ]]; then
     else
         echo "[sync] Dry run: would skip EF migration generation (no new core migrations)."
     fi
+    echo "[sync] Dry run: would apply patches and build the solution (API surface check)."
     if ! preflight_check "${TARGET_VERSION}"; then
         echo "[sync] Dry run: pre-flight failed — no changes were made."
         exit 1
@@ -626,29 +643,28 @@ SYNC_STAGE="update-submodule"
 update_submodules "${TARGET_VERSION}"
 SUBMODULE_COMMIT="$(get_submodule_commit)"
 
-# Verify patches on the new tag with a clean tree, then reset. Patch schema must
-# live in dedicated plugin migrations — never rely on Update_* to capture it.
+# Apply server patches and keep them for the solution build / optional EF generation.
+# Patch schema must live in dedicated plugin migrations — never rely on Update_* to capture it.
 SYNC_STAGE="apply-patches"
-verify_patches jellyfin
+verify_patches jellyfin true
 if [[ -d "${REPO_ROOT}/jellyfin-web/.git" ]] || [[ -f "${REPO_ROOT}/jellyfin-web/.git" ]]; then
     verify_patches jellyfin-web
 fi
 
+SYNC_STAGE="restore-packages"
+echo "[sync] Restoring packages..."
+dotnet tool restore
+dotnet restore "${REPO_ROOT}/Jellyfin.Plugin.Pgsql.sln"
+
+SYNC_STAGE="build"
+verify_solution_build
+echo "" >> "${SYNC_REPORT}"
+echo "## Build" >> "${SYNC_REPORT}"
+echo "- Solution build against patched jellyfin v${TARGET_VERSION}: passed" >> "${SYNC_REPORT}"
+
 PG_MIGRATION="$(get_latest_pg_migration)"
 
 if [[ "${HAS_NEW_CORE_MIGRATIONS}" == "true" ]]; then
-    # Re-apply server patches so the design-time model still includes fork entities
-    # (PlaybackActivity, ProviderKey, etc.). Diff against the existing snapshot should
-    # then be upstream-only, assuming patch schema already has dedicated PG migrations.
-    SYNC_STAGE="apply-patches"
-    echo "[sync] Re-applying jellyfin patches for EF model generation..."
-    bash "${SCRIPT_DIR}/apply-patches.sh" jellyfin
-
-    SYNC_STAGE="restore-packages"
-    echo "[sync] Restoring packages..."
-    dotnet tool restore
-    dotnet restore "${REPO_ROOT}/Jellyfin.Plugin.Pgsql.sln"
-
     MIGRATION_NAME="Update_${TARGET_VERSION//./_}"
     SYNC_STAGE="generate-migration"
     echo "[sync] Generating migration: ${MIGRATION_NAME}..."
@@ -695,9 +711,6 @@ ${build_output}"
     fi
 
     PG_MIGRATION="$(get_latest_pg_migration)"
-
-    # Patches are only needed for the build; restore a clean submodule tree for the PR.
-    reset_submodule_clean jellyfin
 else
     echo "[sync] Skipping EF migration generation (no new core migrations)."
     echo "" >> "${SYNC_REPORT}"
@@ -706,16 +719,20 @@ else
     echo "- Patch schema is not folded into \`Update_*\`; use dedicated plugin migrations for fork entities." >> "${SYNC_REPORT}"
 fi
 
+# Patches are only needed for the build; restore a clean submodule tree for the PR.
+reset_submodule_clean jellyfin
+
 write_state "${TARGET_VERSION}" "${LATEST_CORE}" "${PG_MIGRATION}" "${SUBMODULE_COMMIT}"
 
 echo "" >> "${SYNC_REPORT}"
 echo "## Result" >> "${SYNC_REPORT}"
 echo "- Submodule: v${TARGET_VERSION} (${SUBMODULE_COMMIT})" >> "${SYNC_REPORT}"
 echo "- PostgreSQL migration: ${PG_MIGRATION}" >> "${SYNC_REPORT}"
+echo "- Build: passed" >> "${SYNC_REPORT}"
 if [[ "${HAS_NEW_CORE_MIGRATIONS}" == "true" ]]; then
     echo "- Validation: passed" >> "${SYNC_REPORT}"
 else
-    echo "- Validation: skipped (no new migration)" >> "${SYNC_REPORT}"
+    echo "- Migration validation: skipped (no new migration)" >> "${SYNC_REPORT}"
 fi
 
 SYNC_STARTED=false

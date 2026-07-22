@@ -173,6 +173,8 @@ public sealed class SeerrParentalFilterTests
 
         public CultureDto? FindLanguageInfo(string language) => null;
 
+        public string? GetLanguageDisplayName(string language) => null;
+
         public bool TryGetISO6392TFromB(string isoB, [NotNullWhen(true)] out string? isoT)
         {
             isoT = null;
