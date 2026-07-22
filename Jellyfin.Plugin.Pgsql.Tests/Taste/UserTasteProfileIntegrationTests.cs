@@ -265,12 +265,12 @@ public sealed class UserTasteProfileIntegrationTests
         var factory = new TestDbContextFactory(_fixture.ConnectionString);
         await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
 
-        var plainUser = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000im01");
-        var recUser = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000im02");
-        var movieA = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000im11");
-        var movieB = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000im12");
-        var movieC = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000im13");
-        var genreId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000ima1");
+        var plainUser = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000c101");
+        var recUser = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000c102");
+        var movieA = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000c111");
+        var movieB = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000c112");
+        var movieC = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000c113");
+        var genreId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000c1a1");
 
         Guid[] users = [plainUser, recUser];
         Guid[] items = [movieA, movieB, movieC];
@@ -343,8 +343,8 @@ public sealed class UserTasteProfileIntegrationTests
         var factory = new TestDbContextFactory(_fixture.ConnectionString);
         await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
 
-        var abandonOnlyUser = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000ao01");
-        var movieId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000ao11");
+        var abandonOnlyUser = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000ae01");
+        var movieId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000ae11");
         var runtime = TimeSpan.FromHours(2).Ticks;
 
         await dbContext.UserData.Where(u => u.UserId == abandonOnlyUser).ExecuteDeleteAsync().ConfigureAwait(false);
