@@ -1,0 +1,61 @@
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/UserTasteRecommendationImpression.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/UserTasteRecommendationImpression.cs
+new file mode 100644
+index 0000000000..1111111111
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/UserTasteRecommendationImpression.cs
+@@ -0,0 +1,39 @@
++using System;
++
++namespace Jellyfin.Database.Implementations.Entities;
++
++/// <summary>
++/// Records that a For You recommendation was served to a user (impression).
++/// </summary>
++public class UserTasteRecommendationImpression
++{
++    /// <summary>
++    /// Gets or sets the unique identifier.
++    /// </summary>
++    public Guid Id { get; set; }
++
++    /// <summary>
++    /// Gets or sets the user identifier.
++    /// </summary>
++    public Guid UserId { get; set; }
++
++    /// <summary>
++    /// Gets or sets the recommended item identifier.
++    /// </summary>
++    public Guid ItemId { get; set; }
++
++    /// <summary>
++    /// Gets or sets the item kind name (<c>Movie</c> or <c>Series</c>).
++    /// </summary>
++    public string ItemType { get; set; } = string.Empty;
++
++    /// <summary>
++    /// Gets or sets the 0-based display rank when served.
++    /// </summary>
++    public int Rank { get; set; }
++
++    /// <summary>
++    /// Gets or sets when the impression was recorded (UTC).
++    /// </summary>
++    public DateTime ServedAt { get; set; }
++}
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
+index 3333333333..4444444444 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
+@@ -199,6 +199,11 @@
+     /// </summary>
+     public DbSet<UserTasteRecommendation> UserTasteRecommendations => Set<UserTasteRecommendation>();
+ 
++    /// <summary>
++    /// Gets the <see cref="DbSet{TEntity}"/> containing For You recommendation impressions.
++    /// </summary>
++    public DbSet<UserTasteRecommendationImpression> UserTasteRecommendationImpressions => Set<UserTasteRecommendationImpression>();
++
+     /*public DbSet<Artwork> Artwork => Set<Artwork>();
+ 
+     public DbSet<Book> Books => Set<Book>();

@@ -67,53 +67,65 @@ public sealed class TasteShadowNeuralTrainer
         }
 
         var examples = new List<TasteExample>();
+        var now = DateTime.UtcNow;
+        var lookbackDays = TasteOptions.Current.LookbackDays;
+        var cutoff = now.AddDays(-lookbackDays);
+
         foreach (var profile in profiles)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var payload = UserTasteProfileBuilder.DeserializeFeatures(profile.FeaturesJson);
-            var positiveIds = await LoadPositiveMediaIdsAsync(
+            var labeled = await LoadLabeledMediaAsync(
                     context,
                     profile.UserId,
                     movieType,
                     seriesType,
                     episodeType,
+                    cutoff,
+                    now,
                     cancellationToken)
                 .ConfigureAwait(false);
 
-            if (positiveIds.Count == 0)
+            if (labeled.Count == 0)
             {
                 continue;
             }
 
-            var positiveSet = positiveIds.ToHashSet();
+            var labeledSet = labeled.Select(l => l.ItemId).ToHashSet();
+            var positiveCount = labeled.Count(l => l.IsPositive);
+            var negativeNeeded = Math.Max(positiveCount, 5);
             var movieNegatives = await context.BaseItems.AsNoTracking()
-                .Where(i => i.Type == movieType && !positiveSet.Contains(i.Id))
+                .Where(i => i.Type == movieType && !labeledSet.Contains(i.Id))
                 .OrderBy(i => i.Id)
                 .Select(i => i.Id)
-                .Take(Math.Max(positiveIds.Count, 5))
+                .Take(negativeNeeded)
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
             var seriesNegatives = await context.BaseItems.AsNoTracking()
-                .Where(i => i.Type == seriesType && !positiveSet.Contains(i.Id))
+                .Where(i => i.Type == seriesType && !labeledSet.Contains(i.Id))
                 .OrderBy(i => i.Id)
                 .Select(i => i.Id)
-                .Take(Math.Max(positiveIds.Count, 5))
+                .Take(negativeNeeded)
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
-            var negatives = movieNegatives.Concat(seriesNegatives).Distinct().ToList();
+            var catalogNegatives = movieNegatives.Concat(seriesNegatives).Distinct().ToList();
 
-            var allIds = positiveIds.Concat(negatives).Distinct().ToList();
+            var allIds = labeled.Select(l => l.ItemId).Concat(catalogNegatives).Distinct().ToList();
             var featuresByItem = await LoadCandidateFeaturesAsync(context, allIds, cancellationToken)
                 .ConfigureAwait(false);
 
-            foreach (var id in positiveIds.Where(featuresByItem.ContainsKey))
+            foreach (var row in labeled.Where(l => featuresByItem.ContainsKey(l.ItemId)))
             {
-                examples.Add(ToExample(payload, featuresByItem[id], label: true));
+                examples.Add(ToExample(payload, featuresByItem[row.ItemId], row.IsPositive, row.Weight));
             }
 
-            foreach (var id in negatives.Where(featuresByItem.ContainsKey))
+            foreach (var id in catalogNegatives.Where(featuresByItem.ContainsKey))
             {
-                examples.Add(ToExample(payload, featuresByItem[id], label: false));
+                examples.Add(ToExample(
+                    payload,
+                    featuresByItem[id],
+                    label: false,
+                    weight: TasteEngagementWeights.NeuralCatalogNegativeWeight));
             }
         }
 
@@ -151,7 +163,8 @@ public sealed class TasteShadowNeuralTrainer
                 nameof(TasteExample.RatingDistance))
             .Append(mlContext.BinaryClassification.Trainers.SdcaLogisticRegression(
                 labelColumnName: nameof(TasteExample.Label),
-                featureColumnName: "Features"));
+                featureColumnName: "Features",
+                exampleWeightColumnName: nameof(TasteExample.Weight)));
 
         var model = pipeline.Fit(trainData);
         Directory.CreateDirectory(modelDirectory);
@@ -188,7 +201,7 @@ public sealed class TasteShadowNeuralTrainer
             Auc = metrics.AreaUnderRocCurve,
             PrecisionAt10 = precisionAt10,
             ModelPath = fileName,
-            Notes = null
+            Notes = "Weighted training (completion + For You impressions)"
         };
 
         context.TasteModelEvalRuns.Add(run);
@@ -208,39 +221,48 @@ public sealed class TasteShadowNeuralTrainer
         return run;
     }
 
-    private static async Task<List<Guid>> LoadPositiveMediaIdsAsync(
+    private static async Task<List<LabeledMedia>> LoadLabeledMediaAsync(
         JellyfinDbContext context,
         Guid userId,
         string movieType,
         string seriesType,
         string episodeType,
+        DateTime cutoff,
+        DateTime nowUtc,
         CancellationToken cancellationToken)
     {
-        var movieIds = await context.UserData.AsNoTracking()
-            .Where(ud => ud.UserId == userId
-                && (ud.IsFavorite || ud.Likes == true || ud.Played || ud.PlayCount > 0))
-            .Join(
-                context.BaseItems.AsNoTracking().Where(i => i.Type == movieType),
-                ud => ud.ItemId,
-                i => i.Id,
-                (ud, i) => i.Id)
-            .Distinct()
-            .ToListAsync(cancellationToken)
+        var recommended = (await context.UserTasteRecommendationImpressions.AsNoTracking()
+                .Where(i => i.UserId == userId && i.ServedAt >= cutoff)
+                .Select(i => i.ItemId)
+                .Distinct()
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false))
+            .ToHashSet();
+
+        var labeled = new List<LabeledMedia>();
+        await AppendLabeledForTypeAsync(
+                context,
+                userId,
+                movieType,
+                cutoff,
+                nowUtc,
+                recommended,
+                labeled,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await AppendLabeledForTypeAsync(
+                context,
+                userId,
+                seriesType,
+                cutoff,
+                nowUtc,
+                recommended,
+                labeled,
+                cancellationToken)
             .ConfigureAwait(false);
 
-        var seriesIds = await context.UserData.AsNoTracking()
-            .Where(ud => ud.UserId == userId
-                && (ud.IsFavorite || ud.Likes == true || ud.Played || ud.PlayCount > 0))
-            .Join(
-                context.BaseItems.AsNoTracking().Where(i => i.Type == seriesType),
-                ud => ud.ItemId,
-                i => i.Id,
-                (ud, i) => i.Id)
-            .Distinct()
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        var episodeSeriesIds = await context.UserData.AsNoTracking()
+        // Episode plays roll up to series positives when deep/mid; abandons excluded from positives.
+        var episodeSeriesPositives = await context.UserData.AsNoTracking()
             .Where(ud => ud.UserId == userId && (ud.Played || ud.PlayCount > 0))
             .Join(
                 context.BaseItems.AsNoTracking()
@@ -252,7 +274,118 @@ public sealed class TasteShadowNeuralTrainer
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        return movieIds.Concat(seriesIds).Concat(episodeSeriesIds).Distinct().ToList();
+        var existing = labeled.Select(l => l.ItemId).ToHashSet();
+        foreach (var seriesId in episodeSeriesPositives.Where(id => !existing.Contains(id)))
+        {
+            var weight = recommended.Contains(seriesId)
+                ? TasteEngagementWeights.NeuralRecPositiveWeight
+                : TasteEngagementWeights.NeuralDeepPlayWeight;
+            labeled.Add(new LabeledMedia(seriesId, true, weight));
+        }
+
+        return labeled;
+    }
+
+    private static async Task AppendLabeledForTypeAsync(
+        JellyfinDbContext context,
+        Guid userId,
+        string itemType,
+        DateTime cutoff,
+        DateTime nowUtc,
+        HashSet<Guid> recommended,
+        List<LabeledMedia> labeled,
+        CancellationToken cancellationToken)
+    {
+        var userDataRows = await context.UserData.AsNoTracking()
+            .Where(ud => ud.UserId == userId
+                && (ud.IsFavorite
+                    || ud.Likes == true
+                    || ud.Likes == false
+                    || ud.Played
+                    || ud.PlayCount > 0
+                    || ud.PlaybackPositionTicks > 0
+                    || (ud.LastPlayedDate != null && ud.LastPlayedDate >= cutoff)))
+            .Join(
+                context.BaseItems.AsNoTracking().Where(i => i.Type == itemType),
+                ud => ud.ItemId,
+                i => i.Id,
+                (ud, i) => new
+                {
+                    ud.ItemId,
+                    ud.IsFavorite,
+                    ud.Likes,
+                    ud.Played,
+                    ud.PlayCount,
+                    ud.Rating,
+                    ud.PlaybackPositionTicks,
+                    ud.LastPlayedDate,
+                    i.RunTimeTicks
+                })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var playbackAgg = await context.PlaybackActivity.AsNoTracking()
+            .Where(p => p.UserId == userId && p.DatePlayed >= cutoff && p.PlayedTicks > 0)
+            .Join(
+                context.BaseItems.AsNoTracking().Where(i => i.Type == itemType),
+                p => p.ItemId,
+                i => i.Id,
+                (p, i) => new { p.ItemId, p.PlayedTicks, p.DatePlayed, i.RunTimeTicks })
+            .GroupBy(p => p.ItemId)
+            .Select(g => new
+            {
+                ItemId = g.Key,
+                MaxPlayedTicks = g.Max(x => x.PlayedTicks),
+                LastPlayed = g.Max(x => x.DatePlayed),
+                RunTimeTicks = g.Max(x => x.RunTimeTicks)
+            })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var playbackByItem = playbackAgg.ToDictionary(p => p.ItemId);
+        var userDataByItem = userDataRows.ToDictionary(r => r.ItemId);
+        var itemIds = userDataByItem.Keys.Union(playbackByItem.Keys).ToList();
+
+        foreach (var itemId in itemIds)
+        {
+            userDataByItem.TryGetValue(itemId, out var ud);
+            playbackByItem.TryGetValue(itemId, out var pb);
+            var maxTicks = Math.Max(ud?.PlaybackPositionTicks ?? 0L, pb?.MaxPlayedTicks ?? 0L);
+            var runTime = ud?.RunTimeTicks ?? pb?.RunTimeTicks;
+            DateTime? lastPlayed = null;
+            if (ud?.LastPlayedDate is DateTime udPlayed)
+            {
+                lastPlayed = udPlayed.ToUniversalTime();
+            }
+
+            if (pb?.LastPlayed is DateTime pbPlayed)
+            {
+                var pbUtc = pbPlayed.ToUniversalTime();
+                if (lastPlayed is null || pbUtc > lastPlayed)
+                {
+                    lastPlayed = pbUtc;
+                }
+            }
+
+            var input = new TasteEngagementInput(
+                IsFavorite: ud?.IsFavorite == true,
+                Likes: ud?.Likes,
+                Played: ud?.Played == true,
+                PlayCount: ud?.PlayCount ?? 0,
+                UserRating: ud?.Rating,
+                MaxPlayedTicks: maxTicks,
+                RunTimeTicks: runTime,
+                LastPlayedUtc: lastPlayed,
+                HasLaterPlayWithinNoReturnWindow: false,
+                WasRecommended: recommended.Contains(itemId));
+
+            if (!TasteEngagementWeights.TryGetNeuralExample(input, nowUtc, out var isPositive, out var weight))
+            {
+                continue;
+            }
+
+            labeled.Add(new LabeledMedia(itemId, isPositive, weight));
+        }
     }
 
     private static async Task<Dictionary<Guid, TasteCandidateFeatures>> LoadCandidateFeaturesAsync(
@@ -326,11 +459,13 @@ public sealed class TasteShadowNeuralTrainer
     private static TasteExample ToExample(
         UserTasteFeaturePayload profile,
         TasteCandidateFeatures features,
-        bool label)
+        bool label,
+        float weight)
     {
         return new TasteExample
         {
             Label = label,
+            Weight = weight,
             GenreOverlap = SumWeights(profile.Genres, features.Genres),
             TagOverlap = SumWeights(profile.Tags, features.Tags),
             StudioOverlap = SumWeights(profile.Studios, features.Studios),
@@ -415,6 +550,8 @@ public sealed class TasteShadowNeuralTrainer
     {
         public bool Label { get; set; }
 
+        public float Weight { get; set; } = 1f;
+
         public float GenreOverlap { get; set; }
 
         public float TagOverlap { get; set; }
@@ -433,5 +570,21 @@ public sealed class TasteShadowNeuralTrainer
         public bool Label { get; set; }
 
         public float Probability { get; set; }
+    }
+
+    private sealed class LabeledMedia
+    {
+        public LabeledMedia(Guid itemId, bool isPositive, float weight)
+        {
+            ItemId = itemId;
+            IsPositive = isPositive;
+            Weight = weight;
+        }
+
+        public Guid ItemId { get; }
+
+        public bool IsPositive { get; }
+
+        public float Weight { get; }
     }
 }

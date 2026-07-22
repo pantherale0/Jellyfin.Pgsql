@@ -479,6 +479,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | Schema for scheduled rebuild output. |
 | **Related** | `jellyfin_foryou_home_section`. No public issue. |
 
+### `jellyfin_z_user_taste_recommendation_impressions.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | DB entity for For You serve impressions (`UserTasteRecommendationImpression`). |
+| **Why** | Attribute later watches/favorites/abandons to recommendations for engagement-weighted taste training. |
+| **Where** | `UserTasteRecommendationImpression.cs`, `JellyfinDbContext` |
+| **How** | Schema only; plugin logs on serve and joins during profile/shadow rebuild. Late `z_` so it applies after `jellyfin_user_taste_recommendations`. |
+| **Related** | `jellyfin_user_taste_recommendations`; plugin `Taste/`. No public issue. |
+
 ### `jellyfin_foryou_home_section.patch`
 
 | | |
@@ -672,4 +683,4 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 
 ## File count
 
-**57** patches: **33** `jellyfin_*.patch` (server), **24** `jellyfin_web*.patch` (web).
+**58** patches: **34** `jellyfin_*.patch` (server), **24** `jellyfin_web*.patch` (web).

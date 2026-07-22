@@ -161,6 +161,45 @@ public sealed class TasteRecommendationServiceTests
         Assert.DoesNotContain(items, i => i.ItemId == PlayedComedySeriesId);
     }
 
+    [PostgresTestFact]
+    public async Task Serve_RecordsImpressions_AndDedupesWithin24Hours()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+        await SeedCorpusAsync(dbContext).ConfigureAwait(false);
+        await RebuildProfileAsync(dbContext).ConfigureAwait(false);
+
+        await dbContext.UserTasteRecommendationImpressions
+            .Where(i => i.UserId == TasteUserId)
+            .ExecuteDeleteAsync()
+            .ConfigureAwait(false);
+
+        var service = CreateService(factory, new FakeQueryResultCache());
+        await service.RebuildUserFeedsAsync(TasteUserId, default).ConfigureAwait(false);
+
+        var first = await service.GetRecommendationsAsync(TasteUserId, BaseItemKind.Movie, 24, default)
+            .ConfigureAwait(false);
+        Assert.NotEmpty(first);
+
+        var afterFirst = await dbContext.UserTasteRecommendationImpressions.AsNoTracking()
+            .Where(i => i.UserId == TasteUserId)
+            .CountAsync()
+            .ConfigureAwait(false);
+        Assert.Equal(first.Count, afterFirst);
+
+        var second = await service.GetRecommendationsAsync(TasteUserId, BaseItemKind.Movie, 24, default)
+            .ConfigureAwait(false);
+        Assert.Equal(first.Select(i => i.ItemId), second.Select(i => i.ItemId));
+
+        var afterSecond = await dbContext.UserTasteRecommendationImpressions.AsNoTracking()
+            .Where(i => i.UserId == TasteUserId)
+            .CountAsync()
+            .ConfigureAwait(false);
+        Assert.Equal(afterFirst, afterSecond);
+    }
+
     [Fact]
     public void SampleFeed_SmallPool_IsDeterministicTopN()
     {
@@ -310,7 +349,8 @@ public sealed class TasteRecommendationServiceTests
             factory,
             tasteStore,
             CreateItemTypeLookup().Object,
-            cache);
+            cache,
+            NullLogger<TasteRecommendationService>.Instance);
     }
 
     private sealed class FakeQueryResultCache : IQueryResultCache

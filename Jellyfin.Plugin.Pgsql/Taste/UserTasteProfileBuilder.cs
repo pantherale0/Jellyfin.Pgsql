@@ -85,6 +85,12 @@ public sealed class UserTasteProfileBuilder
 
         var userIds = userDataUserIds.Union(playbackUserIds).ToList();
 
+        var pruneCutoff = DateTime.UtcNow.AddDays(-lookbackDays);
+        await context.UserTasteRecommendationImpressions
+            .Where(i => i.ServedAt < pruneCutoff)
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+
         var upserted = 0;
         var skippedNoSignals = 0;
         var skippedBelowMinSamples = 0;
@@ -432,13 +438,35 @@ public sealed class UserTasteProfileBuilder
         var signals = new Dictionary<Guid, float>();
         var now = DateTime.UtcNow;
 
-        await AccumulateTypedUserDataSignalsAsync(context, userId, movieType, cutoff, now, signals, cancellationToken)
+        var recommendedIds = await context.UserTasteRecommendationImpressions.AsNoTracking()
+            .Where(i => i.UserId == userId && i.ServedAt >= cutoff)
+            .Select(i => i.ItemId)
+            .Distinct()
+            .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
-        await AccumulateTypedPlaybackSignalsAsync(context, userId, movieType, cutoff, now, signals, cancellationToken)
+        var recommended = recommendedIds.ToHashSet();
+
+        await AccumulateTypedMediaSignalsAsync(
+                context,
+                userId,
+                movieType,
+                cutoff,
+                now,
+                recommended,
+                signals,
+                cancellationToken)
             .ConfigureAwait(false);
         var movieIds = signals.Keys.ToHashSet();
 
-        await AccumulateTypedUserDataSignalsAsync(context, userId, seriesType, cutoff, now, signals, cancellationToken)
+        await AccumulateTypedMediaSignalsAsync(
+                context,
+                userId,
+                seriesType,
+                cutoff,
+                now,
+                recommended,
+                signals,
+                cancellationToken)
             .ConfigureAwait(false);
 
         await AccumulateEpisodePlayRollupAsync(
@@ -447,6 +475,7 @@ public sealed class UserTasteProfileBuilder
                 episodeType,
                 cutoff,
                 now,
+                recommended,
                 signals,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -456,12 +485,13 @@ public sealed class UserTasteProfileBuilder
         return (signals, movieCount, seriesCount);
     }
 
-    private static async Task AccumulateTypedUserDataSignalsAsync(
+    private static async Task AccumulateTypedMediaSignalsAsync(
         JellyfinDbContext context,
         Guid userId,
         string itemType,
         DateTime cutoff,
         DateTime now,
+        HashSet<Guid> recommended,
         Dictionary<Guid, float> signals,
         CancellationToken cancellationToken)
     {
@@ -469,53 +499,101 @@ public sealed class UserTasteProfileBuilder
             .Where(ud => ud.UserId == userId
                 && (ud.IsFavorite
                     || ud.Likes == true
+                    || ud.Likes == false
                     || ud.Played
                     || ud.PlayCount > 0
+                    || ud.PlaybackPositionTicks > 0
                     || (ud.LastPlayedDate != null && ud.LastPlayedDate >= cutoff)))
             .Join(
                 context.BaseItems.AsNoTracking().Where(i => i.Type == itemType),
                 ud => ud.ItemId,
                 i => i.Id,
-                (ud, i) => ud)
+                (ud, i) => new
+                {
+                    ud.ItemId,
+                    ud.IsFavorite,
+                    ud.Likes,
+                    ud.Played,
+                    ud.PlayCount,
+                    ud.Rating,
+                    ud.PlaybackPositionTicks,
+                    ud.LastPlayedDate,
+                    i.RunTimeTicks
+                })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        foreach (var row in userDataRows)
-        {
-            var weight = ComputeUserDataWeight(row, now);
-            if (weight <= 0f)
-            {
-                continue;
-            }
+        var itemIds = userDataRows.Select(r => r.ItemId).Distinct().ToList();
 
-            signals[row.ItemId] = signals.GetValueOrDefault(row.ItemId) + weight;
-        }
-    }
-
-    private static async Task AccumulateTypedPlaybackSignalsAsync(
-        JellyfinDbContext context,
-        Guid userId,
-        string itemType,
-        DateTime cutoff,
-        DateTime now,
-        Dictionary<Guid, float> signals,
-        CancellationToken cancellationToken)
-    {
-        var playbackRows = await context.PlaybackActivity.AsNoTracking()
+        var playbackAgg = await context.PlaybackActivity.AsNoTracking()
             .Where(p => p.UserId == userId && p.DatePlayed >= cutoff && p.PlayedTicks > 0)
             .Join(
                 context.BaseItems.AsNoTracking().Where(i => i.Type == itemType),
                 p => p.ItemId,
                 i => i.Id,
-                (p, i) => p)
+                (p, i) => new { p.ItemId, p.PlayedTicks, p.DatePlayed, i.RunTimeTicks })
+            .GroupBy(p => p.ItemId)
+            .Select(g => new
+            {
+                ItemId = g.Key,
+                MaxPlayedTicks = g.Max(x => x.PlayedTicks),
+                LastPlayed = g.Max(x => x.DatePlayed),
+                RunTimeTicks = g.Max(x => x.RunTimeTicks)
+            })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        foreach (var row in playbackRows)
+        var playbackByItem = playbackAgg.ToDictionary(p => p.ItemId);
+        foreach (var id in playbackByItem.Keys)
         {
-            var ageDays = Math.Max(0, (now - row.DatePlayed.ToUniversalTime()).TotalDays);
-            var weight = 0.5f * (float)Math.Exp(-ageDays / 180.0);
-            signals[row.ItemId] = signals.GetValueOrDefault(row.ItemId) + weight;
+            if (!itemIds.Contains(id))
+            {
+                itemIds.Add(id);
+            }
+        }
+
+        var userDataByItem = userDataRows.ToDictionary(r => r.ItemId);
+        foreach (var itemId in itemIds)
+        {
+            userDataByItem.TryGetValue(itemId, out var ud);
+            playbackByItem.TryGetValue(itemId, out var pb);
+
+            var maxTicks = Math.Max(ud?.PlaybackPositionTicks ?? 0L, pb?.MaxPlayedTicks ?? 0L);
+            var runTime = ud?.RunTimeTicks ?? pb?.RunTimeTicks;
+            DateTime? lastPlayed = null;
+            if (ud?.LastPlayedDate is DateTime udPlayed)
+            {
+                lastPlayed = udPlayed.ToUniversalTime();
+            }
+
+            if (pb?.LastPlayed is DateTime pbPlayed)
+            {
+                var pbUtc = pbPlayed.ToUniversalTime();
+                if (lastPlayed is null || pbUtc > lastPlayed)
+                {
+                    lastPlayed = pbUtc;
+                }
+            }
+
+            var input = new TasteEngagementInput(
+                IsFavorite: ud?.IsFavorite == true,
+                Likes: ud?.Likes,
+                Played: ud?.Played == true,
+                PlayCount: ud?.PlayCount ?? 0,
+                UserRating: ud?.Rating,
+                MaxPlayedTicks: maxTicks,
+                RunTimeTicks: runTime,
+                LastPlayedUtc: lastPlayed,
+                HasLaterPlayWithinNoReturnWindow: false,
+                WasRecommended: recommended.Contains(itemId));
+
+            var weight = TasteEngagementWeights.ComputeLinearWeight(input, now);
+            if (weight == 0f)
+            {
+                continue;
+            }
+
+            signals[itemId] = signals.GetValueOrDefault(itemId) + weight;
         }
     }
 
@@ -525,18 +603,31 @@ public sealed class UserTasteProfileBuilder
         string episodeType,
         DateTime cutoff,
         DateTime now,
+        HashSet<Guid> recommended,
         Dictionary<Guid, float> signals,
         CancellationToken cancellationToken)
     {
         var episodeUserData = await context.UserData.AsNoTracking()
             .Where(ud => ud.UserId == userId
-                && (ud.Played || ud.PlayCount > 0 || (ud.LastPlayedDate != null && ud.LastPlayedDate >= cutoff)))
+                && (ud.Played
+                    || ud.PlayCount > 0
+                    || ud.PlaybackPositionTicks > 0
+                    || (ud.LastPlayedDate != null && ud.LastPlayedDate >= cutoff)))
             .Join(
                 context.BaseItems.AsNoTracking()
                     .Where(i => i.Type == episodeType && i.SeriesId != null),
                 ud => ud.ItemId,
                 i => i.Id,
-                (ud, i) => new { EpisodeId = i.Id, SeriesId = i.SeriesId!.Value, ud.LastPlayedDate })
+                (ud, i) => new
+                {
+                    EpisodeId = i.Id,
+                    SeriesId = i.SeriesId!.Value,
+                    ud.Played,
+                    ud.PlayCount,
+                    ud.PlaybackPositionTicks,
+                    ud.LastPlayedDate,
+                    i.RunTimeTicks
+                })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -547,94 +638,164 @@ public sealed class UserTasteProfileBuilder
                     .Where(i => i.Type == episodeType && i.SeriesId != null),
                 p => p.ItemId,
                 i => i.Id,
-                (p, i) => new { EpisodeId = i.Id, SeriesId = i.SeriesId!.Value, p.DatePlayed })
+                (p, i) => new
+                {
+                    EpisodeId = i.Id,
+                    SeriesId = i.SeriesId!.Value,
+                    p.PlayedTicks,
+                    p.DatePlayed,
+                    i.RunTimeTicks
+                })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        var episodesBySeries = new Dictionary<Guid, HashSet<Guid>>();
-        var latestPlayBySeries = new Dictionary<Guid, DateTime>();
+        var seriesIds = episodeUserData.Select(e => e.SeriesId)
+            .Concat(episodePlayback.Select(e => e.SeriesId))
+            .Distinct()
+            .ToHashSet();
 
-        void Track(Guid seriesId, Guid episodeId, DateTime? playedAt)
+        var seriesRecommended = await context.UserTasteRecommendationImpressions.AsNoTracking()
+            .Where(i => i.UserId == userId && i.ServedAt >= cutoff && seriesIds.Contains(i.ItemId))
+            .Select(i => i.ItemId)
+            .Distinct()
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        foreach (var id in seriesRecommended)
         {
-            if (!episodesBySeries.TryGetValue(seriesId, out var set))
-            {
-                set = [];
-                episodesBySeries[seriesId] = set;
-            }
+            recommended.Add(id);
+        }
 
-            set.Add(episodeId);
-            if (playedAt is DateTime at)
+        var episodesBySeries = new Dictionary<Guid, HashSet<Guid>>();
+        var abandonedBySeries = new Dictionary<Guid, HashSet<Guid>>();
+        var latestPlayBySeries = new Dictionary<Guid, DateTime>();
+        var deepOrMidBySeries = new Dictionary<Guid, bool>();
+
+        void EnsureSeries(Guid seriesId)
+        {
+            if (!episodesBySeries.ContainsKey(seriesId))
             {
-                var utc = at.ToUniversalTime();
-                if (!latestPlayBySeries.TryGetValue(seriesId, out var existing) || utc > existing)
-                {
-                    latestPlayBySeries[seriesId] = utc;
-                }
+                episodesBySeries[seriesId] = [];
+                abandonedBySeries[seriesId] = [];
             }
         }
 
+        var episodeState = new Dictionary<Guid, (Guid SeriesId, long MaxTicks, long? RunTime, DateTime? LastPlayed, bool Played, int PlayCount)>();
+
         foreach (var row in episodeUserData)
         {
-            Track(row.SeriesId, row.EpisodeId, row.LastPlayedDate);
+            episodeState[row.EpisodeId] = (
+                row.SeriesId,
+                row.PlaybackPositionTicks,
+                row.RunTimeTicks,
+                row.LastPlayedDate?.ToUniversalTime(),
+                row.Played,
+                row.PlayCount);
         }
 
         foreach (var row in episodePlayback)
         {
-            Track(row.SeriesId, row.EpisodeId, row.DatePlayed);
+            var pbUtc = row.DatePlayed.ToUniversalTime();
+            if (episodeState.TryGetValue(row.EpisodeId, out var existing))
+            {
+                episodeState[row.EpisodeId] = (
+                    existing.SeriesId,
+                    Math.Max(existing.MaxTicks, row.PlayedTicks),
+                    existing.RunTime ?? row.RunTimeTicks,
+                    existing.LastPlayed is DateTime lp && lp > pbUtc ? lp : pbUtc,
+                    existing.Played,
+                    existing.PlayCount);
+            }
+            else
+            {
+                episodeState[row.EpisodeId] = (
+                    row.SeriesId,
+                    row.PlayedTicks,
+                    row.RunTimeTicks,
+                    pbUtc,
+                    false,
+                    0);
+            }
+        }
+
+        foreach (var (episodeId, state) in episodeState)
+        {
+            EnsureSeries(state.SeriesId);
+            episodesBySeries[state.SeriesId].Add(episodeId);
+            if (state.LastPlayed is DateTime at)
+            {
+                if (!latestPlayBySeries.TryGetValue(state.SeriesId, out var existing) || at > existing)
+                {
+                    latestPlayBySeries[state.SeriesId] = at;
+                }
+            }
+
+            var input = new TasteEngagementInput(
+                IsFavorite: false,
+                Likes: null,
+                Played: state.Played,
+                PlayCount: state.PlayCount,
+                UserRating: null,
+                MaxPlayedTicks: state.MaxTicks,
+                RunTimeTicks: state.RunTime,
+                LastPlayedUtc: state.LastPlayed,
+                HasLaterPlayWithinNoReturnWindow: false,
+                WasRecommended: false);
+
+            var kind = TasteEngagementWeights.Classify(input, now);
+            if (kind == TasteEngagementKind.Abandon)
+            {
+                abandonedBySeries[state.SeriesId].Add(episodeId);
+            }
+            else if (kind is TasteEngagementKind.DeepPlay
+                     or TasteEngagementKind.MidPlay
+                     or TasteEngagementKind.FavoriteOrLike)
+            {
+                deepOrMidBySeries[state.SeriesId] = true;
+            }
         }
 
         foreach (var (seriesId, episodes) in episodesBySeries)
         {
-            var weight = TasteSeriesSignalWeights.BingeCappedPlayWeight(episodes.Count);
-            if (latestPlayBySeries.TryGetValue(seriesId, out var lastPlayed))
+            var abandonedCount = abandonedBySeries.GetValueOrDefault(seriesId)?.Count ?? 0;
+            if (TasteEngagementWeights.IsSeriesAbandon(episodes.Count, abandonedCount)
+                && !deepOrMidBySeries.GetValueOrDefault(seriesId))
             {
-                var ageDays = Math.Max(0, (now - lastPlayed).TotalDays);
-                weight *= (float)Math.Exp(-ageDays / 180.0);
+                var weight = recommended.Contains(seriesId)
+                    ? TasteEngagementWeights.RecAbandonLinearWeight
+                    : TasteEngagementWeights.AbandonLinearWeight;
+                if (latestPlayBySeries.TryGetValue(seriesId, out var lastPlayed))
+                {
+                    var ageDays = Math.Max(0, (now - lastPlayed).TotalDays);
+                    weight *= (float)Math.Exp(-ageDays / 180.0);
+                }
+
+                if (weight != 0f)
+                {
+                    signals[seriesId] = signals.GetValueOrDefault(seriesId) + weight;
+                }
+
+                continue;
             }
 
-            if (weight <= 0f)
+            var bingeWeight = TasteSeriesSignalWeights.BingeCappedPlayWeight(episodes.Count);
+            if (latestPlayBySeries.TryGetValue(seriesId, out var last))
+            {
+                var ageDays = Math.Max(0, (now - last).TotalDays);
+                bingeWeight *= (float)Math.Exp(-ageDays / 180.0);
+            }
+
+            if (bingeWeight <= 0f)
             {
                 continue;
             }
 
-            signals[seriesId] = signals.GetValueOrDefault(seriesId) + weight;
-        }
-    }
+            if (recommended.Contains(seriesId) && bingeWeight > 0f)
+            {
+                bingeWeight *= TasteEngagementWeights.RecPositiveEngageMultiplier;
+            }
 
-    private static float ComputeUserDataWeight(UserData row, DateTime now)
-    {
-        float weight = 0f;
-        if (row.IsFavorite)
-        {
-            weight += 3f;
+            signals[seriesId] = signals.GetValueOrDefault(seriesId) + bingeWeight;
         }
-
-        if (row.Likes == true)
-        {
-            weight += 2f;
-        }
-        else if (row.Likes == false)
-        {
-            weight -= 2f;
-        }
-
-        if (row.Played || row.PlayCount > 0)
-        {
-            weight += 1f + (Math.Min(row.PlayCount, 5) * 0.15f);
-        }
-
-        if (row.Rating is double userRating)
-        {
-            weight += (float)(userRating / 10.0);
-        }
-
-        if (row.LastPlayedDate is DateTime lastPlayed)
-        {
-            var ageDays = Math.Max(0, (now - lastPlayed.ToUniversalTime()).TotalDays);
-            weight *= (float)Math.Exp(-ageDays / 180.0);
-        }
-
-        return weight;
     }
 
     private static Dictionary<string, float> Normalize(Dictionary<string, float> raw)
@@ -644,13 +805,20 @@ public sealed class UserTasteProfileBuilder
             return new Dictionary<string, float>(raw.Comparer);
         }
 
-        var sum = raw.Values.Sum();
+        var positive = raw.Where(kvp => kvp.Value > 0f)
+            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value, raw.Comparer);
+        if (positive.Count == 0)
+        {
+            return new Dictionary<string, float>(raw.Comparer);
+        }
+
+        var sum = positive.Values.Sum();
         if (sum <= 0f)
         {
             return new Dictionary<string, float>(raw.Comparer);
         }
 
-        return raw.ToDictionary(kvp => kvp.Key, kvp => kvp.Value / sum, raw.Comparer);
+        return positive.ToDictionary(kvp => kvp.Key, kvp => kvp.Value / sum, raw.Comparer);
     }
 
     private static float Percentile(List<float> sorted, float percentile)
