@@ -223,6 +223,19 @@ index 5e9296e8ce..27f35186d5 100644
          }
  
          if (filter.SeriesStatuses.Length > 0)
+diff --git a/MediaBrowser.Controller/Entities/BaseItem.cs b/MediaBrowser.Controller/Entities/BaseItem.cs
+index 49a4ed4bf6..765c179d73 100644
+--- a/MediaBrowser.Controller/Entities/BaseItem.cs
++++ b/MediaBrowser.Controller/Entities/BaseItem.cs
+@@ -1735,7 +1735,7 @@ namespace MediaBrowser.Controller.Entities
+         /// <param name="skipAllowedTagsCheck">Don't check for allowed tags.</param>
+         /// <returns><c>true</c> if [is parental allowed] [the specified user]; otherwise, <c>false</c>.</returns>
+         /// <exception cref="ArgumentNullException">If user is null.</exception>
+-        public bool IsParentalAllowed(User user, bool skipAllowedTagsCheck)
++        public virtual bool IsParentalAllowed(User user, bool skipAllowedTagsCheck)
+         {
+             ArgumentNullException.ThrowIfNull(user);
+ 
 diff --git a/MediaBrowser.Controller/LiveTv/LiveTvChannel.cs b/MediaBrowser.Controller/LiveTv/LiveTvChannel.cs
 index aee4691cdf..9ec626bae3 100644
 --- a/MediaBrowser.Controller/LiveTv/LiveTvChannel.cs
