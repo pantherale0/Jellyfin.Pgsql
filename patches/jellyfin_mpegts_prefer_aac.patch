@@ -1,5 +1,5 @@
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-index 58eb424bf8..a818bcfaea 100644
+index ec7f5ce5d0..3a2b5c45c4 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 @@ -695,7 +695,9 @@ namespace MediaBrowser.Controller.MediaEncoding
@@ -13,11 +13,27 @@ index 58eb424bf8..a818bcfaea 100644
                  _ => inferredCodec
              };
          }
+@@ -7586,6 +7588,15 @@ namespace MediaBrowser.Controller.MediaEncoding
+                 // Keep them in the supported codecs list, but shift them to the end of the list so that if transcoding happens, another codec is used
+                 shiftAudioCodecs.Add("dts");
+                 shiftAudioCodecs.Add("truehd");
++
++                // Multichannel AAC is unreliable on many Android TV / ExoPlayer devices (silent or
++                // stereo-only decode; Wholphin#255). When AC3/EAC3 are also offered, prefer those
++                // for surround so HLS can copy EAC3 or re-encode to AC3 instead of AAC 5.1.
++                if (audioCodecs.Any(c => string.Equals(c, "ac3", StringComparison.OrdinalIgnoreCase)
++                        || string.Equals(c, "eac3", StringComparison.OrdinalIgnoreCase)))
++                {
++                    shiftAudioCodecs.Add("aac");
++                }
+             }
+             else
+             {
 diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-index 1f293ae8be..14b78afac2 100644
+index 2e394f386a..e18090cc34 100644
 --- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 +++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-@@ -419,6 +419,13 @@ namespace MediaBrowser.MediaEncoding.Encoder
+@@ -420,6 +420,13 @@ namespace MediaBrowser.MediaEncoding.Encoder
              {
                  codec = "libmp3lame";
              }
@@ -32,7 +48,7 @@ index 1f293ae8be..14b78afac2 100644
              return SupportsEncoder(codec);
          }
 diff --git a/MediaBrowser.Model/Dlna/StreamBuilder.cs b/MediaBrowser.Model/Dlna/StreamBuilder.cs
-index 59f97d8c7c..d6509227ac 100644
+index a9ab7d6db0..dafb5d818d 100644
 --- a/MediaBrowser.Model/Dlna/StreamBuilder.cs
 +++ b/MediaBrowser.Model/Dlna/StreamBuilder.cs
 @@ -29,7 +29,9 @@ namespace MediaBrowser.Model.Dlna
