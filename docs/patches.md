@@ -247,15 +247,15 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | Extend HDR10+ strip conditions for MPEG-TS remux. |
 | **Related** | [jellyfin#16823](https://github.com/jellyfin/jellyfin/issues/16823). |
 
-### `jellyfin_mpegts_prefer_aac.patch`
+### `jellyfin_hls_mpegts_audio_compat.patch`
 
 | | |
 |---|---|
 | **Target** | `jellyfin` |
-| **What** | Avoids MP3-in-MPEG-TS HLS; for surround, prefers AC3/EAC3 over AAC **only when the client advertises Dolby**. AAC-only clients (typical browsers/phones) keep AAC. |
-| **Why** | MP3 demuxed from MPEG-TS is often silent on ExoPlayer/Android ([Wholphin#879](https://github.com/damontecres/Wholphin/issues/879)). Multichannel AAC is also silent on many Android TV devices ([Wholphin#255](https://github.com/damontecres/Wholphin/issues/255)), but forcing AC3 globally would break Chrome/Firefox/iOS that only decode AAC in HLS. |
-| **Where** | `StreamBuilder.cs`, `EncodingHelper.cs` (`InferAudioCodec`, `ShiftAudioCodecsIfNeeded`, `EnforceStereoOnlyAac`, `GetAudioEncoder`), `MediaEncoder.cs` (`CanEncodeToAudioCodec`) |
-| **How** | Drop MP3 from HLS TS allowed codecs; infer AAC (not MP3) for `.ts`; treat `libfdk_aac`/`aac_at` as satisfying `aac`; when `Channels > 2` **and** the profile/request includes `ac3`/`eac3`, strip AAC so HLS copies EAC3 or encodes AC3. |
+| **What** | HLS MPEG-TS audio compatibility: disallow MP3-in-TS, default inferred TS audio to AAC, treat `libfdk_aac`/`aac_at` as AAC, and demote AAC behind AC3/EAC3 for multichannel when the client offers Dolby. |
+| **Why** | MP3 in MPEG-TS HLS is often silent on ExoPlayer/Android ([jellyfin-web#5419](https://github.com/jellyfin/jellyfin-web/issues/5419), [Wholphin#879](https://github.com/damontecres/Wholphin/issues/879)). Preferring AAC without ordering Dolby first then re-encodes surround as AAC 5.1, which is also broken on many Android TVs ([Wholphin#255](https://github.com/damontecres/Wholphin/issues/255)). AAC-only clients (typical browsers/phones) are unchanged. |
+| **Where** | `StreamBuilder.cs` (`_supportedHlsAudioCodecsTs`), `EncodingHelper.cs` (`InferAudioCodec`, `ShiftAudioCodecsIfNeeded`), `MediaEncoder.cs` (`CanEncodeToAudioCodec`) |
+| **How** | Same shift-to-end pattern already used for DTS/TrueHD: for ≥6-channel sources, when `ac3`/`eac3` are in the codec list, also shift `aac`/`aac_latm` to the end so copy/re-encode prefers Dolby. Drop MP3 from HLS TS allow-list (still allowed in fMP4). |
 | **Related** | [jellyfin-web#5419](https://github.com/jellyfin/jellyfin-web/issues/5419), [Wholphin#879](https://github.com/damontecres/Wholphin/issues/879), [Wholphin#255](https://github.com/damontecres/Wholphin/issues/255). |
 
 ### `jellyfin_web_chrome_mkv_directplay.patch`
