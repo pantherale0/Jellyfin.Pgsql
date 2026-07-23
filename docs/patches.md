@@ -252,10 +252,10 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | | |
 |---|---|
 | **Target** | `jellyfin` |
-| **What** | HLS MPEG-TS audio compatibility: disallow MP3-in-TS, default inferred TS audio to AAC, treat `libfdk_aac`/`aac_at` as AAC, and demote AAC behind AC3/EAC3 for multichannel when the client offers Dolby. |
-| **Why** | MP3 in MPEG-TS HLS is often silent on ExoPlayer/Android ([jellyfin-web#5419](https://github.com/jellyfin/jellyfin-web/issues/5419), [Wholphin#879](https://github.com/damontecres/Wholphin/issues/879)). Preferring AAC without ordering Dolby first then re-encodes surround as AAC 5.1, which is also broken on many Android TVs ([Wholphin#255](https://github.com/damontecres/Wholphin/issues/255)). AAC-only clients (typical browsers/phones) are unchanged. |
-| **Where** | `StreamBuilder.cs` (`_supportedHlsAudioCodecsTs`), `EncodingHelper.cs` (`InferAudioCodec`, `ShiftAudioCodecsIfNeeded`), `MediaEncoder.cs` (`CanEncodeToAudioCodec`) |
-| **How** | Same shift-to-end pattern already used for DTS/TrueHD: for ≥6-channel sources, when `ac3`/`eac3` are in the codec list, also shift `aac`/`aac_latm` to the end so copy/re-encode prefers Dolby. Drop MP3 from HLS TS allow-list (still allowed in fMP4). |
+| **What** | HLS MPEG-TS audio compatibility: disallow MP3-in-TS; infer AAC for TS; treat `libfdk_aac`/`aac_at` as AAC; prefer remuxing source AC3/EAC3 when DirectPlay supports it; demote AAC behind Dolby for multichannel encode selection. |
+| **Why** | MP3 in MPEG-TS is often silent on ExoPlayer ([jellyfin-web#5419](https://github.com/jellyfin/jellyfin-web/issues/5419), [Wholphin#879](https://github.com/damontecres/Wholphin/issues/879)). Clients may list only AAC on the TranscodingProfile while still advertising EAC3 on DirectPlay; video tonemap then re-encodes surround to AAC 5.1, which is silent on many Android TVs ([Wholphin#255](https://github.com/damontecres/Wholphin/issues/255)). |
+| **Where** | `StreamBuilder.cs` (`_supportedHlsAudioCodecsTs`, `PreferHlsTsRemuxableSourceAudio`), `EncodingHelper.cs` (`InferAudioCodec`, `ShiftAudioCodecsIfNeeded`, `GetAudioStreamCopyFailureReasons`), `MediaEncoder.cs` (`CanEncodeToAudioCodec`) |
+| **How** | After HLS-TS codec filter, if source is multichannel AC3/EAC3 and a DirectPlay profile supports that codec, put it first so StreamBuilder remuxes instead of marking AudioCodecNotSupported. At encode time, shift AAC behind AC3/EAC3 for ≥6ch when Dolby is listed. Do not apply encode bitrate caps when refusing remux of a listed source codec. AAC-only clients (no DirectPlay Dolby) unchanged. |
 | **Related** | [jellyfin-web#5419](https://github.com/jellyfin/jellyfin-web/issues/5419), [Wholphin#879](https://github.com/damontecres/Wholphin/issues/879), [Wholphin#255](https://github.com/damontecres/Wholphin/issues/255). |
 
 ### `jellyfin_web_chrome_mkv_directplay.patch`

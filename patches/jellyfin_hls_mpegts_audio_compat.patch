@@ -1,5 +1,5 @@
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-index ec7f5ce5d0..f033de0e6b 100644
+index ec7f5ce5d0..3f86f25158 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 @@ -695,7 +695,9 @@ namespace MediaBrowser.Controller.MediaEncoding
@@ -13,7 +13,22 @@ index ec7f5ce5d0..f033de0e6b 100644
                  _ => inferredCodec
              };
          }
-@@ -7586,6 +7588,17 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -2709,8 +2711,12 @@ namespace MediaBrowser.Controller.MediaEncoding
+                 reasons |= TranscodeReason.AudioSampleRateNotSupported;
+             }
+ 
+-            // Audio bitrate must fall within requested value
+-            if (request.AudioBitRate.HasValue
++            // Bitrate limits apply to encode targets. Do not refuse a remux solely because the
++            // request carries an encode bitrate (often derived from AAC defaults) below the source.
++            var sourceCodecSupported = !string.IsNullOrEmpty(audioStream.Codec)
++                && supportedAudioCodecs.Contains(audioStream.Codec, StringComparison.OrdinalIgnoreCase);
++            if (!sourceCodecSupported
++                && request.AudioBitRate.HasValue
+                 && audioStream.BitRate.HasValue
+                 && audioStream.BitRate.Value > request.AudioBitRate.Value)
+             {
+@@ -7586,6 +7592,17 @@ namespace MediaBrowser.Controller.MediaEncoding
                  // Keep them in the supported codecs list, but shift them to the end of the list so that if transcoding happens, another codec is used
                  shiftAudioCodecs.Add("dts");
                  shiftAudioCodecs.Add("truehd");
@@ -50,7 +65,7 @@ index 2e394f386a..0dad188d50 100644
              return SupportsEncoder(codec);
          }
 diff --git a/MediaBrowser.Model/Dlna/StreamBuilder.cs b/MediaBrowser.Model/Dlna/StreamBuilder.cs
-index a9ab7d6db0..8ad560cc59 100644
+index a9ab7d6db0..2f8e2fee4d 100644
 --- a/MediaBrowser.Model/Dlna/StreamBuilder.cs
 +++ b/MediaBrowser.Model/Dlna/StreamBuilder.cs
 @@ -29,7 +29,9 @@ namespace MediaBrowser.Model.Dlna
@@ -64,3 +79,60 @@ index a9ab7d6db0..8ad560cc59 100644
          private static readonly string[] _supportedHlsAudioCodecsMp4 = ["aac", "ac3", "eac3", "mp3", "alac", "flac", "opus", "dts", "truehd"];
  
          /// <summary>
+@@ -990,6 +992,7 @@ namespace MediaBrowser.Model.Dlna
+                 else
+                 {
+                     audioCodecs = audioCodecs.Where(codec => _supportedHlsAudioCodecsTs.Contains(codec)).ToList();
++                    PreferHlsTsRemuxableSourceAudio(options, audioStream, audioCodecs);
+                 }
+             }
+ 
+@@ -2475,5 +2478,48 @@ namespace MediaBrowser.Model.Dlna
+ 
+             return failures;
+         }
++
++        /// <summary>
++        /// When video must be transcoded to HLS MPEG-TS, keep source AC3/EAC3 eligible for remux if
++        /// the client DirectPlay profile already claims to support that codec. TranscodingProfiles
++        /// sometimes list only AAC as an encode target even though the device can play Dolby in TS
++        /// (Wholphin/ExoPlayer); without this, surround is re-encoded to multichannel AAC and goes silent.
++        /// </summary>
++        private static void PreferHlsTsRemuxableSourceAudio(
++            MediaOptions options,
++            MediaStream? audioStream,
++            List<string> audioCodecs)
++        {
++            if (audioStream is null
++                || (audioStream.Channels ?? 0) <= 2
++                || string.IsNullOrEmpty(audioStream.Codec))
++            {
++                return;
++            }
++
++            if (!string.Equals(audioStream.Codec, "ac3", StringComparison.OrdinalIgnoreCase)
++                && !string.Equals(audioStream.Codec, "eac3", StringComparison.OrdinalIgnoreCase))
++            {
++                return;
++            }
++
++            if (!_supportedHlsAudioCodecsTs.Contains(audioStream.Codec, StringComparison.OrdinalIgnoreCase))
++            {
++                return;
++            }
++
++            var directPlaySupports = options.Profile.DirectPlayProfiles.Any(profile =>
++                profile.Type == DlnaProfileType.Video
++                && profile.SupportsAudioCodec(audioStream.Codec));
++
++            if (!directPlaySupports)
++            {
++                return;
++            }
++
++            var sourceCodec = audioStream.Codec;
++            audioCodecs.RemoveAll(codec => string.Equals(codec, sourceCodec, StringComparison.OrdinalIgnoreCase));
++            audioCodecs.Insert(0, sourceCodec);
++        }
+     }
+ }
