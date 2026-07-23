@@ -291,7 +291,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Target** | `jellyfin` |
 | **What** | Persists M3U `group-title` as `LiveTvChannel.ChannelGroup` (plus `ChannelGroup:` tags), adds Live TV allowlist preference kinds, and enforces channel/category exceptions to block-unrated and AllowedTags for Live TV. |
 | **Why** | Blocking unrated Live TV hides nearly all channels; operators need group-scoped allowlists for safe kids/shared profiles. |
-| **Where** | `LiveTvChannel`, `LiveTvProgram`, `LiveTvParentalAccess`, `GuideManager`, `PreferenceKind`, `BaseItemRepository` access filters |
+| **Where** | `BaseItem` (`IsParentalAllowed` made virtual), `LiveTvChannel`, `LiveTvProgram`, `LiveTvParentalAccess`, `GuideManager`, `PreferenceKind`, `BaseItemRepository` access filters |
 | **How** | Whitelist by channel id and/or category (M3U group or EPG Kids/Sports/News); SQL expands categories to channel ids; in-memory parental checks bypass unrated + AllowedTags for matches (BlockedTags still apply). Applies after `jellyfin_sso` (`z_` layering). |
 | **Related** | `jellyfin_sso`, `jellyfin_web_rbac`. No public issue. |
 
