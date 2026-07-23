@@ -1028,7 +1028,7 @@ index 6c8cde62c9..c42577bd5c 100644
      }
  }
 diff --git a/src/Jellyfin.LiveTv/TunerHosts/LiveStream.cs b/src/Jellyfin.LiveTv/TunerHosts/LiveStream.cs
-index 70d8afc5d0..a6553e0c8e 100644
+index 70d8afc5d0..3dd7bfb97d 100644
 --- a/src/Jellyfin.LiveTv/TunerHosts/LiveStream.cs
 +++ b/src/Jellyfin.LiveTv/TunerHosts/LiveStream.cs
 @@ -4,12 +4,14 @@
@@ -1046,12 +1046,10 @@ index 70d8afc5d0..a6553e0c8e 100644
  using MediaBrowser.Model.Dto;
  using MediaBrowser.Model.IO;
  using MediaBrowser.Model.LiveTv;
-@@ -19,7 +21,13 @@ namespace Jellyfin.LiveTv.TunerHosts
- {
+@@ -20,6 +22,12 @@ namespace Jellyfin.LiveTv.TunerHosts
      public class LiveStream : ILiveStream
      {
--        private readonly IConfigurationManager _configurationManager;
-+        protected readonly IConfigurationManager ConfigurationManager;
+         private readonly IConfigurationManager _configurationManager;
 +        private readonly object _chunkLock = new();
 +        private readonly List<string> _chunkPaths = new();
 +        private readonly bool _isRollingChunkEnabled;
@@ -1061,12 +1059,7 @@ index 70d8afc5d0..a6553e0c8e 100644
  
          public LiveStream(
              MediaSourceInfo mediaSource,
-@@ -41,11 +49,13 @@ namespace Jellyfin.LiveTv.TunerHosts
-                 TunerHostId = tuner.Id;
-             }
- 
--            _configurationManager = configurationManager;
-+            ConfigurationManager = configurationManager;
+@@ -45,7 +53,9 @@ namespace Jellyfin.LiveTv.TunerHosts
              StreamHelper = streamHelper;
  
              ConsumerCount = 1;
@@ -1077,8 +1070,12 @@ index 70d8afc5d0..a6553e0c8e 100644
          }
  
          protected IFileSystem FileSystem { get; }
-@@ -56,7 +66,9 @@ namespace Jellyfin.LiveTv.TunerHosts
+@@ -54,9 +64,13 @@ namespace Jellyfin.LiveTv.TunerHosts
  
+         protected ILogger Logger { get; }
+ 
++        protected IConfigurationManager ConfigurationManager => _configurationManager;
++
          protected CancellationTokenSource LiveStreamCancellationTokenSource { get; } = new CancellationTokenSource();
  
 -        protected string TempFilePath { get; set; }
@@ -1088,7 +1085,7 @@ index 70d8afc5d0..a6553e0c8e 100644
  
          public MediaSourceInfo OriginalMediaSource { get; set; }
  
-@@ -74,9 +86,9 @@ namespace Jellyfin.LiveTv.TunerHosts
+@@ -74,9 +88,9 @@ namespace Jellyfin.LiveTv.TunerHosts
  
          public DateTime DateOpened { get; protected set; }
  
@@ -1100,7 +1097,7 @@ index 70d8afc5d0..a6553e0c8e 100644
          }
  
          public virtual Task Open(CancellationToken openCancellationToken)
-@@ -96,23 +108,120 @@ namespace Jellyfin.LiveTv.TunerHosts
+@@ -96,23 +110,120 @@ namespace Jellyfin.LiveTv.TunerHosts
  
          public Stream GetStream()
          {
@@ -1118,12 +1115,9 @@ index 70d8afc5d0..a6553e0c8e 100644
 +                    throw new InvalidOperationException("Live stream has not started yet.");
 +                }
 +            }
- 
--            bool seekFile = (DateTime.UtcNow - DateOpened).TotalSeconds > 10;
--            if (seekFile)
++
 +            if (!_isRollingChunkEnabled)
-             {
--                TrySeek(stream, -20000);
++            {
 +                return new FileStream(
 +                    _singleFilePath,
 +                    FileMode.Open,
@@ -1132,7 +1126,9 @@ index 70d8afc5d0..a6553e0c8e 100644
 +                    IODefaults.FileStreamBufferSize,
 +                    FileOptions.Asynchronous);
 +            }
-+
+ 
+-            bool seekFile = (DateTime.UtcNow - DateOpened).TotalSeconds > 10;
+-            if (seekFile)
 +            bool seekToLiveEdge = (DateTime.UtcNow - DateOpened).TotalSeconds > 10;
 +            return new RollingChunkStream(_chunkPaths, _chunkLock, Logger, seekToLiveEdge);
 +        }
@@ -1150,7 +1146,8 @@ index 70d8afc5d0..a6553e0c8e 100644
 +                path = GetChunkPath(_nextChunkIndex++);
 +            }
 +            else
-+            {
+             {
+-                TrySeek(stream, -20000);
 +                path = _singleFilePath;
 +            }
 +
@@ -1231,7 +1228,7 @@ index 70d8afc5d0..a6553e0c8e 100644
          /// <inheritdoc />
          public void Dispose()
          {
-@@ -128,49 +237,82 @@ namespace Jellyfin.LiveTv.TunerHosts
+@@ -128,49 +239,82 @@ namespace Jellyfin.LiveTv.TunerHosts
              }
          }
  
@@ -1556,10 +1553,13 @@ index 0000000000..e9eed24dd5
 +    }
 +}
 diff --git a/src/Jellyfin.LiveTv/TunerHosts/SharedHttpStream.cs b/src/Jellyfin.LiveTv/TunerHosts/SharedHttpStream.cs
-index 5ef04ad9e9..012f012ba8 100644
+index 5ef04ad9e9..4d7a515e0a 100644
 --- a/src/Jellyfin.LiveTv/TunerHosts/SharedHttpStream.cs
 +++ b/src/Jellyfin.LiveTv/TunerHosts/SharedHttpStream.cs
-@@ -2,6 +2,7 @@
+@@ -1,7 +1,10 @@
++#nullable disable
++
+ #pragma warning disable CA1711
  #pragma warning disable CS1591
  
  using System;
@@ -1567,7 +1567,7 @@ index 5ef04ad9e9..012f012ba8 100644
  using System.Globalization;
  using System.IO;
  using System.Net.Http;
-@@ -46,31 +47,59 @@ namespace Jellyfin.LiveTv.TunerHosts
+@@ -46,31 +49,62 @@ namespace Jellyfin.LiveTv.TunerHosts
              LiveStreamCancellationTokenSource.Token.ThrowIfCancellationRequested();
  
              var mediaSource = OriginalMediaSource;
@@ -1593,13 +1593,14 @@ index 5ef04ad9e9..012f012ba8 100644
 +            {
 +                openCts.CancelAfter(openTimeoutMs);
 +            }
- 
--            var taskCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
++
 +            var openToken = openCts.Token;
 +            // If the open deadline fires, stop the copy loop so a stalled origin cannot leak.
-+            await using var cancelLiveOnOpenTimeout = openToken.Register(() => LiveStreamCancellationTokenSource.Cancel());
- 
--            _ = StartStreaming(response, taskCompletionSource, LiveStreamCancellationTokenSource.Token);
++            await using var cancelLiveOnOpenTimeout = openToken.Register(() =>
++            {
++                _ = LiveStreamCancellationTokenSource.CancelAsync();
++            });
++
 +            HttpResponseMessage response = null;
 +            try
 +            {
@@ -1607,19 +1608,21 @@ index 5ef04ad9e9..012f012ba8 100644
 +                response = await _httpClientFactory.CreateClient(NamedClient.Default)
 +                    .GetAsync(url, HttpCompletionOption.ResponseHeadersRead, openToken)
 +                    .ConfigureAwait(false);
-+
+ 
+-            var taskCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 +                var taskCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
  
--            MediaSource.Path = _appHost.GetApiUrlForLocalAccess() + "/LiveTv/LiveStreamFiles/" + UniqueId + "/stream.ts";
--            MediaSource.Protocol = MediaProtocol.Http;
+-            _ = StartStreaming(response, taskCompletionSource, LiveStreamCancellationTokenSource.Token);
 +                _ = StartStreaming(response, taskCompletionSource, LiveStreamCancellationTokenSource.Token);
 +                response = null; // ownership transferred to StartStreaming
  
--            var res = await taskCompletionSource.Task.ConfigureAwait(false);
--            if (!res)
+-            MediaSource.Path = _appHost.GetApiUrlForLocalAccess() + "/LiveTv/LiveStreamFiles/" + UniqueId + "/stream.ts";
+-            MediaSource.Protocol = MediaProtocol.Http;
 +                MediaSource.Path = _appHost.GetApiUrlForLocalAccess() + "/LiveTv/LiveStreamFiles/" + UniqueId + "/stream.ts";
 +                MediaSource.Protocol = MediaProtocol.Http;
-+
+ 
+-            var res = await taskCompletionSource.Task.ConfigureAwait(false);
+-            if (!res)
 +                var res = await taskCompletionSource.Task.WaitAsync(openToken).ConfigureAwait(false);
 +                if (!res)
 +                {
@@ -1631,7 +1634,7 @@ index 5ef04ad9e9..012f012ba8 100644
              {
 -                Logger.LogWarning("Zero bytes copied from stream {StreamType} to {FilePath} but no exception raised", GetType().Name, TempFilePath);
 -                throw new EndOfStreamException(string.Format(CultureInfo.InvariantCulture, "Zero bytes copied from stream {0}", GetType().Name));
-+                LiveStreamCancellationTokenSource.Cancel();
++                await LiveStreamCancellationTokenSource.CancelAsync().ConfigureAwait(false);
 +                if (response is not null)
 +                {
 +                    response.Dispose();
@@ -1641,7 +1644,7 @@ index 5ef04ad9e9..012f012ba8 100644
              }
          }
  
-@@ -81,55 +110,72 @@ namespace Jellyfin.LiveTv.TunerHosts
+@@ -81,55 +115,72 @@ namespace Jellyfin.LiveTv.TunerHosts
                  {
                      try
                      {
@@ -1663,7 +1666,13 @@ index 5ef04ad9e9..012f012ba8 100644
 -                                await using (fileStream.ConfigureAwait(false))
 +                                byte[] buffer = ArrayPool<byte>.Shared.Rent(IODefaults.CopyToBufferSize);
 +                                try
-+                                {
+                                 {
+-                                    await StreamHelper.CopyToAsync(
+-                                        stream,
+-                                        fileStream,
+-                                        IODefaults.CopyToBufferSize,
+-                                        () => Resolve(openTaskCompletionSource),
+-                                        cancellationToken).ConfigureAwait(false);
 +                                    FileStream fileStream = OpenInitialChunk();
 +                                    try
 +                                    {
@@ -1698,13 +1707,7 @@ index 5ef04ad9e9..012f012ba8 100644
 +                                    }
 +                                }
 +                                finally
-                                 {
--                                    await StreamHelper.CopyToAsync(
--                                        stream,
--                                        fileStream,
--                                        IODefaults.CopyToBufferSize,
--                                        () => Resolve(openTaskCompletionSource),
--                                        cancellationToken).ConfigureAwait(false);
++                                {
 +                                    ArrayPool<byte>.Shared.Return(buffer);
                                  }
                              }
