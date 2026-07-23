@@ -32,16 +32,18 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 ## Single Sign-On (OIDC) and RBAC
 
-**What:** Forced OIDC login for browsers, auto-create users, admin role from IdP groups, parental rating from birthdate claim, per-group block-unrated mappings in the dashboard.
+**What:** Forced OIDC login for browsers, auto-create users, admin role from IdP groups, parental rating from birthdate claim, and per-group dashboard mappings for libraries, permissions, block-unrated types, Allowed/Blocked tags, and Live TV channel/category allowlists (exceptions when unrated Live TV is blocked).
 
 **Where:**
 
-- Server: [`jellyfin_sso.patch`](patches.md#jellyfin_ssopatch) (`SSOController`)
+- Server: [`jellyfin_sso.patch`](patches.md#jellyfin_ssopatch) (`SSOController`), [`jellyfin_z_livetv_rbac_allowlist.patch`](patches.md#jellyfin_z_livetv_rbac_allowlistpatch) (ChannelGroup persist + parental enforcement)
 - Web: [`jellyfin_web_rbac.patch`](patches.md#jellyfin_web_rbacpatch) (SSO Mappings UI)
 - TV: [`jellyfin_web_tv_quickconnect_login`](patches.md#jellyfin_web_tv_quickconnect_loginpatch), [`jellyfin_web_quickconnect_modal`](patches.md#jellyfin_web_quickconnect_modalpatch)
 - Config: `JELLYFIN_SSO_OIDC_*` ([README](../README.md#single-sign-on-sso-with-rbac-via-oauth2oidc))
 
-**How:** When SSO env vars are set, the web client redirects to the IdP. Callback is the configured absolute `JELLYFIN_SSO_OIDC_REDIRECT_URI` (not derived from `Host`). Emergency bypass: `?local=true` on the login URL. TV clients skip forced redirect and open Quick Connect.
+**How:** When SSO env vars are set, the web client redirects to the IdP. Callback is the configured absolute `JELLYFIN_SSO_OIDC_REDIRECT_URI` (not derived from `Host`). Matching IdP groups merge `sso_rbac.json` additively onto the user. Emergency bypass: `?local=true` on the login URL. TV clients skip forced redirect and open Quick Connect.
+
+**Live TV allowlist:** With “Live TV” under block-unrated, channels without ratings are hidden unless allowlisted by M3U `group-title` category, EPG category (`Kids` / `Sports` / `News`), or individual channel. Whitelisted Live TV also bypasses AllowedTags (BlockedTags still apply). Refresh the Live TV guide after changing M3U groups so categories appear in the UI.
 
 **Related:** Fork issue [pantherale0#5](https://github.com/pantherale0/Jellyfin.Pgsql/issues/5) (SSO mapping config / auth).
 
