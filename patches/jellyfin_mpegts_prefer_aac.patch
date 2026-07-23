@@ -1,5 +1,5 @@
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-index ec7f5ce5d0..3a2b5c45c4 100644
+index ec7f5ce5d0..264c103719 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 @@ -695,7 +695,9 @@ namespace MediaBrowser.Controller.MediaEncoding
@@ -13,21 +13,104 @@ index ec7f5ce5d0..3a2b5c45c4 100644
                  _ => inferredCodec
              };
          }
-@@ -7586,6 +7588,15 @@ namespace MediaBrowser.Controller.MediaEncoding
-                 // Keep them in the supported codecs list, but shift them to the end of the list so that if transcoding happens, another codec is used
-                 shiftAudioCodecs.Add("dts");
-                 shiftAudioCodecs.Add("truehd");
+@@ -762,6 +764,8 @@ namespace MediaBrowser.Controller.MediaEncoding
+         /// <returns>System.String.</returns>
+         public string GetAudioEncoder(EncodingJobInfo state)
+         {
++            EnforceStereoOnlyAac(state);
 +
-+                // Multichannel AAC is unreliable on many Android TV / ExoPlayer devices (silent or
-+                // stereo-only decode; Wholphin#255). When AC3/EAC3 are also offered, prefer those
-+                // for surround so HLS can copy EAC3 or re-encode to AC3 instead of AAC 5.1.
-+                if (audioCodecs.Any(c => string.Equals(c, "ac3", StringComparison.OrdinalIgnoreCase)
-+                        || string.Equals(c, "eac3", StringComparison.OrdinalIgnoreCase)))
-+                {
-+                    shiftAudioCodecs.Add("aac");
-+                }
+             var codec = state.OutputAudioCodec;
+ 
+             if (!ContainerValidationRegex().IsMatch(codec))
+@@ -7287,6 +7291,58 @@ namespace MediaBrowser.Controller.MediaEncoding
+                     state.AddTranscodeReason(audioCopyFailureReasons & TranscodeReason.AudioCodecNotSupported);
+                 }
              }
-             else
++
++            EnforceStereoOnlyAac(state);
++        }
++
++        /// <summary>
++        /// When the client advertises AC3/EAC3, avoid re-encoding surround as AAC
++        /// (silent on many Android TV / ExoPlayer devices). AAC-only clients keep AAC.
++        /// </summary>
++        private void EnforceStereoOnlyAac(EncodingJobInfo state)
++        {
++            if (string.IsNullOrEmpty(state.OutputAudioCodec) || IsCopyCodec(state.OutputAudioCodec))
++            {
++                return;
++            }
++
++            var inputChannels = state.AudioStream?.Channels ?? 0;
++            var outputChannels = state.OutputAudioChannels ?? inputChannels;
++            if (inputChannels <= 2 && outputChannels <= 2)
++            {
++                return;
++            }
++
++            var codec = state.OutputAudioCodec;
++            if (codec.Contains(',', StringComparison.Ordinal))
++            {
++                codec = codec.Split(',', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? codec;
++            }
++
++            if (!string.Equals(codec, "aac", StringComparison.OrdinalIgnoreCase)
++                && !string.Equals(codec, "aac_latm", StringComparison.OrdinalIgnoreCase))
++            {
++                return;
++            }
++
++            var supported = state.SupportedAudioCodecs;
++            var clientAllowsDolby = supported is not null
++                && supported.Any(static c =>
++                    string.Equals(c, "ac3", StringComparison.OrdinalIgnoreCase)
++                    || string.Equals(c, "eac3", StringComparison.OrdinalIgnoreCase));
++            if (!clientAllowsDolby)
++            {
++                return;
++            }
++
++            if (_mediaEncoder.CanEncodeToAudioCodec("ac3"))
++            {
++                state.OutputAudioCodec = "ac3";
++            }
++            else if (_mediaEncoder.CanEncodeToAudioCodec("eac3"))
++            {
++                state.OutputAudioCodec = "eac3";
++            }
+         }
+ 
+         private string GetFfmpegAnalyzeDurationArg(EncodingJobInfo state)
+@@ -7572,13 +7628,29 @@ namespace MediaBrowser.Controller.MediaEncoding
+ 
+         private void ShiftAudioCodecsIfNeeded(List<string> audioCodecs, MediaStream audioStream)
+         {
++            var inputChannels = audioStream is null ? 6 : audioStream.Channels ?? 6;
++
++            // When the client offers Dolby for surround, drop AAC so we copy EAC3 or encode AC3
++            // instead of multichannel AAC (Wholphin#255). Leave AAC-only clients alone (web/phones).
++            if (inputChannels > 2)
++            {
++                var clientAllowsDolby = audioCodecs.Any(static c =>
++                    string.Equals(c, "ac3", StringComparison.OrdinalIgnoreCase)
++                    || string.Equals(c, "eac3", StringComparison.OrdinalIgnoreCase));
++                if (clientAllowsDolby)
++                {
++                    audioCodecs.RemoveAll(static c =>
++                        string.Equals(c, "aac", StringComparison.OrdinalIgnoreCase)
++                        || string.Equals(c, "aac_latm", StringComparison.OrdinalIgnoreCase));
++                }
++            }
++
+             // No need to shift if there is only one supported audio codec.
+             if (audioCodecs.Count < 2)
+             {
+                 return;
+             }
+ 
+-            var inputChannels = audioStream is null ? 6 : audioStream.Channels ?? 6;
+             var shiftAudioCodecs = new List<string>();
+             if (inputChannels >= 6)
              {
 diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 index 2e394f386a..e18090cc34 100644
@@ -48,7 +131,7 @@ index 2e394f386a..e18090cc34 100644
              return SupportsEncoder(codec);
          }
 diff --git a/MediaBrowser.Model/Dlna/StreamBuilder.cs b/MediaBrowser.Model/Dlna/StreamBuilder.cs
-index a9ab7d6db0..dafb5d818d 100644
+index a9ab7d6db0..e9fd74e001 100644
 --- a/MediaBrowser.Model/Dlna/StreamBuilder.cs
 +++ b/MediaBrowser.Model/Dlna/StreamBuilder.cs
 @@ -29,7 +29,9 @@ namespace MediaBrowser.Model.Dlna
@@ -62,3 +145,37 @@ index a9ab7d6db0..dafb5d818d 100644
          private static readonly string[] _supportedHlsAudioCodecsMp4 = ["aac", "ac3", "eac3", "mp3", "alac", "flac", "opus", "dts", "truehd"];
  
          /// <summary>
+@@ -990,6 +992,23 @@ namespace MediaBrowser.Model.Dlna
+                 else
+                 {
+                     audioCodecs = audioCodecs.Where(codec => _supportedHlsAudioCodecsTs.Contains(codec)).ToList();
++
++                    // Multichannel AAC in MPEG-TS is silent/broken on many ExoPlayer/Android TV
++                    // devices (Wholphin#255). When the client already advertises AC3/EAC3, prefer
++                    // those for surround and drop AAC. AAC-only clients (most browsers/phones)
++                    // keep AAC so we do not force Dolby they cannot decode.
++                    var surroundChannels = audioStream?.Channels
++                        ?? candidateAudioStreams.FirstOrDefault()?.Channels
++                        ?? 0;
++                    var clientAllowsDolby = audioCodecs.Any(static c =>
++                        string.Equals(c, "ac3", StringComparison.OrdinalIgnoreCase)
++                        || string.Equals(c, "eac3", StringComparison.OrdinalIgnoreCase));
++                    if (surroundChannels > 2 && clientAllowsDolby)
++                    {
++                        audioCodecs = audioCodecs
++                            .Where(codec => !IsAacAudioCodec(codec))
++                            .ToList();
++                    }
+                 }
+             }
+ 
+@@ -2475,5 +2494,9 @@ namespace MediaBrowser.Model.Dlna
+ 
+             return failures;
+         }
++
++        private static bool IsAacAudioCodec(string codec)
++            => string.Equals(codec, "aac", StringComparison.OrdinalIgnoreCase)
++                || string.Equals(codec, "aac_latm", StringComparison.OrdinalIgnoreCase);
+     }
+ }
