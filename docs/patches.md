@@ -306,49 +306,27 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | Whitelist by channel id and/or category (M3U group or EPG Kids/Sports/News); SQL expands categories to channel ids; in-memory parental checks bypass unrated + AllowedTags for matches (BlockedTags still apply). Applies after `jellyfin_sso` (`z_` layering). |
 | **Related** | `jellyfin_sso`, `jellyfin_web_rbac`. No public issue. |
 
-### `jellyfin_livetv_stream_buffer.patch`
+### `jellyfin_livetv_stream.patch`
 
 | | |
 |---|---|
 | **Target** | `jellyfin` |
-| **What** | Rolling chunk live stream buffers + `LiveStreamKeepSeconds` encoding option. |
-| **Why** | Unbounded buffer growth exhausted disk; streams need bounded retention after client stop. |
-| **Where** | `RollingChunkStream.cs`, `LiveStream.cs`, HDHR/HTTP tuner hosts, `EncodingOptions` |
-| **How** | Vendored [jellyfin#17128](https://github.com/jellyfin/jellyfin/pull/17128). |
-| **Related** | Web UI `jellyfin_web_live_stream_keep_seconds`. Must precede `jellyfin_livetv_stream_probe`. |
+| **What** | Live TV stream hardening: rolling chunk buffers (`LiveStreamKeepSeconds`), configurable probe delay/analyzeduration/probesize, non-blocking live-stream open/close (global lock no longer held across network I/O), `LiveStreamOpenTimeoutMs` for M3U `SharedHttpStream` connect/first-byte, and dispose of streams that fail to open. |
+| **Why** | Unbounded buffers exhausted disk; default probe delayed starts; one stalled M3U open held the process-global live-stream lock and froze all Live TV until restart ([jellyfin#17319](https://github.com/jellyfin/jellyfin/issues/17319)). |
+| **Where** | `RollingChunkStream.cs`, `LiveStream.cs`, `SharedHttpStream.cs`, `BaseTunerHost.cs`, HDHR host, `LiveStreamHelper`, `MediaSourceManager`, `EncodingHelper`/`MediaEncoder` probesize, `EncodingOptions`, `MediaSourceInfo`, tests |
+| **How** | Combines [jellyfin#17128](https://github.com/jellyfin/jellyfin/pull/17128), [jellyfin#9813](https://github.com/jellyfin/jellyfin/issues/9813), and #17319: snapshot/register under `_liveStreamLocker` only; `Open`/`Close` network work outside the lock; linked open CT + `CancelAfter(LiveStreamOpenTimeoutMs)` (default 15000, `0` disables deadline); `Close()` on failed tuner open. |
+| **Related** | Web `jellyfin_web_live_stream`. |
 
-### `jellyfin_livetv_stream_probe.patch`
-
-| | |
-|---|---|
-| **Target** | `jellyfin` |
-| **What** | Configurable Live TV probe delay / analyzeduration / probesize. |
-| **Why** | Default probe behaviour delays channel start on slow tuners. |
-| **Where** | `LiveStreamHelper`, `MediaSourceManager`, `MediaEncoder`, `EncodingOptions`, `MediaSourceInfo` |
-| **How** | Encoding options + probe wiring. **Apply after** `jellyfin_livetv_stream_buffer`. |
-| **Related** | [jellyfin#9813](https://github.com/jellyfin/jellyfin/issues/9813); web `jellyfin_web_live_stream_probe`. |
-
-### `jellyfin_web_live_stream_keep_seconds.patch`
+### `jellyfin_web_live_stream.patch`
 
 | | |
 |---|---|
 | **Target** | `jellyfin-web` |
-| **What** | Encoding settings UI for `LiveStreamKeepSeconds`. |
-| **Why** | Expose server buffer retention without editing XML. |
+| **What** | Encoding settings UI for `LiveStreamKeepSeconds`, probe delay/analyzeduration/probesize, and `LiveStreamOpenTimeoutMs`. |
+| **Why** | Expose Live TV stream options without editing `encoding.xml`. |
 | **Where** | `transcoding.tsx`, strings |
-| **How** | Vendored [jellyfin-web#8072](https://github.com/jellyfin/jellyfin-web/pull/8072); layered on HWA capabilities UI. |
-| **Related** | [jellyfin#17128](https://github.com/jellyfin/jellyfin/pull/17128); server `jellyfin_livetv_stream_buffer`. |
-
-### `jellyfin_web_live_stream_probe.patch`
-
-| | |
-|---|---|
-| **Target** | `jellyfin-web` |
-| **What** | Encoding settings UI for Live TV probe options. |
-| **Why** | Companion to server probe patch. |
-| **Where** | `transcoding.tsx`, strings |
-| **How** | Form fields for delay/analyzeduration/probesize. **After** keep_seconds patch. |
-| **Related** | [jellyfin#9813](https://github.com/jellyfin/jellyfin/issues/9813). |
+| **How** | Form fields on Dashboard → Playback → Transcoding (layered on HWA capabilities UI). |
+| **Related** | Server `jellyfin_livetv_stream`; [jellyfin#17128](https://github.com/jellyfin/jellyfin/pull/17128) / [web#8072](https://github.com/jellyfin/jellyfin-web/pull/8072), [jellyfin#9813](https://github.com/jellyfin/jellyfin/issues/9813), [jellyfin#17319](https://github.com/jellyfin/jellyfin/issues/17319). |
 
 ### `jellyfin_livetv_getitem_alias.patch`
 
@@ -697,8 +675,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | `jellyfin_z_hls_live_playlist_apikey` | (server-only; required by security hardening for Live/EVENT HLS) |
 | `jellyfin_transcoding_pipeline` | `jellyfin_web_transcoding_pipeline` |
 | `jellyfin_hwa_capabilities` | `jellyfin_web_hwa_capabilities` |
-| `jellyfin_livetv_stream_buffer` | `jellyfin_web_live_stream_keep_seconds` |
-| `jellyfin_livetv_stream_probe` | `jellyfin_web_live_stream_probe` |
+| `jellyfin_livetv_stream` | `jellyfin_web_live_stream` |
 | `jellyfin_playback_statistics` | `jellyfin_web_user_playback_stats` |
 | `jellyfin_foryou_home_section` | `jellyfin_web_foryou_home` |
 | `jellyfin_user_taste_*` | `jellyfin_web_taste_identity`, `jellyfin_web_z_taste_models` |
@@ -706,4 +683,4 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 
 ## File count
 
-**59** patches: **35** `jellyfin_*.patch` (server), **24** `jellyfin_web*.patch` (web).
+**57** patches: **34** `jellyfin_*.patch` (server), **23** `jellyfin_web*.patch` (web).

@@ -86,9 +86,9 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 ## Live TV hardening
 
-**What:** Guide/listings performance, published URL rewrites for Docker, rolling stream buffers / keep-alive seconds, configurable probe delay, `livetv` item alias, active recordings widget.
+**What:** Guide/listings performance, published URL rewrites for Docker, rolling stream buffers / keep-alive seconds, configurable probe delay and SharedHttpStream open timeout, non-blocking live-stream open/close (avoids freezing all Live TV on one stalled M3U open), `livetv` item alias, active recordings widget.
 
-**Where:** See [Live TV patch group](patches.md#4-live-tv). Notable upstream refs: [jellyfin#15411](https://github.com/jellyfin/jellyfin/issues/15411) / [PR #17298](https://github.com/jellyfin/jellyfin/pull/17298), [jellyfin#17128](https://github.com/jellyfin/jellyfin/pull/17128), [jellyfin#9813](https://github.com/jellyfin/jellyfin/issues/9813), [jellyfin-web#8072](https://github.com/jellyfin/jellyfin-web/pull/8072).
+**Where:** See [Live TV patch group](patches.md#4-live-tv). Notable upstream refs: [jellyfin#15411](https://github.com/jellyfin/jellyfin/issues/15411) / [PR #17298](https://github.com/jellyfin/jellyfin/pull/17298), [jellyfin#17128](https://github.com/jellyfin/jellyfin/pull/17128), [jellyfin#9813](https://github.com/jellyfin/jellyfin/issues/9813), [jellyfin#17319](https://github.com/jellyfin/jellyfin/issues/17319), [jellyfin-web#8072](https://github.com/jellyfin/jellyfin-web/pull/8072). Encoding UI: [`jellyfin_web_live_stream`](patches.md#jellyfin_web_live_streampatch).
 
 ## Playback / encoding tooling
 
