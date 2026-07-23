@@ -1,0 +1,66 @@
+diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
+index ec7f5ce5d0..f033de0e6b 100644
+--- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
++++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
+@@ -695,7 +695,9 @@ namespace MediaBrowser.Controller.MediaEncoding
+             {
+                 "ogg" or "oga" or "ogv" or "webm" or "webma" => "opus",
+                 "m4a" or "m4b" or "mp4" or "mov" or "mkv" or "mka" => "aac",
+-                "ts" or "avi" or "flv" or "f4v" or "swf" => "mp3",
++                // MP3 in MPEG-TS is widely silent on ExoPlayer/Android (jellyfin-web#5419, Wholphin#879).
++                "ts" or "m2ts" or "mts" => "aac",
++                "avi" or "flv" or "f4v" or "swf" => "mp3",
+                 _ => inferredCodec
+             };
+         }
+@@ -7586,6 +7588,17 @@ namespace MediaBrowser.Controller.MediaEncoding
+                 // Keep them in the supported codecs list, but shift them to the end of the list so that if transcoding happens, another codec is used
+                 shiftAudioCodecs.Add("dts");
+                 shiftAudioCodecs.Add("truehd");
++
++                // Multichannel AAC is unreliable on many Android TV / ExoPlayer devices (Wholphin#255).
++                // When the client also offers AC3/EAC3, prefer those for copy or re-encode.
++                // AAC-only clients (typical browsers/phones) are unchanged.
++                if (audioCodecs.Any(static c =>
++                        string.Equals(c, "ac3", StringComparison.OrdinalIgnoreCase)
++                        || string.Equals(c, "eac3", StringComparison.OrdinalIgnoreCase)))
++                {
++                    shiftAudioCodecs.Add("aac");
++                    shiftAudioCodecs.Add("aac_latm");
++                }
+             }
+             else
+             {
+diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
+index 2e394f386a..0dad188d50 100644
+--- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
++++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
+@@ -420,6 +420,13 @@ namespace MediaBrowser.MediaEncoding.Encoder
+             {
+                 codec = "libmp3lame";
+             }
++            else if (string.Equals(codec, "aac", StringComparison.OrdinalIgnoreCase))
++            {
++                // Align with EncodingHelper.GetAudioEncoder: any of these satisfy an "aac" request.
++                return SupportsEncoder("aac")
++                    || SupportsEncoder("libfdk_aac")
++                    || SupportsEncoder("aac_at");
++            }
+ 
+             return SupportsEncoder(codec);
+         }
+diff --git a/MediaBrowser.Model/Dlna/StreamBuilder.cs b/MediaBrowser.Model/Dlna/StreamBuilder.cs
+index a9ab7d6db0..8ad560cc59 100644
+--- a/MediaBrowser.Model/Dlna/StreamBuilder.cs
++++ b/MediaBrowser.Model/Dlna/StreamBuilder.cs
+@@ -29,7 +29,9 @@ namespace MediaBrowser.Model.Dlna
+         private readonly ILogger _logger;
+         private readonly ITranscoderSupport _transcoderSupport;
+         private static readonly string[] _supportedHlsVideoCodecs = ["h264", "hevc", "vp9", "av1"];
+-        private static readonly string[] _supportedHlsAudioCodecsTs = ["aac", "ac3", "eac3", "mp3"];
++        // MP3 in MPEG-TS HLS is widely broken on ExoPlayer/Android (silent audio; jellyfin-web#5419,
++        // Wholphin#879). Keep MP3 for fMP4 HLS where demux is reliable.
++        private static readonly string[] _supportedHlsAudioCodecsTs = ["aac", "ac3", "eac3"];
+         private static readonly string[] _supportedHlsAudioCodecsMp4 = ["aac", "ac3", "eac3", "mp3", "alac", "flac", "opus", "dts", "truehd"];
+ 
+         /// <summary>
