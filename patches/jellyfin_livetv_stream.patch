@@ -1,4 +1,7 @@
-# Live TV stream hardening: rolling buffer (jellyfin#17128), probe options (jellyfin#9813), open-lock / SharedHttpStream timeout / failed-open dispose (jellyfin#17319)
+# Live TV stream hardening: rolling buffer (jellyfin#17128), probe options (jellyfin#9813),
+# open-lock / SharedHttpStream timeout / failed-open dispose (jellyfin#17319),
+# per-channel keyed open + ConsumerCount ownership, reverse-close on stop without LiveStreamId,
+# and orphaned live-stream sweeper (jellyfin#16880 / #17177).
 #
 diff --git a/Emby.Server.Implementations/Library/LiveStreamHelper.cs b/Emby.Server.Implementations/Library/LiveStreamHelper.cs
 index 0ebfe3ae71..2b7df3e41e 100644
@@ -82,18 +85,27 @@ index 0ebfe3ae71..2b7df3e41e 100644
      }
  }
 diff --git a/Emby.Server.Implementations/Library/MediaSourceManager.cs b/Emby.Server.Implementations/Library/MediaSourceManager.cs
-index 97e00177b6..b69de84403 100644
+index 97e00177b6..4fe7f033fb 100644
 --- a/Emby.Server.Implementations/Library/MediaSourceManager.cs
 +++ b/Emby.Server.Implementations/Library/MediaSourceManager.cs
-@@ -58,6 +58,7 @@ namespace Emby.Server.Implementations.Library
+@@ -58,8 +58,16 @@ namespace Emby.Server.Implementations.Library
          private readonly IDirectoryService _directoryService;
          private readonly IMediaStreamRepository _mediaStreamRepository;
          private readonly IMediaAttachmentRepository _mediaAttachmentRepository;
 +        private readonly IConfigurationManager _configurationManager;
          private readonly ConcurrentDictionary<string, ILiveStream> _openStreams = new ConcurrentDictionary<string, ILiveStream>(StringComparer.OrdinalIgnoreCase);
          private readonly AsyncNonKeyedLocker _liveStreamLocker = new(1);
++        // Serialize same-channel opens (same OpenToken) without blocking unrelated channels (jellyfin#17319 race).
++        private readonly AsyncKeyedLocker<string> _liveStreamOpenLocks = new(o =>
++        {
++            o.PoolSize = 20;
++            o.PoolInitialFill = 1;
++        });
++
          private readonly JsonSerializerOptions _jsonOptions = JsonDefaults.Options;
-@@ -77,7 +78,8 @@ namespace Emby.Server.Implementations.Library
+ 
+         private IMediaSourceProvider[] _providers;
+@@ -77,7 +85,8 @@ namespace Emby.Server.Implementations.Library
              IMediaEncoder mediaEncoder,
              IDirectoryService directoryService,
              IMediaStreamRepository mediaStreamRepository,
@@ -103,7 +115,7 @@ index 97e00177b6..b69de84403 100644
          {
              _appHost = appHost;
              _itemRepo = itemRepo;
-@@ -92,6 +94,7 @@ namespace Emby.Server.Implementations.Library
+@@ -92,6 +101,7 @@ namespace Emby.Server.Implementations.Library
              _directoryService = directoryService;
              _mediaStreamRepository = mediaStreamRepository;
              _mediaAttachmentRepository = mediaAttachmentRepository;
@@ -111,7 +123,7 @@ index 97e00177b6..b69de84403 100644
          }
  
          public void AddParts(IEnumerable<IMediaSourceProvider> providers)
-@@ -633,16 +636,37 @@ namespace Emby.Server.Implementations.Library
+@@ -633,67 +643,162 @@ namespace Emby.Server.Implementations.Library
  
          public async Task<Tuple<LiveStreamResponse, IDirectStreamProvider>> OpenLiveStreamInternal(LiveStreamRequest request, CancellationToken cancellationToken)
          {
@@ -119,70 +131,199 @@ index 97e00177b6..b69de84403 100644
 -            ILiveStream liveStream;
 +            var (provider, keyId) = GetProvider(request.OpenToken);
  
-+            // Snapshot under the lock only — do not hold it across network Open() (jellyfin#17319).
-+            List<ILiveStream> currentLiveStreams;
-             using (await _liveStreamLocker.LockAsync(cancellationToken).ConfigureAwait(false))
+-            using (await _liveStreamLocker.LockAsync(cancellationToken).ConfigureAwait(false))
++            // Same OpenToken = same channel open path; different tokens still open in parallel.
++            using (await _liveStreamOpenLocks.LockAsync(request.OpenToken, cancellationToken).ConfigureAwait(false))
              {
 -                var (provider, keyId) = GetProvider(request.OpenToken);
-+                currentLiveStreams = _openStreams.Values.ToList();
-+            }
++                ILiveStream liveStream = null;
++                MediaSourceInfo mediaSource;
++                ILiveStream streamToClose = null;
++                List<ILiveStream> currentLiveStreams = null;
++                var sharedWithoutOpen = false;
 +
-+            var liveStream = await provider.OpenMediaSource(keyId, currentLiveStreams, cancellationToken).ConfigureAwait(false);
++                using (await _liveStreamLocker.LockAsync(cancellationToken).ConfigureAwait(false))
++                {
++                    // Authoritative share decision under the global lock (ConsumerCount ownership).
++                    var streamIdHint = TryGetStreamIdHint(keyId);
++                    if (!string.IsNullOrEmpty(streamIdHint))
++                    {
++                        var existing = _openStreams.Values.FirstOrDefault(i =>
++                            i.EnableStreamSharing
++                            && string.Equals(i.OriginalStreamId, streamIdHint, StringComparison.OrdinalIgnoreCase));
++
++                        if (existing is not null)
++                        {
++                            existing.ConsumerCount++;
++                            liveStream = existing;
++                            sharedWithoutOpen = true;
++                            _logger.LogInformation(
++                                "Live stream {0} consumer count is now {1}",
++                                existing.OriginalStreamId,
++                                existing.ConsumerCount);
++                        }
++                    }
  
 -                var currentLiveStreams = _openStreams.Values.ToList();
-+            MediaSourceInfo mediaSource;
-+            ILiveStream streamToClose = null;
-+
-+            using (await _liveStreamLocker.LockAsync(cancellationToken).ConfigureAwait(false))
-+            {
-+                // Prefer a shareable stream registered while we were opening (rare double-open race).
-+                if (!string.IsNullOrEmpty(liveStream.OriginalStreamId))
-+                {
-+                    var existing = _openStreams.Values.FirstOrDefault(i =>
-+                        i.EnableStreamSharing
-+                        && !ReferenceEquals(i, liveStream)
-+                        && string.Equals(i.OriginalStreamId, liveStream.OriginalStreamId, StringComparison.OrdinalIgnoreCase));
++                    if (!sharedWithoutOpen)
++                    {
++                        currentLiveStreams = _openStreams.Values.ToList();
++                    }
++                }
  
 -                liveStream = await provider.OpenMediaSource(keyId, currentLiveStreams, cancellationToken).ConfigureAwait(false);
-+                    if (existing is not null)
++                if (!sharedWithoutOpen)
++                {
++                    // Network Open stays outside the global lock (jellyfin#17319) but inside the keyed lock.
++                    liveStream = await provider.OpenMediaSource(keyId, currentLiveStreams, cancellationToken).ConfigureAwait(false);
++
++                    using (await _liveStreamLocker.LockAsync(cancellationToken).ConfigureAwait(false))
 +                    {
-+                        existing.ConsumerCount++;
-+                        streamToClose = liveStream;
-+                        liveStream = existing;
++                        // Prefer a shareable stream already registered (service advisory list / residual race).
++                        ILiveStream existing = null;
++                        if (!string.IsNullOrEmpty(liveStream.OriginalStreamId))
++                        {
++                            existing = _openStreams.Values.FirstOrDefault(i =>
++                                i.EnableStreamSharing
++                                && string.Equals(i.OriginalStreamId, liveStream.OriginalStreamId, StringComparison.OrdinalIgnoreCase));
++                        }
++
++                        if (existing is not null)
++                        {
++                            existing.ConsumerCount++;
++                            if (!ReferenceEquals(existing, liveStream))
++                            {
++                                streamToClose = liveStream;
++                            }
++
++                            liveStream = existing;
++                            _logger.LogInformation(
++                                "Live stream {0} consumer count is now {1}",
++                                existing.OriginalStreamId,
++                                existing.ConsumerCount);
++                        }
++                        else
++                        {
++                            var source = liveStream.MediaSource;
++
++                            if (source.SupportsDirectStream)
++                            {
++                                source.SupportsDirectStream = SupportsDirectStream(source.Path, source.Protocol);
++                            }
++
++                            SetKeyProperties(provider, source);
++                            _openStreams[source.LiveStreamId] = liveStream;
++                        }
 +                    }
 +                }
  
                  mediaSource = liveStream.MediaSource;
  
-@@ -657,6 +681,18 @@ namespace Emby.Server.Implementations.Library
-                 _openStreams[mediaSource.LiveStreamId] = liveStream;
-             }
+-                // Validate that this is actually possible
++                // Shared hits already have key properties; refresh SupportsDirectStream for the response clone path.
+                 if (mediaSource.SupportsDirectStream)
+                 {
+                     mediaSource.SupportsDirectStream = SupportsDirectStream(mediaSource.Path, mediaSource.Protocol);
+                 }
  
-+            if (streamToClose is not null)
-+            {
+-                SetKeyProperties(provider, mediaSource);
++                if (streamToClose is not null)
++                {
++                    try
++                    {
++                        await streamToClose.Close().ConfigureAwait(false);
++                    }
++                    catch (Exception ex)
++                    {
++                        _logger.LogError(ex, "Error closing duplicate live stream after share race");
++                    }
++                }
+ 
+-                _openStreams[mediaSource.LiveStreamId] = liveStream;
+-            }
 +                try
 +                {
-+                    await streamToClose.Close().ConfigureAwait(false);
++                    if (mediaSource.MediaStreams.Any(i => i.Index != -1) || !mediaSource.SupportsProbing)
++                    {
++                        AddMediaInfo(mediaSource);
++                    }
++                    else
++                    {
++                        // hack - these two values were taken from LiveTVMediaSourceProvider
++                        string cacheKey = request.OpenToken;
+ 
+-            try
+-            {
+-                if (mediaSource.MediaStreams.Any(i => i.Index != -1) || !mediaSource.SupportsProbing)
++                        await new LiveStreamHelper(_mediaEncoder, _logger, _appPaths, _configurationManager)
++                            .AddMediaInfoWithProbe(mediaSource, false, cacheKey, true, cancellationToken)
++                            .ConfigureAwait(false);
++                    }
 +                }
 +                catch (Exception ex)
-+                {
-+                    _logger.LogError(ex, "Error closing duplicate live stream after share race");
-+                }
-+            }
-+
-             try
-             {
-                 if (mediaSource.MediaStreams.Any(i => i.Index != -1) || !mediaSource.SupportsProbing)
-@@ -668,7 +704,7 @@ namespace Emby.Server.Implementations.Library
-                     // hack - these two values were taken from LiveTVMediaSourceProvider
-                     string cacheKey = request.OpenToken;
+                 {
++                    _logger.LogError(ex, "Error probing live tv stream");
+                     AddMediaInfo(mediaSource);
+                 }
+-                else
+-                {
+-                    // hack - these two values were taken from LiveTVMediaSourceProvider
+-                    string cacheKey = request.OpenToken;
  
 -                    await new LiveStreamHelper(_mediaEncoder, _logger, _appPaths)
-+                    await new LiveStreamHelper(_mediaEncoder, _logger, _appPaths, _configurationManager)
-                         .AddMediaInfoWithProbe(mediaSource, false, cacheKey, true, cancellationToken)
-                         .ConfigureAwait(false);
+-                        .AddMediaInfoWithProbe(mediaSource, false, cacheKey, true, cancellationToken)
+-                        .ConfigureAwait(false);
++                // TODO: @bond Fix
++                var json = JsonSerializer.SerializeToUtf8Bytes(mediaSource, _jsonOptions);
++                _logger.LogInformation("Live stream opened: {@MediaSource}", mediaSource);
++                var clone = JsonSerializer.Deserialize<MediaSourceInfo>(json, _jsonOptions);
++
++                if (!request.UserId.IsEmpty())
++                {
++                    var user = _userManager.GetUserById(request.UserId);
++                    var item = request.ItemId.IsEmpty()
++                        ? null
++                        : _libraryManager.GetItemById(request.ItemId);
++                    SetDefaultAudioAndSubtitleStreamIndices(item, clone, user);
                  }
-@@ -781,7 +817,13 @@ namespace Emby.Server.Implementations.Library
+-            }
+-            catch (Exception ex)
+-            {
+-                _logger.LogError(ex, "Error probing live tv stream");
+-                AddMediaInfo(mediaSource);
+-            }
+ 
+-            // TODO: @bond Fix
+-            var json = JsonSerializer.SerializeToUtf8Bytes(mediaSource, _jsonOptions);
+-            _logger.LogInformation("Live stream opened: {@MediaSource}", mediaSource);
+-            var clone = JsonSerializer.Deserialize<MediaSourceInfo>(json, _jsonOptions);
++                return new Tuple<LiveStreamResponse, IDirectStreamProvider>(new LiveStreamResponse(clone), liveStream as IDirectStreamProvider);
++            }
++        }
+ 
+-            if (!request.UserId.IsEmpty())
++        /// <summary>
++        /// Live TV open tokens are <c>itemType_itemId_mediaSourceId</c>; mediaSourceId becomes OriginalStreamId.
++        /// </summary>
++        private static string TryGetStreamIdHint(string keyId)
++        {
++            if (string.IsNullOrEmpty(keyId))
+             {
+-                var user = _userManager.GetUserById(request.UserId);
+-                var item = request.ItemId.IsEmpty()
+-                    ? null
+-                    : _libraryManager.GetItemById(request.ItemId);
+-                SetDefaultAudioAndSubtitleStreamIndices(item, clone, user);
++                return null;
+             }
+ 
+-            return new Tuple<LiveStreamResponse, IDirectStreamProvider>(new LiveStreamResponse(clone), liveStream as IDirectStreamProvider);
++            var keys = keyId.Split(LiveStreamIdDelimiter, 3);
++            return keys.Length >= 3 ? keys[2] : null;
+         }
+ 
+         private static void AddMediaInfo(MediaSourceInfo mediaSource)
+@@ -781,7 +886,13 @@ namespace Emby.Server.Implementations.Library
  
          public async Task AddMediaInfoWithProbe(MediaSourceInfo mediaSource, bool isAudio, string cacheKey, bool addProbeDelay, bool isLiveStream, CancellationToken cancellationToken)
          {
@@ -197,7 +338,7 @@ index 97e00177b6..b69de84403 100644
  
              var now = DateTime.UtcNow;
  
-@@ -814,11 +856,6 @@ namespace Emby.Server.Implementations.Library
+@@ -814,11 +925,6 @@ namespace Emby.Server.Implementations.Library
                      await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
                  }
  
@@ -209,7 +350,7 @@ index 97e00177b6..b69de84403 100644
                  mediaInfo = await _mediaEncoder.GetMediaInfo(
                      new MediaInfoRequest
                      {
-@@ -843,21 +880,6 @@ namespace Emby.Server.Implementations.Library
+@@ -843,21 +949,6 @@ namespace Emby.Server.Implementations.Library
  
              var mediaStreams = mediaInfo.MediaStreams;
  
@@ -231,7 +372,7 @@ index 97e00177b6..b69de84403 100644
              _logger.LogInformation("Live tv media info probe took {0} seconds", (DateTime.UtcNow - now).TotalSeconds.ToString(CultureInfo.InvariantCulture));
  
              mediaSource.Bitrate = mediaInfo.Bitrate;
-@@ -872,15 +894,6 @@ namespace Emby.Server.Implementations.Library
+@@ -872,15 +963,6 @@ namespace Emby.Server.Implementations.Library
  
              mediaSource.DefaultSubtitleStreamIndex = null;
  
@@ -247,7 +388,7 @@ index 97e00177b6..b69de84403 100644
              var audioStream = mediaStreams.FirstOrDefault(i => i.Type == MediaStreamType.Audio);
  
              if (audioStream is null || audioStream.Index == -1)
-@@ -921,11 +934,6 @@ namespace Emby.Server.Implementations.Library
+@@ -921,11 +1003,6 @@ namespace Emby.Server.Implementations.Library
                  videoStream.IsAVC = null;
              }
  
@@ -259,7 +400,20 @@ index 97e00177b6..b69de84403 100644
              // Try to estimate this
              mediaSource.InferTotalBitrate(true);
          }
-@@ -987,7 +995,7 @@ namespace Emby.Server.Implementations.Library
+@@ -961,6 +1038,12 @@ namespace Emby.Server.Implementations.Library
+             return _openStreams.Values.FirstOrDefault(stream => string.Equals(uniqueId, stream?.UniqueId, StringComparison.OrdinalIgnoreCase));
+         }
+ 
++        /// <inheritdoc />
++        public IReadOnlyList<ILiveStream> GetOpenLiveStreams()
++        {
++            return _openStreams.Values.ToList();
++        }
++
+         public async Task<MediaSourceInfo> GetLiveStream(string id, CancellationToken cancellationToken)
+         {
+             var result = await GetLiveStreamWithDirectStreamProvider(id, cancellationToken).ConfigureAwait(false);
+@@ -987,7 +1070,7 @@ namespace Emby.Server.Implementations.Library
                  IgnoreIndex = true
              };
  
@@ -268,7 +422,7 @@ index 97e00177b6..b69de84403 100644
                  .AddMediaInfoWithProbe(stream, false, false, cancellationToken).ConfigureAwait(false);
  
              return [stream];
-@@ -997,6 +1005,8 @@ namespace Emby.Server.Implementations.Library
+@@ -997,11 +1080,13 @@ namespace Emby.Server.Implementations.Library
          {
              ArgumentException.ThrowIfNullOrEmpty(id);
  
@@ -277,7 +431,13 @@ index 97e00177b6..b69de84403 100644
              using (await _liveStreamLocker.LockAsync().ConfigureAwait(false))
              {
                  if (_openStreams.TryGetValue(id, out ILiveStream liveStream))
-@@ -1011,11 +1021,17 @@ namespace Emby.Server.Implementations.Library
+                 {
+-                    liveStream.ConsumerCount--;
++                    liveStream.ConsumerCount = Math.Max(0, liveStream.ConsumerCount - 1);
+ 
+                     _logger.LogInformation("Live stream {0} consumer count is now {1}", liveStream.OriginalStreamId, liveStream.ConsumerCount);
+ 
+@@ -1011,11 +1096,17 @@ namespace Emby.Server.Implementations.Library
  
                          _logger.LogInformation("Closing live stream {0}", id);
  
@@ -297,6 +457,282 @@ index 97e00177b6..b69de84403 100644
          }
  
          private (IMediaSourceProvider MediaSourceProvider, string KeyId) GetProvider(string key)
+@@ -1053,6 +1144,7 @@ namespace Emby.Server.Implementations.Library
+                 }
+ 
+                 _liveStreamLocker.Dispose();
++                _liveStreamOpenLocks.Dispose();
+             }
+         }
+     }
+diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
+index 828bdd6859..342435e0e8 100644
+--- a/Emby.Server.Implementations/Session/SessionManager.cs
++++ b/Emby.Server.Implementations/Session/SessionManager.cs
+@@ -317,10 +317,49 @@ namespace Emby.Server.Implementations.Session
+                     await CloseLiveStreamIfNeededAsync(session.PlayState.LiveStreamId, session.Id).ConfigureAwait(false);
+                 }
+ 
++                // Cover disconnects where PlayState.LiveStreamId was cleared but mappings remain.
++                await CloseLiveStreamsForSessionAsync(session.Id).ConfigureAwait(false);
++
+                 await OnSessionEnded(session).ConfigureAwait(false);
+             }
+         }
+ 
++        /// <summary>
++        /// Closes live streams associated with a session via reverse lookup of active mappings
++        /// (when stop payloads omit <c>LiveStreamId</c>).
++        /// </summary>
++        private async Task CloseLiveStreamsForSessionAsync(string sessionId, string playSessionId = null)
++        {
++            if (string.IsNullOrEmpty(sessionId) && string.IsNullOrEmpty(playSessionId))
++            {
++                return;
++            }
++
++            var liveStreamIds = new List<string>();
++            foreach (var (liveStreamId, mappings) in _activeLiveStreamSessions)
++            {
++                if ((!string.IsNullOrEmpty(sessionId) && mappings.ContainsKey(sessionId))
++                    || (!string.IsNullOrEmpty(playSessionId) && mappings.ContainsKey(playSessionId)))
++                {
++                    liveStreamIds.Add(liveStreamId);
++                }
++            }
++
++            foreach (var liveStreamId in liveStreamIds)
++            {
++                if (!string.IsNullOrEmpty(sessionId)
++                    && _activeLiveStreamSessions.TryGetValue(liveStreamId, out var mappings)
++                    && mappings.ContainsKey(sessionId))
++                {
++                    await CloseLiveStreamIfNeededAsync(liveStreamId, sessionId).ConfigureAwait(false);
++                }
++                else if (!string.IsNullOrEmpty(playSessionId))
++                {
++                    await CloseLiveStreamIfNeededAsync(liveStreamId, playSessionId).ConfigureAwait(false);
++                }
++            }
++        }
++
+         /// <inheritdoc />
+         public async Task CloseLiveStreamIfNeededAsync(string liveStreamId, string sessionIdOrPlaySessionId)
+         {
+@@ -605,14 +644,9 @@ namespace Emby.Server.Implementations.Session
+         {
+             _idleTimer ??= new Timer(CheckForIdlePlayback, null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+ 
+-            if (_config.Configuration.InactiveSessionThreshold > 0)
+-            {
+-                _inactiveTimer ??= new Timer(CheckForInactiveSteams, null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+-            }
+-            else
+-            {
+-                StopInactiveCheckTimer();
+-            }
++            // Always run the 1-minute timer so orphaned live streams can be swept even when
++            // InactiveSessionThreshold is 0 (paused-session stop remains gated on the threshold).
++            _inactiveTimer ??= new Timer(CheckForInactiveSteams, null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+         }
+ 
+         private void StopIdleCheckTimer()
+@@ -669,46 +703,117 @@ namespace Emby.Server.Implementations.Session
+             {
+                 StopIdleCheckTimer();
+             }
++
++            try
++            {
++                await CloseOrphanedLiveStreamsAsync().ConfigureAwait(false);
++            }
++            catch (Exception ex)
++            {
++                _logger.LogDebug(ex, "Error closing orphaned live streams");
++            }
+         }
+ 
+         private async void CheckForInactiveSteams(object state)
+         {
+-            var inactiveSessions = Sessions.Where(i =>
+-                    i.NowPlayingItem is not null
+-                    && i.PlayState.IsPaused
+-                    && (DateTime.UtcNow - i.LastPausedDate).Value.TotalMinutes > _config.Configuration.InactiveSessionThreshold);
+-
+-            foreach (var session in inactiveSessions)
++            if (_config.Configuration.InactiveSessionThreshold > 0)
+             {
+-                _logger.LogDebug("Session {Session} has been inactive for {InactiveTime} minutes. Stopping it.", session.Id, _config.Configuration.InactiveSessionThreshold);
++                var inactiveSessions = Sessions.Where(i =>
++                        i.NowPlayingItem is not null
++                        && i.PlayState.IsPaused
++                        && (DateTime.UtcNow - i.LastPausedDate).Value.TotalMinutes > _config.Configuration.InactiveSessionThreshold);
+ 
+-                try
+-                {
+-                    await SendPlaystateCommand(
+-                        session.Id,
+-                        session.Id,
+-                        new PlaystateRequest()
+-                        {
+-                            Command = PlaystateCommand.Stop,
+-                            ControllingUserId = session.UserId.ToString(),
+-                            SeekPositionTicks = session.PlayState?.PositionTicks
+-                        },
+-                        CancellationToken.None).ConfigureAwait(true);
+-                }
+-                catch (Exception ex)
++                foreach (var session in inactiveSessions)
+                 {
+-                    _logger.LogDebug(ex, "Error calling SendPlaystateCommand for stopping inactive session {Session}.", session.Id);
++                    _logger.LogDebug("Session {Session} has been inactive for {InactiveTime} minutes. Stopping it.", session.Id, _config.Configuration.InactiveSessionThreshold);
++
++                    try
++                    {
++                        await SendPlaystateCommand(
++                            session.Id,
++                            session.Id,
++                            new PlaystateRequest()
++                            {
++                                Command = PlaystateCommand.Stop,
++                                ControllingUserId = session.UserId.ToString(),
++                                SeekPositionTicks = session.PlayState?.PositionTicks
++                            },
++                            CancellationToken.None).ConfigureAwait(true);
++                    }
++                    catch (Exception ex)
++                    {
++                        _logger.LogDebug(ex, "Error calling SendPlaystateCommand for stopping inactive session {Session}.", session.Id);
++                    }
+                 }
+             }
+ 
++            try
++            {
++                await CloseOrphanedLiveStreamsAsync().ConfigureAwait(false);
++            }
++            catch (Exception ex)
++            {
++                _logger.LogDebug(ex, "Error closing orphaned live streams");
++            }
++
+             bool playingSessions = Sessions.Any(i => i.NowPlayingItem is not null);
++            bool hasOpenLiveStreams = _mediaSourceManager.GetOpenLiveStreams().Count > 0;
+ 
+-            if (!playingSessions)
++            if (!playingSessions && !hasOpenLiveStreams)
+             {
+                 StopInactiveCheckTimer();
+             }
+         }
+ 
++        /// <summary>
++        /// Closes open live streams with no session mapping and no PlayState reference after a grace period.
++        /// </summary>
++        private async Task CloseOrphanedLiveStreamsAsync()
++        {
++            const int orphanGraceMinutes = 2;
++            var openStreams = _mediaSourceManager.GetOpenLiveStreams();
++            if (openStreams.Count == 0)
++            {
++                return;
++            }
++
++            var now = DateTime.UtcNow;
++            foreach (var stream in openStreams)
++            {
++                var liveStreamId = stream.MediaSource?.LiveStreamId;
++                if (string.IsNullOrEmpty(liveStreamId))
++                {
++                    continue;
++                }
++
++                if (_activeLiveStreamSessions.ContainsKey(liveStreamId))
++                {
++                    continue;
++                }
++
++                if (Sessions.Any(s => string.Equals(s.PlayState?.LiveStreamId, liveStreamId, StringComparison.OrdinalIgnoreCase)))
++                {
++                    continue;
++                }
++
++                if ((now - stream.DateOpened).TotalMinutes < orphanGraceMinutes)
++                {
++                    continue;
++                }
++
++                _logger.LogInformation("Closing orphaned live stream {LiveStreamId}", liveStreamId);
++
++                try
++                {
++                    await _mediaSourceManager.CloseLiveStream(liveStreamId).ConfigureAwait(false);
++                }
++                catch (Exception ex)
++                {
++                    _logger.LogError(ex, "Error closing orphaned live stream {LiveStreamId}", liveStreamId);
++                }
++            }
++        }
++
+         private BaseItem GetNowPlayingItem(SessionInfo session, Guid itemId)
+         {
+             if (session is null)
+@@ -1066,6 +1171,10 @@ namespace Emby.Server.Implementations.Session
+                 {
+                     await CloseLiveStreamIfNeededAsync(info.LiveStreamId, session.Id).ConfigureAwait(false);
+                 }
++                else
++                {
++                    await CloseLiveStreamsForSessionAsync(session.Id, info.PlaySessionId).ConfigureAwait(false);
++                }
+ 
+                 throw new ArgumentOutOfRangeException(nameof(info), "The PlaybackStopInfo's PositionTicks was negative.");
+             }
+@@ -1139,6 +1248,10 @@ namespace Emby.Server.Implementations.Session
+             {
+                 await CloseLiveStreamIfNeededAsync(info.LiveStreamId, session.Id).ConfigureAwait(false);
+             }
++            else
++            {
++                await CloseLiveStreamsForSessionAsync(session.Id, info.PlaySessionId).ConfigureAwait(false);
++            }
+ 
+             var eventArgs = new PlaybackStopEventArgs
+             {
+diff --git a/MediaBrowser.Controller/Library/ILiveStream.cs b/MediaBrowser.Controller/Library/ILiveStream.cs
+index bf64aca0f0..b247dd61a7 100644
+--- a/MediaBrowser.Controller/Library/ILiveStream.cs
++++ b/MediaBrowser.Controller/Library/ILiveStream.cs
+@@ -24,6 +24,11 @@ namespace MediaBrowser.Controller.Library
+ 
+         string UniqueId { get; }
+ 
++        /// <summary>
++        /// Gets the UTC time the live stream was opened.
++        /// </summary>
++        DateTime DateOpened { get; }
++
+         Task Open(CancellationToken openCancellationToken);
+ 
+         Task Close();
+diff --git a/MediaBrowser.Controller/Library/IMediaSourceManager.cs b/MediaBrowser.Controller/Library/IMediaSourceManager.cs
+index 2b6781a197..9464ee3cdc 100644
+--- a/MediaBrowser.Controller/Library/IMediaSourceManager.cs
++++ b/MediaBrowser.Controller/Library/IMediaSourceManager.cs
+@@ -117,6 +117,12 @@ namespace MediaBrowser.Controller.Library
+         /// <returns>An instance of <see cref="ILiveStream"/>.</returns>
+         public ILiveStream GetLiveStreamInfoByUniqueId(string uniqueId);
+ 
++        /// <summary>
++        /// Gets a snapshot of currently open live streams.
++        /// </summary>
++        /// <returns>Open live streams.</returns>
++        IReadOnlyList<ILiveStream> GetOpenLiveStreams();
++
+         /// <summary>
+         /// Gets the media sources for an active recording.
+         /// </summary>
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 index 1b0bbe9ea0..a9ae1c409f 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
@@ -432,6 +868,51 @@ index 75ccdcf276..b7cc2e6de6 100644
 +
          [JsonIgnore]
          public TranscodeReason TranscodeReasons { get; set; }
+ 
+diff --git a/src/Jellyfin.LiveTv/DefaultLiveTvService.cs b/src/Jellyfin.LiveTv/DefaultLiveTvService.cs
+index d477bc3713..5dd9eec57e 100644
+--- a/src/Jellyfin.LiveTv/DefaultLiveTvService.cs
++++ b/src/Jellyfin.LiveTv/DefaultLiveTvService.cs
+@@ -469,9 +469,8 @@ namespace Jellyfin.LiveTv
+ 
+             if (result is not null && result.EnableStreamSharing)
+             {
+-                result.ConsumerCount++;
+-
+-                _logger.LogInformation("Live stream {0} consumer count is now {1}", streamId, result.ConsumerCount);
++                // ConsumerCount is owned by MediaSourceManager under _liveStreamLocker.
++                _logger.LogInformation("Reusing live stream {0} (consumer count managed by MediaSourceManager)", streamId);
+ 
+                 return result;
+             }
+diff --git a/src/Jellyfin.LiveTv/IO/ExclusiveLiveStream.cs b/src/Jellyfin.LiveTv/IO/ExclusiveLiveStream.cs
+index 394b9cf11d..1578e974ea 100644
+--- a/src/Jellyfin.LiveTv/IO/ExclusiveLiveStream.cs
++++ b/src/Jellyfin.LiveTv/IO/ExclusiveLiveStream.cs
+@@ -24,6 +24,7 @@ namespace Jellyfin.LiveTv.IO
+             _closeFn = closeFn;
+             ConsumerCount = 1;
+             UniqueId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
++            DateOpened = DateTime.UtcNow;
+         }
+ 
+         public int ConsumerCount { get; set; }
+@@ -38,6 +39,8 @@ namespace Jellyfin.LiveTv.IO
+ 
+         public string UniqueId { get; }
+ 
++        public DateTime DateOpened { get; private set; }
++
+         public Task Close()
+         {
+             return _closeFn();
+@@ -50,6 +53,7 @@ namespace Jellyfin.LiveTv.IO
+ 
+         public Task Open(CancellationToken openCancellationToken)
+         {
++            DateOpened = DateTime.UtcNow;
+             return Task.CompletedTask;
+         }
  
 diff --git a/src/Jellyfin.LiveTv/TunerHosts/BaseTunerHost.cs b/src/Jellyfin.LiveTv/TunerHosts/BaseTunerHost.cs
 index aba9627ba0..e16e1ea87b 100644
