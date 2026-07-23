@@ -247,6 +247,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | Extend HDR10+ strip conditions for MPEG-TS remux. |
 | **Related** | [jellyfin#16823](https://github.com/jellyfin/jellyfin/issues/16823). |
 
+### `jellyfin_mpegts_prefer_aac.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Avoids MP3-in-MPEG-TS HLS; prefers AAC for stereo TS, and AC3/EAC3 over multichannel AAC when the client offers Dolby codecs. |
+| **Why** | MP3 demuxed from MPEG-TS is often silent on ExoPlayer/Android ([Wholphin#879](https://github.com/damontecres/Wholphin/issues/879)). After forcing AAC, 5.1 AAC is also silent or stereo-only on many Android TV devices ([Wholphin#255](https://github.com/damontecres/Wholphin/issues/255)); EAC3/AC3 copy or AC3 re-encode works. |
+| **Where** | `StreamBuilder.cs`, `EncodingHelper.cs` (`InferAudioCodec`, `ShiftAudioCodecsIfNeeded`), `MediaEncoder.cs` (`CanEncodeToAudioCodec`) |
+| **How** | Drop MP3 from HLS TS allowed codecs; infer AAC (not MP3) for `.ts`; treat `libfdk_aac`/`aac_at` as satisfying `aac`; for ≥6-channel sources, demote AAC in the codec list when `ac3`/`eac3` are also present so stream-copy/re-encode prefers Dolby. |
+| **Related** | [jellyfin-web#5419](https://github.com/jellyfin/jellyfin-web/issues/5419), [Wholphin#879](https://github.com/damontecres/Wholphin/issues/879), [Wholphin#255](https://github.com/damontecres/Wholphin/issues/255). |
+
 ### `jellyfin_web_chrome_mkv_directplay.patch`
 
 | | |
