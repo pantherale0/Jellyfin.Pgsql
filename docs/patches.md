@@ -252,10 +252,10 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | | |
 |---|---|
 | **Target** | `jellyfin` |
-| **What** | Avoids MP3-in-MPEG-TS HLS; prefers AAC for stereo TS, and AC3/EAC3 over multichannel AAC when the client offers Dolby codecs. |
-| **Why** | MP3 demuxed from MPEG-TS is often silent on ExoPlayer/Android ([Wholphin#879](https://github.com/damontecres/Wholphin/issues/879)). After forcing AAC, 5.1 AAC is also silent or stereo-only on many Android TV devices ([Wholphin#255](https://github.com/damontecres/Wholphin/issues/255)); EAC3/AC3 copy or AC3 re-encode works. |
-| **Where** | `StreamBuilder.cs`, `EncodingHelper.cs` (`InferAudioCodec`, `ShiftAudioCodecsIfNeeded`), `MediaEncoder.cs` (`CanEncodeToAudioCodec`) |
-| **How** | Drop MP3 from HLS TS allowed codecs; infer AAC (not MP3) for `.ts`; treat `libfdk_aac`/`aac_at` as satisfying `aac`; for ≥6-channel sources, demote AAC in the codec list when `ac3`/`eac3` are also present so stream-copy/re-encode prefers Dolby. |
+| **What** | Avoids MP3-in-MPEG-TS HLS; for surround, prefers AC3/EAC3 over AAC **only when the client advertises Dolby**. AAC-only clients (typical browsers/phones) keep AAC. |
+| **Why** | MP3 demuxed from MPEG-TS is often silent on ExoPlayer/Android ([Wholphin#879](https://github.com/damontecres/Wholphin/issues/879)). Multichannel AAC is also silent on many Android TV devices ([Wholphin#255](https://github.com/damontecres/Wholphin/issues/255)), but forcing AC3 globally would break Chrome/Firefox/iOS that only decode AAC in HLS. |
+| **Where** | `StreamBuilder.cs`, `EncodingHelper.cs` (`InferAudioCodec`, `ShiftAudioCodecsIfNeeded`, `EnforceStereoOnlyAac`, `GetAudioEncoder`), `MediaEncoder.cs` (`CanEncodeToAudioCodec`) |
+| **How** | Drop MP3 from HLS TS allowed codecs; infer AAC (not MP3) for `.ts`; treat `libfdk_aac`/`aac_at` as satisfying `aac`; when `Channels > 2` **and** the profile/request includes `ac3`/`eac3`, strip AAC so HLS copies EAC3 or encodes AC3. |
 | **Related** | [jellyfin-web#5419](https://github.com/jellyfin/jellyfin-web/issues/5419), [Wholphin#879](https://github.com/damontecres/Wholphin/issues/879), [Wholphin#255](https://github.com/damontecres/Wholphin/issues/255). |
 
 ### `jellyfin_web_chrome_mkv_directplay.patch`
