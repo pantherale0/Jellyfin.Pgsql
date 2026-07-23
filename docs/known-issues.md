@@ -27,6 +27,7 @@ Most product features (taste, playback stats, Emby import, Live TV patches, etc.
 | SSO redirect URI | Must be an absolute configured URI (`JELLYFIN_SSO_OIDC_REDIRECT_URI`); do not derive from `Request.Host`. |
 | Live TV RBAC categories | M3U `group-title` categories appear in SSO allowlists only after a guide refresh with [`jellyfin_z_livetv_rbac_allowlist`](patches.md#jellyfin_z_livetv_rbac_allowlistpatch). HDHomeRun/XMLTV-only setups typically get EPG Kids/Sports/News categories, not playlist groups. |
 | Live TV EVENT HLS auth | Legacy `/Videos/.../hls/...` segments require `[Authorize]`; without [`jellyfin_z_hls_live_playlist_apikey`](patches.md#jellyfin_z_hls_live_playlist_apikeypatch), playlists omit `ApiKey` on segment URIs (RFC 3986) and clients get 401 / `fragLoadError`. |
+| Live TV open timeout | Shared HTTP (M3U) opens use `LiveStreamOpenTimeoutMs` (default 15000) so a stalled upstream fails that tune instead of waiting ~100s on `HttpClient.Timeout`. With [`jellyfin_livetv_stream`](patches.md#jellyfin_livetv_streampatch), that open no longer holds the global live-stream lock, so other channels/users are not frozen. Adjust under Dashboard → Playback → Transcoding. |
 | SQLite migration | Stop Jellyfin first; target PG database should be empty; one-shot completion marker prevents re-runs ([README](../README.md#migrating-from-sqlite-to-postgresql)). |
 
 ## Inherited Postgres ecosystem issues (upstream tracker)
@@ -52,8 +53,9 @@ These are **Jellyfin** project issues/PRs carried as patches in this repo — se
 |---|---|
 | [jellyfin#14981](https://github.com/jellyfin/jellyfin/issues/14981) | Favorites lost on progress save |
 | [jellyfin#15411](https://github.com/jellyfin/jellyfin/issues/15411) / [PR #17298](https://github.com/jellyfin/jellyfin/pull/17298) | Live TV published URLs in Docker |
-| [jellyfin#17128](https://github.com/jellyfin/jellyfin/pull/17128) / [web#8072](https://github.com/jellyfin/jellyfin-web/pull/8072) | Live stream buffer / KeepSeconds |
-| [jellyfin#9813](https://github.com/jellyfin/jellyfin/issues/9813) | Live TV probe delay |
+| [jellyfin#17128](https://github.com/jellyfin/jellyfin/pull/17128) / [web#8072](https://github.com/jellyfin/jellyfin-web/pull/8072) | Live stream buffer / KeepSeconds (`jellyfin_livetv_stream`) |
+| [jellyfin#9813](https://github.com/jellyfin/jellyfin/issues/9813) | Live TV probe delay (`jellyfin_livetv_stream`) |
+| [jellyfin#17319](https://github.com/jellyfin/jellyfin/issues/17319) | Live TV global open lock / SharedHttpStream stall (`jellyfin_livetv_stream`) |
 | [jellyfin#13668](https://github.com/jellyfin/jellyfin/issues/13668) | HLS remux segment restart thrash |
 | [jellyfin#16823](https://github.com/jellyfin/jellyfin/issues/16823) | HDR10+ MPEG-TS SEI |
 | [jellyfin#15897](https://github.com/jellyfin/jellyfin/issues/15897) | Disabled plugin deletion |

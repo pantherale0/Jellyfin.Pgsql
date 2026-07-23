@@ -34,7 +34,7 @@ Patches are applied in **lexicographic order** (`ls | sort`). Prefixes encode la
 - `jellyfin_z_*` / `jellyfin_web_z_*` run late so they can edit files already touched by earlier patches.
 - `jellyfin_zz_*` / `jellyfin_web_zz_*` run last (for example person identity, Emby import UI).
 
-Some patches document explicit prerequisites in a `#` preamble (for example Live TV probe after stream buffer). Those comments are authoritative when refreshing patches.
+Some patches document explicit prerequisites in a `#` preamble when apply order matters beyond lexicographic sort. Those comments are authoritative when refreshing patches.
 
 ```bash
 # Used by Docker / CI

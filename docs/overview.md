@@ -32,7 +32,7 @@ Quick start and env-var tables remain in the root [README](../README.md). This `
 
 - **Experimental personal fork** — no general support commitment; behaviour can change without a public roadmap.
 - **Collaborator-locked issues and PRs** — public discussion is directed to [GitHub Discussions](https://github.com/pantherale0/Jellyfin.Pgsql/discussions); the tracker is primarily for CI (for example migration-sync failures).
-- **Not stock Jellyfin** — ~59 patches diverge from upstream. Every Jellyfin bump requires re-applying or refreshing patches; some (especially TV Latest optimisation and large Live TV patches) need manual re-validation.
+- **Not stock Jellyfin** — ~57 patches diverge from upstream. Every Jellyfin bump requires re-applying or refreshing patches; some (especially TV Latest optimisation and large Live TV patches) need manual re-validation.
 - **Custom image required for patched features** — installing only the `.dll` plugin into stock Jellyfin does **not** give SSO, playback-stats controllers, home-section enums, or web UIs that live in patches.
 - **Third-party client variance** — native apps that ignore the patched web UI still hit patched APIs where applicable, but TV SSO behaviour, share links, and search providers may differ from stock expectations.
 - **Cache lag** — with default TTLs, newly added media can take up to ~2 minutes to appear in cached Latest rows.

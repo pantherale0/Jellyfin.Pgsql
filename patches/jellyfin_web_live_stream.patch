@@ -1,30 +1,47 @@
-# Add Live TV probe settings UI (companion to jellyfin_livetv_stream_probe / jellyfin#9813)
-# Must apply after jellyfin_web_live_stream_keep_seconds.patch
+# Live TV encoding UI: KeepSeconds, probe options, LiveStreamOpenTimeoutMs
 #
 diff --git a/src/apps/dashboard/routes/playback/transcoding.tsx b/src/apps/dashboard/routes/playback/transcoding.tsx
-index 292c5aa41f..5098d1c6fe 100644
+index 13da3e666b..eae31cf56b 100644
 --- a/src/apps/dashboard/routes/playback/transcoding.tsx
 +++ b/src/apps/dashboard/routes/playback/transcoding.tsx
-@@ -23,8 +23,13 @@ import { type ActionFunctionArgs, Form, useActionData, useNavigation, useSubmit
+@@ -21,7 +21,16 @@ import Alert from '@mui/material/Alert';
+ import Button from '@mui/material/Button';
+ import { type ActionFunctionArgs, Form, useActionData, useNavigation, useSubmit } from 'react-router-dom';
  import { QUERY_KEY, useNamedConfiguration } from 'hooks/useNamedConfiguration';
- import type { EncodingOptions as SdkEncodingOptions } from '@jellyfin/sdk/lib/generated-client/models/encoding-options';
- 
--// LiveStreamKeepSeconds is not yet in the published SDK — remove once the SDK is updated.
--type EncodingOptions = SdkEncodingOptions & { LiveStreamKeepSeconds?: number };
+-import type { EncodingOptions } from '@jellyfin/sdk/lib/generated-client/models/encoding-options';
++import type { EncodingOptions as SdkEncodingOptions } from '@jellyfin/sdk/lib/generated-client/models/encoding-options';
++
 +// Live-stream EncodingOptions fields are not yet in the published SDK — remove once the SDK is updated.
 +type EncodingOptions = SdkEncodingOptions & {
 +    LiveStreamKeepSeconds?: number;
 +    LiveStreamProbeDelayMs?: number;
 +    LiveStreamAnalyzeDurationMs?: number;
 +    LiveStreamProbeSize?: string;
++    LiveStreamOpenTimeoutMs?: number;
 +};
  import { HardwareAccelerationType } from '@jellyfin/sdk/lib/generated-client/models/hardware-acceleration-type';
  import { ServerConnections } from 'lib/jellyfin-apiclient';
  import { getSystemApi } from '@jellyfin/sdk/lib/utils/api/system-api';
-@@ -1009,6 +1014,46 @@ export const Component = () => {
+@@ -884,6 +893,78 @@ export const Component = () => {
                                  }}
                              />
  
++                            <TextField
++                                name='LiveStreamKeepSeconds'
++                                value={config.LiveStreamKeepSeconds}
++                                onChange={onConfigChange}
++                                label={globalize.translate('LabelLiveStreamKeepSeconds')}
++                                helperText={globalize.translate('LabelLiveStreamKeepSecondsHelp')}
++                                type='number'
++                                slotProps={{
++                                    htmlInput: {
++                                        min: 0,
++                                        max: 3600,
++                                        step: 1
++                                    }
++                                }}
++                            />
++
 +                            <TextField
 +                                name='LiveStreamProbeDelayMs'
 +                                value={config.LiveStreamProbeDelayMs}
@@ -65,23 +82,43 @@ index 292c5aa41f..5098d1c6fe 100644
 +                                helperText={globalize.translate('LabelLiveStreamProbeSizeHelp')}
 +                            />
 +
++                            <TextField
++                                name='LiveStreamOpenTimeoutMs'
++                                value={config.LiveStreamOpenTimeoutMs}
++                                onChange={onConfigChange}
++                                label={globalize.translate('LabelLiveStreamOpenTimeoutMs')}
++                                helperText={globalize.translate('LabelLiveStreamOpenTimeoutMsHelp')}
++                                type='number'
++                                slotProps={{
++                                    htmlInput: {
++                                        min: 0,
++                                        max: 120000,
++                                        step: 1000
++                                    }
++                                }}
++                            />
++
                              <Button type='submit' size='large'>
                                  {globalize.translate('Save')}
                              </Button>
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 184345eefb..062dd54eff 100755
+index 693468f439..9bbc42b0f4 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -43,6 +43,12 @@
+@@ -41,6 +41,16 @@
+     "LabelThrottleDelaySecondsHelp": "Time in seconds after which the transcoder will be throttled. Must be large enough for the client to maintain a healthy buffer. Only works if throttling is enabled.",
+     "LabelSegmentKeepSeconds": "Time to keep segments",
      "LabelSegmentKeepSecondsHelp": "Time in seconds for which segments should be kept after they are downloaded by the client. Only works if segment deletion is enabled.",
-     "LabelLiveStreamKeepSeconds": "Live stream rewind buffer (seconds)",
-     "LabelLiveStreamKeepSecondsHelp": "Number of seconds of live TV capture to keep in a rolling chunk buffer for rewinding. Set to 0 to disable the buffer and use the legacy single-growing-file behaviour.",
++    "LabelLiveStreamKeepSeconds": "Live stream rewind buffer (seconds)",
++    "LabelLiveStreamKeepSecondsHelp": "Number of seconds of live TV capture to keep in a rolling chunk buffer for rewinding. Set to 0 to disable the buffer and use the legacy single-growing-file behaviour.",
 +    "LabelLiveStreamProbeDelayMs": "Live stream probe delay (ms)",
 +    "LabelLiveStreamProbeDelayMsHelp": "How long to wait after opening a live stream before probing it. Lower values start playback faster but may fail on slow tuners. Set to 0 to probe immediately.",
 +    "LabelLiveStreamAnalyzeDurationMs": "Live stream analyze duration (ms)",
 +    "LabelLiveStreamAnalyzeDurationMsHelp": "FFmpeg/ffprobe -analyzeduration for live streams, in milliseconds. Lower values start faster; raise this if stream details are missing.",
 +    "LabelLiveStreamProbeSize": "Live stream probe size",
 +    "LabelLiveStreamProbeSizeHelp": "FFmpeg/ffprobe -probesize for live streams (for example 10M). Keep this modest to avoid long hangs on broadcast streams with unknown PIDs. Clear the field and save to use the global FFmpeg probesize.",
++    "LabelLiveStreamOpenTimeoutMs": "Live stream open timeout (ms)",
++    "LabelLiveStreamOpenTimeoutMsHelp": "Connect and first-byte deadline when opening a shared HTTP live stream (M3U). Default 15000. Set to 0 to disable the deadline (request cancellation still applies).",
      "AllowHWTranscodingHelp": "Allow the tuner to transcode streams on the fly. This may help reduce transcoding required by the server.",
      "AllowMediaConversion": "Allow media conversion",
      "AllowMediaConversionHelp": "Grant or deny access to the convert media feature.",
