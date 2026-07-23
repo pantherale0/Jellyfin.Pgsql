@@ -1,9 +1,9 @@
 diff --git a/Jellyfin.Api/Controllers/SSOController.cs b/Jellyfin.Api/Controllers/SSOController.cs
 new file mode 100644
-index 0000000000..1e5ff5f692
+index 0000000000..2cdd37248d
 --- /dev/null
 +++ b/Jellyfin.Api/Controllers/SSOController.cs
-@@ -0,0 +1,828 @@
+@@ -0,0 +1,930 @@
 +using System;
 +using System.Collections.Concurrent;
 +using System.Collections.Generic;
@@ -14,6 +14,7 @@ index 0000000000..1e5ff5f692
 +using System.Text.Encodings.Web;
 +using System.Threading.Tasks;
 +using Jellyfin.Api.Constants;
++using Jellyfin.Api.Models.SsoDtos;
 +using Jellyfin.Api.Results;
 +using Jellyfin.Data;
 +using Jellyfin.Data.Enums;
@@ -22,6 +23,7 @@ index 0000000000..1e5ff5f692
 +using MediaBrowser.Common.Api;
 +using MediaBrowser.Controller.Authentication;
 +using MediaBrowser.Controller.Configuration;
++using MediaBrowser.Controller.Entities;
 +using MediaBrowser.Controller.Library;
 +using MediaBrowser.Controller.Session;
 +using Microsoft.AspNetCore.Authorization;
@@ -410,6 +412,10 @@ index 0000000000..1e5ff5f692
 +                        var enabledFoldersList = new HashSet<Guid>();
 +                        var permissionValues = new Dictionary<PermissionKind, bool>();
 +                        var blockUnratedItems = new HashSet<UnratedItem>();
++                        var allowedTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
++                        var blockedTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
++                        var allowedLiveTvChannels = new HashSet<Guid>();
++                        var allowedLiveTvCategories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 +
 +                        foreach (var mapping in rbacDoc.RootElement.EnumerateArray())
 +                        {
@@ -467,16 +473,43 @@ index 0000000000..1e5ff5f692
 +                                            }
 +                                        }
 +                                    }
++
++                                    AddStringPreferences(mapping, "allowedTags", allowedTags);
++                                    AddStringPreferences(mapping, "blockedTags", blockedTags);
++                                    AddStringPreferences(mapping, "allowedLiveTvCategories", allowedLiveTvCategories);
++
++                                    if (mapping.TryGetProperty("allowedLiveTvChannels", out var liveTvChannelsEl)
++                                        && liveTvChannelsEl.ValueKind == System.Text.Json.JsonValueKind.Array)
++                                    {
++                                        foreach (var channelEl in liveTvChannelsEl.EnumerateArray())
++                                        {
++                                            var channelStr = channelEl.GetString();
++                                            if (!string.IsNullOrEmpty(channelStr) && Guid.TryParse(channelStr, out var channelGuid))
++                                            {
++                                                allowedLiveTvChannels.Add(channelGuid);
++                                            }
++                                        }
++                                    }
 +                                }
 +                            }
 +                        }
 +
 +                        if (mappedAny)
 +                        {
++                            // Keep guide rows consistent when Live TV channels are blocked as unrated.
++                            if (blockUnratedItems.Contains(UnratedItem.LiveTvChannel))
++                            {
++                                blockUnratedItems.Add(UnratedItem.LiveTvProgram);
++                            }
++
 +                            _logger.LogInformation("SSO Applying RBAC mappings for user '{Username}'", username);
 +                            user.SetPermission(PermissionKind.EnableAllFolders, enableAllFolders);
 +                            user.SetPreference(PreferenceKind.EnabledFolders, enabledFoldersList.ToArray());
 +                            user.SetPreference(PreferenceKind.BlockUnratedItems, blockUnratedItems.ToArray());
++                            user.SetPreference(PreferenceKind.AllowedTags, allowedTags.ToArray());
++                            user.SetPreference(PreferenceKind.BlockedTags, blockedTags.ToArray());
++                            user.SetPreference(PreferenceKind.AllowedLiveTvChannels, allowedLiveTvChannels.ToArray());
++                            user.SetPreference(PreferenceKind.AllowedLiveTvCategories, allowedLiveTvCategories.ToArray());
 +
 +                            foreach (var kvp in permissionValues)
 +                            {
@@ -747,6 +780,75 @@ index 0000000000..1e5ff5f692
 +    }
 +
 +    /// <summary>
++    /// Gets Live TV channels and categories for SSO allowlist configuration.
++    /// </summary>
++    /// <returns>Channels and selectable categories.</returns>
++    [HttpGet("rbac/livetv")]
++    [Authorize(Policy = Policies.RequiresElevation)]
++    public ActionResult GetRbacLiveTv()
++    {
++        var channels = _libraryManager.GetItemList(new InternalItemsQuery
++            {
++                IncludeItemTypes = [BaseItemKind.LiveTvChannel],
++                Recursive = true
++            })
++            .OfType<MediaBrowser.Controller.LiveTv.LiveTvChannel>()
++            .OrderBy(c => c.SortName, StringComparer.OrdinalIgnoreCase)
++            .Select(c => new SsoLiveTvChannelDto
++            {
++                Id = c.Id.ToString("N", CultureInfo.InvariantCulture),
++                Name = c.Name ?? string.Empty,
++                Number = c.Number ?? string.Empty,
++                ChannelGroup = c.ChannelGroup ?? string.Empty,
++                Tags = c.Tags?.ToArray() ?? []
++            })
++            .ToList();
++
++        var categories = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
++        foreach (var channel in channels)
++        {
++            if (!string.IsNullOrWhiteSpace(channel.ChannelGroup))
++            {
++                categories.Add(channel.ChannelGroup.Trim());
++            }
++
++            foreach (var epgTag in MediaBrowser.Controller.LiveTv.LiveTvParentalAccess.EpgCategoryTags)
++            {
++                if (channel.Tags.Any(t => string.Equals(t, epgTag, StringComparison.OrdinalIgnoreCase)))
++                {
++                    categories.Add(epgTag);
++                }
++            }
++        }
++
++        return Ok(new SsoLiveTvAllowlistDto
++        {
++            Channels = channels,
++            Categories = categories.ToArray()
++        });
++    }
++
++    private static void AddStringPreferences(
++        System.Text.Json.JsonElement mapping,
++        string propertyName,
++        HashSet<string> target)
++    {
++        if (!mapping.TryGetProperty(propertyName, out var el) || el.ValueKind != System.Text.Json.JsonValueKind.Array)
++        {
++            return;
++        }
++
++        foreach (var itemEl in el.EnumerateArray())
++        {
++            var value = itemEl.GetString();
++            if (!string.IsNullOrWhiteSpace(value))
++            {
++                target.Add(value.Trim());
++            }
++        }
++    }
++
++    /// <summary>
 +    /// Maps an OIDC birthdate claim to the user's max parental rating score.
 +    /// Ages 18+ clear the limit (unrestricted). Missing/invalid claims leave the user unchanged.
 +    /// </summary>
@@ -832,160 +934,16 @@ index 0000000000..1e5ff5f692
 +        return age;
 +    }
 +}
-diff --git a/Jellyfin.Api/Controllers/SSOController.cs b/Jellyfin.Api/Controllers/SSOController.cs
-index 1e5ff5f692..9fd376bdbf 100644
---- a/Jellyfin.Api/Controllers/SSOController.cs
-+++ b/Jellyfin.Api/Controllers/SSOController.cs
-@@ -16,12 +16,14 @@ using Jellyfin.Database.Implementations.Enums;
- using MediaBrowser.Common.Api;
- using MediaBrowser.Controller.Authentication;
- using MediaBrowser.Controller.Configuration;
-+using MediaBrowser.Controller.Entities;
- using MediaBrowser.Controller.Library;
- using MediaBrowser.Controller.Session;
- using Microsoft.AspNetCore.Authorization;
- using Microsoft.AspNetCore.Http;
- using Microsoft.AspNetCore.Mvc;
- using Microsoft.Extensions.Logging;
+diff --git a/Jellyfin.Api/Models/SsoDtos/SsoLiveTvAllowlistDto.cs b/Jellyfin.Api/Models/SsoDtos/SsoLiveTvAllowlistDto.cs
+new file mode 100644
+index 0000000000..ca3b3d894b
+--- /dev/null
++++ b/Jellyfin.Api/Models/SsoDtos/SsoLiveTvAllowlistDto.cs
+@@ -0,0 +1,22 @@
++using System.Collections.Generic;
 +using System.Text.Json.Serialization;
- 
- namespace Jellyfin.Api.Controllers;
- 
-@@ -404,6 +406,10 @@ public class SSOController : ControllerBase
-                         var enabledFoldersList = new HashSet<Guid>();
-                         var permissionValues = new Dictionary<PermissionKind, bool>();
-                         var blockUnratedItems = new HashSet<UnratedItem>();
-+                        var allowedTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-+                        var blockedTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-+                        var allowedLiveTvChannels = new HashSet<Guid>();
-+                        var allowedLiveTvCategories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
- 
-                         foreach (var mapping in rbacDoc.RootElement.EnumerateArray())
-                         {
-@@ -461,16 +467,43 @@ public class SSOController : ControllerBase
-                                             }
-                                         }
-                                     }
 +
-+                                    AddStringPreferences(mapping, "allowedTags", allowedTags);
-+                                    AddStringPreferences(mapping, "blockedTags", blockedTags);
-+                                    AddStringPreferences(mapping, "allowedLiveTvCategories", allowedLiveTvCategories);
-+
-+                                    if (mapping.TryGetProperty("allowedLiveTvChannels", out var liveTvChannelsEl)
-+                                        && liveTvChannelsEl.ValueKind == System.Text.Json.JsonValueKind.Array)
-+                                    {
-+                                        foreach (var channelEl in liveTvChannelsEl.EnumerateArray())
-+                                        {
-+                                            var channelStr = channelEl.GetString();
-+                                            if (!string.IsNullOrEmpty(channelStr) && Guid.TryParse(channelStr, out var channelGuid))
-+                                            {
-+                                                allowedLiveTvChannels.Add(channelGuid);
-+                                            }
-+                                        }
-+                                    }
-                                 }
-                             }
-                         }
- 
-                         if (mappedAny)
-                         {
-+                            // Keep guide rows consistent when Live TV channels are blocked as unrated.
-+                            if (blockUnratedItems.Contains(UnratedItem.LiveTvChannel))
-+                            {
-+                                blockUnratedItems.Add(UnratedItem.LiveTvProgram);
-+                            }
-+
-                             _logger.LogInformation("SSO Applying RBAC mappings for user '{Username}'", username);
-                             user.SetPermission(PermissionKind.EnableAllFolders, enableAllFolders);
-                             user.SetPreference(PreferenceKind.EnabledFolders, enabledFoldersList.ToArray());
-                             user.SetPreference(PreferenceKind.BlockUnratedItems, blockUnratedItems.ToArray());
-+                            user.SetPreference(PreferenceKind.AllowedTags, allowedTags.ToArray());
-+                            user.SetPreference(PreferenceKind.BlockedTags, blockedTags.ToArray());
-+                            user.SetPreference(PreferenceKind.AllowedLiveTvChannels, allowedLiveTvChannels.ToArray());
-+                            user.SetPreference(PreferenceKind.AllowedLiveTvCategories, allowedLiveTvCategories.ToArray());
- 
-                             foreach (var kvp in permissionValues)
-                             {
-@@ -740,6 +773,75 @@ public class SSOController : ControllerBase
-         return Ok(result);
-     }
- 
-+    /// <summary>
-+    /// Gets Live TV channels and categories for SSO allowlist configuration.
-+    /// </summary>
-+    /// <returns>Channels and selectable categories.</returns>
-+    [HttpGet("rbac/livetv")]
-+    [Authorize(Policy = Policies.RequiresElevation)]
-+    public ActionResult GetRbacLiveTv()
-+    {
-+        var channels = _libraryManager.GetItemList(new InternalItemsQuery
-+            {
-+                IncludeItemTypes = [BaseItemKind.LiveTvChannel],
-+                Recursive = true
-+            })
-+            .OfType<MediaBrowser.Controller.LiveTv.LiveTvChannel>()
-+            .OrderBy(c => c.SortName, StringComparer.OrdinalIgnoreCase)
-+            .Select(c => new SsoLiveTvChannelDto
-+            {
-+                Id = c.Id.ToString("N", CultureInfo.InvariantCulture),
-+                Name = c.Name ?? string.Empty,
-+                Number = c.Number ?? string.Empty,
-+                ChannelGroup = c.ChannelGroup ?? string.Empty,
-+                Tags = c.Tags?.ToArray() ?? []
-+            })
-+            .ToList();
-+
-+        var categories = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-+        foreach (var channel in channels)
-+        {
-+            if (!string.IsNullOrWhiteSpace(channel.ChannelGroup))
-+            {
-+                categories.Add(channel.ChannelGroup.Trim());
-+            }
-+
-+            foreach (var epgTag in MediaBrowser.Controller.LiveTv.LiveTvParentalAccess.EpgCategoryTags)
-+            {
-+                if (channel.Tags.Any(t => string.Equals(t, epgTag, StringComparison.OrdinalIgnoreCase)))
-+                {
-+                    categories.Add(epgTag);
-+                }
-+            }
-+        }
-+
-+        return Ok(new SsoLiveTvAllowlistDto
-+        {
-+            Channels = channels,
-+            Categories = categories.ToArray()
-+        });
-+    }
-+
-+    private static void AddStringPreferences(
-+        System.Text.Json.JsonElement mapping,
-+        string propertyName,
-+        HashSet<string> target)
-+    {
-+        if (!mapping.TryGetProperty(propertyName, out var el) || el.ValueKind != System.Text.Json.JsonValueKind.Array)
-+        {
-+            return;
-+        }
-+
-+        foreach (var itemEl in el.EnumerateArray())
-+        {
-+            var value = itemEl.GetString();
-+            if (!string.IsNullOrWhiteSpace(value))
-+            {
-+                target.Add(value.Trim());
-+            }
-+        }
-+    }
-+
-     /// <summary>
-     /// Maps an OIDC birthdate claim to the user's max parental rating score.
-     /// Ages 18+ clear the limit (unrestricted). Missing/invalid claims leave the user unchanged.
-@@ -826,3 +928,58 @@ public class SSOController : ControllerBase
-         return age;
-     }
- }
++namespace Jellyfin.Api.Models.SsoDtos;
 +
 +/// <summary>
 +/// Live TV allowlist payload for SSO RBAC configuration UI.
@@ -1004,6 +962,16 @@ index 1e5ff5f692..9fd376bdbf 100644
 +    [JsonPropertyName("categories")]
 +    public IReadOnlyList<string> Categories { get; set; } = [];
 +}
+diff --git a/Jellyfin.Api/Models/SsoDtos/SsoLiveTvChannelDto.cs b/Jellyfin.Api/Models/SsoDtos/SsoLiveTvChannelDto.cs
+new file mode 100644
+index 0000000000..beb09eb27e
+--- /dev/null
++++ b/Jellyfin.Api/Models/SsoDtos/SsoLiveTvChannelDto.cs
+@@ -0,0 +1,40 @@
++using System.Collections.Generic;
++using System.Text.Json.Serialization;
++
++namespace Jellyfin.Api.Models.SsoDtos;
 +
 +/// <summary>
 +/// Live TV channel summary for SSO allowlist pickers.
@@ -1040,4 +1008,3 @@ index 1e5ff5f692..9fd376bdbf 100644
 +    [JsonPropertyName("tags")]
 +    public IReadOnlyList<string> Tags { get; set; } = [];
 +}
-+

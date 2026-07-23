@@ -15,7 +15,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Target** | `jellyfin` |
 | **What** | Adds OIDC/OAuth2 SSO endpoints and login integration, including group RBAC apply (libraries, permissions, block-unrated, Allowed/Blocked tags, Live TV allowlists) and `GET /sso/rbac/livetv` for the dashboard picker. |
 | **Why** | Stock Jellyfin has no built-in IdP login; this fork needs forced SSO + RBAC for shared deployments. |
-| **Where** | `Jellyfin.Api/Controllers/SSOController.cs` |
+| **Where** | `Jellyfin.Api/Controllers/SSOController.cs`, `Jellyfin.Api/Models/SsoDtos/*` |
 | **How** | New controller handles authorize/callback/session flows driven by `JELLYFIN_SSO_OIDC_*` env configuration; matching `sso_rbac.json` groups merge preferences additively on login (blocking Live TV unrated also blocks `LiveTvProgram`). |
 | **Related** | Companion web: `jellyfin_web_rbac`, `jellyfin_web_tv_quickconnect_login`. Enforcement/persist: `jellyfin_z_livetv_rbac_allowlist`. README SSO section. Fork [pantherale0#5](https://github.com/pantherale0/Jellyfin.Pgsql/issues/5) (SSO mappings UI auth). |
 
