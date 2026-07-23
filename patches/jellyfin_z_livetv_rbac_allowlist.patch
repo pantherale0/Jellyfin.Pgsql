@@ -292,15 +292,16 @@ index aee4691cdf..9ec626bae3 100644
              if (double.TryParse(Number, CultureInfo.InvariantCulture, out double number))
 diff --git a/MediaBrowser.Controller/LiveTv/LiveTvParentalAccess.cs b/MediaBrowser.Controller/LiveTv/LiveTvParentalAccess.cs
 new file mode 100644
-index 0000000000..ae12d1426f
+index 0000000000..debd644d13
 --- /dev/null
 +++ b/MediaBrowser.Controller/LiveTv/LiveTvParentalAccess.cs
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,171 @@
 +#nullable enable
 +
 +using System;
 +using System.Collections.Generic;
 +using System.Linq;
++using Jellyfin.Data;
 +using Jellyfin.Database.Implementations.Entities;
 +using Jellyfin.Database.Implementations.Enums;
 +using Jellyfin.Extensions;
@@ -338,7 +339,7 @@ index 0000000000..ae12d1426f
 +            tags.Add(ChannelGroupTagPrefix + channel.ChannelGroup.Trim());
 +        }
 +
-+        channel.Tags = tags;
++        channel.Tags = tags.ToArray();
 +    }
 +
 +    /// <summary>
