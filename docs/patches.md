@@ -13,22 +13,22 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | | |
 |---|---|
 | **Target** | `jellyfin` |
-| **What** | Adds OIDC/OAuth2 SSO endpoints and login integration. |
+| **What** | Adds OIDC/OAuth2 SSO endpoints and login integration, including group RBAC apply (libraries, permissions, block-unrated, Allowed/Blocked tags, Live TV allowlists) and `GET /sso/rbac/livetv` for the dashboard picker. |
 | **Why** | Stock Jellyfin has no built-in IdP login; this fork needs forced SSO + RBAC for shared deployments. |
 | **Where** | `Jellyfin.Api/Controllers/SSOController.cs` |
-| **How** | New controller handles authorize/callback/session flows driven by `JELLYFIN_SSO_OIDC_*` env configuration. |
-| **Related** | Companion web: `jellyfin_web_rbac`, `jellyfin_web_tv_quickconnect_login`. README SSO section. Fork [pantherale0#5](https://github.com/pantherale0/Jellyfin.Pgsql/issues/5) (SSO mappings UI auth). |
+| **How** | New controller handles authorize/callback/session flows driven by `JELLYFIN_SSO_OIDC_*` env configuration; matching `sso_rbac.json` groups merge preferences additively on login (blocking Live TV unrated also blocks `LiveTvProgram`). |
+| **Related** | Companion web: `jellyfin_web_rbac`, `jellyfin_web_tv_quickconnect_login`. Enforcement/persist: `jellyfin_z_livetv_rbac_allowlist`. README SSO section. Fork [pantherale0#5](https://github.com/pantherale0/Jellyfin.Pgsql/issues/5) (SSO mappings UI auth). |
 
 ### `jellyfin_web_rbac.patch`
 
 | | |
 |---|---|
 | **Target** | `jellyfin-web` |
-| **What** | Dashboard SSO mappings UI and user profile hooks for OIDC groups / parental block-unrated rules. |
-| **Why** | Admins need to map IdP groups to Jellyfin parental settings without editing config files. |
+| **What** | Dashboard SSO mappings UI for OIDC groups: libraries, permissions, block-unrated, Allowed/Blocked tags, and Live TV channel/category allowlists. |
+| **Why** | Admins need a first-class UI to map IdP groups to parental settings (including Live TV exceptions) without editing config files. |
 | **Where** | `SSOMappings.tsx`, user `Profile.tsx`, users edit/index routes |
-| **How** | Admin pages call SSO/RBAC configuration APIs (CamelCase Accept profile where needed). |
-| **Related** | Server `jellyfin_sso`. [pantherale0#5](https://github.com/pantherale0/Jellyfin.Pgsql/issues/5). |
+| **How** | Admin pages call `/sso/rbac/config`, `/sso/rbac/libraries`, and `/sso/rbac/livetv` with CamelCase Accept profile. |
+| **Related** | Server `jellyfin_sso`, `jellyfin_z_livetv_rbac_allowlist`. [pantherale0#5](https://github.com/pantherale0/Jellyfin.Pgsql/issues/5). |
 
 ### `jellyfin_web_tv_quickconnect_login.patch`
 
@@ -283,6 +283,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Where** | `MediaInfoHelper`, `NetworkManager`, media/audio controllers, tests |
 | **How** | Vendored [jellyfin#17298](https://github.com/jellyfin/jellyfin/pull/17298): clone responses and rewrite `/LiveTv/LiveStreamFiles/` via `GetSmartApiUrl`; keep local buffer URL for ffmpeg. |
 | **Related** | [jellyfin#15411](https://github.com/jellyfin/jellyfin/issues/15411). |
+
+### `jellyfin_z_livetv_rbac_allowlist.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Persists M3U `group-title` as `LiveTvChannel.ChannelGroup` (plus `ChannelGroup:` tags), adds Live TV allowlist preference kinds, and enforces channel/category exceptions to block-unrated and AllowedTags for Live TV. |
+| **Why** | Blocking unrated Live TV hides nearly all channels; operators need group-scoped allowlists for safe kids/shared profiles. |
+| **Where** | `LiveTvChannel`, `LiveTvProgram`, `LiveTvParentalAccess`, `GuideManager`, `PreferenceKind`, `BaseItemRepository` access filters |
+| **How** | Whitelist by channel id and/or category (M3U group or EPG Kids/Sports/News); SQL expands categories to channel ids; in-memory parental checks bypass unrated + AllowedTags for matches (BlockedTags still apply). Applies after `jellyfin_sso` (`z_` layering). |
+| **Related** | `jellyfin_sso`, `jellyfin_web_rbac`. No public issue. |
 
 ### `jellyfin_livetv_stream_buffer.patch`
 
@@ -670,6 +681,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | Server | Web |
 |---|---|
 | `jellyfin_sso` | `jellyfin_web_rbac`, `jellyfin_web_tv_quickconnect_login`, `jellyfin_web_quickconnect_modal` |
+| `jellyfin_z_livetv_rbac_allowlist` | `jellyfin_web_rbac` (Live TV allowlist UI) |
 | `jellyfin_security_hardening` | `jellyfin_web_security_hardening` |
 | `jellyfin_z_hls_live_playlist_apikey` | (server-only; required by security hardening for Live/EVENT HLS) |
 | `jellyfin_transcoding_pipeline` | `jellyfin_web_transcoding_pipeline` |
@@ -683,4 +695,4 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 
 ## File count
 
-**58** patches: **34** `jellyfin_*.patch` (server), **24** `jellyfin_web*.patch` (web).
+**59** patches: **35** `jellyfin_*.patch` (server), **24** `jellyfin_web*.patch` (web).

@@ -22,7 +22,7 @@ Quick start and env-var tables remain in the root [README](../README.md). This `
 - **PostgreSQL as the system database** — better fit for large libraries and remote/shared DBs than SQLite.
 - **Query cache + PG-optimised Latest** — optional Redis or in-process Memory cache for home Latest/Resume rows; `DISTINCT ON` Latest paths that fail open to stock queries (see [README](../README.md#query-cache-and-optimisation-optional-experimental)).
 - **Automated SQLite → Postgres migration** — one-shot `MIGRATE_FROM_SQLITE` / pgloader path with backups and a completion marker.
-- **Built-in OIDC SSO + RBAC** — forced browser redirect, admin role sync, birthdate → parental rating, group → block-unrated mappings; TV clients use Quick Connect instead of IdP redirects.
+- **Built-in OIDC SSO + RBAC** — forced browser redirect, admin role sync, birthdate → parental rating, group → libraries/permissions/block-unrated/tags and Live TV channel-category allowlists; TV clients use Quick Connect instead of IdP redirects.
 - **Large-library oriented patches** — home/NextUp/search/Live TV query work, progress write coalescing, indexes mirrored into the PG provider via migration sync.
 - **Product features beyond stock Jellyfin** — playback statistics dashboard, taste profiles / “For You”, Seerr search + Beyond Your Library, Emby userdata import, user merge, HW capability and transcoding pipeline visibility.
 - **Upstream bugfixes carried as patches** — favorites/progress races, Live TV published URLs, HLS remux thrash, HDR10+ MPEG-TS, Chrome MKV DirectPlay false positives, and related items (see [patches catalog](patches.md)).
@@ -32,7 +32,7 @@ Quick start and env-var tables remain in the root [README](../README.md). This `
 
 - **Experimental personal fork** — no general support commitment; behaviour can change without a public roadmap.
 - **Collaborator-locked issues and PRs** — public discussion is directed to [GitHub Discussions](https://github.com/pantherale0/Jellyfin.Pgsql/discussions); the tracker is primarily for CI (for example migration-sync failures).
-- **Not stock Jellyfin** — ~55 patches diverge from upstream. Every Jellyfin bump requires re-applying or refreshing patches; some (especially TV Latest optimisation and large Live TV patches) need manual re-validation.
+- **Not stock Jellyfin** — ~59 patches diverge from upstream. Every Jellyfin bump requires re-applying or refreshing patches; some (especially TV Latest optimisation and large Live TV patches) need manual re-validation.
 - **Custom image required for patched features** — installing only the `.dll` plugin into stock Jellyfin does **not** give SSO, playback-stats controllers, home-section enums, or web UIs that live in patches.
 - **Third-party client variance** — native apps that ignore the patched web UI still hit patched APIs where applicable, but TV SSO behaviour, share links, and search providers may differ from stock expectations.
 - **Cache lag** — with default TTLs, newly added media can take up to ~2 minutes to appear in cached Latest rows.

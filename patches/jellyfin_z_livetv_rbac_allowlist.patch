@@ -1,0 +1,541 @@
+diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
+index 403a4afe68..c8e06238bf 100644
+--- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
++++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
+@@ -7,12 +7,14 @@ using System;
+ using System.Collections.Generic;
+ using System.Linq;
+ using System.Linq.Expressions;
++using Jellyfin.Data;
+ using Jellyfin.Data.Enums;
+ using Jellyfin.Database.Implementations;
+ using Jellyfin.Database.Implementations.Entities;
+ using Jellyfin.Database.Implementations.Enums;
+ using Jellyfin.Extensions;
+ using MediaBrowser.Controller.Entities;
++using MediaBrowser.Controller.LiveTv;
+ using MediaBrowser.Model.Entities;
+ using MediaBrowser.Model.Querying;
+ using Microsoft.EntityFrameworkCore;
+@@ -588,12 +590,27 @@ public sealed partial class BaseItemRepository
+             baseQuery = baseQuery.Where(BuildMaxParentalRatingFilter(context, filter.MaxParentalRating));
+         }
+ 
++        var allowedLiveTvChannelIds = ExpandAllowedLiveTvChannelIds(context, filter.User);
++
+         // Apply block unrated items filtering
+         if (filter.BlockUnratedItems.Length > 0)
+         {
+             var unratedItemTypes = filter.BlockUnratedItems.Select(f => f.ToString()).ToArray();
+-            baseQuery = baseQuery.Where(e =>
+-                e.InheritedParentalRatingValue != null || !unratedItemTypes.Contains(e.UnratedType));
++            var liveTvChannelUnrated = UnratedItem.LiveTvChannel.ToString();
++            var liveTvProgramUnrated = UnratedItem.LiveTvProgram.ToString();
++            if (allowedLiveTvChannelIds.Length > 0)
++            {
++                baseQuery = baseQuery.Where(e =>
++                    e.InheritedParentalRatingValue != null
++                    || !unratedItemTypes.Contains(e.UnratedType)
++                    || (e.UnratedType == liveTvChannelUnrated && allowedLiveTvChannelIds.Contains(e.Id))
++                    || (e.UnratedType == liveTvProgramUnrated && e.ChannelId.HasValue && allowedLiveTvChannelIds.Contains(e.ChannelId.Value)));
++            }
++            else
++            {
++                baseQuery = baseQuery.Where(e =>
++                    e.InheritedParentalRatingValue != null || !unratedItemTypes.Contains(e.UnratedType));
++            }
+         }
+ 
+         // Apply excluded tags filtering (blocked tags).
+@@ -621,15 +638,31 @@ public sealed partial class BaseItemRepository
+             var allowedTagItemIds = context.ItemValuesMap
+                 .Where(f => f.ItemValue.Type == ItemValueType.Tags && includeTags.Contains(f.ItemValue.CleanValue))
+                 .Select(f => f.ItemId);
++            var liveTvChannelUnrated = UnratedItem.LiveTvChannel.ToString();
++            var liveTvProgramUnrated = UnratedItem.LiveTvProgram.ToString();
+ 
+-            baseQuery = baseQuery.Where(e =>
+-                allowedTagItemIds.Contains(e.Id)
+-                || (e.SeriesId.HasValue && allowedTagItemIds.Contains(e.SeriesId.Value))
+-                || e.Parents!.Any(p => allowedTagItemIds.Contains(p.ParentItemId))
+-                || (e.TopParentId.HasValue && allowedTagItemIds.Contains(e.TopParentId.Value))
+-
+-                // People don't carry the tags of the media they appear in and would never match
+-                || e.Type == personTypeName);
++            if (allowedLiveTvChannelIds.Length > 0)
++            {
++                baseQuery = baseQuery.Where(e =>
++                    allowedTagItemIds.Contains(e.Id)
++                    || (e.SeriesId.HasValue && allowedTagItemIds.Contains(e.SeriesId.Value))
++                    || e.Parents!.Any(p => allowedTagItemIds.Contains(p.ParentItemId))
++                    || (e.TopParentId.HasValue && allowedTagItemIds.Contains(e.TopParentId.Value))
++                    || e.Type == personTypeName
++                    || (e.UnratedType == liveTvChannelUnrated && allowedLiveTvChannelIds.Contains(e.Id))
++                    || (e.UnratedType == liveTvProgramUnrated && e.ChannelId.HasValue && allowedLiveTvChannelIds.Contains(e.ChannelId.Value)));
++            }
++            else
++            {
++                baseQuery = baseQuery.Where(e =>
++                    allowedTagItemIds.Contains(e.Id)
++                    || (e.SeriesId.HasValue && allowedTagItemIds.Contains(e.SeriesId.Value))
++                    || e.Parents!.Any(p => allowedTagItemIds.Contains(p.ParentItemId))
++                    || (e.TopParentId.HasValue && allowedTagItemIds.Contains(e.TopParentId.Value))
++
++                    // People don't carry the tags of the media they appear in and would never match
++                    || e.Type == personTypeName);
++            }
+         }
+ 
+         // Exclude alternate versions (have PrimaryVersionId set) and owned non-extra items.
+@@ -642,6 +675,51 @@ public sealed partial class BaseItemRepository
+         return baseQuery;
+     }
+ 
++    /// <summary>
++    /// Expands Live TV channel/category allowlist preferences into concrete channel IDs.
++    /// </summary>
++    private static Guid[] ExpandAllowedLiveTvChannelIds(JellyfinDbContext context, User? user)
++    {
++        if (user is null)
++        {
++            return [];
++        }
++
++        var explicitIds = user.GetPreferenceValues<Guid>(PreferenceKind.AllowedLiveTvChannels);
++        var categories = user.GetPreference(PreferenceKind.AllowedLiveTvCategories);
++        if (explicitIds.Length == 0 && categories.Length == 0)
++        {
++            return [];
++        }
++
++        var allowed = new HashSet<Guid>(explicitIds);
++        if (categories.Length == 0)
++        {
++            return allowed.ToArray();
++        }
++
++        var matchTags = LiveTvParentalAccess.GetCategoryMatchTags(categories);
++        if (matchTags.Length == 0)
++        {
++            return allowed.ToArray();
++        }
++
++        var liveTvChannelUnrated = UnratedItem.LiveTvChannel.ToString();
++        var categoryChannelIds = context.BaseItems
++            .AsNoTracking()
++            .Where(e => e.UnratedType == liveTvChannelUnrated)
++            .Where(e => e.ItemValues!.Any(iv =>
++                iv.ItemValue.Type == ItemValueType.Tags && matchTags.Contains(iv.ItemValue.CleanValue)))
++            .Select(e => e.Id);
++
++        foreach (var id in categoryChannelIds)
++        {
++            allowed.Add(id);
++        }
++
++        return allowed.ToArray();
++    }
++
+     /// <summary>
+     /// Builds a filter expression for max parental rating that handles both rated items
+     /// and unrated BoxSets/Playlists (which check linked children's ratings).
+diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
+index 5e9296e8ce..27f35186d5 100644
+--- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
++++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
+@@ -10,13 +10,16 @@ using System.Collections.Generic;
+ using System.Globalization;
+ using System.Linq;
+ using System.Linq.Expressions;
++using Jellyfin.Data;
+ using Jellyfin.Data.Enums;
+ using Jellyfin.Database.Implementations;
+ using Jellyfin.Database.Implementations.Entities;
++using Jellyfin.Database.Implementations.Enums;
+ using Jellyfin.Database.Implementations.MatchCriteria;
+ using Jellyfin.Extensions;
+ using Jellyfin.Server.Implementations.Extensions;
+ using MediaBrowser.Controller.Entities;
++using MediaBrowser.Controller.LiveTv;
+ using MediaBrowser.Model.Entities;
+ using Microsoft.EntityFrameworkCore;
+ using BaseItemEntity = Jellyfin.Database.Implementations.Entities.BaseItemEntity;
+@@ -731,7 +734,15 @@ public sealed partial class BaseItemRepository
+         else if (filter.BlockUnratedItems.Length > 0)
+         {
+             var unratedItemTypes = filter.BlockUnratedItems.Select(f => f.ToString()).ToArray();
+-            Expression<Func<BaseItemEntity, bool>> unratedItemFilter = e => e.InheritedParentalRatingValue != null || !unratedItemTypes.Contains(e.UnratedType);
++            var allowedLiveTvChannelIds = ExpandAllowedLiveTvChannelIds(context, filter.User);
++            var liveTvChannelUnrated = UnratedItem.LiveTvChannel.ToString();
++            var liveTvProgramUnrated = UnratedItem.LiveTvProgram.ToString();
++            Expression<Func<BaseItemEntity, bool>> unratedItemFilter = allowedLiveTvChannelIds.Length > 0
++                ? e => e.InheritedParentalRatingValue != null
++                    || !unratedItemTypes.Contains(e.UnratedType)
++                    || (e.UnratedType == liveTvChannelUnrated && allowedLiveTvChannelIds.Contains(e.Id))
++                    || (e.UnratedType == liveTvProgramUnrated && e.ChannelId.HasValue && allowedLiveTvChannelIds.Contains(e.ChannelId.Value))
++                : e => e.InheritedParentalRatingValue != null || !unratedItemTypes.Contains(e.UnratedType);
+ 
+             if (minParentalRatingFilter != null && maxParentalRatingFilter != null)
+             {
+@@ -1132,18 +1143,36 @@ public sealed partial class BaseItemRepository
+             var allowedTagItemIds = context.ItemValuesMap
+                 .Where(f => f.ItemValue.Type == ItemValueType.Tags && includeTags.Contains(f.ItemValue.CleanValue))
+                 .Select(f => f.ItemId);
++            var allowedLiveTvChannelIds = ExpandAllowedLiveTvChannelIds(context, filter.User);
++            var liveTvChannelUnrated = UnratedItem.LiveTvChannel.ToString();
++            var liveTvProgramUnrated = UnratedItem.LiveTvProgram.ToString();
+ 
+-            baseQuery = baseQuery.Where(e =>
+-                allowedTagItemIds.Contains(e.Id)
+-                || (e.SeriesId.HasValue && allowedTagItemIds.Contains(e.SeriesId.Value))
+-                || e.Parents!.Any(p => allowedTagItemIds.Contains(p.ParentItemId))
+-                || (e.TopParentId.HasValue && allowedTagItemIds.Contains(e.TopParentId.Value))
++            if (allowedLiveTvChannelIds.Length > 0)
++            {
++                baseQuery = baseQuery.Where(e =>
++                    allowedTagItemIds.Contains(e.Id)
++                    || (e.SeriesId.HasValue && allowedTagItemIds.Contains(e.SeriesId.Value))
++                    || e.Parents!.Any(p => allowedTagItemIds.Contains(p.ParentItemId))
++                    || (e.TopParentId.HasValue && allowedTagItemIds.Contains(e.TopParentId.Value))
++                    || e.Type == personTypeName
++                    || (isPlaylistOnlyQuery && e.Data!.Contains($"OwnerUserId\":\"{filter.User!.Id:N}\""))
++                    || (e.UnratedType == liveTvChannelUnrated && allowedLiveTvChannelIds.Contains(e.Id))
++                    || (e.UnratedType == liveTvProgramUnrated && e.ChannelId.HasValue && allowedLiveTvChannelIds.Contains(e.ChannelId.Value)));
++            }
++            else
++            {
++                baseQuery = baseQuery.Where(e =>
++                    allowedTagItemIds.Contains(e.Id)
++                    || (e.SeriesId.HasValue && allowedTagItemIds.Contains(e.SeriesId.Value))
++                    || e.Parents!.Any(p => allowedTagItemIds.Contains(p.ParentItemId))
++                    || (e.TopParentId.HasValue && allowedTagItemIds.Contains(e.TopParentId.Value))
+ 
+-                // People don't carry the tags of the media they appear in and would never match
+-                || e.Type == personTypeName
++                    // People don't carry the tags of the media they appear in and would never match
++                    || e.Type == personTypeName
+ 
+-                // A playlist should be accessible to its owner regardless of allowed tags
+-                || (isPlaylistOnlyQuery && e.Data!.Contains($"OwnerUserId\":\"{filter.User!.Id:N}\"")));
++                    // A playlist should be accessible to its owner regardless of allowed tags
++                    || (isPlaylistOnlyQuery && e.Data!.Contains($"OwnerUserId\":\"{filter.User!.Id:N}\"")));
++            }
+         }
+ 
+         if (filter.SeriesStatuses.Length > 0)
+diff --git a/MediaBrowser.Controller/LiveTv/LiveTvChannel.cs b/MediaBrowser.Controller/LiveTv/LiveTvChannel.cs
+index aee4691cdf..9ec626bae3 100644
+--- a/MediaBrowser.Controller/LiveTv/LiveTvChannel.cs
++++ b/MediaBrowser.Controller/LiveTv/LiveTvChannel.cs
+@@ -9,6 +9,7 @@ using System.Globalization;
+ using System.Linq;
+ using System.Text.Json.Serialization;
+ using Jellyfin.Data.Enums;
++using Jellyfin.Database.Implementations.Entities;
+ using Jellyfin.Extensions;
+ using MediaBrowser.Controller.Entities;
+ using MediaBrowser.Model.Dto;
+@@ -35,6 +36,12 @@ namespace MediaBrowser.Controller.LiveTv
+         /// <value>The number.</value>
+         public string Number { get; set; }
+ 
++        /// <summary>
++        /// Gets or sets the tuner/playlist channel group (e.g. M3U group-title).
++        /// </summary>
++        /// <value>The channel group.</value>
++        public string ChannelGroup { get; set; }
++
+         /// <summary>
+         /// Gets or sets the type of the channel.
+         /// </summary>
+@@ -105,6 +112,28 @@ namespace MediaBrowser.Controller.LiveTv
+             return UnratedItem.LiveTvChannel;
+         }
+ 
++        /// <inheritdoc />
++        public override bool IsParentalAllowed(User user, bool skipAllowedTagsCheck)
++        {
++            if (LiveTvParentalAccess.IsChannelWhitelisted(this, user))
++            {
++                skipAllowedTagsCheck = true;
++            }
++
++            return base.IsParentalAllowed(user, skipAllowedTagsCheck);
++        }
++
++        /// <inheritdoc />
++        protected override bool GetBlockUnratedValue(User user)
++        {
++            if (LiveTvParentalAccess.IsChannelWhitelisted(this, user))
++            {
++                return false;
++            }
++
++            return base.GetBlockUnratedValue(user);
++        }
++
+         protected override string CreateSortName()
+         {
+             if (double.TryParse(Number, CultureInfo.InvariantCulture, out double number))
+diff --git a/MediaBrowser.Controller/LiveTv/LiveTvParentalAccess.cs b/MediaBrowser.Controller/LiveTv/LiveTvParentalAccess.cs
+new file mode 100644
+index 0000000000..ae12d1426f
+--- /dev/null
++++ b/MediaBrowser.Controller/LiveTv/LiveTvParentalAccess.cs
+@@ -0,0 +1,170 @@
++#nullable enable
++
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using Jellyfin.Database.Implementations.Entities;
++using Jellyfin.Database.Implementations.Enums;
++using Jellyfin.Extensions;
++using MediaBrowser.Controller.Entities;
++
++namespace MediaBrowser.Controller.LiveTv;
++
++/// <summary>
++/// Helpers for SSO/RBAC Live TV allowlists that bypass block-unrated and AllowedTags.
++/// </summary>
++public static class LiveTvParentalAccess
++{
++    /// <summary>
++    /// Tag prefix used to index M3U/playlist channel groups for SQL filtering.
++    /// </summary>
++    public const string ChannelGroupTagPrefix = "ChannelGroup:";
++
++    /// <summary>
++    /// Well-known EPG category tags that can be selected as Live TV categories.
++    /// </summary>
++    public static readonly string[] EpgCategoryTags = ["Kids", "Sports", "News"];
++
++    /// <summary>
++    /// Syncs the <see cref="ChannelGroupTagPrefix"/> tag on a channel from its <see cref="LiveTvChannel.ChannelGroup"/>.
++    /// </summary>
++    /// <param name="channel">The channel.</param>
++    public static void SyncChannelGroupTag(LiveTvChannel channel)
++    {
++        ArgumentNullException.ThrowIfNull(channel);
++
++        var tags = channel.Tags?.ToList() ?? [];
++        tags.RemoveAll(t => t.StartsWith(ChannelGroupTagPrefix, StringComparison.OrdinalIgnoreCase));
++        if (!string.IsNullOrWhiteSpace(channel.ChannelGroup))
++        {
++            tags.Add(ChannelGroupTagPrefix + channel.ChannelGroup.Trim());
++        }
++
++        channel.Tags = tags;
++    }
++
++    /// <summary>
++    /// Builds cleaned tag values used to match allowlisted categories in SQL.
++    /// </summary>
++    /// <param name="categories">Category names (M3U groups and/or Kids/Sports/News).</param>
++    /// <returns>Cleaned tag values.</returns>
++    public static string[] GetCategoryMatchTags(IEnumerable<string> categories)
++    {
++        return categories
++            .Where(c => !string.IsNullOrWhiteSpace(c))
++            .SelectMany(c =>
++            {
++                var trimmed = c.Trim();
++                return new[]
++                {
++                    (ChannelGroupTagPrefix + trimmed).GetCleanValue(),
++                    trimmed.GetCleanValue()
++                };
++            })
++            .Distinct(StringComparer.Ordinal)
++            .ToArray();
++    }
++
++    /// <summary>
++    /// Returns whether the user has any Live TV allowlist preferences.
++    /// </summary>
++    /// <param name="user">The user.</param>
++    /// <returns><c>true</c> if allowlists are configured.</returns>
++    public static bool HasAllowlist(User user)
++    {
++        ArgumentNullException.ThrowIfNull(user);
++        return user.GetPreferenceValues<Guid>(PreferenceKind.AllowedLiveTvChannels).Length > 0
++            || user.GetPreference(PreferenceKind.AllowedLiveTvCategories).Length > 0;
++    }
++
++    /// <summary>
++    /// Returns whether a Live TV channel is on the user's allowlist.
++    /// </summary>
++    /// <param name="channel">The channel.</param>
++    /// <param name="user">The user.</param>
++    /// <returns><c>true</c> if allowlisted.</returns>
++    public static bool IsChannelWhitelisted(LiveTvChannel channel, User user)
++    {
++        ArgumentNullException.ThrowIfNull(channel);
++        ArgumentNullException.ThrowIfNull(user);
++
++        var allowedIds = user.GetPreferenceValues<Guid>(PreferenceKind.AllowedLiveTvChannels);
++        if (allowedIds.Contains(channel.Id))
++        {
++            return true;
++        }
++
++        var categories = user.GetPreference(PreferenceKind.AllowedLiveTvCategories);
++        if (categories.Length == 0)
++        {
++            return false;
++        }
++
++        if (!string.IsNullOrWhiteSpace(channel.ChannelGroup)
++            && categories.Any(c => string.Equals(c, channel.ChannelGroup, StringComparison.OrdinalIgnoreCase)))
++        {
++            return true;
++        }
++
++        foreach (var category in categories)
++        {
++            if (string.IsNullOrWhiteSpace(category))
++            {
++                continue;
++            }
++
++            if (channel.Tags.Contains(category.Trim(), StringComparison.OrdinalIgnoreCase))
++            {
++                return true;
++            }
++        }
++
++        return false;
++    }
++
++    /// <summary>
++    /// Returns whether a Live TV program's parent channel is on the user's allowlist.
++    /// </summary>
++    /// <param name="program">The program.</param>
++    /// <param name="user">The user.</param>
++    /// <returns><c>true</c> if allowlisted.</returns>
++    public static bool IsProgramWhitelisted(LiveTvProgram program, User user)
++    {
++        ArgumentNullException.ThrowIfNull(program);
++        ArgumentNullException.ThrowIfNull(user);
++
++        if (program.ChannelId.Equals(default))
++        {
++            return false;
++        }
++
++        var allowedIds = user.GetPreferenceValues<Guid>(PreferenceKind.AllowedLiveTvChannels);
++        if (allowedIds.Contains(program.ChannelId))
++        {
++            return true;
++        }
++
++        if (BaseItem.LibraryManager?.GetItemById(program.ChannelId) is LiveTvChannel channel)
++        {
++            return IsChannelWhitelisted(channel, user);
++        }
++
++        return false;
++    }
++
++    /// <summary>
++    /// Returns whether a base item is a whitelisted Live TV channel or program.
++    /// </summary>
++    /// <param name="item">The item.</param>
++    /// <param name="user">The user.</param>
++    /// <returns><c>true</c> if allowlisted.</returns>
++    public static bool IsWhitelisted(BaseItem item, User user)
++    {
++        return item switch
++        {
++            LiveTvChannel channel => IsChannelWhitelisted(channel, user),
++            LiveTvProgram program => IsProgramWhitelisted(program, user),
++            _ => false
++        };
++    }
++}
+diff --git a/MediaBrowser.Controller/LiveTv/LiveTvProgram.cs b/MediaBrowser.Controller/LiveTv/LiveTvProgram.cs
+index 83944f741c..be59e6498a 100644
+--- a/MediaBrowser.Controller/LiveTv/LiveTvProgram.cs
++++ b/MediaBrowser.Controller/LiveTv/LiveTvProgram.cs
+@@ -8,6 +8,7 @@ using System.Globalization;
+ using System.Linq;
+ using System.Text.Json.Serialization;
+ using Jellyfin.Data.Enums;
++using Jellyfin.Database.Implementations.Entities;
+ using Jellyfin.Extensions;
+ using MediaBrowser.Common.Configuration;
+ using MediaBrowser.Controller.Entities;
+@@ -212,6 +213,28 @@ namespace MediaBrowser.Controller.LiveTv
+             return UnratedItem.LiveTvProgram;
+         }
+ 
++        /// <inheritdoc />
++        public override bool IsParentalAllowed(User user, bool skipAllowedTagsCheck)
++        {
++            if (LiveTvParentalAccess.IsProgramWhitelisted(this, user))
++            {
++                skipAllowedTagsCheck = true;
++            }
++
++            return base.IsParentalAllowed(user, skipAllowedTagsCheck);
++        }
++
++        /// <inheritdoc />
++        protected override bool GetBlockUnratedValue(User user)
++        {
++            if (LiveTvParentalAccess.IsProgramWhitelisted(this, user))
++            {
++                return false;
++            }
++
++            return base.GetBlockUnratedValue(user);
++        }
++
+         protected override string GetInternalMetadataPath(string basePath)
+         {
+             return System.IO.Path.Combine(basePath, "livetv", Id.ToString("N", CultureInfo.InvariantCulture));
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/PreferenceKind.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/PreferenceKind.cs
+index f70e3e2c23..cbfc387d38 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/PreferenceKind.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/PreferenceKind.cs
+@@ -68,5 +68,15 @@ public enum PreferenceKind
+     /// <summary>
+     /// A list of allowed tags.
+     /// </summary>
+-    AllowedTags = 12
++    AllowedTags = 12,
++
++    /// <summary>
++    /// A list of Live TV channel IDs that remain visible when unrated Live TV is blocked.
++    /// </summary>
++    AllowedLiveTvChannels = 13,
++
++    /// <summary>
++    /// A list of Live TV channel categories (M3U group-title and/or Kids/Sports/News) that remain visible when unrated Live TV is blocked.
++    /// </summary>
++    AllowedLiveTvCategories = 14
+ }
+diff --git a/src/Jellyfin.LiveTv/Guide/GuideManager.cs b/src/Jellyfin.LiveTv/Guide/GuideManager.cs
+index 4c90cefd3c..c0608dc23c 100644
+--- a/src/Jellyfin.LiveTv/Guide/GuideManager.cs
++++ b/src/Jellyfin.LiveTv/Guide/GuideManager.cs
+@@ -439,6 +439,19 @@ public class GuideManager : IGuideManager
+         item.ChannelType = channelInfo.ChannelType;
+         item.ServiceName = serviceName;
+ 
++        if (!string.Equals(item.ChannelGroup, channelInfo.ChannelGroup, StringComparison.Ordinal))
++        {
++            forceUpdate = true;
++        }
++
++        item.ChannelGroup = channelInfo.ChannelGroup;
++        var tagsBeforeGroupSync = item.Tags?.ToArray() ?? [];
++        LiveTvParentalAccess.SyncChannelGroupTag(item);
++        if (!tagsBeforeGroupSync.SequenceEqual(item.Tags ?? [], StringComparer.OrdinalIgnoreCase))
++        {
++            forceUpdate = true;
++        }
++
+         if (!string.Equals(item.GetProviderId(ExternalServiceTag), serviceName, StringComparison.OrdinalIgnoreCase))
+         {
+             forceUpdate = true;

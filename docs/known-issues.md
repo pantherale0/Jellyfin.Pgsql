@@ -25,6 +25,7 @@ Most product features (taste, playback stats, Emby import, Live TV patches, etc.
 | Custom image required | Patched APIs and web UIs are not available if you only drop the plugin DLL into stock Jellyfin. |
 | Submodule/patch drift | Every upstream bump can break `git apply`; maintainers must refresh patches. |
 | SSO redirect URI | Must be an absolute configured URI (`JELLYFIN_SSO_OIDC_REDIRECT_URI`); do not derive from `Request.Host`. |
+| Live TV RBAC categories | M3U `group-title` categories appear in SSO allowlists only after a guide refresh with [`jellyfin_z_livetv_rbac_allowlist`](patches.md#jellyfin_z_livetv_rbac_allowlistpatch). HDHomeRun/XMLTV-only setups typically get EPG Kids/Sports/News categories, not playlist groups. |
 | Live TV EVENT HLS auth | Legacy `/Videos/.../hls/...` segments require `[Authorize]`; without [`jellyfin_z_hls_live_playlist_apikey`](patches.md#jellyfin_z_hls_live_playlist_apikeypatch), playlists omit `ApiKey` on segment URIs (RFC 3986) and clients get 401 / `fragLoadError`. |
 | SQLite migration | Stop Jellyfin first; target PG database should be empty; one-shot completion marker prevents re-runs ([README](../README.md#migrating-from-sqlite-to-postgresql)). |
 
