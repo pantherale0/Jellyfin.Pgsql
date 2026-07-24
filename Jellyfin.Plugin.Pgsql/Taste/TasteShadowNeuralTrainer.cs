@@ -296,7 +296,8 @@ public sealed class TasteShadowNeuralTrainer
         List<LabeledMedia> labeled,
         CancellationToken cancellationToken)
     {
-        var userDataRows = await context.UserData.AsNoTracking()
+        // UserData PK includes CustomDataKey — alternate versions yield multiple rows per ItemId.
+        var userDataRaw = await context.UserData.AsNoTracking()
             .Where(ud => ud.UserId == userId
                 && (ud.IsFavorite
                     || ud.Likes == true
@@ -323,6 +324,16 @@ public sealed class TasteShadowNeuralTrainer
                 })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
+        var userDataRows = userDataRaw.Select(r => new UserDataEngagementRow(
+            r.ItemId,
+            r.IsFavorite,
+            r.Likes,
+            r.Played,
+            r.PlayCount,
+            r.Rating,
+            r.PlaybackPositionTicks,
+            r.LastPlayedDate,
+            r.RunTimeTicks));
 
         var playbackAgg = await context.PlaybackActivity.AsNoTracking()
             .Where(p => p.UserId == userId && p.DatePlayed >= cutoff && p.PlayedTicks > 0)
@@ -343,17 +354,18 @@ public sealed class TasteShadowNeuralTrainer
             .ConfigureAwait(false);
 
         var playbackByItem = playbackAgg.ToDictionary(p => p.ItemId);
-        var userDataByItem = userDataRows.ToDictionary(r => r.ItemId);
+        var userDataByItem = UserDataEngagementAggregation.ToDictionaryByItemId(userDataRows);
         var itemIds = userDataByItem.Keys.Union(playbackByItem.Keys).ToList();
 
         foreach (var itemId in itemIds)
         {
-            userDataByItem.TryGetValue(itemId, out var ud);
+            var hasUd = userDataByItem.TryGetValue(itemId, out var ud);
             playbackByItem.TryGetValue(itemId, out var pb);
-            var maxTicks = Math.Max(ud?.PlaybackPositionTicks ?? 0L, pb?.MaxPlayedTicks ?? 0L);
-            var runTime = ud?.RunTimeTicks ?? pb?.RunTimeTicks;
+            var maxTicks = Math.Max(hasUd ? ud.PlaybackPositionTicks : 0L, pb?.MaxPlayedTicks ?? 0L);
+            var runTime = hasUd ? ud.RunTimeTicks : null;
+            runTime ??= pb?.RunTimeTicks;
             DateTime? lastPlayed = null;
-            if (ud?.LastPlayedDate is DateTime udPlayed)
+            if (hasUd && ud.LastPlayedDate is DateTime udPlayed)
             {
                 lastPlayed = udPlayed.ToUniversalTime();
             }
@@ -368,11 +380,11 @@ public sealed class TasteShadowNeuralTrainer
             }
 
             var input = new TasteEngagementInput(
-                IsFavorite: ud?.IsFavorite == true,
-                Likes: ud?.Likes,
-                Played: ud?.Played == true,
-                PlayCount: ud?.PlayCount ?? 0,
-                UserRating: ud?.Rating,
+                IsFavorite: hasUd && ud.IsFavorite,
+                Likes: hasUd ? ud.Likes : null,
+                Played: hasUd && ud.Played,
+                PlayCount: hasUd ? ud.PlayCount : 0,
+                UserRating: hasUd ? ud.Rating : null,
                 MaxPlayedTicks: maxTicks,
                 RunTimeTicks: runTime,
                 LastPlayedUtc: lastPlayed,
