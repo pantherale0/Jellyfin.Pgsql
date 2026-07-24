@@ -74,7 +74,8 @@ public sealed class TasteAdminController : ControllerBase
 
     private static TasteModelEvalRunDto ToDto(TasteModelEvalRun row)
     {
-        var hasNotes = !string.IsNullOrWhiteSpace(row.Notes);
+        // Successful runs may still carry informational Notes (e.g. training mode).
+        // Skipped runs have Notes explaining why and no eval metrics.
         var hasMetrics = row.Auc is not null || row.Accuracy is not null || row.PrecisionAt10 is not null;
 
         return new TasteModelEvalRunDto
@@ -90,7 +91,7 @@ public sealed class TasteAdminController : ControllerBase
             PrecisionAt10 = row.PrecisionAt10,
             ModelPath = string.IsNullOrWhiteSpace(row.ModelPath) ? null : Path.GetFileName(row.ModelPath),
             Notes = row.Notes,
-            Succeeded = !hasNotes && hasMetrics
+            Succeeded = hasMetrics
         };
     }
 }
