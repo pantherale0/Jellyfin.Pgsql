@@ -12,7 +12,7 @@ Published images live at `ghcr.io/pantherale0/jellyfin.pgsql` (for example `:12.
 |---|---|
 | PostgreSQL plugin | EF Core provider, migrations, query cache, fuzzy search, taste/recs, Emby import APIs, admin helpers |
 | Seerr plugin | In-server Seerr/Jellyseerr search, request, and “Beyond Your Library” discovery |
-| Server patches | SSO/OIDC, Live TV fixes, playback stats schema/APIs, security hardening, query/perf changes |
+| Server patches | SSO/OIDC, Live TV fixes, playback stats schema/APIs, query/perf changes |
 | Web patches | Dashboard UIs for those features, TV/webOS UX, Seerr/taste/home sections |
 
 Quick start and env-var tables remain in the root [README](../README.md). This `docs/` tree covers **what / why / where / how** for the fork, features, and every patch.

@@ -47,12 +47,6 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 **Related:** Fork issue [pantherale0#5](https://github.com/pantherale0/Jellyfin.Pgsql/issues/5) (SSO mapping config / auth).
 
-## Security hardening
-
-**What:** Share links never elevate to admin; media endpoints (including legacy HLS segments) require auth / share scope; “copy stream URL” mints expiring item share links instead of embedding the session API key; configuration-page subresources keep API key auth. Live/EVENT HLS playlists embed the request `ApiKey` on each segment URI so authenticated segments succeed under RFC 3986 relative resolution.
-
-**Where:** [`jellyfin_security_hardening`](patches.md#jellyfin_security_hardeningpatch), [`jellyfin_web_security_hardening`](patches.md#jellyfin_web_security_hardeningpatch), [`jellyfin_z_hls_live_playlist_apikey`](patches.md#jellyfin_z_hls_live_playlist_apikeypatch), [`jellyfin_userdata_userid`](patches.md#jellyfin_userdata_useridpatch).
-
 ## Playback statistics
 
 **What:** Persist playback activity (including daily rollups / delivery method analytics) and expose user + admin dashboards with charts and CSV export.
