@@ -1,10 +1,4 @@
-# Live TV stream hardening: rolling buffer (jellyfin#17128), probe options (jellyfin#9813),
-# open-lock / SharedHttpStream timeout / failed-open dispose (jellyfin#17319),
-# per-channel keyed open + ConsumerCount ownership, reverse-close on stop without LiveStreamId,
-# orphaned live-stream sweeper (jellyfin#16880 / #17177), structured open/share/FirstPull diagnostics,
-# SharedHttpStream for extensionless HTTP origins (e.g. Dispatcharr /proxy/ts/{id}),
-# and live.m3u8 open-before-ffmpeg-CLI so -i uses the post-open buffer Path.
-#
+# Live TV stream hardening: rolling chunk buffers (LiveStreamKeepSeconds), configurable probe delay/analyzeduration/probesize, non-blocking live-stream open/close (global lock no longer held across network I/O), per-channel keyed open lock + ConsumerCount ownership in MediaSourceManager, reverse-close when stop omits LiveStreamId, 2-minute orphaned open-stream sweeper, LiveStreamOpenTimeoutMs for M3U SharedHttpStream connect/first-byte, dispose of streams that fail to open, structured diagnostic logging for open/share/FirstPull, SharedHttpStream for extensionless HTTP origins, and live.m3u8 open-before-ffmpeg-CLI so -i uses the post-open buffer Path.
 diff --git a/Emby.Server.Implementations/Library/LiveStreamHelper.cs b/Emby.Server.Implementations/Library/LiveStreamHelper.cs
 index 0ebfe3ae71..2b7df3e41e 100644
 --- a/Emby.Server.Implementations/Library/LiveStreamHelper.cs
@@ -1587,10 +1581,10 @@ index fb606be0ef..2f8dc6121a 100644
  
 diff --git a/src/Jellyfin.LiveTv/TunerHosts/RollingChunkStream.cs b/src/Jellyfin.LiveTv/TunerHosts/RollingChunkStream.cs
 new file mode 100644
-index 0000000000..e9eed24dd5
+index 0000000000..73ef9fc8d3
 --- /dev/null
 +++ b/src/Jellyfin.LiveTv/TunerHosts/RollingChunkStream.cs
-@@ -0,0 +1,211 @@
+@@ -0,0 +1,232 @@
 +#pragma warning disable CS1591
 +
 +using System;
@@ -1614,8 +1608,8 @@ index 0000000000..e9eed24dd5
 +    private readonly List<string> _chunkPaths;
 +    private readonly object _lock;
 +    private readonly ILogger _logger;
-+    private string _currentPath;
-+    private FileStream _currentStream;
++    private string? _currentPath;
++    private FileStream? _currentStream;
 +    private bool _disposed;
 +
 +    public RollingChunkStream(List<string> chunkPaths, object chunkLock, ILogger logger, bool seekToLiveEdge)
@@ -1624,18 +1618,24 @@ index 0000000000..e9eed24dd5
 +        _lock = chunkLock;
 +        _logger = logger;
 +
-+        string initialPath;
++        string? initialPath = null;
 +        lock (_lock)
 +        {
-+            initialPath = chunkPaths[^1];
++            if (chunkPaths.Count > 0)
++            {
++                initialPath = chunkPaths[^1];
++            }
 +        }
 +
-+        _currentPath = initialPath;
-+        _currentStream = OpenChunkStream(initialPath);
-+
-+        if (seekToLiveEdge)
++        if (initialPath is not null)
 +        {
-+            TrySeekToLiveEdge(_currentStream);
++            _currentPath = initialPath;
++            _currentStream = TryOpenChunkStream(initialPath);
++
++            if (_currentStream is not null && seekToLiveEdge)
++            {
++                TrySeekToLiveEdge(_currentStream);
++            }
 +        }
 +    }
 +
@@ -1662,13 +1662,16 @@ index 0000000000..e9eed24dd5
 +
 +    public override int Read(Span<byte> buffer)
 +    {
-+        int read = _currentStream.Read(buffer);
-+        if (read > 0)
++        if (_currentStream is not null)
 +        {
-+            return read;
++            int read = _currentStream.Read(buffer);
++            if (read > 0)
++            {
++                return read;
++            }
 +        }
 +
-+        if (TryAdvanceChunk())
++        if (TryAdvanceChunk() && _currentStream is not null)
 +        {
 +            return _currentStream.Read(buffer);
 +        }
@@ -1681,13 +1684,16 @@ index 0000000000..e9eed24dd5
 +
 +    public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
 +    {
-+        int read = await _currentStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-+        if (read > 0)
++        if (_currentStream is not null)
 +        {
-+            return read;
++            int read = await _currentStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
++            if (read > 0)
++            {
++                return read;
++            }
 +        }
 +
-+        if (TryAdvanceChunk())
++        if (TryAdvanceChunk() && _currentStream is not null)
 +        {
 +            return await _currentStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
 +        }
@@ -1710,7 +1716,7 @@ index 0000000000..e9eed24dd5
 +
 +        if (disposing)
 +        {
-+            _currentStream.Dispose();
++            _currentStream?.Dispose();
 +        }
 +
 +        _disposed = true;
@@ -1749,46 +1755,55 @@ index 0000000000..e9eed24dd5
 +    /// </summary>
 +    private bool TryAdvanceChunk()
 +    {
-+        string? nextPath = GetNextChunkPath(_currentPath);
-+        if (nextPath is null)
++        if (_currentPath is null)
 +        {
 +            return false;
 +        }
 +
-+        // Open the replacement before disposing the current stream so we never end up
-+        // with a disposed stream and no valid replacement. If the target chunk was evicted
-+        // in the window between selecting it and opening it (TOCTOU race), step forward to
-+        // the new oldest available chunk and retry.
++        string? nextPath = GetNextChunkPath(_currentPath);
++
 +        while (nextPath is not null)
 +        {
-+            try
++            FileStream? next = TryOpenChunkStream(nextPath);
++            if (next is not null)
 +            {
-+                FileStream next = OpenChunkStream(nextPath);
-+                _currentStream.Dispose();
++                _currentStream?.Dispose();
 +                _currentPath = nextPath;
 +                _currentStream = next;
 +                return true;
 +            }
-+            catch (FileNotFoundException)
-+            {
-+                _logger.LogWarning(
-+                    "Chunk {Path} was evicted before it could be opened; skipping to next available chunk",
-+                    nextPath);
-+                nextPath = GetNextChunkPath(nextPath);
-+            }
++
++            _logger.LogWarning(
++                "Chunk {Path} could not be opened; skipping to next available chunk",
++                nextPath);
++            nextPath = GetNextChunkPath(nextPath);
 +        }
 +
 +        return false;
 +    }
 +
-+    private static FileStream OpenChunkStream(string path)
-+        => new FileStream(
-+            path,
-+            FileMode.Open,
-+            FileAccess.Read,
-+            FileShare.ReadWrite | FileShare.Delete,
-+            IODefaults.FileStreamBufferSize,
-+            FileOptions.SequentialScan | FileOptions.Asynchronous);
++    private FileStream? TryOpenChunkStream(string path)
++    {
++        try
++        {
++            if (File.Exists(path))
++            {
++                return new FileStream(
++                    path,
++                    FileMode.Open,
++                    FileAccess.Read,
++                    FileShare.ReadWrite | FileShare.Delete,
++                    IODefaults.FileStreamBufferSize,
++                    FileOptions.SequentialScan | FileOptions.Asynchronous);
++            }
++        }
++        catch (Exception ex)
++        {
++            _logger.LogWarning(ex, "Could not open live stream chunk {Path}", path);
++        }
++
++        return null;
++    }
 +
 +    private static void TrySeekToLiveEdge(FileStream stream)
 +    {
@@ -1803,7 +1818,7 @@ index 0000000000..e9eed24dd5
 +    }
 +}
 diff --git a/src/Jellyfin.LiveTv/TunerHosts/SharedHttpStream.cs b/src/Jellyfin.LiveTv/TunerHosts/SharedHttpStream.cs
-index 5ef04ad9e9..af94805ef1 100644
+index 5ef04ad9e9..d81443b8a7 100644
 --- a/src/Jellyfin.LiveTv/TunerHosts/SharedHttpStream.cs
 +++ b/src/Jellyfin.LiveTv/TunerHosts/SharedHttpStream.cs
 @@ -1,7 +1,10 @@
@@ -1940,7 +1955,7 @@ index 5ef04ad9e9..af94805ef1 100644
              }
          }
  
-@@ -81,55 +160,72 @@ namespace Jellyfin.LiveTv.TunerHosts
+@@ -81,55 +160,71 @@ namespace Jellyfin.LiveTv.TunerHosts
                  {
                      try
                      {
@@ -2026,7 +2041,6 @@ index 5ef04ad9e9..af94805ef1 100644
  
                      EnableStreamSharing = false;
 -                    await DeleteTempFiles(TempFilePath).ConfigureAwait(false);
-+                    await DeleteChunks().ConfigureAwait(false);
                  },
                  CancellationToken.None);
          }
