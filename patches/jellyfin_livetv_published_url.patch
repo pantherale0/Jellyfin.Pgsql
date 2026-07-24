@@ -15,7 +15,7 @@ index 36fed0f16c..5b97ec8547 100644
                  return hostname.TrimEnd('/');
              }
 diff --git a/Jellyfin.Api/Controllers/MediaInfoController.cs b/Jellyfin.Api/Controllers/MediaInfoController.cs
-index ac7c091f85..29a4bd01ca 100644
+index ac7c091f85..5a2edce02b 100644
 --- a/Jellyfin.Api/Controllers/MediaInfoController.cs
 +++ b/Jellyfin.Api/Controllers/MediaInfoController.cs
 @@ -84,7 +84,7 @@ public class MediaInfoController : BaseJellyfinApiController
@@ -35,7 +35,7 @@ index ac7c091f85..29a4bd01ca 100644
                  mediaSourceId,
                  liveStreamId)
              .ConfigureAwait(false);
-@@ -211,6 +212,8 @@ public class MediaInfoController : BaseJellyfinApiController
+@@ -211,16 +212,24 @@ public class MediaInfoController : BaseJellyfinApiController
                      allowAudioStreamCopy.Value,
                      playbackInfoDto?.AlwaysBurnInSubtitleWhenTranscoding ?? false,
                      Request.HttpContext.GetNormalizedRemoteIP());
@@ -44,6 +44,25 @@ index ac7c091f85..29a4bd01ca 100644
              }
  
              _mediaInfoHelper.SortMediaSources(info, maxStreamingBitrate, item.Id);
+         }
+ 
+-        if (autoOpenLiveStream.Value)
++        if (autoOpenLiveStream.Value && info.MediaSources.Count > 0)
+         {
+-            var mediaSource = string.IsNullOrWhiteSpace(mediaSourceId) ? info.MediaSources[0] : info.MediaSources.FirstOrDefault(i => string.Equals(i.Id, mediaSourceId, StringComparison.Ordinal));
++            // Prefer the requested MediaSourceId when it matches a returned source. If the client sent the
++            // Live TV channel item id (placeholder) and ResolvePlaybackMediaSources ignored it, fall back
++            // to MediaSources[0] so AutoOpenLiveStream still runs and returns a LiveStreamId.
++            var mediaSource = string.IsNullOrWhiteSpace(mediaSourceId)
++                ? info.MediaSources[0]
++                : info.MediaSources.FirstOrDefault(i => string.Equals(i.Id, mediaSourceId, StringComparison.Ordinal))
++                    ?? info.MediaSources[0];
+ 
+-            if (mediaSource is not null && mediaSource.RequiresOpening && string.IsNullOrWhiteSpace(mediaSource.LiveStreamId))
++            if (mediaSource.RequiresOpening && string.IsNullOrWhiteSpace(mediaSource.LiveStreamId))
+             {
+                 var openStreamResult = await _mediaInfoHelper.OpenMediaSource(
+                     HttpContext,
 diff --git a/Jellyfin.Api/Controllers/UniversalAudioController.cs b/Jellyfin.Api/Controllers/UniversalAudioController.cs
 index e53d15acfd..cdbd1ee7aa 100644
 --- a/Jellyfin.Api/Controllers/UniversalAudioController.cs
