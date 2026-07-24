@@ -1,14 +1,8 @@
-# Vendored from https://github.com/jellyfin/jellyfin/pull/17298
-# Fix Live TV returning unreachable Docker/bridge IPs to clients (issue #15411).
-# Rewrites /LiveTv/LiveStreamFiles/ paths on response clones via GetSmartApiUrl;
-# keeps local buffer URL for FFmpeg. Includes published-URI host/port parsing fixes.
-# (CONTRIBUTORS.md from upstream PR omitted.)
-#
 diff --git a/Emby.Server.Implementations/ApplicationHost.cs b/Emby.Server.Implementations/ApplicationHost.cs
-index 69e23bcb63..1b37e7498d 100644
+index 36fed0f16c..5b97ec8547 100644
 --- a/Emby.Server.Implementations/ApplicationHost.cs
 +++ b/Emby.Server.Implementations/ApplicationHost.cs
-@@ -965,8 +965,9 @@ namespace Emby.Server.Implementations
+@@ -995,8 +995,9 @@ namespace Emby.Server.Implementations
          /// <inheritdoc/>
          public string GetLocalApiUrl(string hostname, string scheme = null, int? port = null)
          {
@@ -21,7 +15,7 @@ index 69e23bcb63..1b37e7498d 100644
                  return hostname.TrimEnd('/');
              }
 diff --git a/Jellyfin.Api/Controllers/MediaInfoController.cs b/Jellyfin.Api/Controllers/MediaInfoController.cs
-index ac7c091f85..aa942e7642 100644
+index ac7c091f85..29a4bd01ca 100644
 --- a/Jellyfin.Api/Controllers/MediaInfoController.cs
 +++ b/Jellyfin.Api/Controllers/MediaInfoController.cs
 @@ -84,7 +84,7 @@ public class MediaInfoController : BaseJellyfinApiController
@@ -41,6 +35,15 @@ index ac7c091f85..aa942e7642 100644
                  mediaSourceId,
                  liveStreamId)
              .ConfigureAwait(false);
+@@ -211,6 +212,8 @@ public class MediaInfoController : BaseJellyfinApiController
+                     allowAudioStreamCopy.Value,
+                     playbackInfoDto?.AlwaysBurnInSubtitleWhenTranscoding ?? false,
+                     Request.HttpContext.GetNormalizedRemoteIP());
++
++                _mediaInfoHelper.SanitizeLiveStreamClientPath(mediaSource);
+             }
+ 
+             _mediaInfoHelper.SortMediaSources(info, maxStreamingBitrate, item.Id);
 diff --git a/Jellyfin.Api/Controllers/UniversalAudioController.cs b/Jellyfin.Api/Controllers/UniversalAudioController.cs
 index e53d15acfd..cdbd1ee7aa 100644
 --- a/Jellyfin.Api/Controllers/UniversalAudioController.cs
@@ -54,7 +57,7 @@ index e53d15acfd..cdbd1ee7aa 100644
              .ConfigureAwait(false);
  
 diff --git a/Jellyfin.Api/Helpers/MediaInfoHelper.cs b/Jellyfin.Api/Helpers/MediaInfoHelper.cs
-index ef81235808..31e907549c 100644
+index ef81235808..7c51363be3 100644
 --- a/Jellyfin.Api/Helpers/MediaInfoHelper.cs
 +++ b/Jellyfin.Api/Helpers/MediaInfoHelper.cs
 @@ -14,6 +14,7 @@ using Jellyfin.Database.Implementations.Enums;
@@ -193,7 +196,17 @@ index ef81235808..31e907549c 100644
          var profile = request.DeviceProfile;
          if (profile is null)
          {
-@@ -524,4 +538,81 @@ public class MediaInfoHelper
+@@ -462,6 +476,9 @@ public class MediaInfoHelper
+         // here was a check if (result.MediaSource is not null) but Rider said it will never be null
+         NormalizeMediaSourceContainer(result.MediaSource, profile!, DlnaProfileType.Video);
+ 
++        // SetDeviceSpecificData may leave a tuner-origin Path; clear it so clients use TranscodingUrl / LiveStreamFiles.
++        SanitizeLiveStreamClientPath(result.MediaSource);
++
+         return result;
+     }
+ 
+@@ -524,4 +541,131 @@ public class MediaInfoHelper
  
          return maxBitrate;
      }
@@ -219,11 +232,19 @@ index ef81235808..31e907549c 100644
 +            return;
 +        }
 +
++        var localPathHost = Uri.TryCreate(mediaSource.Path, UriKind.Absolute, out var localUri) ? localUri.Host : null;
 +        var baseUrl = _serverConfigurationManager.GetNetworkConfiguration().BaseUrl;
 +        var publishedPath = GetPublishedLiveStreamPath(_appHost.GetSmartApiUrl(request), mediaSource.Path, mediaSource.Protocol, baseUrl);
 +
 +        if (publishedPath is not null)
 +        {
++            var publishedPathHost = Uri.TryCreate(publishedPath, UriKind.Absolute, out var publishedUri) ? publishedUri.Host : null;
++            _logger.LogInformation(
++                "Live stream path rewrite LocalPathHost={LocalPathHost} PublishedPathHost={PublishedPathHost} MediaSourceId={MediaSourceId} LiveStreamId={LiveStreamId}",
++                localPathHost,
++                publishedPathHost,
++                mediaSource.Id,
++                mediaSource.LiveStreamId);
 +            mediaSource.Path = publishedPath;
 +            return;
 +        }
@@ -231,7 +252,49 @@ index ef81235808..31e907549c 100644
 +        if (mediaSource.Path is not null && mediaSource.Path.Contains("/LiveTv/LiveStreamFiles/", StringComparison.OrdinalIgnoreCase))
 +        {
 +            _logger.LogDebug("Not rewriting live stream path for media source {MediaSourceId}: the local path did not resolve under the request's smart API URL/BaseUrl", mediaSource.Id);
++            return;
 +        }
++
++        // Remote M3U / tuner origins must not be advertised to API clients (cluster-internal hosts).
++        // Clients that ignore SupportsDirectPlay and use Path (e.g. Wholphin) will fail with UnknownHostException.
++        _logger.LogInformation(
++            "Live stream path ClearedUnreachableOrigin PathHost={PathHost} MediaSourceId={MediaSourceId} LiveStreamId={LiveStreamId}",
++            localPathHost,
++            mediaSource.Id,
++            mediaSource.LiveStreamId);
++        ClearUnreachableLiveStreamOriginPath(mediaSource);
++    }
++
++    /// <summary>
++    /// Removes tuner-origin Paths from client-facing media sources so players must use
++    /// <see cref="MediaSourceInfo.TranscodingUrl"/> or Jellyfin-hosted LiveStreamFiles URLs.
++    /// </summary>
++    /// <param name="mediaSource">The media source to sanitize in place.</param>
++    public void SanitizeLiveStreamClientPath(MediaSourceInfo mediaSource)
++    {
++        if (string.IsNullOrEmpty(mediaSource.LiveStreamId) || string.IsNullOrEmpty(mediaSource.Path))
++        {
++            return;
++        }
++
++        if (mediaSource.Path.Contains("/LiveTv/LiveStreamFiles/", StringComparison.OrdinalIgnoreCase))
++        {
++            return;
++        }
++
++        var pathHost = Uri.TryCreate(mediaSource.Path, UriKind.Absolute, out var uri) ? uri.Host : null;
++        _logger.LogInformation(
++            "Live stream path ClearedUnreachableOrigin PathHost={PathHost} MediaSourceId={MediaSourceId} LiveStreamId={LiveStreamId}",
++            pathHost,
++            mediaSource.Id,
++            mediaSource.LiveStreamId);
++        ClearUnreachableLiveStreamOriginPath(mediaSource);
++    }
++
++    private static void ClearUnreachableLiveStreamOriginPath(MediaSourceInfo mediaSource)
++    {
++        mediaSource.Path = null;
++        mediaSource.SupportsDirectPlay = false;
 +    }
 +
 +    /// <summary>
