@@ -57,7 +57,7 @@ index e53d15acfd..cdbd1ee7aa 100644
              .ConfigureAwait(false);
  
 diff --git a/Jellyfin.Api/Helpers/MediaInfoHelper.cs b/Jellyfin.Api/Helpers/MediaInfoHelper.cs
-index ef81235808..7c51363be3 100644
+index ef81235808..8bcaefc291 100644
 --- a/Jellyfin.Api/Helpers/MediaInfoHelper.cs
 +++ b/Jellyfin.Api/Helpers/MediaInfoHelper.cs
 @@ -14,6 +14,7 @@ using Jellyfin.Database.Implementations.Enums;
@@ -158,7 +158,7 @@ index ef81235808..7c51363be3 100644
                  result.MediaSources = mediaSourcesClone;
              }
  
-@@ -145,6 +135,28 @@ public class MediaInfoHelper
+@@ -145,6 +135,48 @@ public class MediaInfoHelper
          return result;
      }
  
@@ -179,15 +179,35 @@ index ef81235808..7c51363be3 100644
 +            return mediaSourcesList.ToArray();
 +        }
 +
-+        return mediaSourcesList
++        var matching = mediaSourcesList
 +            .Where(i => string.Equals(i.Id, mediaSourceId, StringComparison.OrdinalIgnoreCase))
 +            .ToArray();
++
++        if (matching.Length > 0)
++        {
++            return matching;
++        }
++
++        // Workaround: some clients (e.g. Wholphin) send MediaSourceId = Live TV channel item id because
++        // LiveTvChannel.GetMediaSources() exposes a placeholder whose Id is the item Guid. Tuner sources
++        // use a different Id (e.g. M3U path MD5). Filtering then yields [] → NoCompatibleStream before open.
++        if (item.SourceType == SourceType.LiveTV && mediaSourcesList.Count > 0)
++        {
++            _logger.LogInformation(
++                "Ignoring unmatched Live TV MediaSourceId {MediaSourceId} for item {ItemId}; returning {Count} tuner source(s)",
++                mediaSourceId,
++                item.Id.ToString("N", CultureInfo.InvariantCulture),
++                mediaSourcesList.Count);
++            return mediaSourcesList.ToArray();
++        }
++
++        return matching;
 +    }
 +
      /// <summary>
      /// SetDeviceSpecificData.
      /// </summary>
-@@ -415,6 +427,8 @@ public class MediaInfoHelper
+@@ -415,6 +447,8 @@ public class MediaInfoHelper
      {
          var result = await _mediaSourceManager.OpenLiveStream(request, CancellationToken.None).ConfigureAwait(false);
  
@@ -196,7 +216,7 @@ index ef81235808..7c51363be3 100644
          var profile = request.DeviceProfile;
          if (profile is null)
          {
-@@ -462,6 +476,9 @@ public class MediaInfoHelper
+@@ -462,6 +496,9 @@ public class MediaInfoHelper
          // here was a check if (result.MediaSource is not null) but Rider said it will never be null
          NormalizeMediaSourceContainer(result.MediaSource, profile!, DlnaProfileType.Video);
  
@@ -206,7 +226,7 @@ index ef81235808..7c51363be3 100644
          return result;
      }
  
-@@ -524,4 +541,131 @@ public class MediaInfoHelper
+@@ -524,4 +561,131 @@ public class MediaInfoHelper
  
          return maxBitrate;
      }
@@ -422,10 +442,10 @@ index 4559f68ce8..69f36e9bb1 100644
      /// Attempts to match the source against the user defined bind interfaces.
      /// </summary>
 diff --git a/tests/Jellyfin.Api.Tests/Helpers/MediaInfoHelperTests.cs b/tests/Jellyfin.Api.Tests/Helpers/MediaInfoHelperTests.cs
-index a003be4d96..d93935a9d0 100644
+index a003be4d96..77192e74b8 100644
 --- a/tests/Jellyfin.Api.Tests/Helpers/MediaInfoHelperTests.cs
 +++ b/tests/Jellyfin.Api.Tests/Helpers/MediaInfoHelperTests.cs
-@@ -1,13 +1,21 @@
+@@ -1,13 +1,22 @@
  using System;
  using System.Globalization;
 +using System.Text.Json;
@@ -440,6 +460,7 @@ index a003be4d96..d93935a9d0 100644
 +using MediaBrowser.Controller.Entities;
 +using MediaBrowser.Controller.Entities.Movies;
  using MediaBrowser.Controller.Library;
++using MediaBrowser.Controller.LiveTv;
  using MediaBrowser.Controller.MediaEncoding;
  using MediaBrowser.Model.Dto;
  using MediaBrowser.Model.MediaInfo;
@@ -447,7 +468,7 @@ index a003be4d96..d93935a9d0 100644
  using Microsoft.Extensions.Logging;
  using Moq;
  using Xunit;
-@@ -16,17 +24,28 @@ namespace Jellyfin.Api.Tests.Helpers
+@@ -16,17 +25,28 @@ namespace Jellyfin.Api.Tests.Helpers
  {
      public class MediaInfoHelperTests
      {
@@ -480,10 +501,48 @@ index a003be4d96..d93935a9d0 100644
          }
  
          private static MediaSourceInfo CreateSource(Guid itemId, int bitrate, bool supportsDirectPlay = true)
-@@ -95,5 +114,361 @@ namespace Jellyfin.Api.Tests.Helpers
+@@ -95,5 +115,399 @@ namespace Jellyfin.Api.Tests.Helpers
  
              Assert.Equal(directPlay.Id, result.MediaSources[0].Id);
          }
++
++        [Fact]
++        public async Task GetPlaybackInfo_LiveTvChannelPlaceholderMediaSourceId_ReturnsTunerSources()
++        {
++            // Wholphin sends the channel item id (placeholder MediaSource.Id) instead of the tuner source id.
++            var channelId = Guid.Parse("163b9707-30df-af84-411f-27b69c316e3d");
++            var tunerSource = new MediaSourceInfo
++            {
++                Id = "4b08b91900b4b848e76351441ec1375c",
++                Protocol = MediaProtocol.Http,
++                Path = "http://dispatcharr.example/proxy/ts/stream/abc",
++                RequiresOpening = true
++            };
++
++            var mediaSourceManager = new Mock<IMediaSourceManager>();
++            mediaSourceManager
++                .Setup(x => x.GetPlaybackMediaSources(
++                    It.IsAny<BaseItem>(),
++                    It.IsAny<User>(),
++                    It.IsAny<bool>(),
++                    It.IsAny<bool>(),
++                    It.IsAny<CancellationToken>()))
++                .ReturnsAsync(new[] { tunerSource });
++
++            var helper = CreateHelper(mediaSourceManager: mediaSourceManager.Object);
++            var channel = new LiveTvChannel { Id = channelId };
++
++            var result = await helper.GetPlaybackInfo(
++                    channel,
++                    null,
++                    Mock.Of<HttpRequest>(),
++                    mediaSourceId: channelId.ToString("N", CultureInfo.InvariantCulture))
++                .ConfigureAwait(true);
++
++            Assert.Null(result.ErrorCode);
++            Assert.Single(result.MediaSources);
++            Assert.Equal(tunerSource.Id, result.MediaSources[0].Id);
++        }
 +
 +        [Fact]
 +        public async Task GetPlaybackInfo_ExistingLiveStream_RewritesReturnedCloneOnly()

@@ -256,10 +256,10 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | | |
 |---|---|
 | **Target** | `jellyfin` |
-| **What** | Rewrites Live TV stream file URLs to published/smart API URLs instead of unreachable Docker bridge IPs; clears tuner-origin Paths that clients cannot reach. |
-| **Why** | Clients outside the container network cannot play tuner buffers advertised with bridge addresses; some clients (e.g. Wholphin) ignore `SupportsDirectPlay=false` and still open `Path`, causing `UnknownHostException` on cluster-internal M3U hosts. |
+| **What** | Rewrites Live TV stream file URLs to published/smart API URLs instead of unreachable Docker bridge IPs; clears tuner-origin Paths that clients cannot reach; ignores unmatched Live TV `MediaSourceId` so placeholder channel ids do not yield `NoCompatibleStream`. |
+| **Why** | Clients outside the container network cannot play tuner buffers advertised with bridge addresses; some clients (e.g. Wholphin) ignore `SupportsDirectPlay=false` and still open `Path`, causing `UnknownHostException` on cluster-internal M3U hosts. Wholphin also sends `MediaSourceId` = channel item Guid (from `LiveTvChannel` placeholder sources) instead of the tuner source id (e.g. M3U path MD5), which filters PlaybackInfo to zero sources before open. |
 | **Where** | `MediaInfoHelper`, `MediaInfoController`, `NetworkManager`, media/audio controllers, tests |
-| **How** | Vendored [jellyfin#17298](https://github.com/jellyfin/jellyfin/pull/17298): clone responses and rewrite `/LiveTv/LiveStreamFiles/` via `GetSmartApiUrl`; keep local buffer URL for ffmpeg. Logs successful rewrites (`LocalPathHost` → `PublishedPathHost`). When Path is still a remote tuner origin, `SanitizeLiveStreamClientPath` / `ClearedUnreachableOrigin` nulls Path and forces `SupportsDirectPlay=false` so clients must use `TranscodingUrl`. |
+| **How** | Vendored [jellyfin#17298](https://github.com/jellyfin/jellyfin/pull/17298): clone responses and rewrite `/LiveTv/LiveStreamFiles/` via `GetSmartApiUrl`; keep local buffer URL for ffmpeg. Logs successful rewrites (`LocalPathHost` → `PublishedPathHost`). When Path is still a remote tuner origin, `SanitizeLiveStreamClientPath` / `ClearedUnreachableOrigin` nulls Path and forces `SupportsDirectPlay=false` so clients must use `TranscodingUrl`. For `SourceType.LiveTV`, if `MediaSourceId` matches no tuner source, log `Ignoring unmatched Live TV MediaSourceId` and return all tuner sources (temporary client workaround). |
 | **Related** | [jellyfin#15411](https://github.com/jellyfin/jellyfin/issues/15411); `jellyfin_livetv_stream` (SharedHttpStream for extensionless HTTP). |
 
 ### `jellyfin_z_livetv_rbac_allowlist.patch`
