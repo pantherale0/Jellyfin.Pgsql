@@ -1,10 +1,11 @@
 # Lazy transcoding pipeline probe (EnsureProbed on admin GetSessions; RegisterPending at ffmpeg start).
 # Also exposes Speed/TranscodeBufferTicks/Pipeline on TranscodingInfo and HW-accel strip for non-admins.
+# Syncs Request.LiveStreamId after AcquireResources open so StreamState.Dispose does not close early.
 diff --git a/Emby.Server.Implementations/ApplicationHost.cs b/Emby.Server.Implementations/ApplicationHost.cs
-index 81be5d3c37..e967b13db1 100644
+index 5b97ec8547..742421b194 100644
 --- a/Emby.Server.Implementations/ApplicationHost.cs
 +++ b/Emby.Server.Implementations/ApplicationHost.cs
-@@ -604,6 +604,7 @@ namespace Emby.Server.Implementations
+@@ -626,6 +626,7 @@ namespace Emby.Server.Implementations
              serviceCollection.AddSingleton<IKeyframeManager, KeyframeManager>();
  
              serviceCollection.AddSingleton<IAttachmentExtractor, MediaBrowser.MediaEncoding.Attachments.AttachmentExtractor>();
@@ -13,10 +14,10 @@ index 81be5d3c37..e967b13db1 100644
              serviceCollection.AddSingleton<ITranscodeManager, TranscodeManager>();
              serviceCollection.AddScoped<MediaInfoHelper>();
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 1111111111..2222222222 100644
+index 76d901b095..b291850955 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
-@@ -30,6 +30,7 @@
+@@ -30,6 +30,7 @@ using MediaBrowser.Controller.Events.Authentication;
  using MediaBrowser.Controller.Events.Session;
  using MediaBrowser.Controller.Library;
  using MediaBrowser.Controller.LiveTv;
@@ -24,7 +25,7 @@ index 1111111111..2222222222 100644
  using MediaBrowser.Controller.Net;
  using MediaBrowser.Controller.Session;
  using MediaBrowser.Model.Dto;
-@@ -57,6 +58,7 @@
+@@ -57,6 +58,7 @@ namespace Emby.Server.Implementations.Session
          private static readonly TimeSpan LiveTvProgramLookupMinInterval = TimeSpan.FromSeconds(30);
  
          private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
@@ -32,7 +33,7 @@ index 1111111111..2222222222 100644
          private readonly IUserDataManager _userDataManager;
          private readonly IServerConfigurationManager _config;
          private readonly ILogger<SessionManager> _logger;
-@@ -111,6 +113,7 @@
+@@ -111,6 +113,7 @@ namespace Emby.Server.Implementations.Session
          /// <param name="mediaSourceManager">Instance of <see cref="IMediaSourceManager"/> interface.</param>
          /// <param name="hostApplicationLifetime">Instance of <see cref="IHostApplicationLifetime"/> interface.</param>
          /// <param name="dbProvider">Instance of <see cref="IDbContextFactory{JellyfinDbContext}"/> interface.</param>
@@ -40,7 +41,7 @@ index 1111111111..2222222222 100644
          public SessionManager(
              ILogger<SessionManager> logger,
              IEventManager eventManager,
-@@ -125,7 +128,8 @@
+@@ -125,7 +128,8 @@ namespace Emby.Server.Implementations.Session
              IDeviceManager deviceManager,
              IMediaSourceManager mediaSourceManager,
              IHostApplicationLifetime hostApplicationLifetime,
@@ -50,7 +51,7 @@ index 1111111111..2222222222 100644
          {
              _logger = logger;
              _eventManager = eventManager;
-@@ -143,6 +147,7 @@
+@@ -143,6 +147,7 @@ namespace Emby.Server.Implementations.Session
  
              _deviceManager.DeviceOptionsUpdated += OnDeviceManagerDeviceOptionsUpdated;
              _dbProvider = dbProvider;
@@ -58,7 +59,7 @@ index 1111111111..2222222222 100644
          }
  
          /// <summary>
-@@ -2530,12 +2535,31 @@
+@@ -2619,12 +2624,31 @@ namespace Emby.Server.Implementations.Session
  
              if (!userIsAdmin)
              {
@@ -305,141 +306,20 @@ index 195dda5fe8..829d1068fd 100644
  
      /// <summary>
 diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
-index defd855ec0..61b3b2dea1 100644
+index 78bb881ec2..7174f611c7 100644
 --- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
 +++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
-@@ -44,6 +44,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
-     private readonly IMediaEncoder _mediaEncoder;
-     private readonly IMediaSourceManager _mediaSourceManager;
-     private readonly IAttachmentExtractor _attachmentExtractor;
-+    private readonly ITranscodingPipelineProbe _pipelineProbe;
+@@ -672,6 +672,10 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
  
-     private readonly List<TranscodingJob> _activeTranscodingJobs = new();
-     private readonly AsyncKeyedLocker<string> _transcodingLocks = new(o =>
-@@ -67,6 +68,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
-     /// <param name="mediaEncoder">The <see cref="IMediaEncoder"/>.</param>
-     /// <param name="mediaSourceManager">The <see cref="IMediaSourceManager"/>.</param>
-     /// <param name="attachmentExtractor">The <see cref="IAttachmentExtractor"/>.</param>
-+    /// <param name="pipelineProbe">The <see cref="ITranscodingPipelineProbe"/>.</param>
-     public TranscodeManager(
-         ILoggerFactory loggerFactory,
-         IFileSystem fileSystem,
-@@ -77,7 +79,8 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
-         EncodingHelper encodingHelper,
-         IMediaEncoder mediaEncoder,
-         IMediaSourceManager mediaSourceManager,
--        IAttachmentExtractor attachmentExtractor)
-+        IAttachmentExtractor attachmentExtractor,
-+        ITranscodingPipelineProbe pipelineProbe)
-     {
-         _loggerFactory = loggerFactory;
-         _fileSystem = fileSystem;
-@@ -89,6 +92,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
-         _mediaEncoder = mediaEncoder;
-         _mediaSourceManager = mediaSourceManager;
-         _attachmentExtractor = attachmentExtractor;
-+        _pipelineProbe = pipelineProbe;
+             _encodingHelper.AttachMediaSourceInfo(state, encodingOptions, liveStreamResponse.MediaSource, state.RequestedUrl);
  
-         _logger = loggerFactory.CreateLogger<TranscodeManager>();
-         DeleteEncodedMediaCache();
-@@ -235,6 +239,8 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
- 
-         job.Stop();
- 
-+        _pipelineProbe.Evict(job.PlaySessionId);
++            // Keep Request in sync so StreamState.Dispose does not close the live stream
++            // when the HLS URL omitted LiveStreamId (open happened here instead).
++            state.Request.LiveStreamId = liveStreamResponse.MediaSource.LiveStreamId;
 +
-         if (delete(job.Path!))
-         {
-             await DeletePartialStreamFiles(job.Path!, job.Type, 0, 1500).ConfigureAwait(false);
-@@ -327,7 +333,8 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
-         float? framerate,
-         double? percentComplete,
-         long? bytesTranscoded,
--        int? bitRate)
-+        int? bitRate,
-+        float? speed = null)
-     {
-         var ticks = transcodingPosition?.Ticks;
- 
-@@ -338,6 +345,10 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
-             job.TranscodingPositionTicks = ticks;
-             job.BytesTranscoded = bytesTranscoded;
-             job.BitRate = bitRate;
-+            if (speed.HasValue)
-+            {
-+                job.Speed = speed;
-+            }
-         }
- 
-         var deviceId = state.Request.DeviceId;
-@@ -348,6 +359,28 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
-             var videoCodec = state.ActualOutputVideoCodec;
-             var hardwareAccelerationType = _serverConfigurationManager.GetEncodingOptions().HardwareAccelerationType;
- 
-+            long? bufferTicks = null;
-+            if (job?.TranscodingPositionTicks is not null && job.DownloadPositionTicks is not null)
-+            {
-+                bufferTicks = Math.Max(0, job.TranscodingPositionTicks.Value - job.DownloadPositionTicks.Value);
-+            }
-+
-+            // Only attach a pipeline if an admin already triggered EnsureProbed; do not
-+            // start ffmpeg -print_graphs from the progress hot path.
-+            var pipeline = job?.Pipeline
-+                ?? _pipelineProbe.GetCachedPipeline(job?.PlaySessionId ?? state.Request.PlaySessionId);
-+            if (pipeline is not null && job is not null)
-+            {
-+                job.Pipeline = pipeline;
-+            }
-+
-+            var transcodeProtocol = job?.Type switch
-+            {
-+                TranscodingJobType.Hls => "hls",
-+                TranscodingJobType.Dash => "dash",
-+                _ => "http"
-+            };
-+
-             _sessionManager.ReportTranscodingInfo(deviceId, new TranscodingInfo
+             if (state.VideoRequest is not null)
              {
-                 Bitrate = bitRate ?? state.TotalOutputBitrate,
-@@ -362,7 +395,19 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
-                 IsAudioDirect = EncodingHelper.IsCopyCodec(state.OutputAudioCodec),
-                 IsVideoDirect = EncodingHelper.IsCopyCodec(state.OutputVideoCodec),
-                 HardwareAccelerationType = hardwareAccelerationType,
--                TranscodeReasons = state.TranscodeReasons
-+                TranscodeReasons = state.TranscodeReasons,
-+                TranscodeProtocol = transcodeProtocol,
-+                PlaySessionId = job?.PlaySessionId ?? state.Request.PlaySessionId,
-+                VideoBitrate = state.OutputVideoBitrate,
-+                AudioBitrate = state.OutputAudioBitrate,
-+                BytesTranscoded = bytesTranscoded ?? job?.BytesTranscoded,
-+                Speed = speed ?? job?.Speed,
-+                TranscodePositionTicks = ticks ?? job?.TranscodingPositionTicks,
-+                TranscodeBufferTicks = bufferTicks,
-+                IsThrottled = job?.TranscodingThrottler?.IsThrottled == true,
-+                SubtitleCodec = state.SubtitleStream?.Codec,
-+                SubtitleDeliveryMethod = state.SubtitleStream is null ? null : state.SubtitleDeliveryMethod,
-+                Pipeline = pipeline
-             });
-         }
-     }
-@@ -501,6 +546,9 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
-         _logger.LogDebug("Launched FFmpeg process");
-         state.TranscodingJob = transcodingJob;
- 
-+        // Defer pipeline probing until an admin views sessions (EnsureProbed).
-+        _pipelineProbe.RegisterPending(state.Request.PlaySessionId, commandLineArguments);
-+
-         // Important - don't await the log task or we won't be able to kill FFmpeg when the user stops playback
-         _ = new JobLogger(_logger).StartStreamingLog(state, process.StandardError, logStream);
- 
-@@ -656,6 +704,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
-             _logger.LogError("FFmpeg exited with code {0}", process.ExitCode);
-         }
- 
-+        _pipelineProbe.Evict(job.PlaySessionId);
-         job.Dispose();
-     }
- 
+                 _encodingHelper.TryStreamCopy(state, encodingOptions);
 diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodingPipelineClassifier.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodingPipelineClassifier.cs
 new file mode 100644
 index 0000000000..4b88cbfd40
@@ -2019,10 +1899,10 @@ index 0000000000..2a05a1cf44
 +    }
 +}
 diff --git a/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs b/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
-index 1111111111..2222222222 100644
+index 3a971a163d..a6ca2fccab 100644
 --- a/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
 +++ b/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
-@@ -9,6 +9,7 @@
+@@ -9,6 +9,7 @@ using MediaBrowser.Controller.Drawing;
  using MediaBrowser.Controller.Dto;
  using MediaBrowser.Controller.Events;
  using MediaBrowser.Controller.Library;
@@ -2030,7 +1910,7 @@ index 1111111111..2222222222 100644
  using MediaBrowser.Controller.Session;
  using Microsoft.Extensions.Hosting;
  using Microsoft.Extensions.Logging.Abstractions;
-@@ -38,7 +39,8 @@
+@@ -38,7 +39,8 @@ public class SessionManagerTests
              Mock.Of<IDeviceManager>(),
              Mock.Of<IMediaSourceManager>(),
              Mock.Of<IHostApplicationLifetime>(),
@@ -2040,7 +1920,7 @@ index 1111111111..2222222222 100644
  
          await Assert.ThrowsAsync(exceptionType, () => sessionManager.GetAuthorizationToken(
              new User("test", "default", "default"),
-@@ -66,7 +68,8 @@
+@@ -66,7 +68,8 @@ public class SessionManagerTests
              Mock.Of<IDeviceManager>(),
              Mock.Of<IMediaSourceManager>(),
              Mock.Of<IHostApplicationLifetime>(),

@@ -2,7 +2,8 @@
 # open-lock / SharedHttpStream timeout / failed-open dispose (jellyfin#17319),
 # per-channel keyed open + ConsumerCount ownership, reverse-close on stop without LiveStreamId,
 # orphaned live-stream sweeper (jellyfin#16880 / #17177), structured open/share/FirstPull diagnostics,
-# and SharedHttpStream for extensionless HTTP origins (e.g. Dispatcharr /proxy/ts/{id}).
+# SharedHttpStream for extensionless HTTP origins (e.g. Dispatcharr /proxy/ts/{id}),
+# and live.m3u8 open-before-ffmpeg-CLI so -i uses the post-open buffer Path.
 #
 diff --git a/Emby.Server.Implementations/Library/LiveStreamHelper.cs b/Emby.Server.Implementations/Library/LiveStreamHelper.cs
 index 0ebfe3ae71..2b7df3e41e 100644
@@ -758,7 +759,7 @@ index 828bdd6859..7c4d45779b 100644
              var eventArgs = new PlaybackStopEventArgs
              {
 diff --git a/Jellyfin.Api/Controllers/DynamicHlsController.cs b/Jellyfin.Api/Controllers/DynamicHlsController.cs
-index d5ccaeacde..24a13bf475 100644
+index d5ccaeacde..07d6458d15 100644
 --- a/Jellyfin.Api/Controllers/DynamicHlsController.cs
 +++ b/Jellyfin.Api/Controllers/DynamicHlsController.cs
 @@ -16,6 +16,7 @@ using Jellyfin.Data.Enums;
@@ -769,7 +770,42 @@ index d5ccaeacde..24a13bf475 100644
  using MediaBrowser.Controller.Configuration;
  using MediaBrowser.Controller.Library;
  using MediaBrowser.Controller.MediaEncoding;
-@@ -517,6 +518,15 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -25,6 +26,7 @@ using MediaBrowser.Model.Configuration;
+ using MediaBrowser.Model.Dlna;
+ using MediaBrowser.Model.Entities;
+ using MediaBrowser.Model.IO;
++using MediaBrowser.Model.MediaInfo;
+ using MediaBrowser.Model.Net;
+ using Microsoft.AspNetCore.Authorization;
+ using Microsoft.AspNetCore.Http;
+@@ -307,6 +309,26 @@ public class DynamicHlsController : BaseJellyfinApiController
+                     // If the playlist doesn't already exist, startup ffmpeg
+                     try
+                     {
++                        // Open before building CLI: StartFfMpeg's AcquireResources runs after
++                        // the caller supplies arguments, so a pre-open Path (tuner origin) would
++                        // be baked into -i. Opening here also sets Request.LiveStreamId so a
++                        // later AcquireResources is a no-op and StreamState.Dispose won't close.
++                        if (state.MediaSource.RequiresOpening
++                            && string.IsNullOrWhiteSpace(state.Request.LiveStreamId)
++                            && !string.IsNullOrWhiteSpace(state.MediaSource.OpenToken))
++                        {
++                            var liveStreamResponse = await _mediaSourceManager.OpenLiveStream(
++                                    new LiveStreamRequest { OpenToken = state.MediaSource.OpenToken },
++                                    cancellationToken)
++                                .ConfigureAwait(false);
++                            _encodingHelper.AttachMediaSourceInfo(
++                                state,
++                                _encodingOptions,
++                                liveStreamResponse.MediaSource,
++                                state.RequestedUrl);
++                            state.Request.LiveStreamId = liveStreamResponse.MediaSource.LiveStreamId;
++                        }
++
+                         job = await _transcodeManager.StartFfMpeg(
+                                 state,
+                                 playlistPath,
+@@ -517,6 +539,15 @@ public class DynamicHlsController : BaseJellyfinApiController
              AlwaysBurnInSubtitleWhenTranscoding = alwaysBurnInSubtitleWhenTranscoding
          };
  
