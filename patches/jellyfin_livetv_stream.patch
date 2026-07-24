@@ -1,7 +1,8 @@
 # Live TV stream hardening: rolling buffer (jellyfin#17128), probe options (jellyfin#9813),
 # open-lock / SharedHttpStream timeout / failed-open dispose (jellyfin#17319),
 # per-channel keyed open + ConsumerCount ownership, reverse-close on stop without LiveStreamId,
-# and orphaned live-stream sweeper (jellyfin#16880 / #17177).
+# orphaned live-stream sweeper (jellyfin#16880 / #17177), structured open/share/FirstPull diagnostics,
+# and SharedHttpStream for extensionless HTTP origins (e.g. Dispatcharr /proxy/ts/{id}).
 #
 diff --git a/Emby.Server.Implementations/Library/LiveStreamHelper.cs b/Emby.Server.Implementations/Library/LiveStreamHelper.cs
 index 0ebfe3ae71..2b7df3e41e 100644
@@ -85,10 +86,18 @@ index 0ebfe3ae71..2b7df3e41e 100644
      }
  }
 diff --git a/Emby.Server.Implementations/Library/MediaSourceManager.cs b/Emby.Server.Implementations/Library/MediaSourceManager.cs
-index 97e00177b6..4fe7f033fb 100644
+index 97e00177b6..97801ddb6b 100644
 --- a/Emby.Server.Implementations/Library/MediaSourceManager.cs
 +++ b/Emby.Server.Implementations/Library/MediaSourceManager.cs
-@@ -58,8 +58,16 @@ namespace Emby.Server.Implementations.Library
+@@ -6,6 +6,7 @@ using System;
+ using System.Collections.Concurrent;
+ using System.Collections.Generic;
+ using System.Collections.Immutable;
++using System.Diagnostics;
+ using System.Globalization;
+ using System.IO;
+ using System.Linq;
+@@ -58,8 +59,16 @@ namespace Emby.Server.Implementations.Library
          private readonly IDirectoryService _directoryService;
          private readonly IMediaStreamRepository _mediaStreamRepository;
          private readonly IMediaAttachmentRepository _mediaAttachmentRepository;
@@ -105,7 +114,7 @@ index 97e00177b6..4fe7f033fb 100644
          private readonly JsonSerializerOptions _jsonOptions = JsonDefaults.Options;
  
          private IMediaSourceProvider[] _providers;
-@@ -77,7 +85,8 @@ namespace Emby.Server.Implementations.Library
+@@ -77,7 +86,8 @@ namespace Emby.Server.Implementations.Library
              IMediaEncoder mediaEncoder,
              IDirectoryService directoryService,
              IMediaStreamRepository mediaStreamRepository,
@@ -115,7 +124,7 @@ index 97e00177b6..4fe7f033fb 100644
          {
              _appHost = appHost;
              _itemRepo = itemRepo;
-@@ -92,6 +101,7 @@ namespace Emby.Server.Implementations.Library
+@@ -92,6 +102,7 @@ namespace Emby.Server.Implementations.Library
              _directoryService = directoryService;
              _mediaStreamRepository = mediaStreamRepository;
              _mediaAttachmentRepository = mediaAttachmentRepository;
@@ -123,13 +132,14 @@ index 97e00177b6..4fe7f033fb 100644
          }
  
          public void AddParts(IEnumerable<IMediaSourceProvider> providers)
-@@ -633,67 +643,162 @@ namespace Emby.Server.Implementations.Library
+@@ -633,67 +644,200 @@ namespace Emby.Server.Implementations.Library
  
          public async Task<Tuple<LiveStreamResponse, IDirectStreamProvider>> OpenLiveStreamInternal(LiveStreamRequest request, CancellationToken cancellationToken)
          {
 -            MediaSourceInfo mediaSource;
 -            ILiveStream liveStream;
 +            var (provider, keyId) = GetProvider(request.OpenToken);
++            var openStopwatch = Stopwatch.StartNew();
  
 -            using (await _liveStreamLocker.LockAsync(cancellationToken).ConfigureAwait(false))
 +            // Same OpenToken = same channel open path; different tokens still open in parallel.
@@ -141,6 +151,7 @@ index 97e00177b6..4fe7f033fb 100644
 +                ILiveStream streamToClose = null;
 +                List<ILiveStream> currentLiveStreams = null;
 +                var sharedWithoutOpen = false;
++                var shareRace = false;
 +
 +                using (await _liveStreamLocker.LockAsync(cancellationToken).ConfigureAwait(false))
 +                {
@@ -157,10 +168,6 @@ index 97e00177b6..4fe7f033fb 100644
 +                            existing.ConsumerCount++;
 +                            liveStream = existing;
 +                            sharedWithoutOpen = true;
-+                            _logger.LogInformation(
-+                                "Live stream {0} consumer count is now {1}",
-+                                existing.OriginalStreamId,
-+                                existing.ConsumerCount);
 +                        }
 +                    }
  
@@ -170,13 +177,13 @@ index 97e00177b6..4fe7f033fb 100644
 +                        currentLiveStreams = _openStreams.Values.ToList();
 +                    }
 +                }
- 
--                liveStream = await provider.OpenMediaSource(keyId, currentLiveStreams, cancellationToken).ConfigureAwait(false);
++
 +                if (!sharedWithoutOpen)
 +                {
 +                    // Network Open stays outside the global lock (jellyfin#17319) but inside the keyed lock.
 +                    liveStream = await provider.OpenMediaSource(keyId, currentLiveStreams, cancellationToken).ConfigureAwait(false);
-+
+ 
+-                liveStream = await provider.OpenMediaSource(keyId, currentLiveStreams, cancellationToken).ConfigureAwait(false);
 +                    using (await _liveStreamLocker.LockAsync(cancellationToken).ConfigureAwait(false))
 +                    {
 +                        // Prefer a shareable stream already registered (service advisory list / residual race).
@@ -197,10 +204,7 @@ index 97e00177b6..4fe7f033fb 100644
 +                            }
 +
 +                            liveStream = existing;
-+                            _logger.LogInformation(
-+                                "Live stream {0} consumer count is now {1}",
-+                                existing.OriginalStreamId,
-+                                existing.ConsumerCount);
++                            shareRace = true;
 +                        }
 +                        else
 +                        {
@@ -273,9 +277,31 @@ index 97e00177b6..4fe7f033fb 100644
 -                    await new LiveStreamHelper(_mediaEncoder, _logger, _appPaths)
 -                        .AddMediaInfoWithProbe(mediaSource, false, cacheKey, true, cancellationToken)
 -                        .ConfigureAwait(false);
++                openStopwatch.Stop();
++
++                var shared = sharedWithoutOpen || shareRace;
++                var reason = sharedWithoutOpen ? "EarlyShare" : shareRace ? "ShareRace" : "Registered";
++                var ageMs = shared
++                    ? (long)(DateTime.UtcNow - liveStream.DateOpened).TotalMilliseconds
++                    : (long?)null;
++
 +                // TODO: @bond Fix
 +                var json = JsonSerializer.SerializeToUtf8Bytes(mediaSource, _jsonOptions);
-+                _logger.LogInformation("Live stream opened: {@MediaSource}", mediaSource);
++                _logger.LogInformation(
++                    "Live stream open decision Shared={Shared} Reason={Reason} OpenToken={OpenToken} OriginalStreamId={OriginalStreamId} LiveStreamId={LiveStreamId} ConsumerCount={ConsumerCount} AgeMs={AgeMs} PathHost={PathHost} PathIsLiveStreamFiles={PathIsLiveStreamFiles} SupportsDirectPlay={SupportsDirectPlay} SupportsDirectStream={SupportsDirectStream} UserId={UserId} OpenElapsedMs={OpenElapsedMs}",
++                    shared,
++                    reason,
++                    TruncateForLog(request.OpenToken),
++                    liveStream.OriginalStreamId,
++                    mediaSource.LiveStreamId,
++                    liveStream.ConsumerCount,
++                    ageMs,
++                    TryGetPathHost(mediaSource.Path),
++                    IsLiveStreamFilesPath(mediaSource.Path),
++                    mediaSource.SupportsDirectPlay,
++                    mediaSource.SupportsDirectStream,
++                    request.UserId.IsEmpty() ? null : request.UserId.ToString("N", CultureInfo.InvariantCulture),
++                    openStopwatch.ElapsedMilliseconds);
 +                var clone = JsonSerializer.Deserialize<MediaSourceInfo>(json, _jsonOptions);
 +
 +                if (!request.UserId.IsEmpty())
@@ -286,19 +312,37 @@ index 97e00177b6..4fe7f033fb 100644
 +                        : _libraryManager.GetItemById(request.ItemId);
 +                    SetDefaultAudioAndSubtitleStreamIndices(item, clone, user);
                  }
--            }
++
++                return new Tuple<LiveStreamResponse, IDirectStreamProvider>(new LiveStreamResponse(clone), liveStream as IDirectStreamProvider);
+             }
 -            catch (Exception ex)
--            {
++        }
++
++        private static string TruncateForLog(string value, int maxLength = 120)
++        {
++            if (string.IsNullOrEmpty(value) || value.Length <= maxLength)
+             {
 -                _logger.LogError(ex, "Error probing live tv stream");
 -                AddMediaInfo(mediaSource);
--            }
++                return value;
+             }
  
 -            // TODO: @bond Fix
 -            var json = JsonSerializer.SerializeToUtf8Bytes(mediaSource, _jsonOptions);
 -            _logger.LogInformation("Live stream opened: {@MediaSource}", mediaSource);
 -            var clone = JsonSerializer.Deserialize<MediaSourceInfo>(json, _jsonOptions);
-+                return new Tuple<LiveStreamResponse, IDirectStreamProvider>(new LiveStreamResponse(clone), liveStream as IDirectStreamProvider);
-+            }
++            return string.Concat(value.AsSpan(0, maxLength), "...");
++        }
++
++        private static string TryGetPathHost(string path)
++        {
++            return Uri.TryCreate(path, UriKind.Absolute, out var uri) ? uri.Host : null;
++        }
++
++        private static bool IsLiveStreamFilesPath(string path)
++        {
++            return path is not null
++                && path.Contains("/LiveTv/LiveStreamFiles/", StringComparison.OrdinalIgnoreCase);
 +        }
  
 -            if (!request.UserId.IsEmpty())
@@ -323,7 +367,7 @@ index 97e00177b6..4fe7f033fb 100644
          }
  
          private static void AddMediaInfo(MediaSourceInfo mediaSource)
-@@ -781,7 +886,13 @@ namespace Emby.Server.Implementations.Library
+@@ -781,7 +925,13 @@ namespace Emby.Server.Implementations.Library
  
          public async Task AddMediaInfoWithProbe(MediaSourceInfo mediaSource, bool isAudio, string cacheKey, bool addProbeDelay, bool isLiveStream, CancellationToken cancellationToken)
          {
@@ -338,7 +382,7 @@ index 97e00177b6..4fe7f033fb 100644
  
              var now = DateTime.UtcNow;
  
-@@ -814,11 +925,6 @@ namespace Emby.Server.Implementations.Library
+@@ -814,11 +964,6 @@ namespace Emby.Server.Implementations.Library
                      await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
                  }
  
@@ -350,7 +394,7 @@ index 97e00177b6..4fe7f033fb 100644
                  mediaInfo = await _mediaEncoder.GetMediaInfo(
                      new MediaInfoRequest
                      {
-@@ -843,21 +949,6 @@ namespace Emby.Server.Implementations.Library
+@@ -843,21 +988,6 @@ namespace Emby.Server.Implementations.Library
  
              var mediaStreams = mediaInfo.MediaStreams;
  
@@ -372,7 +416,7 @@ index 97e00177b6..4fe7f033fb 100644
              _logger.LogInformation("Live tv media info probe took {0} seconds", (DateTime.UtcNow - now).TotalSeconds.ToString(CultureInfo.InvariantCulture));
  
              mediaSource.Bitrate = mediaInfo.Bitrate;
-@@ -872,15 +963,6 @@ namespace Emby.Server.Implementations.Library
+@@ -872,15 +1002,6 @@ namespace Emby.Server.Implementations.Library
  
              mediaSource.DefaultSubtitleStreamIndex = null;
  
@@ -388,7 +432,7 @@ index 97e00177b6..4fe7f033fb 100644
              var audioStream = mediaStreams.FirstOrDefault(i => i.Type == MediaStreamType.Audio);
  
              if (audioStream is null || audioStream.Index == -1)
-@@ -921,11 +1003,6 @@ namespace Emby.Server.Implementations.Library
+@@ -921,11 +1042,6 @@ namespace Emby.Server.Implementations.Library
                  videoStream.IsAVC = null;
              }
  
@@ -400,7 +444,7 @@ index 97e00177b6..4fe7f033fb 100644
              // Try to estimate this
              mediaSource.InferTotalBitrate(true);
          }
-@@ -961,6 +1038,12 @@ namespace Emby.Server.Implementations.Library
+@@ -961,6 +1077,12 @@ namespace Emby.Server.Implementations.Library
              return _openStreams.Values.FirstOrDefault(stream => string.Equals(uniqueId, stream?.UniqueId, StringComparison.OrdinalIgnoreCase));
          }
  
@@ -413,7 +457,7 @@ index 97e00177b6..4fe7f033fb 100644
          public async Task<MediaSourceInfo> GetLiveStream(string id, CancellationToken cancellationToken)
          {
              var result = await GetLiveStreamWithDirectStreamProvider(id, cancellationToken).ConfigureAwait(false);
-@@ -987,7 +1070,7 @@ namespace Emby.Server.Implementations.Library
+@@ -987,7 +1109,7 @@ namespace Emby.Server.Implementations.Library
                  IgnoreIndex = true
              };
  
@@ -422,7 +466,7 @@ index 97e00177b6..4fe7f033fb 100644
                  .AddMediaInfoWithProbe(stream, false, false, cancellationToken).ConfigureAwait(false);
  
              return [stream];
-@@ -997,11 +1080,13 @@ namespace Emby.Server.Implementations.Library
+@@ -997,11 +1119,13 @@ namespace Emby.Server.Implementations.Library
          {
              ArgumentException.ThrowIfNullOrEmpty(id);
  
@@ -437,7 +481,7 @@ index 97e00177b6..4fe7f033fb 100644
  
                      _logger.LogInformation("Live stream {0} consumer count is now {1}", liveStream.OriginalStreamId, liveStream.ConsumerCount);
  
-@@ -1011,11 +1096,17 @@ namespace Emby.Server.Implementations.Library
+@@ -1011,11 +1135,17 @@ namespace Emby.Server.Implementations.Library
  
                          _logger.LogInformation("Closing live stream {0}", id);
  
@@ -457,7 +501,7 @@ index 97e00177b6..4fe7f033fb 100644
          }
  
          private (IMediaSourceProvider MediaSourceProvider, string KeyId) GetProvider(string key)
-@@ -1053,6 +1144,7 @@ namespace Emby.Server.Implementations.Library
+@@ -1053,6 +1183,7 @@ namespace Emby.Server.Implementations.Library
                  }
  
                  _liveStreamLocker.Dispose();
@@ -466,10 +510,10 @@ index 97e00177b6..4fe7f033fb 100644
          }
      }
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 828bdd6859..342435e0e8 100644
+index 828bdd6859..7c4d45779b 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
-@@ -317,10 +317,49 @@ namespace Emby.Server.Implementations.Session
+@@ -317,10 +317,56 @@ namespace Emby.Server.Implementations.Session
                      await CloseLiveStreamIfNeededAsync(session.PlayState.LiveStreamId, session.Id).ConfigureAwait(false);
                  }
  
@@ -503,6 +547,13 @@ index 828bdd6859..342435e0e8 100644
 +
 +            foreach (var liveStreamId in liveStreamIds)
 +            {
++                _logger.LogInformation(
++                    "Live stream reverse-close Reason={Reason} SessionId={SessionId} PlaySessionId={PlaySessionId} LiveStreamId={LiveStreamId}",
++                    "ReverseClose",
++                    sessionId,
++                    playSessionId,
++                    liveStreamId);
++
 +                if (!string.IsNullOrEmpty(sessionId)
 +                    && _activeLiveStreamSessions.TryGetValue(liveStreamId, out var mappings)
 +                    && mappings.ContainsKey(sessionId))
@@ -519,7 +570,7 @@ index 828bdd6859..342435e0e8 100644
          /// <inheritdoc />
          public async Task CloseLiveStreamIfNeededAsync(string liveStreamId, string sessionIdOrPlaySessionId)
          {
-@@ -605,14 +644,9 @@ namespace Emby.Server.Implementations.Session
+@@ -605,14 +651,9 @@ namespace Emby.Server.Implementations.Session
          {
              _idleTimer ??= new Timer(CheckForIdlePlayback, null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
  
@@ -537,7 +588,7 @@ index 828bdd6859..342435e0e8 100644
          }
  
          private void StopIdleCheckTimer()
-@@ -669,46 +703,117 @@ namespace Emby.Server.Implementations.Session
+@@ -669,46 +710,123 @@ namespace Emby.Server.Implementations.Session
              {
                  StopIdleCheckTimer();
              }
@@ -662,7 +713,13 @@ index 828bdd6859..342435e0e8 100644
 +                    continue;
 +                }
 +
-+                _logger.LogInformation("Closing orphaned live stream {LiveStreamId}", liveStreamId);
++                _logger.LogInformation(
++                    "Closing orphaned live stream Reason={Reason} LiveStreamId={LiveStreamId} OriginalStreamId={OriginalStreamId} ConsumerCount={ConsumerCount} AgeMinutes={AgeMinutes}",
++                    "Orphan",
++                    liveStreamId,
++                    stream.OriginalStreamId,
++                    stream.ConsumerCount,
++                    (now - stream.DateOpened).TotalMinutes);
 +
 +                try
 +                {
@@ -678,7 +735,7 @@ index 828bdd6859..342435e0e8 100644
          private BaseItem GetNowPlayingItem(SessionInfo session, Guid itemId)
          {
              if (session is null)
-@@ -1066,6 +1171,10 @@ namespace Emby.Server.Implementations.Session
+@@ -1066,6 +1184,10 @@ namespace Emby.Server.Implementations.Session
                  {
                      await CloseLiveStreamIfNeededAsync(info.LiveStreamId, session.Id).ConfigureAwait(false);
                  }
@@ -689,7 +746,7 @@ index 828bdd6859..342435e0e8 100644
  
                  throw new ArgumentOutOfRangeException(nameof(info), "The PlaybackStopInfo's PositionTicks was negative.");
              }
-@@ -1139,6 +1248,10 @@ namespace Emby.Server.Implementations.Session
+@@ -1139,6 +1261,10 @@ namespace Emby.Server.Implementations.Session
              {
                  await CloseLiveStreamIfNeededAsync(info.LiveStreamId, session.Id).ConfigureAwait(false);
              }
@@ -700,6 +757,93 @@ index 828bdd6859..342435e0e8 100644
  
              var eventArgs = new PlaybackStopEventArgs
              {
+diff --git a/Jellyfin.Api/Controllers/DynamicHlsController.cs b/Jellyfin.Api/Controllers/DynamicHlsController.cs
+index d5ccaeacde..5a9f23ef0e 100644
+--- a/Jellyfin.Api/Controllers/DynamicHlsController.cs
++++ b/Jellyfin.Api/Controllers/DynamicHlsController.cs
+@@ -30,6 +30,7 @@ using Microsoft.AspNetCore.Authorization;
+ using Microsoft.AspNetCore.Http;
+ using Microsoft.AspNetCore.Mvc;
+ using Microsoft.Extensions.Logging;
++using MediaBrowser.Common.Extensions;
+ 
+ namespace Jellyfin.Api.Controllers;
+ 
+@@ -517,6 +518,15 @@ public class DynamicHlsController : BaseJellyfinApiController
+             AlwaysBurnInSubtitleWhenTranscoding = alwaysBurnInSubtitleWhenTranscoding
+         };
+ 
++        if (!string.IsNullOrEmpty(liveStreamId))
++        {
++            _logger.LogInformation(
++                "Live TV FirstPull Route={Route} LiveStreamId={LiveStreamId} RemoteIP={RemoteIP}",
++                nameof(GetMasterHlsVideoPlaylist),
++                liveStreamId,
++                HttpContext.GetNormalizedRemoteIP());
++        }
++
+         return await _dynamicHlsHelper.GetMasterHlsPlaylist(TranscodingJobType, streamingRequest, enableAdaptiveBitrateStreaming).ConfigureAwait(false);
+     }
+ 
+diff --git a/Jellyfin.Api/Controllers/LiveTvController.cs b/Jellyfin.Api/Controllers/LiveTvController.cs
+index 1c570daf21..af8846a888 100644
+--- a/Jellyfin.Api/Controllers/LiveTvController.cs
++++ b/Jellyfin.Api/Controllers/LiveTvController.cs
+@@ -32,6 +32,9 @@ using MediaBrowser.Model.Querying;
+ using Microsoft.AspNetCore.Authorization;
+ using Microsoft.AspNetCore.Http;
+ using Microsoft.AspNetCore.Mvc;
++using Microsoft.Extensions.DependencyInjection;
++using Microsoft.Extensions.Logging;
++using MediaBrowser.Common.Extensions;
+ 
+ namespace Jellyfin.Api.Controllers;
+ 
+@@ -1150,6 +1153,13 @@ public class LiveTvController : BaseJellyfinApiController
+         [FromRoute, Required] string streamId,
+         [FromRoute, Required][RegularExpression(EncodingHelper.ContainerValidationRegexStr)] string container)
+     {
++        var logger = HttpContext.RequestServices.GetService<ILogger<LiveTvController>>();
++        logger?.LogInformation(
++            "Live TV FirstPull Route={Route} UniqueId={UniqueId} RemoteIP={RemoteIP}",
++            nameof(GetLiveStreamFile),
++            streamId,
++            HttpContext.GetNormalizedRemoteIP());
++
+         var liveStreamInfo = _mediaSourceManager.GetLiveStreamInfoByUniqueId(streamId);
+         if (liveStreamInfo is null)
+         {
+diff --git a/Jellyfin.Api/Controllers/VideosController.cs b/Jellyfin.Api/Controllers/VideosController.cs
+index 29a92cdb90..e472e14c84 100644
+--- a/Jellyfin.Api/Controllers/VideosController.cs
++++ b/Jellyfin.Api/Controllers/VideosController.cs
+@@ -29,6 +29,9 @@ using MediaBrowser.Model.Querying;
+ using Microsoft.AspNetCore.Authorization;
+ using Microsoft.AspNetCore.Http;
+ using Microsoft.AspNetCore.Mvc;
++using Microsoft.Extensions.DependencyInjection;
++using Microsoft.Extensions.Logging;
++using MediaBrowser.Common.Extensions;
+ 
+ namespace Jellyfin.Api.Controllers;
+ 
+@@ -368,6 +371,16 @@ public class VideosController : BaseJellyfinApiController
+         [FromQuery] Dictionary<string, string> streamOptions,
+         [FromQuery] bool enableAudioVbrEncoding = true)
+     {
++        if (!string.IsNullOrEmpty(liveStreamId))
++        {
++            var logger = HttpContext.RequestServices.GetService<ILogger<VideosController>>();
++            logger?.LogInformation(
++                "Live TV FirstPull Route={Route} LiveStreamId={LiveStreamId} RemoteIP={RemoteIP}",
++                nameof(GetVideoStream),
++                liveStreamId,
++                HttpContext.GetNormalizedRemoteIP());
++        }
++
+         var isHeadRequest = Request.Method == System.Net.WebRequestMethods.Http.Head;
+         // CTS lifecycle is managed internally.
+         var cancellationTokenSource = new CancellationTokenSource();
 diff --git a/MediaBrowser.Controller/Library/ILiveStream.cs b/MediaBrowser.Controller/Library/ILiveStream.cs
 index bf64aca0f0..b247dd61a7 100644
 --- a/MediaBrowser.Controller/Library/ILiveStream.cs
@@ -734,10 +878,10 @@ index 2b6781a197..9464ee3cdc 100644
          /// Gets the media sources for an active recording.
          /// </summary>
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-index 1b0bbe9ea0..a9ae1c409f 100644
+index 2dcf6f38ed..3f86f25158 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-@@ -1300,7 +1300,7 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -1303,7 +1303,7 @@ namespace MediaBrowser.Controller.MediaEncoding
                  }
  
                  // Apply probesize, too, if configured
@@ -746,7 +890,7 @@ index 1b0bbe9ea0..a9ae1c409f 100644
                  if (!string.IsNullOrEmpty(ffmpegProbeSizeArgument))
                  {
                      arg.Append(' ').Append(ffmpegProbeSizeArgument);
-@@ -7274,13 +7274,15 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -7315,13 +7315,15 @@ namespace MediaBrowser.Controller.MediaEncoding
              return analyzeDurationArgument;
          }
  
@@ -766,7 +910,7 @@ index 1b0bbe9ea0..a9ae1c409f 100644
              }
  
              return string.Empty;
-@@ -7299,7 +7301,7 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -7340,7 +7342,7 @@ namespace MediaBrowser.Controller.MediaEncoding
              inputModifier = inputModifier.Trim();
  
              // Apply -probesize if configured
@@ -776,10 +920,10 @@ index 1b0bbe9ea0..a9ae1c409f 100644
              if (!string.IsNullOrEmpty(ffmpegProbeSizeArgument))
              {
 diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-index 0ddd378352..cefce67ddb 100644
+index 28e5b64034..0dad188d50 100644
 --- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 +++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-@@ -452,9 +452,12 @@ namespace MediaBrowser.MediaEncoding.Encoder
+@@ -475,9 +475,12 @@ namespace MediaBrowser.MediaEncoding.Encoder
                  extraArgs = analyzeDuration;
              }
  
@@ -870,10 +1014,10 @@ index 75ccdcf276..b7cc2e6de6 100644
          public TranscodeReason TranscodeReasons { get; set; }
  
 diff --git a/src/Jellyfin.LiveTv/DefaultLiveTvService.cs b/src/Jellyfin.LiveTv/DefaultLiveTvService.cs
-index d477bc3713..5dd9eec57e 100644
+index 58d5c83ae8..2ec1f9a7f8 100644
 --- a/src/Jellyfin.LiveTv/DefaultLiveTvService.cs
 +++ b/src/Jellyfin.LiveTv/DefaultLiveTvService.cs
-@@ -469,9 +469,8 @@ namespace Jellyfin.LiveTv
+@@ -480,9 +480,8 @@ namespace Jellyfin.LiveTv
  
              if (result is not null && result.EnableStreamSharing)
              {
@@ -1335,6 +1479,62 @@ index 70d8afc5d0..3dd7bfb97d 100644
          }
      }
  }
+diff --git a/src/Jellyfin.LiveTv/TunerHosts/M3UTunerHost.cs b/src/Jellyfin.LiveTv/TunerHosts/M3UTunerHost.cs
+index fb606be0ef..2f8dc6121a 100644
+--- a/src/Jellyfin.LiveTv/TunerHosts/M3UTunerHost.cs
++++ b/src/Jellyfin.LiveTv/TunerHosts/M3UTunerHost.cs
+@@ -100,29 +100,32 @@ namespace Jellyfin.LiveTv.TunerHosts
+ 
+                 if (string.IsNullOrEmpty(extension))
+                 {
+-                    try
+-                    {
+-                        using var message = new HttpRequestMessage(HttpMethod.Head, mediaSource.Path);
+-                        using var response = await _httpClientFactory.CreateClient(NamedClient.Default)
+-                            .SendAsync(message, cancellationToken)
+-                            .ConfigureAwait(false);
+-
+-                        if (response.IsSuccessStatusCode)
+-                        {
+-                            if (_mimeTypesCanShareHttpStream.Contains(response.Content.Headers.ContentType?.MediaType, StringComparison.OrdinalIgnoreCase))
+-                            {
+-                                return new SharedHttpStream(mediaSource, tunerHost, streamId, FileSystem, _httpClientFactory, Logger, Config, _appHost, _streamHelper);
+-                            }
+-                        }
+-                    }
+-                    catch (Exception)
++                    // Paths like Dispatcharr /proxy/ts/{id} have no file extension. Prefer SharedHttpStream
++                    // so MediaSource.Path becomes a Jellyfin /LiveTv/LiveStreamFiles/ URL clients can reach.
++                    return new SharedHttpStream(mediaSource, tunerHost, streamId, FileSystem, _httpClientFactory, Logger, Config, _appHost, _streamHelper);
++                }
++
++                if (_extensionsCanShareHttpStream.Contains(extension, StringComparison.OrdinalIgnoreCase))
++                {
++                    return new SharedHttpStream(mediaSource, tunerHost, streamId, FileSystem, _httpClientFactory, Logger, Config, _appHost, _streamHelper);
++                }
++
++                try
++                {
++                    using var message = new HttpRequestMessage(HttpMethod.Head, mediaSource.Path);
++                    using var response = await _httpClientFactory.CreateClient(NamedClient.Default)
++                        .SendAsync(message, cancellationToken)
++                        .ConfigureAwait(false);
++
++                    if (response.IsSuccessStatusCode
++                        && _mimeTypesCanShareHttpStream.Contains(response.Content.Headers.ContentType?.MediaType, StringComparison.OrdinalIgnoreCase))
+                     {
+-                        Logger.LogWarning("HEAD request to check MIME type failed, shared stream disabled");
++                        return new SharedHttpStream(mediaSource, tunerHost, streamId, FileSystem, _httpClientFactory, Logger, Config, _appHost, _streamHelper);
+                     }
+                 }
+-                else if (_extensionsCanShareHttpStream.Contains(extension, StringComparison.OrdinalIgnoreCase))
++                catch (Exception)
+                 {
+-                    return new SharedHttpStream(mediaSource, tunerHost, streamId, FileSystem, _httpClientFactory, Logger, Config, _appHost, _streamHelper);
++                    Logger.LogWarning("HEAD request to check MIME type failed, shared stream disabled");
+                 }
+             }
+ 
 diff --git a/src/Jellyfin.LiveTv/TunerHosts/RollingChunkStream.cs b/src/Jellyfin.LiveTv/TunerHosts/RollingChunkStream.cs
 new file mode 100644
 index 0000000000..e9eed24dd5
@@ -1553,7 +1753,7 @@ index 0000000000..e9eed24dd5
 +    }
 +}
 diff --git a/src/Jellyfin.LiveTv/TunerHosts/SharedHttpStream.cs b/src/Jellyfin.LiveTv/TunerHosts/SharedHttpStream.cs
-index 5ef04ad9e9..4d7a515e0a 100644
+index 5ef04ad9e9..af94805ef1 100644
 --- a/src/Jellyfin.LiveTv/TunerHosts/SharedHttpStream.cs
 +++ b/src/Jellyfin.LiveTv/TunerHosts/SharedHttpStream.cs
 @@ -1,7 +1,10 @@
@@ -1567,12 +1767,13 @@ index 5ef04ad9e9..4d7a515e0a 100644
  using System.Globalization;
  using System.IO;
  using System.Net.Http;
-@@ -46,31 +49,62 @@ namespace Jellyfin.LiveTv.TunerHosts
+@@ -46,31 +49,107 @@ namespace Jellyfin.LiveTv.TunerHosts
              LiveStreamCancellationTokenSource.Token.ThrowIfCancellationRequested();
  
              var mediaSource = OriginalMediaSource;
 -
              var url = mediaSource.Path;
++            var originHost = Uri.TryCreate(url, UriKind.Absolute, out var originUri) ? originUri.Host : null;
  
 -            Directory.CreateDirectory(Path.GetDirectoryName(TempFilePath) ?? throw new InvalidOperationException("Path can't be a root directory."));
 +            if (IsRollingChunkEnabled)
@@ -1587,20 +1788,26 @@ index 5ef04ad9e9..4d7a515e0a 100644
 -            var response = await _httpClientFactory.CreateClient(NamedClient.Default)
 -                .GetAsync(url, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None)
 -                .ConfigureAwait(false);
+-
+-            var taskCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 +            var openTimeoutMs = Math.Max(0, ConfigurationManager.GetEncodingOptions().LiveStreamOpenTimeoutMs ?? 15000);
 +            using var openCts = CancellationTokenSource.CreateLinkedTokenSource(openCancellationToken);
 +            if (openTimeoutMs > 0)
 +            {
 +                openCts.CancelAfter(openTimeoutMs);
 +            }
-+
+ 
+-            _ = StartStreaming(response, taskCompletionSource, LiveStreamCancellationTokenSource.Token);
 +            var openToken = openCts.Token;
 +            // If the open deadline fires, stop the copy loop so a stalled origin cannot leak.
 +            await using var cancelLiveOnOpenTimeout = openToken.Register(() =>
 +            {
 +                _ = LiveStreamCancellationTokenSource.CancelAsync();
 +            });
-+
+ 
+-            MediaSource.Path = _appHost.GetApiUrlForLocalAccess() + "/LiveTv/LiveStreamFiles/" + UniqueId + "/stream.ts";
+-            MediaSource.Protocol = MediaProtocol.Http;
++            var openStarted = DateTime.UtcNow;
 +            HttpResponseMessage response = null;
 +            try
 +            {
@@ -1608,27 +1815,66 @@ index 5ef04ad9e9..4d7a515e0a 100644
 +                response = await _httpClientFactory.CreateClient(NamedClient.Default)
 +                    .GetAsync(url, HttpCompletionOption.ResponseHeadersRead, openToken)
 +                    .ConfigureAwait(false);
- 
--            var taskCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
++
++                var httpConnectMs = (DateTime.UtcNow - openStarted).TotalMilliseconds;
++                Logger.LogInformation(
++                    "Live stream HTTP connect completed StreamType={StreamType} OriginHost={OriginHost} HttpConnectMs={HttpConnectMs} OpenTimeoutMs={OpenTimeoutMs} UniqueId={UniqueId}",
++                    typeName,
++                    originHost,
++                    httpConnectMs,
++                    openTimeoutMs,
++                    UniqueId);
++
 +                var taskCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
- 
--            _ = StartStreaming(response, taskCompletionSource, LiveStreamCancellationTokenSource.Token);
++
 +                _ = StartStreaming(response, taskCompletionSource, LiveStreamCancellationTokenSource.Token);
 +                response = null; // ownership transferred to StartStreaming
- 
--            MediaSource.Path = _appHost.GetApiUrlForLocalAccess() + "/LiveTv/LiveStreamFiles/" + UniqueId + "/stream.ts";
--            MediaSource.Protocol = MediaProtocol.Http;
++
 +                MediaSource.Path = _appHost.GetApiUrlForLocalAccess() + "/LiveTv/LiveStreamFiles/" + UniqueId + "/stream.ts";
 +                MediaSource.Protocol = MediaProtocol.Http;
- 
--            var res = await taskCompletionSource.Task.ConfigureAwait(false);
--            if (!res)
++
++                var bufferPathHost = Uri.TryCreate(MediaSource.Path, UriKind.Absolute, out var bufferUri) ? bufferUri.Host : null;
++                Logger.LogInformation(
++                    "Live stream buffer path ready StreamType={StreamType} UniqueId={UniqueId} BufferPathHost={BufferPathHost} OriginalStreamId={OriginalStreamId}",
++                    typeName,
++                    UniqueId,
++                    bufferPathHost,
++                    OriginalStreamId);
++
++                var firstByteStarted = DateTime.UtcNow;
 +                var res = await taskCompletionSource.Task.WaitAsync(openToken).ConfigureAwait(false);
++                var firstByteMs = (DateTime.UtcNow - firstByteStarted).TotalMilliseconds;
++                Logger.LogInformation(
++                    "Live stream first byte ready StreamType={StreamType} UniqueId={UniqueId} FirstByteMs={FirstByteMs} OpenElapsedMs={OpenElapsedMs}",
++                    typeName,
++                    UniqueId,
++                    firstByteMs,
++                    (DateTime.UtcNow - openStarted).TotalMilliseconds);
++
 +                if (!res)
 +                {
 +                    Logger.LogWarning("Zero bytes copied from stream {StreamType} to {Directory} but no exception raised", GetType().Name, ChunkDirectory);
 +                    throw new EndOfStreamException(string.Format(CultureInfo.InvariantCulture, "Zero bytes copied from stream {0}", GetType().Name));
 +                }
++            }
++            catch (OperationCanceledException) when (openCts.IsCancellationRequested && !openCancellationToken.IsCancellationRequested)
++            {
++                Logger.LogWarning(
++                    "Live stream open timed out StreamType={StreamType} OriginHost={OriginHost} OpenTimeoutMs={OpenTimeoutMs} ElapsedMs={ElapsedMs} UniqueId={UniqueId}",
++                    typeName,
++                    originHost,
++                    openTimeoutMs,
++                    (DateTime.UtcNow - openStarted).TotalMilliseconds,
++                    UniqueId);
++                await LiveStreamCancellationTokenSource.CancelAsync().ConfigureAwait(false);
++                if (response is not null)
++                {
++                    response.Dispose();
++                }
+ 
+-            var res = await taskCompletionSource.Task.ConfigureAwait(false);
+-            if (!res)
++                throw;
 +            }
 +            catch
              {
@@ -1644,7 +1890,7 @@ index 5ef04ad9e9..4d7a515e0a 100644
              }
          }
  
-@@ -81,55 +115,72 @@ namespace Jellyfin.LiveTv.TunerHosts
+@@ -81,55 +160,72 @@ namespace Jellyfin.LiveTv.TunerHosts
                  {
                      try
                      {
