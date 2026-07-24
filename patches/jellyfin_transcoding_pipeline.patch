@@ -306,10 +306,134 @@ index 195dda5fe8..829d1068fd 100644
  
      /// <summary>
 diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
-index 78bb881ec2..7174f611c7 100644
+index 78bb881ec2..26ef115aaf 100644
 --- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
 +++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
-@@ -672,6 +672,10 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+@@ -44,6 +44,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+     private readonly IMediaEncoder _mediaEncoder;
+     private readonly IMediaSourceManager _mediaSourceManager;
+     private readonly IAttachmentExtractor _attachmentExtractor;
++    private readonly ITranscodingPipelineProbe _pipelineProbe;
+ 
+     private readonly List<TranscodingJob> _activeTranscodingJobs = new();
+     private readonly AsyncKeyedLocker<string> _transcodingLocks = new(o =>
+@@ -77,7 +78,8 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+         EncodingHelper encodingHelper,
+         IMediaEncoder mediaEncoder,
+         IMediaSourceManager mediaSourceManager,
+-        IAttachmentExtractor attachmentExtractor)
++        IAttachmentExtractor attachmentExtractor,
++        ITranscodingPipelineProbe pipelineProbe)
+     {
+         _loggerFactory = loggerFactory;
+         _fileSystem = fileSystem;
+@@ -89,6 +91,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+         _mediaEncoder = mediaEncoder;
+         _mediaSourceManager = mediaSourceManager;
+         _attachmentExtractor = attachmentExtractor;
++        _pipelineProbe = pipelineProbe;
+ 
+         _logger = loggerFactory.CreateLogger<TranscodeManager>();
+         DeleteEncodedMediaCache();
+@@ -235,6 +238,8 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+ 
+         job.Stop();
+ 
++        _pipelineProbe.Evict(job.PlaySessionId);
++
+         if (delete(job.Path!))
+         {
+             await DeletePartialStreamFiles(job.Path!, job.Type, 0, 1500).ConfigureAwait(false);
+@@ -327,7 +332,8 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+         float? framerate,
+         double? percentComplete,
+         long? bytesTranscoded,
+-        int? bitRate)
++        int? bitRate,
++        float? speed = null)
+     {
+         var ticks = transcodingPosition?.Ticks;
+ 
+@@ -338,6 +344,10 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+             job.TranscodingPositionTicks = ticks;
+             job.BytesTranscoded = bytesTranscoded;
+             job.BitRate = bitRate;
++            if (speed.HasValue)
++            {
++                job.Speed = speed;
++            }
+         }
+ 
+         var deviceId = state.Request.DeviceId;
+@@ -348,6 +358,28 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+             var videoCodec = state.ActualOutputVideoCodec;
+             var hardwareAccelerationType = _serverConfigurationManager.GetEncodingOptions().HardwareAccelerationType;
+ 
++            long? bufferTicks = null;
++            if (job?.TranscodingPositionTicks is not null && job.DownloadPositionTicks is not null)
++            {
++                bufferTicks = Math.Max(0, job.TranscodingPositionTicks.Value - job.DownloadPositionTicks.Value);
++            }
++
++            // Only attach a pipeline if an admin already triggered EnsureProbed; do not
++            // start ffmpeg -print_graphs from the progress hot path.
++            var pipeline = job?.Pipeline
++                ?? _pipelineProbe.GetCachedPipeline(job?.PlaySessionId ?? state.Request.PlaySessionId);
++            if (pipeline is not null && job is not null)
++            {
++                job.Pipeline = pipeline;
++            }
++
++            var transcodeProtocol = job?.Type switch
++            {
++                TranscodingJobType.Hls => "hls",
++                TranscodingJobType.Dash => "dash",
++                _ => "http"
++            };
++
+             _sessionManager.ReportTranscodingInfo(deviceId, new TranscodingInfo
+             {
+                 Bitrate = bitRate ?? state.TotalOutputBitrate,
+@@ -362,7 +394,19 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+                 IsAudioDirect = EncodingHelper.IsCopyCodec(state.OutputAudioCodec),
+                 IsVideoDirect = EncodingHelper.IsCopyCodec(state.OutputVideoCodec),
+                 HardwareAccelerationType = hardwareAccelerationType,
+-                TranscodeReasons = state.TranscodeReasons
++                TranscodeReasons = state.TranscodeReasons,
++                TranscodeProtocol = transcodeProtocol,
++                PlaySessionId = job?.PlaySessionId ?? state.Request.PlaySessionId,
++                VideoBitrate = state.OutputVideoBitrate,
++                AudioBitrate = state.OutputAudioBitrate,
++                BytesTranscoded = bytesTranscoded ?? job?.BytesTranscoded,
++                Speed = speed ?? job?.Speed,
++                TranscodePositionTicks = ticks ?? job?.TranscodingPositionTicks,
++                TranscodeBufferTicks = bufferTicks,
++                IsThrottled = job?.TranscodingThrottler?.IsThrottled == true,
++                SubtitleCodec = state.SubtitleStream?.Codec,
++                SubtitleDeliveryMethod = state.SubtitleStream is null ? null : state.SubtitleDeliveryMethod,
++                Pipeline = pipeline
+             });
+         }
+     }
+@@ -502,6 +546,9 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+         _logger.LogDebug("Launched FFmpeg process");
+         state.TranscodingJob = transcodingJob;
+ 
++        // Defer pipeline probing until an admin views sessions (EnsureProbed).
++        _pipelineProbe.RegisterPending(state.Request.PlaySessionId, commandLineArguments);
++
+         // Important - don't await the log task or we won't be able to kill FFmpeg when the user stops playback
+         _ = new JobLogger(_logger).StartStreamingLog(state, process.StandardError, logStream);
+ 
+@@ -657,6 +704,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+             _logger.LogError("FFmpeg exited with code {0}", process.ExitCode);
+         }
+ 
++        _pipelineProbe.Evict(job.PlaySessionId);
+         job.Dispose();
+     }
+ 
+@@ -672,6 +720,10 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
  
              _encodingHelper.AttachMediaSourceInfo(state, encodingOptions, liveStreamResponse.MediaSource, state.RequestedUrl);
  
