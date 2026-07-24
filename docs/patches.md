@@ -52,28 +52,6 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | Modal component + menu entry; simplifies QC page shell. |
 | **Related** | `jellyfin_web_tv_quickconnect_login`. No public issue. |
 
-### `jellyfin_security_hardening.patch`
-
-| | |
-|---|---|
-| **Target** | `jellyfin` |
-| **What** | Hardens auth claims and media endpoints so share links cannot elevate; scopes access with share metadata. Requires `[Authorize]` on legacy HLS segment routes. |
-| **Why** | Media share tokens must not grant Administrator; stream/image/subtitle routes need share-aware authorization. |
-| **Where** | `CustomAuthenticationHandler`, authorization handlers, `Audio`/`Videos`/`Hls`/`Image`/`LiveTv`/`Subtitle`/… controllers, `AuthorizationContext` |
-| **How** | Adds `IsMediaShareLink` / `ShareItemId` claims; blocks elevation for share auth; permission checks on media controllers. |
-| **Related** | Companion `jellyfin_web_security_hardening`; requires `jellyfin_z_hls_live_playlist_apikey` so Live/EVENT playlists embed `ApiKey` on segment URIs (RFC 3986). No public issue. |
-
-### `jellyfin_web_security_hardening.patch`
-
-| | |
-|---|---|
-| **Target** | `jellyfin-web` |
-| **What** | Client companions: configuration-page subresource API keys; copy-stream uses expiring share links. |
-| **Why** | Plugin config HTML loads scripts/CSS without Authorization headers; embedding session API keys in copyable stream URLs is unsafe. |
-| **Where** | `ServerContentPage.tsx`, `itemContextMenu.js`, `viewContainer.js`, `ServerConnections.js`, `utils/dashboard.js` |
-| **How** | Rewrites configurationpage URLs with API key query; POST `Items/{id}/ShareLinks` for copy-stream. |
-| **Related** | `jellyfin_security_hardening`. No public issue. |
-
 ### `jellyfin_userdata_userid.patch`
 
 | | |
@@ -224,17 +202,6 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Where** | `DynamicHlsController.cs`, `EncodingHelper.cs`, `DynamicHlsPlaylistGenerator.cs` |
 | **How** | Smarter restart/playlist logic for remux jobs. |
 | **Related** | [jellyfin#13668](https://github.com/jellyfin/jellyfin/issues/13668). |
-
-### `jellyfin_z_hls_live_playlist_apikey.patch`
-
-| | |
-|---|---|
-| **Target** | `jellyfin` |
-| **What** | Appends the request query string (`ApiKey`, etc.) to every URI in Live/EVENT HLS playlists served by `GetLivePlaylistText`. |
-| **Why** | After `jellyfin_security_hardening` requires `[Authorize]` on legacy `/Videos/.../hls/...` segments, clients 401 because RFC 3986 relative resolution does not inherit the playlist URL’s query (ffmpeg emits bare `hls/{id}/N.ts` lines). Dynamic `hls1` already forwarded `Request.QueryString`; live did not. |
-| **Where** | `HlsHelpers.cs`, `DynamicHlsController.cs`, comments on `HlsSegmentController` segment actions |
-| **How** | `AppendQueryStringToPlaylistUris` rewrites media URI lines and `#EXT-X-MAP` URIs; call site passes `Request.QueryString`. Apply-order `z_` so it runs after security hardening. |
-| **Related** | `jellyfin_security_hardening`. Upstream context [jellyfin#13984](https://github.com/jellyfin/jellyfin/issues/13984). |
 
 ### `jellyfin_hdr10plus_mpegts_sei.patch`
 
@@ -671,8 +638,6 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 |---|---|
 | `jellyfin_sso` | `jellyfin_web_rbac`, `jellyfin_web_tv_quickconnect_login`, `jellyfin_web_quickconnect_modal` |
 | `jellyfin_z_livetv_rbac_allowlist` | `jellyfin_web_rbac` (Live TV allowlist UI) |
-| `jellyfin_security_hardening` | `jellyfin_web_security_hardening` |
-| `jellyfin_z_hls_live_playlist_apikey` | (server-only; required by security hardening for Live/EVENT HLS) |
 | `jellyfin_transcoding_pipeline` | `jellyfin_web_transcoding_pipeline` |
 | `jellyfin_hwa_capabilities` | `jellyfin_web_hwa_capabilities` |
 | `jellyfin_livetv_stream` | `jellyfin_web_live_stream` |
@@ -683,4 +648,4 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 
 ## File count
 
-**57** patches: **34** `jellyfin_*.patch` (server), **23** `jellyfin_web*.patch` (web).
+**54** patches: **32** `jellyfin_*.patch` (server), **22** `jellyfin_web*.patch` (web).
