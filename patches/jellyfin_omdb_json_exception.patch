@@ -1,0 +1,86 @@
+diff --git a/MediaBrowser.Providers/Plugins/Omdb/OmdbProvider.cs b/MediaBrowser.Providers/Plugins/Omdb/OmdbProvider.cs
+index f562d64ddd..63aa74455d 100644
+--- a/MediaBrowser.Providers/Plugins/Omdb/OmdbProvider.cs
++++ b/MediaBrowser.Providers/Plugins/Omdb/OmdbProvider.cs
+@@ -231,21 +231,73 @@ namespace MediaBrowser.Providers.Plugins.Omdb
+ 
+         internal async Task<RootObject> GetRootObject(string imdbId, CancellationToken cancellationToken)
+         {
+-            var path = await EnsureItemInfo(imdbId, cancellationToken).ConfigureAwait(false);
+-            var stream = AsyncFile.OpenRead(path);
+-            await using (stream.ConfigureAwait(false))
++            var imdbParam = imdbId.StartsWith("tt", StringComparison.OrdinalIgnoreCase) ? imdbId : "tt" + imdbId;
++            var path = GetDataFilePath(imdbParam);
++
++            try
++            {
++                await EnsureItemInfo(imdbId, cancellationToken).ConfigureAwait(false);
++                var stream = AsyncFile.OpenRead(path);
++                await using (stream.ConfigureAwait(false))
++                {
++                    return await JsonSerializer.DeserializeAsync<RootObject>(stream, _jsonOptions, cancellationToken).ConfigureAwait(false);
++                }
++            }
++            catch (JsonException)
++            {
++                if (File.Exists(path))
++                {
++                    try
++                    {
++                        File.Delete(path);
++                    }
++                    catch
++                    {
++                        // Ignore cleanup exceptions
++                    }
++                }
++
++                return null;
++            }
++            catch (HttpRequestException)
+             {
+-                return await JsonSerializer.DeserializeAsync<RootObject>(stream, _jsonOptions, cancellationToken).ConfigureAwait(false);
++                return null;
+             }
+         }
+ 
+         internal async Task<SeasonRootObject> GetSeasonRootObject(string imdbId, int seasonId, CancellationToken cancellationToken)
+         {
+-            var path = await EnsureSeasonInfo(imdbId, seasonId, cancellationToken).ConfigureAwait(false);
+-            var stream = AsyncFile.OpenRead(path);
+-            await using (stream.ConfigureAwait(false))
++            var imdbParam = imdbId.StartsWith("tt", StringComparison.OrdinalIgnoreCase) ? imdbId : "tt" + imdbId;
++            var path = GetSeasonFilePath(imdbParam, seasonId);
++
++            try
++            {
++                await EnsureSeasonInfo(imdbId, seasonId, cancellationToken).ConfigureAwait(false);
++                var stream = AsyncFile.OpenRead(path);
++                await using (stream.ConfigureAwait(false))
++                {
++                    return await JsonSerializer.DeserializeAsync<SeasonRootObject>(stream, _jsonOptions, cancellationToken).ConfigureAwait(false);
++                }
++            }
++            catch (JsonException)
++            {
++                if (File.Exists(path))
++                {
++                    try
++                    {
++                        File.Delete(path);
++                    }
++                    catch
++                    {
++                        // Ignore cleanup exceptions
++                    }
++                }
++
++                return null;
++            }
++            catch (HttpRequestException)
+             {
+-                return await JsonSerializer.DeserializeAsync<SeasonRootObject>(stream, _jsonOptions, cancellationToken).ConfigureAwait(false);
++                return null;
+             }
+         }
+ 

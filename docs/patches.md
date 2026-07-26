@@ -354,6 +354,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | Expand affected paths / refresh targeting for directory updates. |
 | **Related** | No public issue. |
 
+### `jellyfin_omdb_json_exception.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Catch `JsonException` and `HttpRequestException` when reading or deserializing OMDb API data. |
+| **Why** | OMDb API responses can contain malformed JSON (e.g. unescaped quotes), causing unhandled `JsonException` during metadata scanning. |
+| **Where** | `MediaBrowser.Providers/Plugins/Omdb/OmdbProvider.cs` |
+| **How** | Wrap `GetRootObject` and `GetSeasonRootObject` deserialization in try/catch, delete corrupt cache files on disk if present, and return `null` gracefully. |
+| **Related** | No public issue. |
+
 ### `jellyfin_zz_person_provider_identity.patch`
 
 | | |
@@ -648,4 +659,4 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 
 ## File count
 
-**54** patches: **32** `jellyfin_*.patch` (server), **22** `jellyfin_web*.patch` (web).
+**55** patches: **33** `jellyfin_*.patch` (server), **22** `jellyfin_web*.patch` (web).
