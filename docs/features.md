@@ -47,6 +47,15 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 **Related:** Fork issue [pantherale0#5](https://github.com/pantherale0/Jellyfin.Pgsql/issues/5) (SSO mapping config / auth).
 
+## Live TV Multiview
+
+**What:** Allows users to stream up to 4 Live TV channels simultaneously in the web player. Includes Sky TV mode (1 large main stream + 3 side streams), Quad 2x2 grid, and Dual side-by-side layouts. Features single-click audio focus switching, channel slot swapping, and a channel picker dialog. Access is governed by the `EnableLiveTvMultiview` user permission (configurable per user or via SSO group RBAC mappings in `sso_rbac.json`). For performance and UI compatibility, Multiview is strictly restricted to Desktop/Mobile web clients (disabled on Smart TV / webOS clients via `!layoutManager.tv`) and controlled by an experimental setting toggle (`chkEnableExperimentalMultiview` in User Settings). If tuner capacity is exhausted when adding a channel, a toast alert informs the user.
+
+**Where:**
+- Server: [`jellyfin_livetv_multiview_rbac.patch`](patches.md#jellyfin_livetv_multiview_rbacpatch) (`PermissionKind.EnableLiveTvMultiview`, `UserPolicy`, `UserManager`)
+- Web: [`jellyfin_web_zzz_livetv_multiview.patch`](patches.md#jellyfin_web_zzz_livetv_multiviewpatch) (`multiviewManager.js`, `channelPickerModal.js`, `multiview.scss`, `userSettings.js`, `displaySettings`, OSD Multiview button, User Profile checkbox)
+- SSO: [`jellyfin_sso.patch`](patches.md#jellyfin_ssopatch), [`jellyfin_web_rbac.patch`](patches.md#jellyfin_web_rbacpatch) (SSO Mappings UI)
+
 ## Playback statistics
 
 **What:** Persist playback activity (including daily rollups / delivery method analytics) and expose user + admin dashboards with charts and CSV export.

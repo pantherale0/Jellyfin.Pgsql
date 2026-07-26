@@ -251,6 +251,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | Batching/caching/query tweaks + index migration. |
 | **Related** | No public issue. |
 
+### `jellyfin_livetv_multiview_rbac.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Adds `EnableLiveTvMultiview` permission to `PermissionKind` enum, `UserPolicy` DTO, `UserManager` policy mapping, and default user entity creation. |
+| **Why** | Core permission backend for user-configurable Live TV Multiview access and SSO group RBAC policy enforcement. |
+| **Where** | `PermissionKind.cs`, `UserPolicy.cs`, `UserManager.cs`, `UserEntityExtensions.cs` |
+| **How** | Enum value 24 mapped to/from UserPolicy boolean; automatically picked up by SSO `sso_rbac.json` permission parser. |
+| **Related** | `jellyfin_web_zzz_livetv_multiview.patch`, `jellyfin_sso.patch`, `jellyfin_web_rbac.patch`. |
+
 ### `jellyfin_livetv_published_url.patch`
 
 | | |
@@ -641,12 +652,24 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | Detect webOS5-class clients and adjust loading strategy. |
 | **Related** | No public issue. |
 
+### `jellyfin_web_zzz_livetv_multiview.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin-web` |
+| **What** | Multiview player overlay for web-based Live TV streaming, including Sky TV mode (1 main + 3 side), Quad mode (2x2), Dual mode, audio focus switching, channel picker modal, tuner capacity error toasts, User Profile permission UI, and an experimental user setting flag (`chkEnableExperimentalMultiview`). Automatically hidden on TV clients (`!layoutManager.tv`). |
+| **Why** | Enables users with `EnableLiveTvMultiview` permission to stream up to 4 Live TV channels simultaneously on Desktop/Mobile browsers while protecting TV client performance. |
+| **Where** | `src/components/multiview/multiviewManager.js`, `channelPickerModal.js`, `multiview.scss`, `userSettings.js`, `displaySettings`, `Profile.tsx`, `video/index.html`, `video/index.js`, `en-us.json` |
+| **How** | `multiviewManager` tracks up to 4 active live stream sessions and manages HTML5 video mute states. OSD displays Multiview button for Live TV streams when `!layoutManager.tv && userSettings.enableExperimentalMultiview() && user.Policy.EnableLiveTvMultiview !== false`. |
+| **Related** | `jellyfin_livetv_multiview_rbac.patch`, `jellyfin_web_rbac.patch`. |
+
 ---
 
 ## Companion pairs (quick reference)
 
 | Server | Web |
 |---|---|
+| `jellyfin_livetv_multiview_rbac` | `jellyfin_web_zzz_livetv_multiview` |
 | `jellyfin_sso` | `jellyfin_web_rbac`, `jellyfin_web_tv_quickconnect_login`, `jellyfin_web_quickconnect_modal` |
 | `jellyfin_z_livetv_rbac_allowlist` | `jellyfin_web_rbac` (Live TV allowlist UI) |
 | `jellyfin_transcoding_pipeline` | `jellyfin_web_transcoding_pipeline` |
@@ -659,4 +682,4 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 
 ## File count
 
-**55** patches: **33** `jellyfin_*.patch` (server), **22** `jellyfin_web*.patch` (web).
+**57** patches: **34** `jellyfin_*.patch` (server), **23** `jellyfin_web*.patch` (web).

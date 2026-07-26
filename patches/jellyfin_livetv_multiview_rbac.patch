@@ -1,0 +1,67 @@
+diff --git a/Jellyfin.Data/UserEntityExtensions.cs b/Jellyfin.Data/UserEntityExtensions.cs
+index 0fc8d3cd25..dfcc4f27a1 100644
+--- a/Jellyfin.Data/UserEntityExtensions.cs
++++ b/Jellyfin.Data/UserEntityExtensions.cs
+@@ -185,6 +185,7 @@ public static class UserEntityExtensions
+         entity.Permissions.Add(new Permission(PermissionKind.EnableSyncTranscoding, true));
+         entity.Permissions.Add(new Permission(PermissionKind.EnableAudioPlaybackTranscoding, true));
+         entity.Permissions.Add(new Permission(PermissionKind.EnableLiveTvAccess, true));
++        entity.Permissions.Add(new Permission(PermissionKind.EnableLiveTvMultiview, true));
+         entity.Permissions.Add(new Permission(PermissionKind.EnableLiveTvManagement, false));
+         entity.Permissions.Add(new Permission(PermissionKind.EnableSharedDeviceControl, true));
+         entity.Permissions.Add(new Permission(PermissionKind.EnableVideoPlaybackTranscoding, true));
+diff --git a/Jellyfin.Server.Implementations/Users/UserManager.cs b/Jellyfin.Server.Implementations/Users/UserManager.cs
+index 81408d9aa8..a79bf2a6ff 100644
+--- a/Jellyfin.Server.Implementations/Users/UserManager.cs
++++ b/Jellyfin.Server.Implementations/Users/UserManager.cs
+@@ -456,6 +456,7 @@ namespace Jellyfin.Server.Implementations.Users
+                     EnableRemoteAccess = user.HasPermission(PermissionKind.EnableRemoteAccess),
+                     EnableLiveTvManagement = user.HasPermission(PermissionKind.EnableLiveTvManagement),
+                     EnableLiveTvAccess = user.HasPermission(PermissionKind.EnableLiveTvAccess),
++                    EnableLiveTvMultiview = user.HasPermission(PermissionKind.EnableLiveTvMultiview),
+                     EnableMediaPlayback = user.HasPermission(PermissionKind.EnableMediaPlayback),
+                     EnableAudioPlaybackTranscoding = user.HasPermission(PermissionKind.EnableAudioPlaybackTranscoding),
+                     EnableVideoPlaybackTranscoding = user.HasPermission(PermissionKind.EnableVideoPlaybackTranscoding),
+@@ -837,6 +838,7 @@ namespace Jellyfin.Server.Implementations.Users
+                     user.SetPermission(PermissionKind.EnableRemoteAccess, policy.EnableRemoteAccess);
+                     user.SetPermission(PermissionKind.EnableLiveTvManagement, policy.EnableLiveTvManagement);
+                     user.SetPermission(PermissionKind.EnableLiveTvAccess, policy.EnableLiveTvAccess);
++                    user.SetPermission(PermissionKind.EnableLiveTvMultiview, policy.EnableLiveTvMultiview);
+                     user.SetPermission(PermissionKind.EnableMediaPlayback, policy.EnableMediaPlayback);
+                     user.SetPermission(PermissionKind.EnableAudioPlaybackTranscoding, policy.EnableAudioPlaybackTranscoding);
+                     user.SetPermission(PermissionKind.EnableVideoPlaybackTranscoding, policy.EnableVideoPlaybackTranscoding);
+diff --git a/MediaBrowser.Model/Users/UserPolicy.cs b/MediaBrowser.Model/Users/UserPolicy.cs
+index 95e4d46c59..76b550228f 100644
+--- a/MediaBrowser.Model/Users/UserPolicy.cs
++++ b/MediaBrowser.Model/Users/UserPolicy.cs
+@@ -32,6 +32,7 @@ namespace MediaBrowser.Model.Users
+             ForceRemoteSourceTranscoding = false;
+             EnableLiveTvManagement = true;
+             EnableLiveTvAccess = true;
++            EnableLiveTvMultiview = true;
+ 
+             // Without this on by default, admins won't be able to do this
+             // Improve in the future
+@@ -133,6 +134,8 @@ namespace MediaBrowser.Model.Users
+ 
+         public bool EnableLiveTvAccess { get; set; }
+ 
++        public bool EnableLiveTvMultiview { get; set; }
++
+         public bool EnableMediaPlayback { get; set; }
+ 
+         public bool EnableAudioPlaybackTranscoding { get; set; }
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/PermissionKind.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/PermissionKind.cs
+index 0818639636..360c96350e 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/PermissionKind.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/PermissionKind.cs
+@@ -124,4 +124,9 @@ public enum PermissionKind
+     /// Whether the user can edit lyrics.
+     /// </summary>
+     EnableLyricManagement = 23,
++
++    /// <summary>
++    /// Whether the user can use Live TV Multiview.
++    /// </summary>
++    EnableLiveTvMultiview = 24,
+ }
