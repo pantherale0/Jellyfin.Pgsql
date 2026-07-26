@@ -1,0 +1,765 @@
+diff --git a/src/apps/legacy/controllers/playback/video/index.js b/src/apps/legacy/controllers/playback/video/index.js
+index 8737a03078..4632e62581 100644
+--- a/src/apps/legacy/controllers/playback/video/index.js
++++ b/src/apps/legacy/controllers/playback/video/index.js
+@@ -33,6 +33,9 @@ import { ServerConnections } from 'lib/jellyfin-apiclient';
+ import LibraryMenu from 'scripts/libraryMenu';
+ import { setBackdropTransparency, TRANSPARENCY_LEVEL } from 'components/backdrop/backdrop';
+ import { pluginManager } from 'components/pluginManager';
++import layoutManager from 'components/layoutManager';
++import * as userSettings from 'scripts/settings/userSettings';
++import multiviewManager from 'components/multiview/multiviewManager';
+ 
+ function getOpenedDialog() {
+     return document.querySelector('.dialogContainer .dialog.opened');
+@@ -110,6 +113,17 @@ export default function (view) {
+             secondaryMediaInfo.classList.add('hide');
+         }
+ 
++        const user = ServerConnections.getCurrentUser();
++        const canMultiview = !layoutManager.tv && userSettings.enableExperimentalMultiview() && user?.Policy?.EnableLiveTvMultiview !== false && (displayItem.Type === 'LiveTvChannel' || displayItem.Type === 'LiveTvProgram' || displayItem.MediaType === 'LiveTv');
++        const btnMultiview = view.querySelector('.btnMultiview');
++        if (btnMultiview) {
++            if (canMultiview) {
++                btnMultiview.classList.remove('hide');
++            } else {
++                btnMultiview.classList.add('hide');
++            }
++        }
++
+         if (enableProgressByTimeOfDay) {
+             setDisplayTime(startTimeText, displayItem.StartDate);
+             setDisplayTime(endTimeText, displayItem.EndDate);
+@@ -1768,6 +1782,9 @@ export default function (view) {
+         playbackManager.toggleAirPlay(currentPlayer);
+     });
+     view.querySelector('.btnVideoOsdSettings').addEventListener('click', onSettingsButtonClick);
++    view.querySelector('.btnMultiview')?.addEventListener('click', function () {
++        multiviewManager.toggle({ currentItem });
++    });
+     view.addEventListener('viewhide', function () {
+         clearHideAnimationEventListeners(headerElement);
+         headerElement.classList.remove('hide');
+diff --git a/src/components/displaySettings/displaySettings.js b/src/components/displaySettings/displaySettings.js
+index b7a831e104..e5364f4855 100644
+--- a/src/components/displaySettings/displaySettings.js
++++ b/src/components/displaySettings/displaySettings.js
+@@ -128,6 +128,10 @@ function loadForm(context, user, userSettings) {
+     context.querySelector('#chkFadein').checked = userSettings.enableFastFadein();
+     context.querySelector('#chkBlurhash').checked = userSettings.enableBlurhash();
+     context.querySelector('#infscroll').checked = userSettings.enableInfiniteScroll();
++    context.querySelector('#chkEnableExperimentalMultiview').checked = userSettings.enableExperimentalMultiview();
++    if (layoutManager.tv) {
++        context.querySelector('.fldExperimentalMultiview')?.classList.add('hide');
++    }
+     context.querySelector('#chkBackdrops').checked = userSettings.enableBackdrops();
+     context.querySelector('#chkDetailsBanner').checked = userSettings.detailsBanner();
+ 
+@@ -170,6 +174,7 @@ function saveUser(context, user, userSettingsInstance, apiClient) {
+ 
+     userSettingsInstance.libraryPageSize(context.querySelector('#txtLibraryPageSize').value);
+     userSettingsInstance.enableInfiniteScroll(context.querySelector('#infscroll').checked);
++    userSettingsInstance.enableExperimentalMultiview(context.querySelector('#chkEnableExperimentalMultiview').checked);
+ 
+     userSettingsInstance.maxDaysForNextUp(context.querySelector('#txtMaxDaysForNextUp').value);
+     userSettingsInstance.enableRewatchingInNextUp(context.querySelector('#chkRewatchingNextUp').checked);
+diff --git a/src/components/displaySettings/displaySettings.template.html b/src/components/displaySettings/displaySettings.template.html
+index 3ab4fdd46f..820ef5e36c 100644
+--- a/src/components/displaySettings/displaySettings.template.html
++++ b/src/components/displaySettings/displaySettings.template.html
+@@ -251,6 +251,14 @@ <h2 class="sectionTitle">
+         <div class="fieldDescription checkboxFieldDescription">${EnableInfiniteScrollHelp}</div>
+     </div>
+ 
++    <div class="checkboxContainer checkboxContainer-withDescription fldExperimentalMultiview">
++        <label>
++            <input type="checkbox" is="emby-checkbox" id="chkEnableExperimentalMultiview" />
++            <span>${OptionEnableExperimentalMultiview}</span>
++        </label>
++        <div class="fieldDescription checkboxFieldDescription">${OptionEnableExperimentalMultiviewHelp}</div>
++    </div>
++
+     <div class="checkboxContainer checkboxContainer-withDescription fldBackdrops">
+         <label>
+             <input type="checkbox" is="emby-checkbox" id="chkBackdrops" />
+diff --git a/src/components/multiview/channelPickerModal.js b/src/components/multiview/channelPickerModal.js
+new file mode 100644
+index 0000000000..7856f08b42
+--- /dev/null
++++ b/src/components/multiview/channelPickerModal.js
+@@ -0,0 +1,74 @@
++import dialogHelper from '../dialogHelper/dialogHelper';
++import ServerConnections from '../../lib/jellyfin-apiclient/serverConnections';
++
++export default function showChannelPicker(activeChannelIds = []) {
++    return new Promise((resolve) => {
++        const apiClient = ServerConnections.getApiClient();
++        const user = ServerConnections.getCurrentUser();
++
++        apiClient.getLiveTvChannels({ userId: user?.Id }).then((result) => {
++            const channels = (result.Items || []).filter(c => !activeChannelIds.includes(c.Id));
++
++            if (channels.length === 0) {
++                resolve(null);
++                return;
++            }
++
++            const dialogOptions = {
++                removeOnClose: true,
++                size: 'small'
++            };
++
++            const dlg = dialogHelper.createDialog(dialogOptions);
++            dlg.classList.add('formDialog');
++
++            let html = `
++                <div class="dialogHeader">
++                    <button is="paper-icon-button-light" class="btnCancel autoSize" tabindex="-1">
++                        <span class="material-icons arrow_back"></span>
++                    </button>
++                    <h2 class="dialogHeaderTitle">Add Channel to Multiview</h2>
++                </div>
++            `;
++            html += `<div class="dialogContent" style="max-height: 60vh; overflow-y: auto; padding: 0 16px 16px;"><div class="paperList">`;
++
++            channels.forEach((channel) => {
++                const channelName = channel.Name || 'Channel';
++                const channelNum = channel.ChannelNumber ? `Ch. ${channel.ChannelNumber} - ` : '';
++                const currentProgram = channel.CurrentProgram?.Name ? `<div style="font-size: 0.85em; opacity: 0.7;">${channel.CurrentProgram.Name}</div>` : '';
++
++                html += `
++                    <button type="button" class="paper-icon-item-button channelPickerItem" data-id="${channel.Id}" style="width: 100%; text-align: left; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.08); background: none; color: inherit; cursor: pointer; border-radius: 4px;">
++                        <div>
++                            <div style="font-weight: 600; font-size: 1rem;">${channelNum}${channelName}</div>
++                            ${currentProgram}
++                        </div>
++                        <span class="material-icons play_arrow" style="color: var(--theme-primary-color, #00a4dc);"></span>
++                    </button>
++                `;
++            });
++
++            html += `</div></div>`;
++            dlg.innerHTML = html;
++
++            dlg.querySelector('.btnCancel').addEventListener('click', () => {
++                dialogHelper.close(dlg);
++                resolve(null);
++            });
++
++            dlg.querySelectorAll('.channelPickerItem').forEach((btn) => {
++                btn.addEventListener('click', (e) => {
++                    const channelId = e.currentTarget.getAttribute('data-id');
++                    const selectedChannel = channels.find(c => c.Id === channelId);
++                    dialogHelper.close(dlg);
++                    resolve(selectedChannel);
++                });
++            });
++
++            dialogHelper.open(dlg);
++        }).catch((err) => {
++            console.error('[Multiview] Failed to load channels:', err);
++            resolve(null);
++        });
++    });
++}
+diff --git a/src/components/multiview/multiview.scss b/src/components/multiview/multiview.scss
+new file mode 100644
+index 0000000000..e480011791
+--- /dev/null
++++ b/src/components/multiview/multiview.scss
+@@ -0,0 +1,233 @@
++.multiviewOverlayContainer {
++    position: fixed;
++    top: 0;
++    left: 0;
++    right: 0;
++    bottom: 0;
++    background: #000000;
++    z-index: 99999;
++    display: flex;
++    flex-direction: column;
++    color: #ffffff;
++    font-family: inherit;
++
++    .multiviewHeader {
++        display: flex;
++        align-items: center;
++        justify-content: space-between;
++        padding: 10px 20px;
++        background: #181818;
++        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
++        z-index: 10;
++
++        .multiviewTitle {
++            font-size: 1.15rem;
++            font-weight: 600;
++            display: flex;
++            align-items: center;
++            gap: 10px;
++
++            .multiviewBadge {
++                background: var(--theme-primary-color, #00a4dc);
++                color: #ffffff;
++                font-size: 0.75rem;
++                padding: 3px 8px;
++                border-radius: 3px;
++                text-transform: uppercase;
++                letter-spacing: 0.5px;
++                font-weight: 600;
++            }
++        }
++
++        .multiviewControls {
++            display: flex;
++            align-items: center;
++            gap: 8px;
++
++            button {
++                background: #282828;
++                border: 1px solid rgba(255, 255, 255, 0.1);
++                color: #e0e0e0;
++                padding: 6px 14px;
++                border-radius: 4px;
++                cursor: pointer;
++                display: flex;
++                align-items: center;
++                gap: 6px;
++                font-size: 0.88rem;
++                font-weight: 500;
++                transition: background 0.15s ease, border-color 0.15s ease;
++
++                &:hover {
++                    background: #333333;
++                    color: #ffffff;
++                }
++
++                &.activeMode {
++                    background: var(--theme-primary-color, #00a4dc);
++                    border-color: var(--theme-primary-color, #00a4dc);
++                    color: #ffffff;
++                }
++            }
++        }
++    }
++
++    .multiviewGrid {
++        flex: 1;
++        display: grid;
++        gap: 12px;
++        padding: 16px;
++        box-sizing: border-box;
++        width: 100%;
++        height: calc(100vh - 56px);
++
++        /* Sky TV mode (1 Large Primary + 3 Side Thumbnails) */
++        &.mode-skytv {
++            grid-template-columns: 3fr 1fr;
++            grid-template-rows: repeat(3, 1fr);
++
++            .multiviewSlot[data-slot="0"] {
++                grid-column: 1 / 2;
++                grid-row: 1 / 4;
++            }
++        }
++
++        /* Quad mode (2x2 equal grid) */
++        &.mode-quad {
++            grid-template-columns: 1fr 1fr;
++            grid-template-rows: 1fr 1fr;
++        }
++
++        /* Dual mode (1x2 side-by-side) */
++        &.mode-dual {
++            grid-template-columns: 1fr 1fr;
++            grid-template-rows: 1fr;
++        }
++
++        .multiviewSlot {
++            position: relative;
++            background: #141414;
++            border-radius: 6px;
++            overflow: hidden;
++            border: 2px solid rgba(255, 255, 255, 0.08);
++            transition: border-color 0.15s ease, box-shadow 0.15s ease;
++            display: flex;
++            align-items: center;
++            justify-content: center;
++
++            &.activeAudio {
++                border-color: var(--theme-primary-color, #00a4dc);
++                box-shadow: 0 0 12px rgba(0, 164, 220, 0.4);
++            }
++
++            video {
++                width: 100%;
++                height: 100%;
++                object-fit: contain;
++                background: #000000;
++            }
++
++            .slotOverlay {
++                position: absolute;
++                top: 0;
++                left: 0;
++                right: 0;
++                bottom: 0;
++                background: linear-gradient(180deg, rgba(16, 16, 16, 0.85) 0%, rgba(16, 16, 16, 0) 35%, rgba(16, 16, 16, 0.9) 100%);
++                opacity: 0;
++                transition: opacity 0.2s ease;
++                display: flex;
++                flex-direction: column;
++                justify-content: space-between;
++                padding: 12px;
++                box-sizing: border-box;
++                pointer-events: none;
++
++                .slotOverlayHeader,
++                .slotOverlayFooter {
++                    pointer-events: auto;
++                }
++            }
++
++            &:hover .slotOverlay {
++                opacity: 1;
++            }
++
++            .slotTitle {
++                font-weight: 600;
++                font-size: 0.92rem;
++                color: #ffffff;
++                text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
++            }
++
++            .audioBadge {
++                position: absolute;
++                top: 10px;
++                left: 10px;
++                background: var(--theme-primary-color, #00a4dc);
++                color: #ffffff;
++                padding: 3px 8px;
++                border-radius: 3px;
++                font-size: 0.75rem;
++                font-weight: 600;
++                display: flex;
++                align-items: center;
++                gap: 4px;
++                box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
++                z-index: 5;
++            }
++
++            .emptySlotBtn {
++                background: #181818;
++                border: 2px dashed rgba(255, 255, 255, 0.15);
++                border-radius: 6px;
++                width: 100%;
++                height: 100%;
++                display: flex;
++                flex-direction: column;
++                align-items: center;
++                justify-content: center;
++                gap: 10px;
++                color: #999999;
++                cursor: pointer;
++                transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
++
++                &:hover {
++                    background: #222222;
++                    border-color: var(--theme-primary-color, #00a4dc);
++                    color: #ffffff;
++                }
++
++                span.material-icons {
++                    font-size: 2.2rem;
++                }
++            }
++
++            .slotActions {
++                display: flex;
++                align-items: center;
++                justify-content: center;
++                gap: 8px;
++
++                button {
++                    background: rgba(24, 24, 24, 0.9);
++                    border: 1px solid rgba(255, 255, 255, 0.15);
++                    color: #ffffff;
++                    width: 36px;
++                    height: 36px;
++                    border-radius: 50%;
++                    display: flex;
++                    align-items: center;
++                    justify-content: center;
++                    cursor: pointer;
++                    transition: background 0.15s ease, border-color 0.15s ease;
++
++                    &:hover {
++                        background: var(--theme-primary-color, #00a4dc);
++                        border-color: var(--theme-primary-color, #00a4dc);
++                    }
++                }
++            }
++        }
++    }
++}
+diff --git a/src/components/multiview/multiviewManager.js b/src/components/multiview/multiviewManager.js
+new file mode 100644
+index 0000000000..a2aa7e716a
+--- /dev/null
++++ b/src/components/multiview/multiviewManager.js
+@@ -0,0 +1,310 @@
++import toast from '../toast/toast';
++import ServerConnections from '../../lib/jellyfin-apiclient/serverConnections';
++import showChannelPicker from './channelPickerModal';
++import './multiview.scss';
++
++class MultiviewManager {
++    constructor() {
++        this.active = false;
++        this.layout = 'skytv'; // 'skytv' | 'quad' | 'dual'
++        this.slots = [null, null, null, null]; // Max 4 slots
++        this.activeAudioIndex = 0;
++        this.container = null;
++        this.gridElement = null;
++    }
++
++    toggle(options = {}) {
++        if (this.active) {
++            this.close();
++        } else {
++            this.open(options);
++        }
++    }
++
++    open(options = {}) {
++        if (this.active) return;
++        this.active = true;
++        this.layout = 'skytv';
++
++        this.renderContainer();
++
++        const currentItem = options.currentItem;
++        if (currentItem) {
++            this.setSlotChannel(0, currentItem);
++        }
++    }
++
++    close() {
++        if (!this.active) return;
++        this.active = false;
++
++        // Clean up all play sessions and video elements
++        for (let i = 0; i < 4; i++) {
++            this.clearSlot(i);
++        }
++
++        if (this.container && this.container.parentNode) {
++            this.container.parentNode.removeChild(this.container);
++        }
++        this.container = null;
++        this.gridElement = null;
++    }
++
++    renderContainer() {
++        this.container = document.createElement('div');
++        this.container.className = 'multiviewOverlayContainer';
++
++        this.container.innerHTML = `
++            <div class="multiviewHeader">
++                <div class="multiviewTitle">
++                    <span class="material-icons" style="color: var(--theme-primary-color, #00a4dc);">grid_view</span>
++                    <span>Live TV Multiview</span>
++                    <span class="multiviewBadge">Sky TV Mode</span>
++                </div>
++                <div class="multiviewControls">
++                    <button type="button" class="btnLayoutSkyTv ${this.layout === 'skytv' ? 'activeMode' : ''}" title="Sky TV Mode (1 Main + 3 Side)">
++                        <span class="material-icons">view_quicker</span> Sky TV
++                    </button>
++                    <button type="button" class="btnLayoutQuad ${this.layout === 'quad' ? 'activeMode' : ''}" title="Quad Grid (2x2)">
++                        <span class="material-icons">grid_on</span> Quad
++                    </button>
++                    <button type="button" class="btnLayoutDual ${this.layout === 'dual' ? 'activeMode' : ''}" title="Dual View (Side-by-Side)">
++                        <span class="material-icons">view_column</span> Dual
++                    </button>
++                    <button type="button" class="btnCloseMultiview" title="Close Multiview" style="background: rgba(220, 53, 69, 0.2); color: #ff6b6b; border-color: rgba(220, 53, 69, 0.4);">
++                        <span class="material-icons">close</span> Exit
++                    </button>
++                </div>
++            </div>
++            <div class="multiviewGrid mode-${this.layout}">
++                ${[0, 1, 2, 3].map(i => this.renderSlotHtml(i)).join('')}
++            </div>
++        `;
++
++        document.body.appendChild(this.container);
++        this.gridElement = this.container.querySelector('.multiviewGrid');
++
++        // Bind layout mode buttons
++        this.container.querySelector('.btnLayoutSkyTv').addEventListener('click', () => this.setLayout('skytv'));
++        this.container.querySelector('.btnLayoutQuad').addEventListener('click', () => this.setLayout('quad'));
++        this.container.querySelector('.btnLayoutDual').addEventListener('click', () => this.setLayout('dual'));
++        this.container.querySelector('.btnCloseMultiview').addEventListener('click', () => this.close());
++
++        // Bind slot action events
++        this.bindSlotEvents();
++    }
++
++    renderSlotHtml(index) {
++        return `
++            <div class="multiviewSlot ${index === this.activeAudioIndex ? 'activeAudio' : ''}" data-slot="${index}">
++                <button type="button" class="emptySlotBtn" data-slot="${index}">
++                    <span class="material-icons">add_circle_outline</span>
++                    <span>Select Channel (${index === 0 ? 'Main' : `Slot ${index + 1}`})</span>
++                </button>
++            </div>
++        `;
++    }
++
++    setLayout(mode) {
++        this.layout = mode;
++        if (!this.gridElement) return;
++
++        this.gridElement.className = `multiviewGrid mode-${mode}`;
++
++        const badge = this.container.querySelector('.multiviewBadge');
++        if (badge) {
++            badge.textContent = mode === 'skytv' ? 'Sky TV Mode' : (mode === 'quad' ? 'Quad Grid' : 'Dual View');
++        }
++
++        this.container.querySelectorAll('.multiviewControls button').forEach(btn => btn.classList.remove('activeMode'));
++        if (mode === 'skytv') this.container.querySelector('.btnLayoutSkyTv')?.classList.add('activeMode');
++        if (mode === 'quad') this.container.querySelector('.btnLayoutQuad')?.classList.add('activeMode');
++        if (mode === 'dual') this.container.querySelector('.btnLayoutDual')?.classList.add('activeMode');
++    }
++
++    bindSlotEvents() {
++        if (!this.gridElement) return;
++
++        this.gridElement.addEventListener('click', async (e) => {
++            const slotBtn = e.target.closest('.emptySlotBtn');
++            if (slotBtn) {
++                const index = parseInt(slotBtn.getAttribute('data-slot'), 10);
++                this.promptAddChannel(index);
++                return;
++            }
++
++            const actionBtn = e.target.closest('button[data-action]');
++            if (actionBtn) {
++                const action = actionBtn.getAttribute('data-action');
++                const index = parseInt(actionBtn.getAttribute('data-slot'), 10);
++
++                if (action === 'audio') {
++                    this.setAudioFocus(index);
++                } else if (action === 'swap') {
++                    this.swapSlots(index, 0);
++                } else if (action === 'replace') {
++                    this.promptAddChannel(index);
++                } else if (action === 'close') {
++                    this.clearSlot(index);
++                }
++            }
++        });
++    }
++
++    async promptAddChannel(slotIndex) {
++        const activeIds = this.slots.filter(s => s && s.item).map(s => s.item.Id);
++        const channel = await showChannelPicker(activeIds);
++        if (channel) {
++            this.setSlotChannel(slotIndex, channel);
++        }
++    }
++
++    async setSlotChannel(slotIndex, item) {
++        this.clearSlot(slotIndex);
++
++        const slotElem = this.gridElement.querySelector(`.multiviewSlot[data-slot="${slotIndex}"]`);
++        if (!slotElem) return;
++
++        try {
++            const apiClient = ServerConnections.getApiClient();
++
++            // Attempt to create live stream session
++            const playSessionId = 'mv_' + Date.now() + '_' + slotIndex;
++            const streamUrl = apiClient.getUrl(`/Videos/${item.Id}/stream.m3u8`, {
++                static: true,
++                PlaySessionId: playSessionId
++            });
++
++            const video = document.createElement('video');
++            video.autoplay = true;
++            video.playsInline = true;
++            video.muted = (slotIndex !== this.activeAudioIndex);
++            video.src = streamUrl;
++
++            // Handle video error (e.g. tuner capacity reached)
++            video.addEventListener('error', () => {
++                toast('Live TV stream capacity reached. Cannot open additional tuner stream.');
++                this.clearSlot(slotIndex);
++            });
++
++            slotElem.innerHTML = '';
++            slotElem.appendChild(video);
++
++            // Add Audio focus badge if this slot is active audio
++            if (slotIndex === this.activeAudioIndex) {
++                const badge = document.createElement('div');
++                badge.className = 'audioBadge';
++                badge.innerHTML = `<span class="material-icons" style="font-size: 1rem;">volume_up</span> AUDIO FOCUS`;
++                slotElem.appendChild(badge);
++            }
++
++            // Overlay controls on hover
++            const overlay = document.createElement('div');
++            overlay.className = 'slotOverlay';
++            overlay.innerHTML = `
++                <div class="slotOverlayHeader">
++                    <div class="slotTitle">${item.Name || 'Live Channel'}</div>
++                </div>
++                <div class="slotOverlayFooter">
++                    <div class="slotActions">
++                        <button type="button" data-action="audio" data-slot="${slotIndex}" title="Focus Audio">
++                            <span class="material-icons">${slotIndex === this.activeAudioIndex ? 'volume_up' : 'volume_off'}</span>
++                        </button>
++                        ${slotIndex !== 0 ? `
++                        <button type="button" data-action="swap" data-slot="${slotIndex}" title="Swap with Main Screen">
++                            <span class="material-icons">swap_horiz</span>
++                        </button>` : ''}
++                        <button type="button" data-action="replace" data-slot="${slotIndex}" title="Change Channel">
++                            <span class="material-icons">find_replace</span>
++                        </button>
++                        <button type="button" data-action="close" data-slot="${slotIndex}" title="Close Channel">
++                            <span class="material-icons">close</span>
++                        </button>
++                    </div>
++                </div>
++            `;
++            slotElem.appendChild(overlay);
++
++            this.slots[slotIndex] = {
++                item,
++                video,
++                playSessionId
++            };
++        } catch (err) {
++            console.error('[Multiview] Tuner stream error:', err);
++            toast('Live TV stream capacity reached. Cannot open additional tuner stream.');
++            this.clearSlot(slotIndex);
++        }
++    }
++
++    setAudioFocus(slotIndex) {
++        this.activeAudioIndex = slotIndex;
++
++        for (let i = 0; i < 4; i++) {
++            const slotData = this.slots[i];
++            const slotElem = this.gridElement?.querySelector(`.multiviewSlot[data-slot="${i}"]`);
++
++            if (slotData && slotData.video) {
++                slotData.video.muted = (i !== slotIndex);
++            }
++
++            if (slotElem) {
++                if (i === slotIndex) {
++                    slotElem.classList.add('activeAudio');
++                    if (!slotElem.querySelector('.audioBadge')) {
++                        const badge = document.createElement('div');
++                        badge.className = 'audioBadge';
++                        badge.innerHTML = `<span class="material-icons" style="font-size: 1rem;">volume_up</span> AUDIO FOCUS`;
++                        slotElem.appendChild(badge);
++                    }
++                } else {
++                    slotElem.classList.remove('activeAudio');
++                    const badge = slotElem.querySelector('.audioBadge');
++                    if (badge) badge.remove();
++                }
++            }
++        }
++    }
++
++    swapSlots(idxA, idxB) {
++        const slotA = this.slots[idxA];
++        const slotB = this.slots[idxB];
++
++        this.slots[idxA] = null;
++        this.slots[idxB] = null;
++
++        if (slotA && slotA.item) this.setSlotChannel(idxB, slotA.item);
++        else this.clearSlot(idxB);
++
++        if (slotB && slotB.item) this.setSlotChannel(idxA, slotB.item);
++        else this.clearSlot(idxA);
++
++        this.setAudioFocus(0);
++    }
++
++    clearSlot(index) {
++        const slotData = this.slots[index];
++        if (slotData) {
++            if (slotData.video) {
++                slotData.video.pause();
++                slotData.video.removeAttribute('src');
++                slotData.video.load();
++            }
++            this.slots[index] = null;
++        }
++
++        const slotElem = this.gridElement?.querySelector(`.multiviewSlot[data-slot="${index}"]`);
++        if (slotElem) {
++            slotElem.classList.remove('activeAudio');
++            slotElem.innerHTML = `
++                <button type="button" class="emptySlotBtn" data-slot="${index}">
++                    <span class="material-icons">add_circle_outline</span>
++                    <span>Select Channel (${index === 0 ? 'Main' : `Slot ${index + 1}`})</span>
++                </button>
++            `;
++        }
++    }
++}
++
++const multiviewManager = new MultiviewManager();
++export default multiviewManager;
+diff --git a/src/scripts/settings/userSettings.js b/src/scripts/settings/userSettings.js
+index 409e52ba94..db48bf04d7 100644
+--- a/src/scripts/settings/userSettings.js
++++ b/src/scripts/settings/userSettings.js
+@@ -550,6 +550,19 @@ export class UserSettings {
+         return toBoolean(this.get('enableInfiniteScroll', false), false);
+     }
+ 
++    /**
++     * Get or set experimental Live TV Multiview preference.
++     * @param {boolean|undefined} [val] - Experimental multiview state.
++     * @returns {boolean} Experimental multiview state.
++     */
++    enableExperimentalMultiview(val) {
++        if (val !== undefined) {
++            return this.set('enableExperimentalMultiview', val.toString(), false);
++        }
++
++        return toBoolean(this.get('enableExperimentalMultiview', false), true);
++    }
++
+     /**
+      * Get or set max days for next up list.
+      * @param {number|undefined} [val] - Max days for next up.
+@@ -785,6 +798,7 @@ export const getComicsPlayerSettings = currentSettings.getComicsPlayerSettings.b
+ export const setComicsPlayerSettings = currentSettings.setComicsPlayerSettings.bind(currentSettings);
+ export const setFilter = currentSettings.setFilter.bind(currentSettings);
+ export const enableInfiniteScroll = currentSettings.enableInfiniteScroll.bind(currentSettings);
++export const enableExperimentalMultiview = currentSettings.enableExperimentalMultiview.bind(currentSettings);
+ export const getFilter = currentSettings.getFilter.bind(currentSettings);
+ export const customCss = currentSettings.customCss.bind(currentSettings);
+ export const disableCustomCss = currentSettings.disableCustomCss.bind(currentSettings);
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+index c565ff3d03..346f07c08a 100755
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -1345,6 +1345,9 @@
+     "Option3D": "3D",
+     "OptionAllowAudioPlaybackTranscoding": "Allow audio playback that requires transcoding",
+     "OptionAllowBrowsingLiveTv": "Allow Live TV access",
++    "OptionAllowLiveTvMultiview": "Allow Live TV Multiview",
++    "OptionEnableExperimentalMultiview": "Enable experimental Live TV Multiview",
++    "OptionEnableExperimentalMultiviewHelp": "Allows watching up to 4 Live TV streams simultaneously in the web player. Disabled on Smart TV clients for performance.",
+     "OptionAllowContentDownload": "Allow media downloads",
+     "OptionAllowContentDownloadHelp": "Users can download media and store it on their devices. This is not the same as a sync feature. Book libraries require this enabled to function properly.",
+     "OptionAllowLinkSharing": "Allow social media sharing",

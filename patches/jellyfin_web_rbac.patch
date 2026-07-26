@@ -69,6 +69,7 @@ index 0000000000..996ba24bde
 +    { key: 'EnableLyricManagement', label: 'Enable Lyric Management' },
 +    { key: 'EnableLiveTvAccess', label: 'Enable Live TV Access' },
 +    { key: 'EnableLiveTvManagement', label: 'Enable Live TV Management' },
++    { key: 'EnableLiveTvMultiview', label: 'Enable Live TV Multiview' },
 +    { key: 'EnableMediaPlayback', label: 'Enable Media Playback' },
 +    { key: 'EnableAudioPlaybackTranscoding', label: 'Enable Audio Playback Transcoding' },
 +    { key: 'EnableVideoPlaybackTranscoding', label: 'Enable Video Playback Transcoding' },
