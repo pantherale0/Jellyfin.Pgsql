@@ -1,0 +1,53 @@
+diff --git a/webpack.dev.js b/webpack.dev.js
+index 58c5fbbd68..b9ac1c15d7 100644
+--- a/webpack.dev.js
++++ b/webpack.dev.js
+@@ -24,6 +24,47 @@ module.exports = merge(common, {
+                 errors: true,
+                 warnings: false
+             }
+-        }
++        },
++        proxy: [
++            {
++                context: (pathname) => {
++                    const lower = pathname.toLowerCase();
++                    const apiRoutes = [
++                        '/system',
++                        '/users',
++                        '/items',
++                        '/sessions',
++                        '/playback',
++                        '/playbackstatistics',
++                        '/livetv',
++                        '/plugins',
++                        '/sso',
++                        '/socket',
++                        '/api',
++                        '/displaypreferences',
++                        '/userviews',
++                        '/branding',
++                        '/scheduledtasks',
++                        '/quickconnect',
++                        '/audio',
++                        '/videos',
++                        '/genres',
++                        '/studios',
++                        '/persons',
++                        '/artists',
++                        '/shows',
++                        '/playlists',
++                        '/libraries',
++                        '/taste',
++                        '/playbackreporting',
++                        '/seerr'
++                    ];
++                    return apiRoutes.some(route => lower.startsWith(route));
++                },
++                target: process.env.JELLYFIN_BACKEND_URL || 'http://localhost:8096',
++                ws: true,
++                changeOrigin: true
++            }
++        ]
+     }
+ });
