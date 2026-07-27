@@ -21,6 +21,10 @@ if [ ! -d "$PATCHES_DIR" ]; then
     exit 0
 fi
 
+echo "Resetting $TARGET submodule to clean state..."
+git -C "$TARGET" checkout -- .
+git -C "$TARGET" clean -fd
+
 apply_patch() {
     patch_file="$1"
     echo "Applying $patch_file to $TARGET/"

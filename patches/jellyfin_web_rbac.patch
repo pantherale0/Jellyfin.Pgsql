@@ -24,7 +24,7 @@ new file mode 100644
 index 0000000000..996ba24bde
 --- /dev/null
 +++ b/src/apps/dashboard/features/users/components/SSOMappings.tsx
-@@ -0,0 +1,377 @@
+@@ -0,0 +1,378 @@
 +import React, { useEffect, useState, useCallback } from 'react';
 +import { useApi } from 'hooks/useApi';
 +import Box from '@mui/material/Box';

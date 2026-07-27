@@ -1,18 +1,67 @@
+diff --git a/src/apps/dashboard/features/users/components/Profile.tsx b/src/apps/dashboard/features/users/components/Profile.tsx
+index 3522432572..0fc45bf67f 100644
+--- a/src/apps/dashboard/features/users/components/Profile.tsx
++++ b/src/apps/dashboard/features/users/components/Profile.tsx
+@@ -189,6 +189,10 @@ const Profile = ({ userDto }: ProfileProps) => {
+         (page.querySelector('.chkEnableDownloading') as HTMLInputElement).checked = !!userDto.Policy?.EnableContentDownloading;
+         (page.querySelector('.chkManageLiveTv') as HTMLInputElement).checked = !!userDto.Policy?.EnableLiveTvManagement;
+         (page.querySelector('.chkEnableLiveTvAccess') as HTMLInputElement).checked = !!userDto.Policy?.EnableLiveTvAccess;
++        const chkMultiview = page.querySelector('.chkEnableLiveTvMultiview') as HTMLInputElement | null;
++        if (chkMultiview) {
++            chkMultiview.checked = (userDto.Policy as any)?.EnableLiveTvMultiview == null || !!(userDto.Policy as any)?.EnableLiveTvMultiview;
++        }
+         (page.querySelector('.chkEnableMediaPlayback') as HTMLInputElement).checked = !!userDto.Policy?.EnableMediaPlayback;
+         (page.querySelector('.chkEnableAudioPlaybackTranscoding') as HTMLInputElement).checked = !!userDto.Policy?.EnableAudioPlaybackTranscoding;
+         (page.querySelector('.chkEnableVideoPlaybackTranscoding') as HTMLInputElement).checked = !!userDto.Policy?.EnableVideoPlaybackTranscoding;
+@@ -227,6 +231,10 @@ const Profile = ({ userDto }: ProfileProps) => {
+             user.Policy.EnableRemoteControlOfOtherUsers = (page.querySelector('.chkEnableRemoteControlOtherUsers') as HTMLInputElement).checked;
+             user.Policy.EnableLiveTvManagement = (page.querySelector('.chkManageLiveTv') as HTMLInputElement).checked;
+             user.Policy.EnableLiveTvAccess = (page.querySelector('.chkEnableLiveTvAccess') as HTMLInputElement).checked;
++            const chkMultiviewSave = page.querySelector('.chkEnableLiveTvMultiview') as HTMLInputElement | null;
++            if (chkMultiviewSave) {
++                (user.Policy as any).EnableLiveTvMultiview = chkMultiviewSave.checked;
++            }
+             user.Policy.EnableSharedDeviceControl = (page.querySelector('.chkRemoteControlSharedDevices') as HTMLInputElement).checked;
+             user.Policy.EnableMediaPlayback = (page.querySelector('.chkEnableMediaPlayback') as HTMLInputElement).checked;
+             user.Policy.EnableAudioPlaybackTranscoding = (page.querySelector('.chkEnableAudioPlaybackTranscoding') as HTMLInputElement).checked;
+@@ -395,6 +403,10 @@ const Profile = ({ userDto }: ProfileProps) => {
+                             className='chkEnableLiveTvAccess'
+                             title='OptionAllowBrowsingLiveTv'
+                         />
++                        <CheckBoxElement
++                            className='chkEnableLiveTvMultiview'
++                            title='OptionAllowLiveTvMultiview'
++                        />
+                         <CheckBoxElement
+                             className='chkManageLiveTv'
+                             title='OptionAllowManageLiveTv'
+diff --git a/src/apps/legacy/controllers/playback/video/index.html b/src/apps/legacy/controllers/playback/video/index.html
+index 57b11092d7..5f18f26a06 100644
+--- a/src/apps/legacy/controllers/playback/video/index.html
++++ b/src/apps/legacy/controllers/playback/video/index.html
+@@ -84,6 +84,9 @@ <h3 class="osdTitle"></h3>
+                         <input is="emby-slider" type="range" step="1" min="0" max="100" value="0" class="osdVolumeSlider" />
+                     </div>
+                 </div>
++                <button is="paper-icon-button-light" class="btnMultiview hide autoSize" title="Multiview">
++                    <span class="largePaperIconButton material-icons grid_view" aria-hidden="true"></span>
++                </button>
+                 <button is="paper-icon-button-light" class="btnVideoOsdSettings autoSize" title="${Settings}">
+                     <span class="largePaperIconButton material-icons settings" aria-hidden="true"></span>
+                 </button>
 diff --git a/src/apps/legacy/controllers/playback/video/index.js b/src/apps/legacy/controllers/playback/video/index.js
-index 8737a03078..4632e62581 100644
+index 8737a03078..8cb5b2a58a 100644
 --- a/src/apps/legacy/controllers/playback/video/index.js
 +++ b/src/apps/legacy/controllers/playback/video/index.js
-@@ -33,6 +33,9 @@ import { ServerConnections } from 'lib/jellyfin-apiclient';
- import LibraryMenu from 'scripts/libraryMenu';
- import { setBackdropTransparency, TRANSPARENCY_LEVEL } from 'components/backdrop/backdrop';
- import { pluginManager } from 'components/pluginManager';
-+import layoutManager from 'components/layoutManager';
-+import * as userSettings from 'scripts/settings/userSettings';
+@@ -21,6 +21,7 @@ import { appHost } from 'components/apphost';
+ import layoutManager from 'components/layoutManager';
+ import * as userSettings from 'scripts/settings/userSettings';
+ import keyboardnavigation from 'scripts/keyboardNavigation';
 +import multiviewManager from 'components/multiview/multiviewManager';
- 
- function getOpenedDialog() {
-     return document.querySelector('.dialogContainer .dialog.opened');
-@@ -110,6 +113,17 @@ export default function (view) {
+ import 'styles/scrollstyles.scss';
+ import 'elements/emby-slider/emby-slider';
+ import 'elements/emby-button/paper-icon-button-light';
+@@ -110,6 +111,17 @@ export default function (view) {
              secondaryMediaInfo.classList.add('hide');
          }
  
@@ -30,7 +79,7 @@ index 8737a03078..4632e62581 100644
          if (enableProgressByTimeOfDay) {
              setDisplayTime(startTimeText, displayItem.StartDate);
              setDisplayTime(endTimeText, displayItem.EndDate);
-@@ -1768,6 +1782,9 @@ export default function (view) {
+@@ -1768,6 +1780,9 @@ export default function (view) {
          playbackManager.toggleAirPlay(currentPlayer);
      });
      view.querySelector('.btnVideoOsdSettings').addEventListener('click', onSettingsButtonClick);
@@ -84,12 +133,12 @@ index 3ab4fdd46f..820ef5e36c 100644
              <input type="checkbox" is="emby-checkbox" id="chkBackdrops" />
 diff --git a/src/components/multiview/channelPickerModal.js b/src/components/multiview/channelPickerModal.js
 new file mode 100644
-index 0000000000..7856f08b42
+index 0000000000..d883b56d53
 --- /dev/null
 +++ b/src/components/multiview/channelPickerModal.js
 @@ -0,0 +1,74 @@
 +import dialogHelper from '../dialogHelper/dialogHelper';
-+import ServerConnections from '../../lib/jellyfin-apiclient/serverConnections';
++import { ServerConnections } from 'lib/jellyfin-apiclient';
 +
 +export default function showChannelPicker(activeChannelIds = []) {
 +    return new Promise((resolve) => {
@@ -403,12 +452,12 @@ index 0000000000..e480011791
 +}
 diff --git a/src/components/multiview/multiviewManager.js b/src/components/multiview/multiviewManager.js
 new file mode 100644
-index 0000000000..a2aa7e716a
+index 0000000000..910ee7b05a
 --- /dev/null
 +++ b/src/components/multiview/multiviewManager.js
 @@ -0,0 +1,310 @@
 +import toast from '../toast/toast';
-+import ServerConnections from '../../lib/jellyfin-apiclient/serverConnections';
++import { ServerConnections } from 'lib/jellyfin-apiclient';
 +import showChannelPicker from './channelPickerModal';
 +import './multiview.scss';
 +

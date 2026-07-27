@@ -1,21 +1,89 @@
 {
-    // Paths and plugin names are configured in settings.json
-    "version": "0.2.0",
-    "configurations": [
-        {
-            "type": "coreclr",
-            "name": "Launch",
-            "request": "launch",
-            "preLaunchTask": "build-and-copy",
-            "program": "${config:jellyfinDir}/bin/Debug/net9.0/jellyfin.dll",
-            "args": [
-               "--nowebclient",
-               // "--webdir",
-               "${config:jellyfinWebDir}/dist/",
-               "--ffmpeg",
-               "/usr/lib/jellyfin-ffmpeg/ffmpeg",
-            ],
-            "cwd": "${config:jellyfinDir}",
-        }
-    ]
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Launch Jellyfin Server (Host Debug)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build-and-copy",
+      "program": "${config:jellyfinDir}/bin/Debug/net10.0/jellyfin.dll",
+      "args": [
+        "--datadir",
+        "${workspaceFolder}/dev-env/config",
+        "--cachedir",
+        "${workspaceFolder}/dev-env/cache",
+        "--webdir",
+        "${config:jellyfinWebDir}/dist"
+      ],
+      "cwd": "${config:jellyfinDir}",
+      "env": {
+        "POSTGRES_HOST": "localhost",
+        "POSTGRES_DB": "jellyfin",
+        "POSTGRES_USER": "jellyfin",
+        "POSTGRES_PASSWORD": "jellyfin_secure_pass",
+        "JELLYFIN_CACHE_DIR": "${workspaceFolder}/dev-env/cache",
+        "JELLYFIN_SSO_OIDC_AUTHORITY": "http://keycloak:8080/realms/jellyfin",
+        "JELLYFIN_SSO_OIDC_CLIENT_ID": "jellyfin-client",
+        "JELLYFIN_SSO_OIDC_CLIENT_SECRET": "jellyfin_secret",
+        "JELLYFIN_SSO_OIDC_REDIRECT_URI": "http://localhost:8096/sso/callback",
+        "JELLYFIN_SSO_OIDC_SCOPE": "openid profile email",
+        "JELLYFIN_SSO_OIDC_USERNAME_CLAIM": "preferred_username",
+        "JELLYFIN_SSO_OIDC_ROLES_CLAIM": "groups",
+        "JELLYFIN_SSO_OIDC_ADMIN_ROLE": "jellyfin_admin",
+        "JELLYFIN_SSO_OIDC_BIRTHDATE_CLAIM": "birthdate",
+        "JELLYFIN_SSO_OIDC_CREATE_USERS": "true"
+      },
+      "console": "internalConsole",
+      "stopAtEntry": false
+    },
+    {
+      "name": "Launch Jellyfin Server (netcoredbg via pipeTransport)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build-and-copy",
+      "program": "${config:jellyfinDir}/bin/Debug/net10.0/jellyfin.dll",
+      "args": [
+        "--datadir",
+        "${workspaceFolder}/dev-env/config",
+        "--cachedir",
+        "${workspaceFolder}/dev-env/cache",
+        "--webdir",
+        "${config:jellyfinWebDir}/dist"
+      ],
+      "cwd": "${config:jellyfinDir}",
+      "env": {
+        "POSTGRES_HOST": "localhost",
+        "POSTGRES_DB": "jellyfin",
+        "POSTGRES_USER": "jellyfin",
+        "POSTGRES_PASSWORD": "jellyfin_secure_pass",
+        "JELLYFIN_CACHE_DIR": "${workspaceFolder}/dev-env/cache",
+        "JELLYFIN_SSO_OIDC_AUTHORITY": "http://keycloak:8080/realms/jellyfin",
+        "JELLYFIN_SSO_OIDC_CLIENT_ID": "jellyfin-client",
+        "JELLYFIN_SSO_OIDC_CLIENT_SECRET": "jellyfin_secret",
+        "JELLYFIN_SSO_OIDC_REDIRECT_URI": "http://localhost:8096/sso/callback",
+        "JELLYFIN_SSO_OIDC_SCOPE": "openid profile email",
+        "JELLYFIN_SSO_OIDC_USERNAME_CLAIM": "preferred_username",
+        "JELLYFIN_SSO_OIDC_ROLES_CLAIM": "groups",
+        "JELLYFIN_SSO_OIDC_ADMIN_ROLE": "jellyfin_admin",
+        "JELLYFIN_SSO_OIDC_BIRTHDATE_CLAIM": "birthdate",
+        "JELLYFIN_SSO_OIDC_CREATE_USERS": "true"
+      },
+      "pipeTransport": {
+        "pipeCwd": "${workspaceFolder}",
+        "pipeProgram": "/bin/sh",
+        "pipeArgs": [
+          "-c",
+          "netcoredbg --interpreter=vscode"
+        ],
+        "debuggerPath": "netcoredbg"
+      },
+      "console": "internalConsole",
+      "stopAtEntry": false
+    },
+    {
+      "name": "Attach to Process",
+      "type": "coreclr",
+      "request": "attach"
+    }
+  ]
 }
