@@ -8,17 +8,20 @@ echo "================================================================="
 echo "       Fast Local Jellyfin Backend Dev Server (Host dotnet watch)"
 echo "================================================================="
 
-# Ensure support services are running
+# 1. Ensure support services are running
 ./scripts/start-dev-deps.sh
 
-echo "Applying server patches to jellyfin submodule..."
-./scripts/apply-patches.sh jellyfin
+# 2. Apply all server and web patches ONCE
+./scripts/apply-patches.sh all
 
-echo "Building and copying Jellyfin.Plugin.Pgsql..."
-dotnet publish --configuration=Debug Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj /property:GenerateFullPaths=true /consoleloggerparameters:NoSummary
-mkdir -p dev-env/config/plugins/PostgreSQL dev-env/config/plugins/Jellyfin.Plugin.Pgsql
-cp -r ./Jellyfin.Plugin.Pgsql/bin/Debug/net10.0/publish/* dev-env/config/plugins/PostgreSQL/
-cp -r ./Jellyfin.Plugin.Pgsql/bin/Debug/net10.0/publish/* dev-env/config/plugins/Jellyfin.Plugin.Pgsql/
+# 3. Sync & publish plugins (Pgsql + Seerr) and database.xml
+./scripts/sync-dev-plugins.sh
+
+# 4. Build web static dist if missing or empty
+if [ ! -d "jellyfin-web/dist" ] || [ -z "$(ls -A jellyfin-web/dist 2>/dev/null)" ]; then
+    echo "Web dist empty/missing; building web UI bundle..."
+    ./scripts/build-web.sh
+fi
 
 echo "Starting Jellyfin Server with dotnet watch..."
 export POSTGRES_HOST=localhost
@@ -29,7 +32,7 @@ export JELLYFIN_CACHE_DIR="$(pwd)/dev-env/cache"
 export JELLYFIN_SSO_OIDC_AUTHORITY=http://keycloak:8080/realms/jellyfin
 export JELLYFIN_SSO_OIDC_CLIENT_ID=jellyfin-client
 export JELLYFIN_SSO_OIDC_CLIENT_SECRET=jellyfin_secret
-export JELLYFIN_SSO_OIDC_REDIRECT_URI=http://localhost:8096/sso/callback
+export JELLYFIN_SSO_OIDC_REDIRECT_URI="${JELLYFIN_SSO_OIDC_REDIRECT_URI:-http://localhost:8096/sso/callback}"
 export JELLYFIN_SSO_OIDC_SCOPE="openid profile email"
 export JELLYFIN_SSO_OIDC_USERNAME_CLAIM=preferred_username
 export JELLYFIN_SSO_OIDC_ROLES_CLAIM=groups

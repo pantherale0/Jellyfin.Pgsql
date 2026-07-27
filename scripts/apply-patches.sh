@@ -5,16 +5,22 @@
 #   jellyfin_web*.patch  -> jellyfin-web/
 #   jellyfin_*.patch     -> jellyfin/  (excluding jellyfin_web*)
 #
-# Usage: apply-patches.sh <jellyfin|jellyfin-web> [patches-dir]
+# Usage: apply-patches.sh [jellyfin|jellyfin-web|all] [patches-dir]
 
 set -eu
 
-TARGET="${1:?Usage: $0 <jellyfin|jellyfin-web> [patches-dir]}"
+TARGET="${1:-all}"
 PATCHES_DIR="${2:-patches}"
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 cd "$REPO_ROOT"
+
+if [ "$TARGET" = "all" ]; then
+    "$0" jellyfin "$PATCHES_DIR"
+    "$0" jellyfin-web "$PATCHES_DIR"
+    exit 0
+fi
 
 if [ ! -d "$PATCHES_DIR" ]; then
     echo "No patches directory found at $PATCHES_DIR; skipping."
@@ -55,7 +61,7 @@ for patch_file in $(ls "$PATCHES_DIR"/*.patch 2>/dev/null | sort); do
             esac
             ;;
         *)
-            echo "Unknown target: $TARGET (expected jellyfin or jellyfin-web)" >&2
+            echo "Unknown target: $TARGET (expected jellyfin, jellyfin-web, or all)" >&2
             exit 1
             ;;
     esac
