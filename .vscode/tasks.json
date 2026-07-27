@@ -1,27 +1,56 @@
 {
-  // Paths and plugin name are configured in settings.json
   "version": "2.0.0",
   "tasks": [
     {
-      // A chain task - build the plugin, then copy it to your
-      // jellyfin server's plugin directory
-      "label": "build-and-copy",
-      "dependsOrder": "sequence",
-      "dependsOn": [
-        "build",
-        "make-plugin-dir",
-        "copy-dll"
-      ]
+      "label": "start-dev-deps",
+      "type": "shell",
+      "command": "docker-compose",
+      "args": [
+        "-f",
+        "docker-compose.dev.yaml",
+        "up",
+        "postgres",
+        "keycloak",
+        "-d"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always"
+      }
     },
     {
-      // Build the plugin
-      "label": "build",
-      "command": "dotnet",
+      "label": "stop-dev-deps",
       "type": "shell",
+      "command": "docker-compose",
       "args": [
-        "publish",
+        "-f",
+        "docker-compose.dev.yaml",
+        "down"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "apply-server-patches",
+      "type": "shell",
+      "command": "./scripts/apply-patches.sh",
+      "args": ["jellyfin"],
+      "problemMatcher": []
+    },
+    {
+      "label": "clean-submodules",
+      "type": "shell",
+      "command": "./scripts/clean-submodules.sh",
+      "problemMatcher": []
+    },
+    {
+      "label": "build-server",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "build",
         "--configuration=Debug",
-        "${workspaceFolder}/${config:pluginName}.sln",
+        "${workspaceFolder}/jellyfin/Jellyfin.Server/Jellyfin.Server.csproj",
+        "/property:TreatWarningsAsErrors=false",
         "/property:GenerateFullPaths=true",
         "/consoleloggerparameters:NoSummary"
       ],
@@ -32,45 +61,83 @@
       "problemMatcher": "$msCompile"
     },
     {
-      // Ensure the plugin directory exists before trying to use it
+      "label": "build",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "publish",
+        "--configuration=Debug",
+        "${workspaceFolder}/${config:pluginName}/${config:pluginName}.csproj",
+        "/property:GenerateFullPaths=true",
+        "/consoleloggerparameters:NoSummary"
+      ],
+      "group": "build",
+      "presentation": {
+        "reveal": "silent"
+      },
+      "problemMatcher": "$msCompile"
+    },
+    {
       "label": "make-plugin-dir",
       "type": "shell",
       "command": "mkdir",
-      "windows": {
-        "args": [
-          "-Force",
-          "-Path",
-          "${config:jellyfinWindowsDataDir}/plugins/${config:pluginName}/"
-        ]
-      },
-      "linux": {
-        "args": [
-          "-p",
-          "${config:jellyfinLinuxDataDir}/plugins/${config:pluginName}/"
-        ]
-      }
+      "args": [
+        "-p",
+        "${config:jellyfinLinuxDataDir}/plugins/PostgreSQL/",
+        "${config:jellyfinLinuxDataDir}/plugins/${config:pluginName}/"
+      ]
     },
     {
-      // Copy the plugin dll to the jellyfin plugin install path
-      // This command copies every .dll from the build directory to the plugin dir
-      // Usually, you probablly only need ${config:pluginName}.dll
-      // But some plugins may bundle extra requirements
       "label": "copy-dll",
       "type": "shell",
-      "command": "cp",
-      "windows": {
-        "args": [
-          "./${config:pluginName}/bin/Debug/net9.0/publish/*",
-          "${config:jellyfinWindowsDataDir}/plugins/${config:pluginName}/"
-        ]
-      },
-      "linux": {
-        "args": [
-          "-r",
-          "./${config:pluginName}/bin/Debug/net9.0/publish/*",
-          "${config:jellyfinLinuxDataDir}/plugins/${config:pluginName}/"
-        ]
-      }
+      "command": "sh",
+      "args": [
+        "-c",
+        "cp -r ./${config:pluginName}/bin/Debug/net10.0/publish/* ${config:jellyfinLinuxDataDir}/plugins/PostgreSQL/ && cp -r ./${config:pluginName}/bin/Debug/net10.0/publish/* ${config:jellyfinLinuxDataDir}/plugins/${config:pluginName}/"
+      ]
     },
+    {
+      "label": "build-and-copy",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "apply-server-patches",
+        "build-server",
+        "build",
+        "make-plugin-dir",
+        "copy-dll"
+      ]
+    },
+    {
+      "label": "start-web-dev",
+      "type": "shell",
+      "command": "npm",
+      "args": ["start"],
+      "options": {
+        "cwd": "${workspaceFolder}/jellyfin-web"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "test-backend",
+      "type": "shell",
+      "command": "sh",
+      "args": [
+        "-c",
+        "./scripts/apply-patches.sh jellyfin && dotnet test Jellyfin.Plugin.Pgsql.sln"
+      ],
+      "group": "test",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "test-web",
+      "type": "shell",
+      "command": "npm",
+      "args": ["test"],
+      "options": {
+        "cwd": "${workspaceFolder}/jellyfin-web"
+      },
+      "group": "test",
+      "problemMatcher": []
+    }
   ]
 }

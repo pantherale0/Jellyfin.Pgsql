@@ -123,6 +123,25 @@ To maintain a clean upstream repository, changes to the `jellyfin` server and `j
 2. `jellyfin_web_*.patch` files (e.g. [`patches/jellyfin_web_rbac.patch`](patches/jellyfin_web_rbac.patch)) are applied to the `jellyfin-web` submodule.
 3. During `docker build`, [`scripts/apply-patches.sh`](scripts/apply-patches.sh) scans `patches/` and applies every matching patch before compiling the server and web client from source.
 
+## Local Development & Debugging (Fast Loop)
+
+Instead of running full Docker image builds (`start-dev.sh`), use the fast local workflow:
+
+1. **Start Dev Support Services (Postgres & Keycloak detached):**
+   ```bash
+   ./scripts/start-dev-deps.sh
+   ```
+2. **VS Code Debugging (Host Server):**
+   Press `F5` or select **"Launch Jellyfin Server (Host Debug)"** in VS Code. It automatically builds `Jellyfin.Plugin.Pgsql`, installs it to `dev-env/config/plugins/`, and starts debugging with pre-configured Postgres and OIDC environment variables.
+3. **CLI Backend Watch (Auto-restart on C# save):**
+   ```bash
+   ./scripts/dev-backend.sh
+   ```
+4. **CLI Web UI Watch (Instant HMR on frontend save):**
+   ```bash
+   ./scripts/dev-web.sh
+   ```
+
 ## Build (from source)
 
 1. Check out the Jellyfin submodule: `git submodule update --init jellyfin`
