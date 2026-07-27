@@ -19,6 +19,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | New controller handles authorize/callback/session flows driven by `JELLYFIN_SSO_OIDC_*` env configuration; matching `sso_rbac.json` groups merge preferences additively on login (blocking Live TV unrated also blocks `LiveTvProgram`). |
 | **Related** | Companion web: `jellyfin_web_rbac`, `jellyfin_web_tv_quickconnect_login`. Enforcement/persist: `jellyfin_z_livetv_rbac_allowlist`. README SSO section. Fork [pantherale0#5](https://github.com/pantherale0/Jellyfin.Pgsql/issues/5) (SSO mappings UI auth). |
 
+### `jellyfin_web_sso_script.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin-web` |
+| **What** | Injects `<script src="/sso/login-script.js"></script>` into `src/index.html` right before `</body>`. |
+| **Why** | Essential for loading the dynamic SSO login script that handles auto-redirects and injects the "Login with SSO" button on desktop/mobile clients. |
+| **Where** | `src/index.html` |
+| **How** | Includes script tag targeting the server's `SSOController.GetLoginScript()` endpoint. |
+| **Related** | Server `jellyfin_sso`. No public issue. |
+
 ### `jellyfin_web_rbac.patch`
 
 | | |
@@ -663,6 +674,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | `multiviewManager` tracks up to 4 active live stream sessions and manages HTML5 video mute states. OSD displays Multiview button for Live TV streams when `!layoutManager.tv && userSettings.enableExperimentalMultiview() && user.Policy.EnableLiveTvMultiview !== false`. |
 | **Related** | `jellyfin_livetv_multiview_rbac.patch`, `jellyfin_web_rbac.patch`. |
 
+### `jellyfin_web_dev_server_proxy.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin-web` |
+| **What** | Adds proxy configuration to `webpack.dev.js` for `webpack-dev-server` (`./scripts/dev-web.sh`), forwarding all API endpoints and WebSocket connections to `JELLYFIN_BACKEND_URL` (default `http://localhost:8096`). |
+| **Why** | Running Webpack Dev Server HMR independently requires seamless API proxying to the local Jellyfin server. |
+| **Where** | `webpack.dev.js` |
+| **How** | Configures `devServer.proxy` to route `/System`, `/Users`, `/Items`, `/Sessions`, `/Playback`, `/LiveTv`, `/Plugins`, `/sso`, `/socket`, `/Taste`, `/Seerr`, and API routes to `http://localhost:8096` with WebSocket support. |
+| **Related** | `./scripts/dev-web.sh`, `./scripts/dev-backend.sh`. No public issue. |
+
 ---
 
 ## Companion pairs (quick reference)
@@ -682,4 +704,5 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 
 ## File count
 
-**57** patches: **34** `jellyfin_*.patch` (server), **23** `jellyfin_web*.patch` (web).
+**59** patches: **34** `jellyfin_*.patch` (server), **25** `jellyfin_web*.patch` (web).
+
