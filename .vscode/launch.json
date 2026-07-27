@@ -5,7 +5,7 @@
       "name": "Launch Jellyfin Server (Host Debug)",
       "type": "coreclr",
       "request": "launch",
-      "preLaunchTask": "build-and-copy",
+      "preLaunchTask": "prepare-server-debug",
       "program": "${config:jellyfinDir}/bin/Debug/net10.0/jellyfin.dll",
       "args": [
         "--datadir",
@@ -40,7 +40,7 @@
       "name": "Launch Jellyfin Server (netcoredbg via pipeTransport)",
       "type": "coreclr",
       "request": "launch",
-      "preLaunchTask": "build-and-copy",
+      "preLaunchTask": "prepare-server-debug",
       "program": "${config:jellyfinDir}/bin/Debug/net10.0/jellyfin.dll",
       "args": [
         "--datadir",

@@ -2,31 +2,29 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "prepare-server-debug",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "start-dev-deps",
+        "apply-server-patches",
+        "sync-dev-plugins",
+        "ensure-web-dist",
+        "build-server"
+      ]
+    },
+    {
       "label": "start-dev-deps",
       "type": "shell",
       "command": "docker-compose",
-      "args": [
-        "-f",
-        "docker-compose.dev.yaml",
-        "up",
-        "postgres",
-        "keycloak",
-        "-d"
-      ],
-      "problemMatcher": [],
-      "presentation": {
-        "reveal": "always"
-      }
+      "args": ["-f", "docker-compose.dev.yaml", "up", "postgres", "keycloak", "-d"],
+      "presentation": { "reveal": "silent" },
+      "problemMatcher": []
     },
     {
       "label": "stop-dev-deps",
       "type": "shell",
       "command": "docker-compose",
-      "args": [
-        "-f",
-        "docker-compose.dev.yaml",
-        "down"
-      ],
+      "args": ["-f", "docker-compose.dev.yaml", "down"],
       "problemMatcher": []
     },
     {
@@ -37,9 +35,28 @@
       "problemMatcher": []
     },
     {
+      "label": "apply-all-patches",
+      "type": "shell",
+      "command": "./scripts/apply-patches.sh",
+      "args": ["all"],
+      "problemMatcher": []
+    },
+    {
       "label": "clean-submodules",
       "type": "shell",
       "command": "./scripts/clean-submodules.sh",
+      "problemMatcher": []
+    },
+    {
+      "label": "sync-dev-plugins",
+      "type": "shell",
+      "command": "./scripts/sync-dev-plugins.sh",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "ensure-web-dist",
+      "type": "shell",
+      "command": "./scripts/ensure-web-dist.sh",
       "problemMatcher": []
     },
     {
@@ -55,76 +72,33 @@
         "/consoleloggerparameters:NoSummary"
       ],
       "group": "build",
-      "presentation": {
-        "reveal": "silent"
-      },
+      "presentation": { "reveal": "silent" },
       "problemMatcher": "$msCompile"
     },
     {
-      "label": "build",
+      "label": "build-web",
       "type": "shell",
-      "command": "dotnet",
-      "args": [
-        "publish",
-        "--configuration=Debug",
-        "${workspaceFolder}/${config:pluginName}/${config:pluginName}.csproj",
-        "/property:GenerateFullPaths=true",
-        "/consoleloggerparameters:NoSummary"
-      ],
+      "command": "./scripts/build-web.sh",
       "group": "build",
-      "presentation": {
-        "reveal": "silent"
-      },
-      "problemMatcher": "$msCompile"
+      "problemMatcher": []
     },
     {
-      "label": "make-plugin-dir",
+      "label": "start-server",
       "type": "shell",
-      "command": "mkdir",
-      "args": [
-        "-p",
-        "${config:jellyfinLinuxDataDir}/plugins/PostgreSQL/",
-        "${config:jellyfinLinuxDataDir}/plugins/${config:pluginName}/"
-      ]
-    },
-    {
-      "label": "copy-dll",
-      "type": "shell",
-      "command": "sh",
-      "args": [
-        "-c",
-        "cp -r ./${config:pluginName}/bin/Debug/net10.0/publish/* ${config:jellyfinLinuxDataDir}/plugins/PostgreSQL/ && cp -r ./${config:pluginName}/bin/Debug/net10.0/publish/* ${config:jellyfinLinuxDataDir}/plugins/${config:pluginName}/"
-      ]
-    },
-    {
-      "label": "build-and-copy",
-      "dependsOrder": "sequence",
-      "dependsOn": [
-        "apply-server-patches",
-        "build-server",
-        "build",
-        "make-plugin-dir",
-        "copy-dll"
-      ]
+      "command": "./scripts/dev-backend.sh",
+      "problemMatcher": []
     },
     {
       "label": "start-web-dev",
       "type": "shell",
-      "command": "npm",
-      "args": ["start"],
-      "options": {
-        "cwd": "${workspaceFolder}/jellyfin-web"
-      },
+      "command": "./scripts/dev-web.sh",
       "problemMatcher": []
     },
     {
       "label": "test-backend",
       "type": "shell",
       "command": "sh",
-      "args": [
-        "-c",
-        "./scripts/apply-patches.sh jellyfin && dotnet test Jellyfin.Plugin.Pgsql.sln"
-      ],
+      "args": ["-c", "./scripts/apply-patches.sh jellyfin && dotnet test Jellyfin.Plugin.Pgsql.sln"],
       "group": "test",
       "problemMatcher": "$msCompile"
     },
@@ -133,9 +107,7 @@
       "type": "shell",
       "command": "npm",
       "args": ["test"],
-      "options": {
-        "cwd": "${workspaceFolder}/jellyfin-web"
-      },
+      "options": { "cwd": "${workspaceFolder}/jellyfin-web" },
       "group": "test",
       "problemMatcher": []
     }
