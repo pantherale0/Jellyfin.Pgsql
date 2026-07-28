@@ -29,12 +29,25 @@ Patches live in a flat `patches/` directory. `scripts/apply-patches.sh` routes t
 ./scripts/apply-patches.sh jellyfin
 ./scripts/apply-patches.sh jellyfin-web
 
-# Typical workflow after editing a clean submodule checkout
-git -C jellyfin diff > patches/jellyfin_<name>.patch
-git -C jellyfin-web diff > patches/jellyfin_web_<name>.patch
-git -C jellyfin checkout -- .
-git -C jellyfin-web checkout -- .
+# Typical workflow after editing a submodule checkout
+./scripts/export-patch.sh jellyfin_<name>.patch
+./scripts/export-patch.sh jellyfin_web_<name>.patch
 ```
+
+#### Submodule Patch Export Script (`./scripts/export-patch.sh`)
+
+When creating or updating a patch in `jellyfin/` or `jellyfin-web/`, run:
+
+```bash
+# Automatically snapshots edits, isolates dependency baseline, generates full diff, and rebuilds web
+./scripts/export-patch.sh jellyfin_web_zzz_livetv_multiview.patch
+```
+
+It performs the following steps automatically:
+1. **Snapshots Working Edits:** Saves all modified and untracked files currently in `jellyfin/` or `jellyfin-web/`.
+2. **Isolates Baseline:** Resets the submodule to release tag (`v12.0-rc3`), removes the target patch file, applies preceding dependency patches (`./scripts/apply-patches.sh <target>`), and commits `baseline_deps`.
+3. **Restores & Diffs:** Restores all feature edits onto `baseline_deps`, stages untracked files (`git add -N`), and exports the complete multi-file diff to `patches/<patch_name>`.
+4. **Validates & Rebuilds:** Appends a trailing newline `\n` to prevent `git apply` EOF errors, resets the submodule back to clean `v12.0-rc3`, and runs `./scripts/build-web.sh`.
 
 ### 3. Do not build Docker automatically
 
