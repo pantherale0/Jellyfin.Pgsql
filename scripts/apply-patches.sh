@@ -27,14 +27,23 @@ if [ ! -d "$PATCHES_DIR" ]; then
     exit 0
 fi
 
-echo "Resetting $TARGET submodule to clean state..."
-git -C "$TARGET" checkout -- .
-git -C "$TARGET" clean -fd
+if git -C "$TARGET" rev-parse --git-dir >/dev/null 2>&1; then
+    echo "Resetting $TARGET submodule to clean state..."
+    git -C "$TARGET" checkout -- .
+    git -C "$TARGET" clean -fd
+else
+    echo "$TARGET is not a git repository; initializing temporary git repository..."
+    (cd "$TARGET" && git init -q && git config user.name "build" && git config user.email "build@local" && git add -A && git commit -q -m "initial" >/dev/null 2>&1 || true)
+fi
 
 apply_patch() {
     patch_file="$1"
     echo "Applying $patch_file to $TARGET/"
-    git apply --directory="$TARGET" "$patch_file"
+    case "$patch_file" in
+        /*) abs_patch="$patch_file" ;;
+        *)  abs_patch="$REPO_ROOT/$patch_file" ;;
+    esac
+    (cd "$TARGET" && git apply -p1 "$abs_patch")
 }
 
 found=0

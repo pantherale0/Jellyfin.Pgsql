@@ -11,7 +11,7 @@ index 0fc8d3cd25..dfcc4f27a1 100644
          entity.Permissions.Add(new Permission(PermissionKind.EnableSharedDeviceControl, true));
          entity.Permissions.Add(new Permission(PermissionKind.EnableVideoPlaybackTranscoding, true));
 diff --git a/Jellyfin.Server.Implementations/Users/UserManager.cs b/Jellyfin.Server.Implementations/Users/UserManager.cs
-index 81408d9aa8..a79bf2a6ff 100644
+index 8198ebce47..59a1857017 100644
 --- a/Jellyfin.Server.Implementations/Users/UserManager.cs
 +++ b/Jellyfin.Server.Implementations/Users/UserManager.cs
 @@ -456,6 +456,7 @@ namespace Jellyfin.Server.Implementations.Users
@@ -22,7 +22,7 @@ index 81408d9aa8..a79bf2a6ff 100644
                      EnableMediaPlayback = user.HasPermission(PermissionKind.EnableMediaPlayback),
                      EnableAudioPlaybackTranscoding = user.HasPermission(PermissionKind.EnableAudioPlaybackTranscoding),
                      EnableVideoPlaybackTranscoding = user.HasPermission(PermissionKind.EnableVideoPlaybackTranscoding),
-@@ -837,6 +838,7 @@ namespace Jellyfin.Server.Implementations.Users
+@@ -843,6 +844,7 @@ namespace Jellyfin.Server.Implementations.Users
                      user.SetPermission(PermissionKind.EnableRemoteAccess, policy.EnableRemoteAccess);
                      user.SetPermission(PermissionKind.EnableLiveTvManagement, policy.EnableLiveTvManagement);
                      user.SetPermission(PermissionKind.EnableLiveTvAccess, policy.EnableLiveTvAccess);
@@ -30,6 +30,34 @@ index 81408d9aa8..a79bf2a6ff 100644
                      user.SetPermission(PermissionKind.EnableMediaPlayback, policy.EnableMediaPlayback);
                      user.SetPermission(PermissionKind.EnableAudioPlaybackTranscoding, policy.EnableAudioPlaybackTranscoding);
                      user.SetPermission(PermissionKind.EnableVideoPlaybackTranscoding, policy.EnableVideoPlaybackTranscoding);
+diff --git a/Jellyfin.Server/Extensions/ApiServiceCollectionExtensions.cs b/Jellyfin.Server/Extensions/ApiServiceCollectionExtensions.cs
+index a498901481..0f19785310 100644
+--- a/Jellyfin.Server/Extensions/ApiServiceCollectionExtensions.cs
++++ b/Jellyfin.Server/Extensions/ApiServiceCollectionExtensions.cs
+@@ -75,6 +75,7 @@ namespace Jellyfin.Server.Extensions
+                 options.AddPolicy(Policies.FirstTimeSetupOrIgnoreParentalControl, new FirstTimeSetupRequirement(false, false));
+                 options.AddPolicy(Policies.IgnoreParentalControl, new DefaultAuthorizationRequirement(validateParentalSchedule: false));
+                 options.AddPolicy(Policies.LiveTvAccess, new UserPermissionRequirement(PermissionKind.EnableLiveTvAccess));
++                options.AddPolicy(Policies.LiveTvMultiview, new UserPermissionRequirement(PermissionKind.EnableLiveTvMultiview));
+                 options.AddPolicy(Policies.LiveTvManagement, new UserPermissionRequirement(PermissionKind.EnableLiveTvManagement));
+                 options.AddPolicy(Policies.LocalAccessOrRequiresElevation, new LocalAccessOrRequiresElevationRequirement());
+                 options.AddPolicy(Policies.SyncPlayHasAccess, new SyncPlayAccessRequirement(SyncPlayAccessRequirementType.HasAccess));
+diff --git a/MediaBrowser.Common/Api/Policies.cs b/MediaBrowser.Common/Api/Policies.cs
+index 435f4798ff..298c57098b 100644
+--- a/MediaBrowser.Common/Api/Policies.cs
++++ b/MediaBrowser.Common/Api/Policies.cs
+@@ -80,6 +80,11 @@ public static class Policies
+     /// </summary>
+     public const string LiveTvAccess = "LiveTvAccess";
+ 
++    /// <summary>
++    /// Policy name for using LiveTV Multiview.
++    /// </summary>
++    public const string LiveTvMultiview = "LiveTvMultiview";
++
+     /// <summary>
+     /// Policy name for managing LiveTV.
+     /// </summary>
 diff --git a/MediaBrowser.Model/Users/UserPolicy.cs b/MediaBrowser.Model/Users/UserPolicy.cs
 index 95e4d46c59..76b550228f 100644
 --- a/MediaBrowser.Model/Users/UserPolicy.cs

@@ -1,222 +1,405 @@
 diff --git a/src/apps/dashboard/features/users/components/Profile.tsx b/src/apps/dashboard/features/users/components/Profile.tsx
-index 3522432572..0fc45bf67f 100644
+index 3522432572..84a79c1826 100644
 --- a/src/apps/dashboard/features/users/components/Profile.tsx
 +++ b/src/apps/dashboard/features/users/components/Profile.tsx
-@@ -189,6 +189,10 @@ const Profile = ({ userDto }: ProfileProps) => {
+@@ -189,6 +189,7 @@ const Profile = ({ userDto }: ProfileProps) => {
          (page.querySelector('.chkEnableDownloading') as HTMLInputElement).checked = !!userDto.Policy?.EnableContentDownloading;
          (page.querySelector('.chkManageLiveTv') as HTMLInputElement).checked = !!userDto.Policy?.EnableLiveTvManagement;
          (page.querySelector('.chkEnableLiveTvAccess') as HTMLInputElement).checked = !!userDto.Policy?.EnableLiveTvAccess;
-+        const chkMultiview = page.querySelector('.chkEnableLiveTvMultiview') as HTMLInputElement | null;
-+        if (chkMultiview) {
-+            chkMultiview.checked = (userDto.Policy as any)?.EnableLiveTvMultiview == null || !!(userDto.Policy as any)?.EnableLiveTvMultiview;
-+        }
++        (page.querySelector('.chkEnableLiveTvMultiview') as HTMLInputElement).checked = (userDto.Policy as any)?.EnableLiveTvMultiview == null || !!(userDto.Policy as any)?.EnableLiveTvMultiview;
          (page.querySelector('.chkEnableMediaPlayback') as HTMLInputElement).checked = !!userDto.Policy?.EnableMediaPlayback;
          (page.querySelector('.chkEnableAudioPlaybackTranscoding') as HTMLInputElement).checked = !!userDto.Policy?.EnableAudioPlaybackTranscoding;
          (page.querySelector('.chkEnableVideoPlaybackTranscoding') as HTMLInputElement).checked = !!userDto.Policy?.EnableVideoPlaybackTranscoding;
-@@ -227,6 +231,10 @@ const Profile = ({ userDto }: ProfileProps) => {
+@@ -227,6 +228,7 @@ const Profile = ({ userDto }: ProfileProps) => {
              user.Policy.EnableRemoteControlOfOtherUsers = (page.querySelector('.chkEnableRemoteControlOtherUsers') as HTMLInputElement).checked;
              user.Policy.EnableLiveTvManagement = (page.querySelector('.chkManageLiveTv') as HTMLInputElement).checked;
              user.Policy.EnableLiveTvAccess = (page.querySelector('.chkEnableLiveTvAccess') as HTMLInputElement).checked;
-+            const chkMultiviewSave = page.querySelector('.chkEnableLiveTvMultiview') as HTMLInputElement | null;
-+            if (chkMultiviewSave) {
-+                (user.Policy as any).EnableLiveTvMultiview = chkMultiviewSave.checked;
-+            }
++            (user.Policy as any).EnableLiveTvMultiview = (page.querySelector('.chkEnableLiveTvMultiview') as HTMLInputElement).checked;
              user.Policy.EnableSharedDeviceControl = (page.querySelector('.chkRemoteControlSharedDevices') as HTMLInputElement).checked;
              user.Policy.EnableMediaPlayback = (page.querySelector('.chkEnableMediaPlayback') as HTMLInputElement).checked;
              user.Policy.EnableAudioPlaybackTranscoding = (page.querySelector('.chkEnableAudioPlaybackTranscoding') as HTMLInputElement).checked;
-@@ -395,6 +403,10 @@ const Profile = ({ userDto }: ProfileProps) => {
-                             className='chkEnableLiveTvAccess'
-                             title='OptionAllowBrowsingLiveTv'
+@@ -399,6 +401,10 @@ const Profile = ({ userDto }: ProfileProps) => {
+                             className='chkManageLiveTv'
+                             title='OptionAllowManageLiveTv'
                          />
 +                        <CheckBoxElement
 +                            className='chkEnableLiveTvMultiview'
 +                            title='OptionAllowLiveTvMultiview'
 +                        />
-                         <CheckBoxElement
-                             className='chkManageLiveTv'
-                             title='OptionAllowManageLiveTv'
-diff --git a/src/apps/legacy/controllers/playback/video/index.html b/src/apps/legacy/controllers/playback/video/index.html
-index 57b11092d7..5f18f26a06 100644
---- a/src/apps/legacy/controllers/playback/video/index.html
-+++ b/src/apps/legacy/controllers/playback/video/index.html
-@@ -84,6 +84,9 @@ <h3 class="osdTitle"></h3>
-                         <input is="emby-slider" type="range" step="1" min="0" max="100" value="0" class="osdVolumeSlider" />
                      </div>
                  </div>
-+                <button is="paper-icon-button-light" class="btnMultiview hide autoSize" title="Multiview">
-+                    <span class="largePaperIconButton material-icons grid_view" aria-hidden="true"></span>
-+                </button>
-                 <button is="paper-icon-button-light" class="btnVideoOsdSettings autoSize" title="${Settings}">
-                     <span class="largePaperIconButton material-icons settings" aria-hidden="true"></span>
-                 </button>
-diff --git a/src/apps/legacy/controllers/playback/video/index.js b/src/apps/legacy/controllers/playback/video/index.js
-index 8737a03078..8cb5b2a58a 100644
---- a/src/apps/legacy/controllers/playback/video/index.js
-+++ b/src/apps/legacy/controllers/playback/video/index.js
-@@ -21,6 +21,7 @@ import { appHost } from 'components/apphost';
- import layoutManager from 'components/layoutManager';
+                 <div className='verticalSection'>
+diff --git a/src/apps/legacy/controllers/livetv.html b/src/apps/legacy/controllers/livetv.html
+index 365c5b4415..e708a09352 100644
+--- a/src/apps/legacy/controllers/livetv.html
++++ b/src/apps/legacy/controllers/livetv.html
+@@ -63,6 +63,7 @@ <h2 class="sectionTitle sectionTitle-cards" style="display: inline-block; vertic
+                 <div class="paging"></div>
+                 <div class="btnFilter-wrapper">
+                     <button is="paper-icon-button-light" class="btnFilter sectionTitleButton" title="${Filter}"><span class="material-icons filter_alt" aria-hidden="true"></span></button>
++                    <button is="paper-icon-button-light" class="btnMultiview sectionTitleButton hide" title="Open Live TV Multiview"><span class="material-icons grid_view" aria-hidden="true"></span></button>
+                 </div>
+             </div>
+             <div is="emby-itemscontainer" id="items" class="itemsContainer vertical-wrap padded-left padded-right"></div>
+diff --git a/src/apps/legacy/controllers/livetv/livetvchannels.js b/src/apps/legacy/controllers/livetv/livetvchannels.js
+index 036e69c121..ecf63ee70a 100644
+--- a/src/apps/legacy/controllers/livetv/livetvchannels.js
++++ b/src/apps/legacy/controllers/livetv/livetvchannels.js
+@@ -5,6 +5,8 @@ import loading from 'components/loading/loading';
  import * as userSettings from 'scripts/settings/userSettings';
- import keyboardnavigation from 'scripts/keyboardNavigation';
+ import Events from 'utils/events';
+ import { setFilterStatus } from 'components/filterdialog/filterIndicator';
++import layoutManager from 'components/layoutManager';
 +import multiviewManager from 'components/multiview/multiviewManager';
- import 'styles/scrollstyles.scss';
- import 'elements/emby-slider/emby-slider';
- import 'elements/emby-button/paper-icon-button-light';
-@@ -110,6 +111,17 @@ export default function (view) {
-             secondaryMediaInfo.classList.add('hide');
-         }
  
-+        const user = ServerConnections.getCurrentUser();
-+        const canMultiview = !layoutManager.tv && userSettings.enableExperimentalMultiview() && user?.Policy?.EnableLiveTvMultiview !== false && (displayItem.Type === 'LiveTvChannel' || displayItem.Type === 'LiveTvProgram' || displayItem.MediaType === 'LiveTv');
-+        const btnMultiview = view.querySelector('.btnMultiview');
-+        if (btnMultiview) {
+ import 'elements/emby-itemscontainer/emby-itemscontainer';
+ 
+@@ -136,6 +138,24 @@ export default function (view, params, tabContent) {
+     let pageData;
+     const self = this;
+     let isLoading = false;
++    const btnMultiview = tabContent.querySelector('.btnMultiview');
++    if (btnMultiview) {
++        const apiClient = ApiClient;
++        apiClient.getCurrentUser().then(function (user) {
++            const policyMultiview = user?.Policy?.EnableLiveTvMultiview ?? user?.Policy?.enableLiveTvMultiview;
++            const canMultiview = !layoutManager.tv && userSettings.enableExperimentalMultiview() && policyMultiview !== false;
 +            if (canMultiview) {
 +                btnMultiview.classList.remove('hide');
 +            } else {
 +                btnMultiview.classList.add('hide');
 +            }
-+        }
++        });
 +
++        btnMultiview.addEventListener('click', function () {
++            multiviewManager.open({});
++        });
++    }
++
+     tabContent.querySelector('.btnFilter').addEventListener('click', function () {
+         showFilterMenu(tabContent);
+     });
+diff --git a/src/apps/legacy/controllers/playback/video/index.html b/src/apps/legacy/controllers/playback/video/index.html
+index 57b11092d7..788b7aedbe 100644
+--- a/src/apps/legacy/controllers/playback/video/index.html
++++ b/src/apps/legacy/controllers/playback/video/index.html
+@@ -87,6 +87,9 @@ <h3 class="osdTitle"></h3>
+                 <button is="paper-icon-button-light" class="btnVideoOsdSettings autoSize" title="${Settings}">
+                     <span class="largePaperIconButton material-icons settings" aria-hidden="true"></span>
+                 </button>
++                <button is="paper-icon-button-light" class="btnMultiview autoSize hide" title="Multiview">
++                    <span class="largePaperIconButton material-icons grid_view" aria-hidden="true"></span>
++                </button>
+                 <button is="paper-icon-button-light" class="btnAirPlay hide autoSize" title="${AirPlay}">
+                     <span class="xlargePaperIconButton material-icons airplay" aria-hidden="true"></span>
+                 </button>
+diff --git a/src/apps/legacy/controllers/playback/video/index.js b/src/apps/legacy/controllers/playback/video/index.js
+index 8737a03078..ba7e023700 100644
+--- a/src/apps/legacy/controllers/playback/video/index.js
++++ b/src/apps/legacy/controllers/playback/video/index.js
+@@ -12,6 +12,7 @@ import dom from 'utils/dom';
+ import inputManager from 'scripts/inputManager';
+ import mouseManager from 'scripts/mouseManager';
+ import datetime from 'scripts/datetime';
++import multiviewManager from 'components/multiview/multiviewManager';
+ import itemHelper from 'components/itemHelper';
+ import mediaInfo from 'components/mediainfo/mediainfo';
+ import focusManager from 'components/focusManager';
+@@ -104,11 +105,19 @@ export default function (view) {
+         });
+         secondaryMediaInfo.innerHTML = secondaryMediaInfoHtml;
+ 
+-        if (secondaryMediaInfoHtml) {
+-            secondaryMediaInfo.classList.remove('hide');
+-        } else {
+-            secondaryMediaInfo.classList.add('hide');
+-        }
++        const apiClient = ServerConnections.getApiClient(displayItem?.ServerId || item?.ServerId);
++        apiClient.getCurrentUser().then(function (user) {
++            const policyMultiview = user?.Policy?.EnableLiveTvMultiview ?? user?.Policy?.enableLiveTvMultiview;
++            const canMultiview = !layoutManager.tv && userSettings.enableExperimentalMultiview() && policyMultiview !== false;
++            const btnMultiview = view.querySelector('.btnMultiview');
++            if (btnMultiview) {
++                if (canMultiview) {
++                    btnMultiview.classList.remove('hide');
++                } else {
++                    btnMultiview.classList.add('hide');
++                }
++            }
++        });
+ 
          if (enableProgressByTimeOfDay) {
              setDisplayTime(startTimeText, displayItem.StartDate);
-             setDisplayTime(endTimeText, displayItem.EndDate);
-@@ -1768,6 +1780,9 @@ export default function (view) {
+@@ -1768,6 +1777,24 @@ export default function (view) {
          playbackManager.toggleAirPlay(currentPlayer);
      });
      view.querySelector('.btnVideoOsdSettings').addEventListener('click', onSettingsButtonClick);
 +    view.querySelector('.btnMultiview')?.addEventListener('click', function () {
-+        multiviewManager.toggle({ currentItem });
++        const player = playbackManager.currentPlayer();
++        const mediaSource = player ? playbackManager.currentMediaSource(player) : null;
++        const itemToPlay = currentItem || (player ? playbackManager.currentItem(player) : null);
++
++        if (player) {
++            playbackManager.pause(player);
++        }
++
++        window.history.back();
++
++        setTimeout(function () {
++            multiviewManager.open({
++                currentItem: itemToPlay,
++                existingMediaSource: mediaSource
++            });
++        }, 200);
 +    });
      view.addEventListener('viewhide', function () {
          clearHideAnimationEventListeners(headerElement);
          headerElement.classList.remove('hide');
+diff --git a/src/apps/modern/features/preferences/components/DisplayPreferences.tsx b/src/apps/modern/features/preferences/components/DisplayPreferences.tsx
+index 9f653dbb00..5b7acd5d01 100644
+--- a/src/apps/modern/features/preferences/components/DisplayPreferences.tsx
++++ b/src/apps/modern/features/preferences/components/DisplayPreferences.tsx
+@@ -11,6 +11,7 @@ import Typography from '@mui/material/Typography';
+ import React, { Fragment } from 'react';
+ 
+ import { appHost } from 'components/apphost';
++import layoutManager from 'components/layoutManager';
+ import { AppFeature } from 'constants/appFeature';
+ import { LayoutMode } from 'constants/layoutMode';
+ import { useApi } from 'hooks/useApi';
+@@ -250,6 +251,25 @@ export function DisplayPreferences({ onChange, values }: Readonly<DisplayPrefere
+                     {globalize.translate('EnableBlurHashHelp')}
+                 </FormHelperText>
+             </FormControl>
++
++            {!layoutManager.tv && (
++                <FormControl fullWidth>
++                    <FormControlLabel
++                        aria-describedby='display-settings-experimental-multiview-description'
++                        control={
++                            <Checkbox
++                                checked={values.enableExperimentalMultiview}
++                                onChange={onChange}
++                            />
++                        }
++                        label={globalize.translate('OptionEnableExperimentalMultiview')}
++                        name='enableExperimentalMultiview'
++                    />
++                    <FormHelperText id='display-settings-experimental-multiview-description'>
++                        {globalize.translate('OptionEnableExperimentalMultiviewHelp')}
++                    </FormHelperText>
++                </FormControl>
++            )}
+         </Stack>
+     );
+ }
+diff --git a/src/apps/modern/features/preferences/hooks/useDisplaySettings.ts b/src/apps/modern/features/preferences/hooks/useDisplaySettings.ts
+index ad608fc2c5..64eb96be9a 100644
+--- a/src/apps/modern/features/preferences/hooks/useDisplaySettings.ts
++++ b/src/apps/modern/features/preferences/hooks/useDisplaySettings.ts
+@@ -90,6 +90,7 @@ async function loadDisplaySettings({
+         disableCustomCss: Boolean(settings.disableCustomCss()),
+         displayMissingEpisodes: user?.Configuration?.DisplayMissingEpisodes ?? false,
+         enableBlurHash: Boolean(settings.enableBlurhash()),
++        enableExperimentalMultiview: Boolean(settings.enableExperimentalMultiview()),
+         enableFasterAnimation: Boolean(settings.enableFastFadein()),
+         enableItemDetailsBanner: Boolean(settings.detailsBanner()),
+         enableLibraryBackdrops: Boolean(settings.enableBackdrops()),
+@@ -137,6 +138,7 @@ async function saveDisplaySettings({
+     userSettings.dateTimeLocale(normalizeValue(newDisplaySettings.dateTimeLocale));
+     userSettings.disableCustomCss(newDisplaySettings.disableCustomCss);
+     userSettings.enableBlurhash(newDisplaySettings.enableBlurHash);
++    userSettings.enableExperimentalMultiview(newDisplaySettings.enableExperimentalMultiview);
+     userSettings.enableFastFadein(newDisplaySettings.enableFasterAnimation);
+     userSettings.detailsBanner(newDisplaySettings.enableItemDetailsBanner);
+     userSettings.enableBackdrops(newDisplaySettings.enableLibraryBackdrops);
+diff --git a/src/apps/modern/features/preferences/types/displaySettingsValues.ts b/src/apps/modern/features/preferences/types/displaySettingsValues.ts
+index 961fc1d0dd..de6a5b64a0 100644
+--- a/src/apps/modern/features/preferences/types/displaySettingsValues.ts
++++ b/src/apps/modern/features/preferences/types/displaySettingsValues.ts
+@@ -5,6 +5,7 @@ export interface DisplaySettingsValues {
+     disableCustomCss: boolean;
+     displayMissingEpisodes: boolean;
+     enableBlurHash: boolean;
++    enableExperimentalMultiview: boolean;
+     enableFasterAnimation: boolean;
+     enableItemDetailsBanner: boolean;
+     enableLibraryBackdrops: boolean;
 diff --git a/src/components/displaySettings/displaySettings.js b/src/components/displaySettings/displaySettings.js
-index b7a831e104..e5364f4855 100644
+index b7a831e104..fb163e3f7b 100644
 --- a/src/components/displaySettings/displaySettings.js
 +++ b/src/components/displaySettings/displaySettings.js
-@@ -128,6 +128,10 @@ function loadForm(context, user, userSettings) {
+@@ -127,6 +127,10 @@ function loadForm(context, user, userSettings) {
+     context.querySelector('#chkThemeVideo').checked = userSettings.enableThemeVideos();
      context.querySelector('#chkFadein').checked = userSettings.enableFastFadein();
      context.querySelector('#chkBlurhash').checked = userSettings.enableBlurhash();
-     context.querySelector('#infscroll').checked = userSettings.enableInfiniteScroll();
-+    context.querySelector('#chkEnableExperimentalMultiview').checked = userSettings.enableExperimentalMultiview();
-+    if (layoutManager.tv) {
-+        context.querySelector('.fldExperimentalMultiview')?.classList.add('hide');
++    const chkMultiview = context.querySelector('.chkEnableExperimentalMultiview');
++    if (chkMultiview) {
++        chkMultiview.checked = userSettings.enableExperimentalMultiview();
 +    }
+     context.querySelector('#infscroll').checked = userSettings.enableInfiniteScroll();
      context.querySelector('#chkBackdrops').checked = userSettings.enableBackdrops();
      context.querySelector('#chkDetailsBanner').checked = userSettings.detailsBanner();
+@@ -177,6 +181,11 @@ function saveUser(context, user, userSettingsInstance, apiClient) {
  
-@@ -170,6 +174,7 @@ function saveUser(context, user, userSettingsInstance, apiClient) {
+     userSettingsInstance.enableFastFadein(context.querySelector('#chkFadein').checked);
+     userSettingsInstance.enableBlurhash(context.querySelector('#chkBlurhash').checked);
++    const chkMultiview = context.querySelector('.chkEnableExperimentalMultiview');
++    if (chkMultiview) {
++        userSettingsInstance.enableExperimentalMultiview(chkMultiview.checked);
++    }
++    userSettingsInstance.enableInfiniteScroll(context.querySelector('#infscroll').checked);
+     userSettingsInstance.enableBackdrops(context.querySelector('#chkBackdrops').checked);
+     userSettingsInstance.detailsBanner(context.querySelector('#chkDetailsBanner').checked);
  
-     userSettingsInstance.libraryPageSize(context.querySelector('#txtLibraryPageSize').value);
-     userSettingsInstance.enableInfiniteScroll(context.querySelector('#infscroll').checked);
-+    userSettingsInstance.enableExperimentalMultiview(context.querySelector('#chkEnableExperimentalMultiview').checked);
- 
-     userSettingsInstance.maxDaysForNextUp(context.querySelector('#txtMaxDaysForNextUp').value);
-     userSettingsInstance.enableRewatchingInNextUp(context.querySelector('#chkRewatchingNextUp').checked);
 diff --git a/src/components/displaySettings/displaySettings.template.html b/src/components/displaySettings/displaySettings.template.html
-index 3ab4fdd46f..820ef5e36c 100644
+index 3ab4fdd46f..5f89cf900c 100644
 --- a/src/components/displaySettings/displaySettings.template.html
 +++ b/src/components/displaySettings/displaySettings.template.html
-@@ -251,6 +251,14 @@ <h2 class="sectionTitle">
-         <div class="fieldDescription checkboxFieldDescription">${EnableInfiniteScrollHelp}</div>
+@@ -234,6 +234,14 @@ <h2 class="sectionTitle">
+         <div class="fieldDescription checkboxFieldDescription">${EnableBlurHashHelp}</div>
      </div>
  
-+    <div class="checkboxContainer checkboxContainer-withDescription fldExperimentalMultiview">
++    <div class="checkboxContainer checkboxContainer-withDescription">
 +        <label>
-+            <input type="checkbox" is="emby-checkbox" id="chkEnableExperimentalMultiview" />
++            <input type="checkbox" is="emby-checkbox" class="chkEnableExperimentalMultiview" />
 +            <span>${OptionEnableExperimentalMultiview}</span>
 +        </label>
 +        <div class="fieldDescription checkboxFieldDescription">${OptionEnableExperimentalMultiviewHelp}</div>
 +    </div>
 +
-     <div class="checkboxContainer checkboxContainer-withDescription fldBackdrops">
-         <label>
-             <input type="checkbox" is="emby-checkbox" id="chkBackdrops" />
+     <h2 class="sectionTitle">
+         ${HeaderLibraries}
+     </h2>
+diff --git a/src/components/itemContextMenu.js b/src/components/itemContextMenu.js
+index 7b71363d13..2396edbad2 100644
+--- a/src/components/itemContextMenu.js
++++ b/src/components/itemContextMenu.js
+@@ -15,6 +15,7 @@ import itemHelper, { canEditPlaylist } from './itemHelper';
+ import { playbackManager } from './playback/playbackmanager';
+ import toast from './toast/toast';
+ import * as userSettings from '../scripts/settings/userSettings';
++import multiviewManager from './multiview/multiviewManager';
+ 
+ /** Item types that support downloading all children. */
+ const DOWNLOAD_ALL_TYPES = [
+@@ -58,6 +59,16 @@ export async function getCommands(options) {
+             });
+         }
+ 
++        const policyMultiview = user?.Policy?.EnableLiveTvMultiview ?? user?.Policy?.enableLiveTvMultiview;
++        const canMultiview = !browser.tv && userSettings.enableExperimentalMultiview() && policyMultiview !== false && (item.Type === 'LiveTvChannel' || item.Type === 'LiveTvProgram' || item.Type === 'TvChannel' || item.Type === 'Program' || item.MediaType === 'LiveTv' || Boolean(item.ChannelId));
++        if (canMultiview) {
++            commands.push({
++                name: globalize.translate('OpenInMultiview'),
++                id: 'openinmultiview',
++                icon: 'grid_view'
++            });
++        }
++
+         if (options.playAllFromHere && item.Type !== 'Program' && item.Type !== 'TvChannel') {
+             commands.push({
+                 name: globalize.translate('PlayAllFromHere'),
+@@ -394,6 +405,10 @@ function executeCommand(item, id, options) {
+     return new Promise(function (resolve, reject) {
+         // eslint-disable-next-line sonarjs/max-switch-cases
+         switch (id) {
++            case 'openinmultiview':
++                multiviewManager.open({ currentItem: item });
++                getResolveFunction(resolve, id)();
++                break;
+             case 'addtocollection':
+                 import('./collectionEditor/collectionEditor').then(({ default: CollectionEditor }) => {
+                     const collectionEditor = new CollectionEditor();
 diff --git a/src/components/multiview/channelPickerModal.js b/src/components/multiview/channelPickerModal.js
 new file mode 100644
-index 0000000000..d883b56d53
+index 0000000000..74288f2879
 --- /dev/null
 +++ b/src/components/multiview/channelPickerModal.js
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,77 @@
 +import dialogHelper from '../dialogHelper/dialogHelper';
 +import { ServerConnections } from 'lib/jellyfin-apiclient';
 +
 +export default function showChannelPicker(activeChannelIds = []) {
 +    return new Promise((resolve) => {
 +        const apiClient = ServerConnections.getApiClient();
-+        const user = ServerConnections.getCurrentUser();
++        apiClient.getCurrentUser().then((user) => {
++            apiClient.getLiveTvChannels({ userId: user?.Id }).then((result) => {
++                const channels = (result.Items || []).filter(c => !activeChannelIds.includes(c.Id));
 +
-+        apiClient.getLiveTvChannels({ userId: user?.Id }).then((result) => {
-+            const channels = (result.Items || []).filter(c => !activeChannelIds.includes(c.Id));
++                if (channels.length === 0) {
++                    resolve(null);
++                    return;
++                }
 +
-+            if (channels.length === 0) {
-+                resolve(null);
-+                return;
-+            }
++                const dialogOptions = {
++                    removeOnClose: true,
++                    size: 'small'
++                };
 +
-+            const dialogOptions = {
-+                removeOnClose: true,
-+                size: 'small'
-+            };
++                const dlg = dialogHelper.createDialog(dialogOptions);
++                dlg.classList.add('formDialog');
 +
-+            const dlg = dialogHelper.createDialog(dialogOptions);
-+            dlg.classList.add('formDialog');
-+
-+            let html = `
-+                <div class="dialogHeader">
-+                    <button is="paper-icon-button-light" class="btnCancel autoSize" tabindex="-1">
-+                        <span class="material-icons arrow_back"></span>
-+                    </button>
-+                    <h2 class="dialogHeaderTitle">Add Channel to Multiview</h2>
-+                </div>
-+            `;
-+            html += `<div class="dialogContent" style="max-height: 60vh; overflow-y: auto; padding: 0 16px 16px;"><div class="paperList">`;
-+
-+            channels.forEach((channel) => {
-+                const channelName = channel.Name || 'Channel';
-+                const channelNum = channel.ChannelNumber ? `Ch. ${channel.ChannelNumber} - ` : '';
-+                const currentProgram = channel.CurrentProgram?.Name ? `<div style="font-size: 0.85em; opacity: 0.7;">${channel.CurrentProgram.Name}</div>` : '';
-+
-+                html += `
-+                    <button type="button" class="paper-icon-item-button channelPickerItem" data-id="${channel.Id}" style="width: 100%; text-align: left; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.08); background: none; color: inherit; cursor: pointer; border-radius: 4px;">
-+                        <div>
-+                            <div style="font-weight: 600; font-size: 1rem;">${channelNum}${channelName}</div>
-+                            ${currentProgram}
-+                        </div>
-+                        <span class="material-icons play_arrow" style="color: var(--theme-primary-color, #00a4dc);"></span>
-+                    </button>
++                let html = `
++                    <div class="dialogHeader">
++                        <button is="paper-icon-button-light" class="btnCancel autoSize" tabindex="-1">
++                            <span class="material-icons arrow_back"></span>
++                        </button>
++                        <h2 class="dialogHeaderTitle">Add Channel to Multiview</h2>
++                    </div>
 +                `;
-+            });
++                html += `<div class="dialogContent" style="max-height: 60vh; overflow-y: auto; padding: 0 16px 16px;"><div class="paperList">`;
 +
-+            html += `</div></div>`;
-+            dlg.innerHTML = html;
++                channels.forEach((channel) => {
++                    const channelName = channel.Name || 'Channel';
++                    const channelNum = channel.ChannelNumber ? `Ch. ${channel.ChannelNumber} - ` : '';
++                    const currentProgram = channel.CurrentProgram?.Name ? `<div style="font-size: 0.85em; opacity: 0.7;">${channel.CurrentProgram.Name}</div>` : '';
 +
-+            dlg.querySelector('.btnCancel').addEventListener('click', () => {
-+                dialogHelper.close(dlg);
++                    html += `
++                        <button type="button" class="paper-icon-item-button channelPickerItem" data-id="${channel.Id}" style="width: 100%; text-align: left; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.08); background: none; color: inherit; cursor: pointer; border-radius: 4px;">
++                            <div>
++                                <div style="font-weight: 600; font-size: 1rem;">${channelNum}${channelName}</div>
++                                ${currentProgram}
++                            </div>
++                            <span class="material-icons play_arrow" style="color: var(--theme-primary-color, #00a4dc);"></span>
++                        </button>
++                    `;
++                });
++
++                html += `</div></div>`;
++                dlg.innerHTML = html;
++
++                dlg.querySelector('.btnCancel').addEventListener('click', () => {
++                    dialogHelper.close(dlg);
++                    resolve(null);
++                });
++
++                dlg.querySelectorAll('.channelPickerItem').forEach((btn) => {
++                    btn.addEventListener('click', (e) => {
++                        const channelId = e.currentTarget.getAttribute('data-id');
++                        const selectedChannel = channels.find(c => c.Id === channelId);
++                        dialogHelper.close(dlg);
++                        resolve(selectedChannel);
++                    });
++                });
++
++                dialogHelper.open(dlg);
++            }).catch((err) => {
++                console.error('[Multiview] Failed to load channels:', err);
 +                resolve(null);
 +            });
-+
-+            dlg.querySelectorAll('.channelPickerItem').forEach((btn) => {
-+                btn.addEventListener('click', (e) => {
-+                    const channelId = e.currentTarget.getAttribute('data-id');
-+                    const selectedChannel = channels.find(c => c.Id === channelId);
-+                    dialogHelper.close(dlg);
-+                    resolve(selectedChannel);
-+                });
-+            });
-+
-+            dialogHelper.open(dlg);
 +        }).catch((err) => {
-+            console.error('[Multiview] Failed to load channels:', err);
++            console.error('[Multiview] Failed to load user:', err);
 +            resolve(null);
 +        });
 +    });
 +}
 diff --git a/src/components/multiview/multiview.scss b/src/components/multiview/multiview.scss
 new file mode 100644
-index 0000000000..e480011791
+index 0000000000..29526ebc83
 --- /dev/null
 +++ b/src/components/multiview/multiview.scss
-@@ -0,0 +1,233 @@
+@@ -0,0 +1,240 @@
 +.multiviewOverlayContainer {
 +    position: fixed;
 +    top: 0;
@@ -224,7 +407,7 @@ index 0000000000..e480011791
 +    right: 0;
 +    bottom: 0;
 +    background: #000000;
-+    z-index: 99999;
++    z-index: 10000;
 +    display: flex;
 +    flex-direction: column;
 +    color: #ffffff;
@@ -264,6 +447,8 @@ index 0000000000..e480011791
 +            gap: 8px;
 +
 +            button {
++                flex: 0 0 auto;
++                width: auto;
 +                background: #282828;
 +                border: 1px solid rgba(255, 255, 255, 0.1);
 +                color: #e0e0e0;
@@ -321,6 +506,11 @@ index 0000000000..e480011791
 +        &.mode-dual {
 +            grid-template-columns: 1fr 1fr;
 +            grid-template-rows: 1fr;
++
++            .multiviewSlot[data-slot="2"],
++            .multiviewSlot[data-slot="3"] {
++                display: none !important;
++            }
 +        }
 +
 +        .multiviewSlot {
@@ -452,12 +642,14 @@ index 0000000000..e480011791
 +}
 diff --git a/src/components/multiview/multiviewManager.js b/src/components/multiview/multiviewManager.js
 new file mode 100644
-index 0000000000..910ee7b05a
+index 0000000000..23df194c9b
 --- /dev/null
 +++ b/src/components/multiview/multiviewManager.js
-@@ -0,0 +1,310 @@
+@@ -0,0 +1,413 @@
 +import toast from '../toast/toast';
 +import { ServerConnections } from 'lib/jellyfin-apiclient';
++import { playbackManager } from '../playback/playbackmanager';
++import Hls from 'hls.js';
 +import showChannelPicker from './channelPickerModal';
 +import './multiview.scss';
 +
@@ -466,6 +658,7 @@ index 0000000000..910ee7b05a
 +        this.active = false;
 +        this.layout = 'skytv'; // 'skytv' | 'quad' | 'dual'
 +        this.slots = [null, null, null, null]; // Max 4 slots
++        this.hlsInstances = [null, null, null, null];
 +        this.activeAudioIndex = 0;
 +        this.container = null;
 +        this.gridElement = null;
@@ -487,8 +680,10 @@ index 0000000000..910ee7b05a
 +        this.renderContainer();
 +
 +        const currentItem = options.currentItem;
++        const existingMediaSource = options.existingMediaSource;
++
 +        if (currentItem) {
-+            this.setSlotChannel(0, currentItem);
++            this.setSlotChannel(0, currentItem, existingMediaSource);
 +        }
 +    }
 +
@@ -499,6 +694,13 @@ index 0000000000..910ee7b05a
 +        // Clean up all play sessions and video elements
 +        for (let i = 0; i < 4; i++) {
 +            this.clearSlot(i);
++        }
++
++        // Clean up any background single player sessions
++        try {
++            playbackManager.stop();
++        } catch (e) {
++            // Ignore if no player running
 +        }
 +
 +        if (this.container && this.container.parentNode) {
@@ -617,33 +819,103 @@ index 0000000000..910ee7b05a
 +        }
 +    }
 +
-+    async setSlotChannel(slotIndex, item) {
++    async setSlotChannel(slotIndex, item, existingMediaSource = null) {
 +        this.clearSlot(slotIndex);
 +
 +        const slotElem = this.gridElement.querySelector(`.multiviewSlot[data-slot="${slotIndex}"]`);
 +        if (!slotElem) return;
 +
 +        try {
-+            const apiClient = ServerConnections.getApiClient();
++            const apiClient = item?.ServerId ? ServerConnections.getApiClient(item.ServerId) : ServerConnections.currentApiClient();
++            const targetItem = {
++                ...item,
++                Id: item.ChannelId || item.Id,
++                ServerId: item.ServerId || apiClient.serverId()
++            };
 +
-+            // Attempt to create live stream session
 +            const playSessionId = 'mv_' + Date.now() + '_' + slotIndex;
-+            const streamUrl = apiClient.getUrl(`/Videos/${item.Id}/stream.m3u8`, {
-+                static: true,
-+                PlaySessionId: playSessionId
-+            });
++            let liveStreamId = null;
++            let finalStreamUrl = '';
++
++            // Check if adopting an existing running LiveStream session
++            if (existingMediaSource && (existingMediaSource.LiveStreamId || existingMediaSource.Path)) {
++                liveStreamId = existingMediaSource.LiveStreamId || null;
++                if (existingMediaSource.Path && (existingMediaSource.Path.startsWith('http://') || existingMediaSource.Path.startsWith('https://'))) {
++                    finalStreamUrl = existingMediaSource.Path;
++                } else if (liveStreamId) {
++                    finalStreamUrl = apiClient.getUrl(`/Videos/${targetItem.Id}/stream.m3u8`, {
++                        LiveStreamId: liveStreamId,
++                        PlaySessionId: playSessionId,
++                        static: true
++                    });
++                }
++            }
++
++            // Fallback: Obtain fresh playback info & LiveStream session
++            if (!finalStreamUrl) {
++                const playbackInfoResult = await playbackManager.getPlaybackInfo(targetItem, { mediaType: 'Video' });
++                const mediaSource = playbackInfoResult?.MediaSources?.[0];
++
++                if (!mediaSource) {
++                    toast('Cannot load Live TV channel media source.');
++                    this.clearSlot(slotIndex);
++                    return;
++                }
++
++                liveStreamId = mediaSource.LiveStreamId || null;
++
++                if (mediaSource.Path && (mediaSource.Path.startsWith('http://') || mediaSource.Path.startsWith('https://'))) {
++                    finalStreamUrl = mediaSource.Path;
++                } else if (liveStreamId) {
++                    finalStreamUrl = apiClient.getUrl(`/Videos/${targetItem.Id}/stream.m3u8`, {
++                        LiveStreamId: liveStreamId,
++                        PlaySessionId: playSessionId,
++                        static: true
++                    });
++                } else {
++                    finalStreamUrl = apiClient.getUrl(`/Videos/${targetItem.Id}/stream.m3u8`, {
++                        PlaySessionId: playSessionId,
++                        static: true
++                    });
++                }
++            }
 +
 +            const video = document.createElement('video');
 +            video.autoplay = true;
 +            video.playsInline = true;
 +            video.muted = (slotIndex !== this.activeAudioIndex);
-+            video.src = streamUrl;
 +
-+            // Handle video error (e.g. tuner capacity reached)
-+            video.addEventListener('error', () => {
-+                toast('Live TV stream capacity reached. Cannot open additional tuner stream.');
-+                this.clearSlot(slotIndex);
-+            });
++            if (Hls.isSupported()) {
++                const hls = new Hls({
++                    enableWorker: true,
++                    lowLatencyMode: true
++                });
++                hls.loadSource(finalStreamUrl);
++                hls.attachMedia(video);
++
++                let retried = false;
++                hls.on(Hls.Events.ERROR, (event, data) => {
++                    if (data.fatal) {
++                        console.error('[Multiview] HLS stream error:', data);
++                        if (!retried) {
++                            retried = true;
++                            console.log('[Multiview] Retrying slot stream with fresh playback info...');
++                            hls.destroy();
++                            setTimeout(() => {
++                                this.setSlotChannel(slotIndex, item, null);
++                            }, 500);
++                        } else {
++                            toast('Live TV stream playback error.');
++                            this.clearSlot(slotIndex);
++                        }
++                    }
++                });
++                this.hlsInstances[slotIndex] = hls;
++            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
++                video.src = finalStreamUrl;
++            } else {
++                toast('HLS playback is not supported in this browser.');
++            }
 +
 +            slotElem.innerHTML = '';
 +            slotElem.appendChild(video);
@@ -661,7 +933,7 @@ index 0000000000..910ee7b05a
 +            overlay.className = 'slotOverlay';
 +            overlay.innerHTML = `
 +                <div class="slotOverlayHeader">
-+                    <div class="slotTitle">${item.Name || 'Live Channel'}</div>
++                    <div class="slotTitle">${item.Name || item.ChannelName || 'Live Channel'}</div>
 +                </div>
 +                <div class="slotOverlayFooter">
 +                    <div class="slotActions">
@@ -684,13 +956,14 @@ index 0000000000..910ee7b05a
 +            slotElem.appendChild(overlay);
 +
 +            this.slots[slotIndex] = {
-+                item,
++                item: targetItem,
 +                video,
-+                playSessionId
++                playSessionId,
++                liveStreamId
 +            };
 +        } catch (err) {
 +            console.error('[Multiview] Tuner stream error:', err);
-+            toast('Live TV stream capacity reached. Cannot open additional tuner stream.');
++            toast('Live TV stream capacity reached or failed to open.');
 +            this.clearSlot(slotIndex);
 +        }
 +    }
@@ -741,6 +1014,11 @@ index 0000000000..910ee7b05a
 +    }
 +
 +    clearSlot(index) {
++        if (this.hlsInstances[index]) {
++            this.hlsInstances[index].destroy();
++            this.hlsInstances[index] = null;
++        }
++
 +        const slotData = this.slots[index];
 +        if (slotData) {
 +            if (slotData.video) {
@@ -748,6 +1026,21 @@ index 0000000000..910ee7b05a
 +                slotData.video.removeAttribute('src');
 +                slotData.video.load();
 +            }
++
++            if (slotData.liveStreamId) {
++                try {
++                    const apiClient = slotData.item?.ServerId ? ServerConnections.getApiClient(slotData.item.ServerId) : ServerConnections.currentApiClient();
++                    apiClient.ajax({
++                        type: 'POST',
++                        url: apiClient.getUrl('LiveStreams/Close', {
++                            LiveStreamId: slotData.liveStreamId
++                        })
++                    });
++                } catch (e) {
++                    console.error('[Multiview] Error closing LiveStream:', e);
++                }
++            }
++
 +            this.slots[index] = null;
 +        }
 +
@@ -767,48 +1060,44 @@ index 0000000000..910ee7b05a
 +const multiviewManager = new MultiviewManager();
 +export default multiviewManager;
 diff --git a/src/scripts/settings/userSettings.js b/src/scripts/settings/userSettings.js
-index 409e52ba94..db48bf04d7 100644
+index 409e52ba94..0ecc5c012a 100644
 --- a/src/scripts/settings/userSettings.js
 +++ b/src/scripts/settings/userSettings.js
-@@ -550,6 +550,19 @@ export class UserSettings {
-         return toBoolean(this.get('enableInfiniteScroll', false), false);
+@@ -210,6 +210,14 @@ export class UserSettings {
+         return toBoolean(this.get('enableCinemaMode', false), true);
      }
  
-+    /**
-+     * Get or set experimental Live TV Multiview preference.
-+     * @param {boolean|undefined} [val] - Experimental multiview state.
-+     * @returns {boolean} Experimental multiview state.
-+     */
 +    enableExperimentalMultiview(val) {
 +        if (val !== undefined) {
 +            return this.set('enableExperimentalMultiview', val.toString(), false);
 +        }
 +
-+        return toBoolean(this.get('enableExperimentalMultiview', false), true);
++        return toBoolean(this.get('enableExperimentalMultiview', true), true);
 +    }
 +
      /**
-      * Get or set max days for next up list.
-      * @param {number|undefined} [val] - Max days for next up.
-@@ -785,6 +798,7 @@ export const getComicsPlayerSettings = currentSettings.getComicsPlayerSettings.b
- export const setComicsPlayerSettings = currentSettings.setComicsPlayerSettings.bind(currentSettings);
- export const setFilter = currentSettings.setFilter.bind(currentSettings);
- export const enableInfiniteScroll = currentSettings.enableInfiniteScroll.bind(currentSettings);
+      * Get or set 'Enable Audio Normalization' state.
+      * @param {string|undefined} val - Flag to enable 'Enable Audio Normalization' or undefined.
+@@ -751,6 +759,7 @@ export const allowedAudioChannels = currentSettings.allowedAudioChannels.bind(cu
+ export const preferFmp4HlsContainer = currentSettings.preferFmp4HlsContainer.bind(currentSettings);
+ export const limitSegmentLength = currentSettings.limitSegmentLength.bind(currentSettings);
+ export const enableCinemaMode = currentSettings.enableCinemaMode.bind(currentSettings);
 +export const enableExperimentalMultiview = currentSettings.enableExperimentalMultiview.bind(currentSettings);
- export const getFilter = currentSettings.getFilter.bind(currentSettings);
- export const customCss = currentSettings.customCss.bind(currentSettings);
- export const disableCustomCss = currentSettings.disableCustomCss.bind(currentSettings);
+ export const selectAudioNormalization = currentSettings.selectAudioNormalization.bind(currentSettings);
+ export const enableNextVideoInfoOverlay = currentSettings.enableNextVideoInfoOverlay.bind(currentSettings);
+ export const enableVideoRemainingTime = currentSettings.enableVideoRemainingTime.bind(currentSettings);
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index c565ff3d03..346f07c08a 100755
+index c565ff3d03..013812c1bd 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -1345,6 +1345,9 @@
+@@ -1345,6 +1345,10 @@
      "Option3D": "3D",
      "OptionAllowAudioPlaybackTranscoding": "Allow audio playback that requires transcoding",
      "OptionAllowBrowsingLiveTv": "Allow Live TV access",
 +    "OptionAllowLiveTvMultiview": "Allow Live TV Multiview",
 +    "OptionEnableExperimentalMultiview": "Enable experimental Live TV Multiview",
 +    "OptionEnableExperimentalMultiviewHelp": "Allows watching up to 4 Live TV streams simultaneously in the web player. Disabled on Smart TV clients for performance.",
++    "OpenInMultiview": "Open in Multiview",
      "OptionAllowContentDownload": "Allow media downloads",
      "OptionAllowContentDownloadHelp": "Users can download media and store it on their devices. This is not the same as a sync feature. Book libraries require this enabled to function properly.",
      "OptionAllowLinkSharing": "Allow social media sharing",
