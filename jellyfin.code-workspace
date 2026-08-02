@@ -12,6 +12,9 @@
             "**/obj": true
         },
         "formatFiles.excludePattern": "**/node_modules,**/.vscode,**/dist/**,**/.chrome,ThirdParty,unRaid,debian",
-        "dotnet.defaultSolution": "disable"
+        "dotnet.defaultSolution": "disable",
+        "csharp-dev-tools.solutionViewer.selectedWorkspaceSolutions": [
+            "Jellyfin.Plugin.Pgsql.sln"
+        ]
     }
 }

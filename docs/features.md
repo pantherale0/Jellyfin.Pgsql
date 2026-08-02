@@ -49,12 +49,14 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 ## Live TV Multiview
 
-**What:** Allows users to stream up to 4 Live TV channels simultaneously in the web player. Includes Sky TV mode (1 large main stream + 3 side streams), Quad 2x2 grid, and Dual side-by-side layouts. Features single-click audio focus switching, channel slot swapping, and a channel picker dialog. Access is governed by the `EnableLiveTvMultiview` user permission (configurable per user or via SSO group RBAC mappings in `sso_rbac.json`). For performance and UI compatibility, Multiview is strictly restricted to Desktop/Mobile web clients (disabled on Smart TV / webOS clients via `!layoutManager.tv`) and controlled by an experimental setting toggle (`chkEnableExperimentalMultiview` in User Settings). If tuner capacity is exhausted when adding a channel, a toast alert informs the user.
+**What:** Experimental desktop/mobile web overlay for watching up to 4 Live TV channels at once (Sky TV 1+3, Quad 2×2, Dual side-by-side). Supports audio-focus switching, in-place slot swap, and a channel picker. Each tile opens a normal Live TV session via `getPlaybackInfo` and plays with raw `hls.js` (not the full html video player stack—no per-tile subtitle/bitrate OSD). Access requires the `EnableLiveTvMultiview` user permission (Dashboard user profile or SSO group mappings in `sso_rbac.json`), the experimental display setting (`chkEnableExperimentalMultiview`), and a non-TV layout (`!layoutManager.tv`). Entry points: Live TV → Channels header, item context menu, and the video OSD button (Live TV items only). Tuner exhaustion when adding a channel shows a toast.
 
 **Where:**
 - Server: [`jellyfin_livetv_multiview_rbac.patch`](patches.md#jellyfin_livetv_multiview_rbacpatch) (`PermissionKind.EnableLiveTvMultiview`, `UserPolicy`, `UserManager`)
 - Web: [`jellyfin_web_zzz_livetv_multiview.patch`](patches.md#jellyfin_web_zzz_livetv_multiviewpatch) (`multiviewManager.js`, `channelPickerModal.js`, `multiview.scss`, `userSettings.js`, `displaySettings`, OSD Multiview button, User Profile checkbox)
 - SSO: [`jellyfin_sso.patch`](patches.md#jellyfin_ssopatch), [`jellyfin_web_rbac.patch`](patches.md#jellyfin_web_rbacpatch) (SSO Mappings UI)
+
+**Note:** Permission is enforced in the web UI only; see [known issues](known-issues.md).
 
 ## Playback statistics
 

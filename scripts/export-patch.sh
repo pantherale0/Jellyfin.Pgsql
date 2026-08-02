@@ -44,22 +44,31 @@ if [ -z "$(git -C "$TARGET" status --porcelain)" ]; then
     exit 1
 fi
 
-# Stage intent to add for new files so git sees them
+# Stage intent to add for new files so git diff sees them
 git -C "$TARGET" add -N . 2>/dev/null || true
 
-# Copy current working tree files to a temporary directory
-TEMP_DIR=$(mktemp -d)
-trap 'rm -rf "$TEMP_DIR"' EXIT
+# Save current uncommitted diff against submodule HEAD
+TEMP_CHANGES=$(mktemp)
+TEMP_UNTRACKED=$(mktemp -d)
+trap 'rm -f "$TEMP_CHANGES"; rm -rf "$TEMP_UNTRACKED"' EXIT
 
-echo "Saving current submodule modifications..."
-(cd "$TARGET" && tar -cf - src strings 2>/dev/null | (cd "$TEMP_DIR" && tar -xf -) || true)
+echo "Snapshotted current submodule edits..."
+git -C "$TARGET" diff > "$TEMP_CHANGES"
+
+# Copy untracked files if any
+(cd "$TARGET" && git status --porcelain | grep '^??' | awk '{print $2}' | while read -r f; do
+    if [ -f "$f" ]; then
+        mkdir -p "$TEMP_UNTRACKED/$(dirname "$f")"
+        cp "$f" "$TEMP_UNTRACKED/$f"
+    fi
+done) || true
 
 # Reset submodule to clean release tag
 echo "Resetting $TARGET submodule to clean state..."
 git -C "$TARGET" reset --hard v12.0-rc3 >/dev/null
 git -C "$TARGET" clean -fd >/dev/null
 
-# Remove target patch temporarily if it exists so apply-patches won't apply it
+# Backup target patch temporarily if it exists
 if [ -f "$PATCH_FILE" ]; then
     rm -f "$PATCH_FILE"
 fi
@@ -73,13 +82,16 @@ git -C "$TARGET" add -A
 git -C "$TARGET" commit -q -m "baseline_deps"
 BASE_HASH=$(git -C "$TARGET" rev-parse HEAD)
 
-# Restore feature files from temporary directory
-echo "Restoring feature edits to $TARGET/..."
-if [ -d "$TEMP_DIR/src" ]; then
-    cp -Rf "$TEMP_DIR/src/"* "$TARGET/src/" 2>/dev/null || true
+# Restore feature changes onto baseline_deps
+echo "Restoring feature edits onto baseline..."
+if [ -s "$TEMP_CHANGES" ]; then
+    if ! git -C "$TARGET" apply "$TEMP_CHANGES" 2>/dev/null; then
+        git -C "$TARGET" apply --3way "$TEMP_CHANGES" 2>/dev/null || git -C "$TARGET" apply --reject "$TEMP_CHANGES" 2>/dev/null || true
+    fi
 fi
-if [ -d "$TEMP_DIR/strings" ]; then
-    cp -Rf "$TEMP_DIR/strings/"* "$TARGET/strings/" 2>/dev/null || true
+
+if [ -d "$TEMP_UNTRACKED" ]; then
+    cp -Rf "$TEMP_UNTRACKED/"* "$TARGET/" 2>/dev/null || true
 fi
 
 # Stage intent to add for any new files

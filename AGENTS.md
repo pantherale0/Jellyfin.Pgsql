@@ -181,6 +181,7 @@ Docs are part of the change, not a follow-up. When you add, rename, remove, or m
 | `patches/` | All committed Jellyfin/Jellyfin-web diffs |
 | `docs/` | Overview, architecture, features, patch catalog, known issues |
 | `scripts/apply-patches.sh` | Applies patches by naming convention |
+| `scripts/export-patch.sh` | Snapshots submodule edits into patches & rebuilds web |
 | `scripts/start-dev.sh` | Dev stack entrypoint (user-run) |
 | `scripts/sync-jellyfin-migrations.sh` | Align plugin migrations with a Jellyfin release |
 | `docker/` | Production image build |
