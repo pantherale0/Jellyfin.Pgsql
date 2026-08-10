@@ -1,10 +1,5 @@
-# Fix favorites lost during playback progress saves (https://github.com/jellyfin/jellyfin/issues/14981).
-# Goes beyond upstream #15048 (cache-first GetUserData on 10.11.z only): also serializes
-# per-item SaveUserData and reloads IsFavorite/Rating from DB for PlaybackStart/Progress/Finished
-# so a stale progress snapshot cannot overwrite a concurrent favorite.
-#
 diff --git a/Emby.Server.Implementations/Library/UserDataManager.cs b/Emby.Server.Implementations/Library/UserDataManager.cs
-index f5c41e5670..e875208d06 100644
+index 0680046c11..d725b24ccb 100644
 --- a/Emby.Server.Implementations/Library/UserDataManager.cs
 +++ b/Emby.Server.Implementations/Library/UserDataManager.cs
 @@ -1,6 +1,7 @@
@@ -126,10 +121,10 @@ index f5c41e5670..e875208d06 100644
          /// <inheritdoc />
          public void SaveUserData(User user, BaseItem item, UpdateUserItemDataDto userDataDto, UserDataSaveReason reason)
          {
-@@ -352,11 +401,18 @@ namespace Emby.Server.Implementations.Library
-         /// <inheritdoc />
+@@ -353,11 +402,18 @@ namespace Emby.Server.Implementations.Library
          public UserItemData? GetUserData(User user, BaseItem item)
          {
+             ArgumentNullException.ThrowIfNull(user);
 -            var row = ResolveUserDataRow(item, item.UserData?.Where(e => e.UserId.Equals(user.Id)));
 -            return row is not null ? Map(row) : new UserItemData()
 -            {
@@ -151,7 +146,7 @@ index f5c41e5670..e875208d06 100644
  
          /// <summary>
 diff --git a/tests/Jellyfin.Server.Implementations.Tests/Library/UserDataManagerTests.cs b/tests/Jellyfin.Server.Implementations.Tests/Library/UserDataManagerTests.cs
-index bd14ca008d..54c2655c88 100644
+index ba3127bc08..50a5c6794d 100644
 --- a/tests/Jellyfin.Server.Implementations.Tests/Library/UserDataManagerTests.cs
 +++ b/tests/Jellyfin.Server.Implementations.Tests/Library/UserDataManagerTests.cs
 @@ -8,6 +8,7 @@ using Jellyfin.Database.Providers.Sqlite;
@@ -162,11 +157,10 @@ index bd14ca008d..54c2655c88 100644
  using Microsoft.Data.Sqlite;
  using Microsoft.EntityFrameworkCore;
  using Microsoft.Extensions.Logging.Abstractions;
-@@ -206,4 +207,37 @@ public sealed class UserDataManagerTests : IDisposable
-         Assert.Equal(222, result[fossilItem.Id].PlaybackPositionTicks);
+@@ -207,6 +208,39 @@ public sealed class UserDataManagerTests : IDisposable
          Assert.Equal(333, result[retiredItem.Id].PlaybackPositionTicks);
      }
-+
+ 
 +    [Theory]
 +    [InlineData(UserDataSaveReason.PlaybackStart, true)]
 +    [InlineData(UserDataSaveReason.PlaybackProgress, true)]
@@ -199,4 +193,7 @@ index bd14ca008d..54c2655c88 100644
 +        Assert.True(staleProgressSnapshot.Likes);
 +        Assert.Equal(1_000, staleProgressSnapshot.PlaybackPositionTicks);
 +    }
- }
++
+     [Fact]
+     public void GetUserData_NullUser_ThrowsArgumentNullException()
+     {

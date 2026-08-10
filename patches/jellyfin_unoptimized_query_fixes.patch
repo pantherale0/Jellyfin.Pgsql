@@ -1,8 +1,8 @@
 diff --git a/Emby.Server.Implementations/Library/LibraryManager.cs b/Emby.Server.Implementations/Library/LibraryManager.cs
-index f684f4dca3..69d3b36c65 100644
+index de44e2ada5..88db93848f 100644
 --- a/Emby.Server.Implementations/Library/LibraryManager.cs
 +++ b/Emby.Server.Implementations/Library/LibraryManager.cs
-@@ -1219,6 +1219,70 @@ namespace Emby.Server.Implementations.Library
+@@ -1224,6 +1224,70 @@ namespace Emby.Server.Implementations.Library
              return GetItemByNameId<Studio>(Studio.GetPath(name));
          }
  
@@ -73,7 +73,7 @@ index f684f4dca3..69d3b36c65 100644
          public Guid GetGenreId(string name)
          {
              return GetItemByNameId<Genre>(Genre.GetPath(name));
-@@ -3555,14 +3619,20 @@ namespace Emby.Server.Implementations.Library
+@@ -3640,14 +3704,20 @@ namespace Emby.Server.Implementations.Library
  
          private async Task SavePeopleMetadataAsync(IEnumerable<PersonInfo> people, CancellationToken cancellationToken)
          {
@@ -209,10 +209,10 @@ index 525396b7ee..be435d79e3 100644
  
          // Apply default sorting if none requested
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-index 88404ef34c..403a4afe68 100644
+index f447308f40..301995a2c2 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-@@ -308,6 +308,16 @@ public sealed partial class BaseItemRepository
+@@ -340,6 +340,16 @@ public sealed partial class BaseItemRepository
              return ApplyDatePlayedOrder(query, filter, context, orderBy);
          }
  
@@ -229,7 +229,7 @@ index 88404ef34c..403a4afe68 100644
          IOrderedQueryable<BaseItemEntity>? orderedQuery = null;
  
          if (hasSearch)
-@@ -433,6 +443,108 @@ public sealed partial class BaseItemRepository
+@@ -465,6 +475,108 @@ public sealed partial class BaseItemRepository
          return ordered.ThenBy(x => x.Item.SortName).Select(x => x.Item);
      }
  
@@ -338,9 +338,9 @@ index 88404ef34c..403a4afe68 100644
      /// <summary>
      /// Builds a query for descendants of an ancestor with user access filtering applied.
      /// Uses recursive CTE to traverse both hierarchical (AncestorIds) and linked (LinkedChildren) relationships.
-@@ -619,4 +731,24 @@ public sealed partial class BaseItemRepository
-             .Where(g => g.Select(x => x.Id).Distinct().Count() == g.Where(x => x.Played).Select(x => x.Id).Distinct().Count())
-             .Select(g => g.Key);
+@@ -621,4 +733,24 @@ public sealed partial class BaseItemRepository
+                 && (descendants.Any(d => d.Id == lc.ChildId)
+                     || context.AncestorIds.Any(a => a.ParentItemId == lc.ChildId && descendants.Any(d => d.Id == a.ItemId))));
      }
 +
 +    private sealed class UserDataOrderJoinRow
@@ -363,65 +363,8 @@ index 88404ef34c..403a4afe68 100644
 +        public bool IsFavorite { get; init; }
 +    }
  }
-diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-index 377f8503e8..c7dbd841d2 100644
---- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-+++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-@@ -468,15 +468,24 @@ public sealed partial class BaseItemRepository
-                 var isPlayed = filter.IsPlayed.Value;
-                 var seriesTypeName = _itemTypeLookup.BaseItemKindNames[BaseItemKind.Series];
-                 var boxSetTypeName = _itemTypeLookup.BaseItemKindNames[BaseItemKind.BoxSet];
-+                var playedEpisodeIds = context.UserData
-+                    .AsNoTracking()
-+                    .Where(ud => ud.UserId == userId && ud.Played)
-+                    .Select(ud => ud.ItemId);
- 
--                // Series: played = at least one episode AND all episodes played; unplayed = otherwise.
-                 IQueryable<Guid> playedSeriesIds = hasSeries
-                     ? context.BaseItems
-                         .AsNoTracking()
-                         .Where(e => !e.IsFolder && !e.IsVirtualItem && e.SeriesId.HasValue)
-                         .GroupBy(e => e.SeriesId!.Value)
--                        .Where(g => !g.Any(e => !e.UserData!.Any(ud => ud.UserId == userId && ud.Played)))
--                        .Select(g => g.Key)
-+                        .Select(g => new
-+                        {
-+                            SeriesId = g.Key,
-+                            EpisodeCount = g.Count(),
-+                            PlayedCount = g.Count(e => playedEpisodeIds.Contains(e.Id))
-+                        })
-+                        .Where(x => x.EpisodeCount > 0 && x.EpisodeCount == x.PlayedCount)
-+                        .Select(x => x.SeriesId)
-                     : Enumerable.Empty<Guid>().AsQueryable();
- 
-                 // BoxSet: played = all children played.
-@@ -527,6 +536,11 @@ public sealed partial class BaseItemRepository
-             // In-progress user data rows; alternate versions track their own progress.
-             var inProgress = context.UserData
-                 .Where(ud => ud.UserId == userId && ud.PlaybackPositionTicks > 0);
-+            var inProgressItemIds = inProgress.Select(ud => ud.ItemId);
-+            var playedEpisodeIds = context.UserData
-+                .AsNoTracking()
-+                .Where(ud => ud.UserId == userId && ud.Played)
-+                .Select(ud => ud.ItemId);
- 
-             IQueryable<Guid>? resumableSeriesIds = null;
-             if (hasSeries)
-@@ -539,9 +553,9 @@ public sealed partial class BaseItemRepository
-                     .Select(g => new
-                     {
-                         SeriesId = g.Key,
--                        HasInProgress = g.Any(e => e.UserData!.Any(ud => ud.UserId == userId && ud.PlaybackPositionTicks > 0)),
--                        HasPlayed = g.Any(e => e.UserData!.Any(ud => ud.UserId == userId && ud.Played)),
--                        HasUnplayed = g.Any(e => !e.UserData!.Any(ud => ud.UserId == userId && ud.Played))
-+                        HasInProgress = g.Any(e => inProgressItemIds.Contains(e.Id)),
-+                        HasPlayed = g.Any(e => playedEpisodeIds.Contains(e.Id)),
-+                        HasUnplayed = g.Any(e => !playedEpisodeIds.Contains(e.Id))
-                     });
- 
-                 // A series is resumable if it has an in-progress episode,
 diff --git a/Jellyfin.Server.Implementations/Item/LinkedChildrenService.cs b/Jellyfin.Server.Implementations/Item/LinkedChildrenService.cs
-index 5e5ce320a5..405b9c86a0 100644
+index 5f1d9bf87a..5b277a26e7 100644
 --- a/Jellyfin.Server.Implementations/Item/LinkedChildrenService.cs
 +++ b/Jellyfin.Server.Implementations/Item/LinkedChildrenService.cs
 @@ -7,6 +7,7 @@ using System.Collections.Generic;
@@ -503,10 +446,10 @@ index a4614fc125..71b50265c6 100644
      /// Gets parent IDs that reference the specified child with LinkedChildType.Manual.
      /// </summary>
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs
-index a8c7af8b4c..7940cf3339 100644
+index 6075dc05dd..f412a5cbe2 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs
-@@ -71,6 +71,7 @@ public class BaseItemConfiguration : IEntityTypeConfiguration<BaseItemEntity>
+@@ -76,6 +76,7 @@ public class BaseItemConfiguration : IEntityTypeConfiguration<BaseItemEntity>
          builder.HasIndex(e => new { e.Type, e.CleanName });
          // Latest TV: GROUP BY SeriesName
          builder.HasIndex(e => e.SeriesName);
@@ -570,10 +513,10 @@ index 0000000000..6daa40e267
 +    }
 +}
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
-index 5310c43046..fe87cf086a 100644
+index 3df836f865..ed82e3efa5 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
-@@ -379,6 +379,8 @@ namespace Jellyfin.Server.Implementations.Migrations
+@@ -382,6 +382,8 @@ namespace Jellyfin.Server.Implementations.Migrations
  
                      b.HasIndex("SeriesName");
  
@@ -582,7 +525,7 @@ index 5310c43046..fe87cf086a 100644
                      b.HasIndex("ExtraType", "OwnerId");
  
                      b.HasIndex("TopParentId", "Id");
-@@ -1468,6 +1470,9 @@ namespace Jellyfin.Server.Implementations.Migrations
+@@ -1469,6 +1471,9 @@ namespace Jellyfin.Server.Implementations.Migrations
  
                      b.HasIndex("UserId", "PlaybackPositionTicks");
  

@@ -85,8 +85,8 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Target** | `jellyfin` |
 | **What** | Fixes expensive library/item/TV query shapes and adds supporting indexes. |
 | **Why** | Large libraries on Postgres amplify N+1 and unindexed filters that were tolerable on SQLite. |
-| **Where** | `LibraryManager`, `ItemsController`, `TVSeriesManager`, `BaseItemRepository.*`, `LinkedChildrenService`, query-index migration |
-| **How** | Query rewrites + `AddQueryPerformanceIndexes` migration (mirrored to PG via sync). |
+| **Where** | `LibraryManager`, `ItemsController`, `TVSeriesManager`, `BaseItemRepository.QueryBuilding`, `LinkedChildrenService`, query-index migration |
+| **How** | Query rewrites (including user-data sort join helpers) + `AddQueryPerformanceIndexes` migration (mirrored to PG via sync). Played/resumable TranslateQuery shapes from earlier forks were superseded by upstream rc4 query rewrites. |
 | **Related** | Motivated by scale reports such as upstream [JPVenson#34](https://github.com/JPVenson/Jellyfin.Pgsql/issues/34) / [#35](https://github.com/JPVenson/Jellyfin.Pgsql/issues/35) (context, not a direct fix ticket). |
 
 ### `jellyfin_home_api_performance.patch`
@@ -278,10 +278,10 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | | |
 |---|---|
 | **Target** | `jellyfin` |
-| **What** | Rewrites Live TV stream file URLs to published/smart API URLs instead of unreachable Docker bridge IPs; clears tuner-origin Paths that clients cannot reach; ignores unmatched Live TV `MediaSourceId` so placeholder channel ids do not yield `NoCompatibleStream`; AutoOpenLiveStream falls back to `MediaSources[0]` when the requested id is a channel placeholder. |
+| **What** | Fork residuals on top of upstream Live TV published-URL rewrite: clear unreachable tuner-origin Paths, ignore unmatched Live TV `MediaSourceId` placeholders, and AutoOpenLiveStream fallback to `MediaSources[0]`. |
 | **Why** | Clients outside the container network cannot play tuner buffers advertised with bridge addresses; some clients (e.g. Wholphin) ignore `SupportsDirectPlay=false` and still open `Path`, causing `UnknownHostException` on cluster-internal M3U hosts. Wholphin also sends `MediaSourceId` = channel item Guid (from `LiveTvChannel` placeholder sources) instead of the tuner source id (e.g. M3U path MD5), which filters PlaybackInfo to zero sources before open — and even after ignore-fallback, AutoOpen used to skip when that id matched nothing, so PlaybackInfo returned no `LiveStreamId` and `live.m3u8` failed with null `OpenToken`. |
-| **Where** | `MediaInfoHelper`, `MediaInfoController`, `NetworkManager`, media/audio controllers, tests |
-| **How** | Vendored [jellyfin#17298](https://github.com/jellyfin/jellyfin/pull/17298): clone responses and rewrite `/LiveTv/LiveStreamFiles/` via `GetSmartApiUrl`; keep local buffer URL for ffmpeg. Logs successful rewrites (`LocalPathHost` → `PublishedPathHost`). When Path is still a remote tuner origin, `SanitizeLiveStreamClientPath` / `ClearedUnreachableOrigin` nulls Path and forces `SupportsDirectPlay=false` so clients must use `TranscodingUrl`. For `SourceType.LiveTV`, if `MediaSourceId` matches no tuner source, log `Ignoring unmatched Live TV MediaSourceId` and return all tuner sources (temporary client workaround). AutoOpen then selects that first tuner source so the response includes `LiveStreamId`. |
+| **Where** | `MediaInfoHelper`, `MediaInfoController`, tests |
+| **How** | Core rewrite landed upstream in [jellyfin#17298](https://github.com/jellyfin/jellyfin/pull/17298) (rc4). This patch keeps `SanitizeLiveStreamClientPath` / `ClearedUnreachableOrigin`, Live TV unmatched-`MediaSourceId` ignore, and AutoOpen fallback. |
 | **Related** | [jellyfin#15411](https://github.com/jellyfin/jellyfin/issues/15411); `jellyfin_livetv_stream` (SharedHttpStream / live.m3u8 open-before-CLI); `jellyfin_transcoding_pipeline` (`Request.LiveStreamId` sync). |
 
 ### `jellyfin_z_livetv_rbac_allowlist.patch`
@@ -325,7 +325,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **What** | `GET Items/{itemId}` accepts alias `livetv` for the Live TV view (string route). |
 | **Why** | Clients/bookmarks use a stable Live TV alias instead of a raw GUID. |
 | **Where** | `UserLibraryController.cs` |
-| **How** | Route `itemId` as string; resolve `livetv` via `ILiveTvManager`. |
+| **How** | Route `itemId` as string; resolve `livetv` via `ILiveTvManager`. Rebased for rc4 sync `GetItem` + `IProviderManager` injection. |
 | **Related** | No public issue. |
 
 ### `jellyfin_web_dashboard_active_recordings.patch`
