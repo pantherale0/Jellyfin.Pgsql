@@ -205,7 +205,7 @@ index 69cbe533c6..658d2431ce 100644
  
 diff --git a/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs b/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs
 new file mode 100644
-index 0000000000..a79262609f
+index 0000000000..e229aa42cb
 --- /dev/null
 +++ b/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs
 @@ -0,0 +1,95 @@
@@ -227,7 +227,7 @@ index 0000000000..a79262609f
 +{
 +    private static readonly TimeSpan PlaybackYieldDelay = TimeSpan.FromSeconds(3);
 +
-+    private readonly ISessionManager _sessionManager;
++    private readonly Lazy<ISessionManager> _sessionManager;
 +    private readonly ILogger<BackgroundMediaWorkGate> _logger;
 +    private readonly SemaphoreSlim _semaphore;
 +    private bool _disposed;
@@ -235,11 +235,11 @@ index 0000000000..a79262609f
 +    /// <summary>
 +    /// Initializes a new instance of the <see cref="BackgroundMediaWorkGate"/> class.
 +    /// </summary>
-+    /// <param name="sessionManager">Session manager used to detect active playback.</param>
++    /// <param name="sessionManager">Session manager used to detect active playback (lazy to avoid DI cycles).</param>
 +    /// <param name="configurationManager">Server configuration.</param>
 +    /// <param name="logger">Logger.</param>
 +    public BackgroundMediaWorkGate(
-+        ISessionManager sessionManager,
++        Lazy<ISessionManager> sessionManager,
 +        IServerConfigurationManager configurationManager,
 +        ILogger<BackgroundMediaWorkGate> logger)
 +    {
@@ -272,7 +272,7 @@ index 0000000000..a79262609f
 +
 +    private bool HasActivePlayback()
 +    {
-+        return _sessionManager.Sessions.Any(s => s.NowPlayingItem is not null);
++        return _sessionManager.Value.Sessions.Any(s => s.NowPlayingItem is not null);
 +    }
 +
 +    /// <inheritdoc />
