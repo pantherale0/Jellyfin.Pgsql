@@ -113,6 +113,14 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 **Where:** [TV UX group](patches.md#8-tv--web-ux).
 
+## Background media QoS (scan / segments / chapters)
+
+**What:** Library scan, media-segment extraction, and chapter-image work yield while playback is active and use more conservative unset concurrency defaults so the server stays usable under load.
+
+**Where:** [`jellyfin_background_media_qos`](patches.md#jellyfin_background_media_qospatch); PG index migration `AddMediaSegmentsItemIdIndex` (`IX_MediaSegments_ItemId`).
+
+**How:** Raise throughput explicitly via `LibraryScanFanoutConcurrency` and/or `ParallelImageEncodingLimit` in server config if overnight jobs should use more cores. Segment extraction skips items that already have provider rows (`forceOverwrite: false`). Extreme scan memory/OOM is unchanged — see [known issues](known-issues.md).
+
 ## Library / plugin reliability
 
 **What:** Path-aware media refresh; BaseItem image-info dedupe; person provider-key identity; refuse deleting “disabled” plugins when the name is newly seen; fix plugin ALC so transitive deps (for example Redis) resolve from `.deps.json`.

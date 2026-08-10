@@ -343,6 +343,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 
 ## 5. Library / metadata / plugin loading
 
+### `jellyfin_background_media_qos.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Caps background scan/segment/chapter work and yields while clients are playing so the API stays responsive. |
+| **Why** | Library scan, media-segment extraction, and chapter-image ffmpeg work saturated CPU/IO/DB and made the server sluggish. |
+| **Where** | `BackgroundMediaWorkGate`, `LimitedConcurrencyLibraryScheduler`, `MediaSegmentExtractionTask`, `MediaSegmentManager`, `ChapterManager`, `ChapterImagesTask`, `MediaEncoder`, `ImageProcessor`, `ApplicationHost` |
+| **How** | Shared gate delays under `NowPlayingItem` and limits concurrency (from `ParallelImageEncodingLimit` or `ProcessorCount/4`); unset scan fanout uses `ProcessorCount/2`; segment task skips providers that already have rows and bulk-inserts; chapter task pages and skips videos that already have images; chapter extract (task + in-scan) goes through the gate; unset image-encoding pools default to `ProcessorCount/4`. Companion PG index: `IX_MediaSegments_ItemId` (`AddMediaSegmentsItemIdIndex`). |
+| **Related** | No public issue. Does not fix scan OOM ([JPVenson#36](https://github.com/JPVenson/Jellyfin.Pgsql/issues/36)). |
+
 ### `jellyfin_library_image_parental.patch`
 
 | | |

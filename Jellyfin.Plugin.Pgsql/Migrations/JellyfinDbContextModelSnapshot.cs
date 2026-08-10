@@ -848,6 +848,8 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("ItemId");
+
                     b.ToTable("MediaSegments");
                 });
 
