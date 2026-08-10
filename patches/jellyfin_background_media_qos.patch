@@ -1,12 +1,14 @@
 diff --git a/Emby.Server.Implementations/ApplicationHost.cs b/Emby.Server.Implementations/ApplicationHost.cs
-index 742421b194..2d0590293c 100644
+index 742421b194..242866ab5c 100644
 --- a/Emby.Server.Implementations/ApplicationHost.cs
 +++ b/Emby.Server.Implementations/ApplicationHost.cs
-@@ -607,6 +607,8 @@ namespace Emby.Server.Implementations
+@@ -607,6 +607,10 @@ namespace Emby.Server.Implementations
  
              serviceCollection.AddSingleton<ISessionManager, SessionManager>();
  
 +            serviceCollection.AddSingleton<IBackgroundMediaWorkGate, BackgroundMediaWorkGate>();
++            // Lazy breaks ChapterManager -> Gate -> SessionManager -> DtoService -> ChapterManager
++            serviceCollection.AddTransient(provider => new Lazy<ISessionManager>(provider.GetRequiredService<ISessionManager>));
 +
              serviceCollection.AddSingleton<ICollectionManager, CollectionManager>();
              serviceCollection.AddSingleton<ILimitedConcurrencyLibraryScheduler, LimitedConcurrencyLibraryScheduler>();
