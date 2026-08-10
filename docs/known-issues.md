@@ -41,7 +41,7 @@ These live on [JPVenson/Jellyfin.Pgsql](https://github.com/JPVenson/Jellyfin.Pgs
 |---|---|---|
 | [JPVenson#35](https://github.com/JPVenson/Jellyfin.Pgsql/issues/35) | `/Items/Latest` 30s timeouts on large libraries | Motivates command timeout + Latest query cache/optimisation in this fork. |
 | [JPVenson#43](https://github.com/JPVenson/Jellyfin.Pgsql/issues/43) | Timeout env ignored on old image tags | Use a current pantherale0 image; prefer `Pgsql_COMMAND_TIMEOUT`. |
-| [JPVenson#36](https://github.com/JPVenson/Jellyfin.Pgsql/issues/36) | Very high memory during library scan | Extreme library sizes can still OOM; not fully solved by switching DB engines. |
+| [JPVenson#36](https://github.com/JPVenson/Jellyfin.Pgsql/issues/36) | Very high memory during library scan | Extreme library sizes can still OOM; not fully solved by switching DB engines. [`jellyfin_background_media_qos`](patches.md#jellyfin_background_media_qospatch) reduces CPU/IO contention during scan/segment/chapter work but does **not** address scan OOM. |
 | [JPVenson#34](https://github.com/JPVenson/Jellyfin.Pgsql/issues/34) | Slow homepage/list with hundreds of thousands of rows | Scale motivation for indexes/query patches/cache. |
 | [JPVenson#42](https://github.com/JPVenson/Jellyfin.Pgsql/issues/42) | `/Library/VirtualFolders` empty while libraries exist | Dashboard Libraries page edge case on some PG setups. |
 | [JPVenson#15](https://github.com/JPVenson/Jellyfin.Pgsql/issues/15), [#19](https://github.com/JPVenson/Jellyfin.Pgsql/issues/19), [#44](https://github.com/JPVenson/Jellyfin.Pgsql/issues/44) | Schema / unique constraint insert failures | Sequence/`varchar` length/`ItemValues`/`UserData` PK races after migration or rescans. |

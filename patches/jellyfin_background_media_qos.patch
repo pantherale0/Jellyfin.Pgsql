@@ -1,0 +1,658 @@
+diff --git a/Emby.Server.Implementations/ApplicationHost.cs b/Emby.Server.Implementations/ApplicationHost.cs
+index 742421b194..2d0590293c 100644
+--- a/Emby.Server.Implementations/ApplicationHost.cs
++++ b/Emby.Server.Implementations/ApplicationHost.cs
+@@ -607,6 +607,8 @@ namespace Emby.Server.Implementations
+ 
+             serviceCollection.AddSingleton<ISessionManager, SessionManager>();
+ 
++            serviceCollection.AddSingleton<IBackgroundMediaWorkGate, BackgroundMediaWorkGate>();
++
+             serviceCollection.AddSingleton<ICollectionManager, CollectionManager>();
+             serviceCollection.AddSingleton<ILimitedConcurrencyLibraryScheduler, LimitedConcurrencyLibraryScheduler>();
+ 
+diff --git a/Emby.Server.Implementations/Chapters/ChapterManager.cs b/Emby.Server.Implementations/Chapters/ChapterManager.cs
+index 69cbe533c6..658d2431ce 100644
+--- a/Emby.Server.Implementations/Chapters/ChapterManager.cs
++++ b/Emby.Server.Implementations/Chapters/ChapterManager.cs
+@@ -33,6 +33,7 @@ public class ChapterManager : IChapterManager
+     private readonly IChapterRepository _chapterRepository;
+     private readonly ILibraryManager _libraryManager;
+     private readonly IPathManager _pathManager;
++    private readonly IBackgroundMediaWorkGate _backgroundMediaWorkGate;
+ 
+     /// <summary>
+     /// The first chapter ticks.
+@@ -48,13 +49,15 @@ public class ChapterManager : IChapterManager
+     /// <param name="chapterRepository">The <see cref="IChapterRepository"/>.</param>
+     /// <param name="libraryManager">The <see cref="ILibraryManager"/>.</param>
+     /// <param name="pathManager">The <see cref="IPathManager"/>.</param>
++    /// <param name="backgroundMediaWorkGate">Gate that yields under playback and caps concurrency.</param>
+     public ChapterManager(
+         ILogger<ChapterManager> logger,
+         IFileSystem fileSystem,
+         IMediaEncoder encoder,
+         IChapterRepository chapterRepository,
+         ILibraryManager libraryManager,
+-        IPathManager pathManager)
++        IPathManager pathManager,
++        IBackgroundMediaWorkGate backgroundMediaWorkGate)
+     {
+         _logger = logger;
+         _fileSystem = fileSystem;
+@@ -62,6 +65,7 @@ public class ChapterManager : IChapterManager
+         _chapterRepository = chapterRepository;
+         _libraryManager = libraryManager;
+         _pathManager = pathManager;
++        _backgroundMediaWorkGate = backgroundMediaWorkGate;
+     }
+ 
+     /// <summary>
+@@ -142,83 +146,101 @@ public class ChapterManager : IChapterManager
+ 
+         var currentImages = GetSavedChapterImages(video, directoryService);
+ 
+-        foreach (var chapter in chapters)
++        // Gate covers both the scheduled chapter task and in-scan extraction.
++        // Callers must not also AcquireAsync around this method (semaphore is not reentrant).
++        IAsyncDisposable? workLease = null;
++        try
+         {
+-            if (chapter.StartPositionTicks >= runtimeTicks)
++            if (extractImages)
+             {
+-                _logger.LogInformation("Stopping chapter extraction for {0} because a chapter was found with a position greater than the runtime.", video.Name);
+-                break;
++                workLease = await _backgroundMediaWorkGate.AcquireAsync(cancellationToken).ConfigureAwait(false);
+             }
+ 
+-            var path = _pathManager.GetChapterImagePath(video, chapter.StartPositionTicks);
+-
+-            if (!currentImages.Contains(path, StringComparison.OrdinalIgnoreCase))
++            foreach (var chapter in chapters)
+             {
+-                if (extractImages)
++                if (chapter.StartPositionTicks >= runtimeTicks)
+                 {
+-                    cancellationToken.ThrowIfCancellationRequested();
+-
+-                    try
+-                    {
+-                        // Add some time for the first chapter to make sure we don't end up with a black image
+-                        var time = chapter.StartPositionTicks == 0 ? TimeSpan.FromTicks(Math.Min(_firstChapterTicks, video.RunTimeTicks ?? 0)) : TimeSpan.FromTicks(chapter.StartPositionTicks);
+-
+-                        var inputPath = video.Path;
+-                        var directoryPath = Path.GetDirectoryName(path);
+-                        if (!string.IsNullOrEmpty(directoryPath))
+-                        {
+-                            Directory.CreateDirectory(directoryPath);
+-                        }
++                    _logger.LogInformation("Stopping chapter extraction for {0} because a chapter was found with a position greater than the runtime.", video.Name);
++                    break;
++                }
+ 
+-                        var container = video.Container;
+-                        var mediaSource = new MediaSourceInfo
+-                        {
+-                            VideoType = video.VideoType,
+-                            IsoType = video.IsoType,
+-                            Protocol = video.PathProtocol ?? MediaProtocol.File,
+-                        };
++                var path = _pathManager.GetChapterImagePath(video, chapter.StartPositionTicks);
+ 
+-                        _logger.LogInformation("Extracting chapter image for {Name} at {Path}", video.Name, inputPath);
+-                        var tempFile = await _encoder.ExtractVideoImage(inputPath, container, mediaSource, video.GetDefaultVideoStream(), video.Video3DFormat, time, cancellationToken).ConfigureAwait(false);
+-                        File.Copy(tempFile, path, true);
++                if (!currentImages.Contains(path, StringComparison.OrdinalIgnoreCase))
++                {
++                    if (extractImages)
++                    {
++                        cancellationToken.ThrowIfCancellationRequested();
+ 
+                         try
+                         {
+-                            _fileSystem.DeleteFile(tempFile);
++                            // Add some time for the first chapter to make sure we don't end up with a black image
++                            var time = chapter.StartPositionTicks == 0 ? TimeSpan.FromTicks(Math.Min(_firstChapterTicks, video.RunTimeTicks ?? 0)) : TimeSpan.FromTicks(chapter.StartPositionTicks);
++
++                            var inputPath = video.Path;
++                            var directoryPath = Path.GetDirectoryName(path);
++                            if (!string.IsNullOrEmpty(directoryPath))
++                            {
++                                Directory.CreateDirectory(directoryPath);
++                            }
++
++                            var container = video.Container;
++                            var mediaSource = new MediaSourceInfo
++                            {
++                                VideoType = video.VideoType,
++                                IsoType = video.IsoType,
++                                Protocol = video.PathProtocol ?? MediaProtocol.File,
++                            };
++
++                            _logger.LogInformation("Extracting chapter image for {Name} at {Path}", video.Name, inputPath);
++                            var tempFile = await _encoder.ExtractVideoImage(inputPath, container, mediaSource, video.GetDefaultVideoStream(), video.Video3DFormat, time, cancellationToken).ConfigureAwait(false);
++                            File.Copy(tempFile, path, true);
++
++                            try
++                            {
++                                _fileSystem.DeleteFile(tempFile);
++                            }
++                            catch (IOException ex)
++                            {
++                                _logger.LogError(ex, "Error deleting temporary chapter image encoding file {Path}", tempFile);
++                            }
++
++                            chapter.ImagePath = path;
++                            chapter.ImageDateModified = _fileSystem.GetLastWriteTimeUtc(path);
++                            changesMade = true;
+                         }
+-                        catch (IOException ex)
++                        catch (Exception ex)
+                         {
+-                            _logger.LogError(ex, "Error deleting temporary chapter image encoding file {Path}", tempFile);
++                            _logger.LogError(ex, "Error extracting chapter images for {0}", string.Join(',', video.Path));
++                            success = false;
++                            break;
+                         }
+-
+-                        chapter.ImagePath = path;
+-                        chapter.ImageDateModified = _fileSystem.GetLastWriteTimeUtc(path);
+-                        changesMade = true;
+                     }
+-                    catch (Exception ex)
++                    else if (!string.IsNullOrEmpty(chapter.ImagePath))
+                     {
+-                        _logger.LogError(ex, "Error extracting chapter images for {0}", string.Join(',', video.Path));
+-                        success = false;
+-                        break;
++                        chapter.ImagePath = null;
++                        changesMade = true;
+                     }
+                 }
+-                else if (!string.IsNullOrEmpty(chapter.ImagePath))
++                else if (!string.Equals(path, chapter.ImagePath, StringComparison.OrdinalIgnoreCase))
++                {
++                    chapter.ImagePath = path;
++                    chapter.ImageDateModified = _fileSystem.GetLastWriteTimeUtc(path);
++                    changesMade = true;
++                }
++                else if (libraryOptions?.EnableChapterImageExtraction != true)
+                 {
++                    // We have an image for the current chapter but the user has disabled chapter image extraction -> delete this chapter's image
+                     chapter.ImagePath = null;
+                     changesMade = true;
+                 }
+             }
+-            else if (!string.Equals(path, chapter.ImagePath, StringComparison.OrdinalIgnoreCase))
+-            {
+-                chapter.ImagePath = path;
+-                chapter.ImageDateModified = _fileSystem.GetLastWriteTimeUtc(path);
+-                changesMade = true;
+-            }
+-            else if (libraryOptions?.EnableChapterImageExtraction != true)
++        }
++        finally
++        {
++            if (workLease is not null)
+             {
+-                // We have an image for the current chapter but the user has disabled chapter image extraction -> delete this chapter's image
+-                chapter.ImagePath = null;
+-                changesMade = true;
++                await workLease.DisposeAsync().ConfigureAwait(false);
+             }
+         }
+ 
+diff --git a/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs b/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs
+new file mode 100644
+index 0000000000..a79262609f
+--- /dev/null
++++ b/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs
+@@ -0,0 +1,95 @@
++using System;
++using System.Linq;
++using System.Threading;
++using System.Threading.Tasks;
++using MediaBrowser.Controller.Configuration;
++using MediaBrowser.Controller.Library;
++using MediaBrowser.Controller.Session;
++using Microsoft.Extensions.Logging;
++
++namespace Emby.Server.Implementations.Library;
++
++/// <summary>
++/// Caps concurrent background media work and yields while playback is active.
++/// </summary>
++public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposable
++{
++    private static readonly TimeSpan PlaybackYieldDelay = TimeSpan.FromSeconds(3);
++
++    private readonly ISessionManager _sessionManager;
++    private readonly ILogger<BackgroundMediaWorkGate> _logger;
++    private readonly SemaphoreSlim _semaphore;
++    private bool _disposed;
++
++    /// <summary>
++    /// Initializes a new instance of the <see cref="BackgroundMediaWorkGate"/> class.
++    /// </summary>
++    /// <param name="sessionManager">Session manager used to detect active playback.</param>
++    /// <param name="configurationManager">Server configuration.</param>
++    /// <param name="logger">Logger.</param>
++    public BackgroundMediaWorkGate(
++        ISessionManager sessionManager,
++        IServerConfigurationManager configurationManager,
++        ILogger<BackgroundMediaWorkGate> logger)
++    {
++        _sessionManager = sessionManager;
++        _logger = logger;
++
++        var configured = configurationManager.Configuration.ParallelImageEncodingLimit;
++        var limit = configured > 0
++            ? Math.Max(1, Math.Min(configured, Math.Max(1, Environment.ProcessorCount / 4)))
++            : Math.Max(1, Environment.ProcessorCount / 4);
++
++        _semaphore = new SemaphoreSlim(limit, limit);
++        _logger.LogInformation("Background media work gate limit set to {Limit}", limit);
++    }
++
++    /// <inheritdoc />
++    public async Task<IAsyncDisposable> AcquireAsync(CancellationToken cancellationToken)
++    {
++        ObjectDisposedException.ThrowIf(_disposed, this);
++
++        while (HasActivePlayback())
++        {
++            _logger.LogDebug("Deferring background media work while playback is active");
++            await Task.Delay(PlaybackYieldDelay, cancellationToken).ConfigureAwait(false);
++        }
++
++        await _semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
++        return new Lease(_semaphore);
++    }
++
++    private bool HasActivePlayback()
++    {
++        return _sessionManager.Sessions.Any(s => s.NowPlayingItem is not null);
++    }
++
++    /// <inheritdoc />
++    public void Dispose()
++    {
++        if (_disposed)
++        {
++            return;
++        }
++
++        _disposed = true;
++        _semaphore.Dispose();
++    }
++
++    private sealed class Lease : IAsyncDisposable
++    {
++        private SemaphoreSlim? _semaphore;
++
++        public Lease(SemaphoreSlim semaphore)
++        {
++            _semaphore = semaphore;
++        }
++
++        public ValueTask DisposeAsync()
++        {
++            var semaphore = Interlocked.Exchange(ref _semaphore, null);
++            semaphore?.Release();
++            return ValueTask.CompletedTask;
++        }
++    }
++}
+diff --git a/Emby.Server.Implementations/ScheduledTasks/Tasks/ChapterImagesTask.cs b/Emby.Server.Implementations/ScheduledTasks/Tasks/ChapterImagesTask.cs
+index f1e1579a1d..36a81ba955 100644
+--- a/Emby.Server.Implementations/ScheduledTasks/Tasks/ChapterImagesTask.cs
++++ b/Emby.Server.Implementations/ScheduledTasks/Tasks/ChapterImagesTask.cs
+@@ -82,7 +82,8 @@ public class ChapterImagesTask : IScheduledTask
+     /// <inheritdoc />
+     public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
+     {
+-        var videos = _libraryManager.GetItemList(new InternalItemsQuery
++        var pagesize = 100;
++        var query = new InternalItemsQuery
+         {
+             MediaTypes = [MediaType.Video],
+             IsFolder = false,
+@@ -93,12 +94,16 @@ public class ChapterImagesTask : IScheduledTask
+             },
+             SourceTypes = [SourceType.Library],
+             IsVirtualItem = false,
+-            IncludeOwnedItems = true
+-        })
+-        .OfType<Video>()
+-        .ToList();
++            IncludeOwnedItems = true,
++            Limit = pagesize
++        };
+ 
+-        var numComplete = 0;
++        var totalVideos = _libraryManager.GetCount(query);
++        if (totalVideos == 0)
++        {
++            progress.Report(100);
++            return;
++        }
+ 
+         var failHistoryPath = Path.Combine(_appPaths.CachePath, "chapter-failures.txt");
+ 
+@@ -123,47 +128,68 @@ public class ChapterImagesTask : IScheduledTask
+         }
+ 
+         var directoryService = new DirectoryService(_fileSystem);
++        var numComplete = 0;
++        var startIndex = 0;
+ 
+-        foreach (var video in videos)
++        while (startIndex < totalVideos)
+         {
+-            cancellationToken.ThrowIfCancellationRequested();
+-
+-            var key = video.Path + video.DateModified.Ticks;
+-
+-            var extract = !previouslyFailedImages.Contains(key, StringComparison.OrdinalIgnoreCase);
++            query.StartIndex = startIndex;
++            var page = _libraryManager.GetItemList(query).OfType<Video>().ToList();
++            var currentPageCount = page.Count;
++            if (currentPageCount == 0)
++            {
++                break;
++            }
+ 
+-            try
++            foreach (var video in page)
+             {
+-                var chapters = _chapterManager.GetChapters(video.Id);
++                cancellationToken.ThrowIfCancellationRequested();
+ 
+-                var success = await _chapterManager.RefreshChapterImages(video, directoryService, chapters, extract, true, cancellationToken).ConfigureAwait(false);
++                var key = video.Path + video.DateModified.Ticks;
++                var extract = !previouslyFailedImages.Contains(key, StringComparison.OrdinalIgnoreCase);
+ 
+-                if (!success)
++                try
+                 {
+-                    previouslyFailedImages.Add(key);
++                    var chapters = _chapterManager.GetChapters(video.Id);
+ 
+-                    var parentPath = Path.GetDirectoryName(failHistoryPath);
+-                    if (parentPath is not null)
++                    // Skip videos that already have chapter images for every chapter.
++                    if (chapters.Count > 0
++                        && chapters.All(c => !string.IsNullOrEmpty(c.ImagePath)))
+                     {
+-                        Directory.CreateDirectory(parentPath);
++                        numComplete++;
++                        progress.Report(100.0 * numComplete / totalVideos);
++                        continue;
+                     }
+ 
+-                    string text = string.Join('|', previouslyFailedImages);
+-                    await File.WriteAllTextAsync(failHistoryPath, text, cancellationToken).ConfigureAwait(false);
+-                }
++                    // ChapterManager acquires the background work gate when extractImages is true.
++                    var success = await _chapterManager.RefreshChapterImages(video, directoryService, chapters, extract, true, cancellationToken).ConfigureAwait(false);
+ 
+-                numComplete++;
+-                double percent = numComplete;
+-                percent /= videos.Count;
++                    if (!success)
++                    {
++                        previouslyFailedImages.Add(key);
+ 
+-                progress.Report(100 * percent);
+-            }
+-            catch (ObjectDisposedException ex)
+-            {
+-                // TODO Investigate and properly fix.
+-                _logger.LogError(ex, "Object Disposed");
+-                break;
++                        var parentPath = Path.GetDirectoryName(failHistoryPath);
++                        if (parentPath is not null)
++                        {
++                            Directory.CreateDirectory(parentPath);
++                        }
++
++                        string text = string.Join('|', previouslyFailedImages);
++                        await File.WriteAllTextAsync(failHistoryPath, text, cancellationToken).ConfigureAwait(false);
++                    }
++
++                    numComplete++;
++                    progress.Report(100.0 * numComplete / totalVideos);
++                }
++                catch (ObjectDisposedException ex)
++                {
++                    // TODO Investigate and properly fix.
++                    _logger.LogError(ex, "Object Disposed");
++                    return;
++                }
+             }
++
++            startIndex += pagesize;
+         }
+     }
+ }
+diff --git a/Emby.Server.Implementations/ScheduledTasks/Tasks/MediaSegmentExtractionTask.cs b/Emby.Server.Implementations/ScheduledTasks/Tasks/MediaSegmentExtractionTask.cs
+index 9cc6eb265a..8983989ee7 100644
+--- a/Emby.Server.Implementations/ScheduledTasks/Tasks/MediaSegmentExtractionTask.cs
++++ b/Emby.Server.Implementations/ScheduledTasks/Tasks/MediaSegmentExtractionTask.cs
+@@ -24,6 +24,7 @@ public class MediaSegmentExtractionTask : IScheduledTask
+     private readonly ILibraryManager _libraryManager;
+     private readonly ILocalizationManager _localization;
+     private readonly IMediaSegmentManager _mediaSegmentManager;
++    private readonly IBackgroundMediaWorkGate _backgroundMediaWorkGate;
+     private static readonly BaseItemKind[] _itemTypes = [BaseItemKind.Episode, BaseItemKind.Movie, BaseItemKind.Audio, BaseItemKind.AudioBook];
+ 
+     /// <summary>
+@@ -32,11 +33,17 @@ public class MediaSegmentExtractionTask : IScheduledTask
+     /// <param name="libraryManager">The library manager.</param>
+     /// <param name="localization">The localization manager.</param>
+     /// <param name="mediaSegmentManager">The segment manager.</param>
+-    public MediaSegmentExtractionTask(ILibraryManager libraryManager, ILocalizationManager localization, IMediaSegmentManager mediaSegmentManager)
++    /// <param name="backgroundMediaWorkGate">Gate that yields under playback and caps concurrency.</param>
++    public MediaSegmentExtractionTask(
++        ILibraryManager libraryManager,
++        ILocalizationManager localization,
++        IMediaSegmentManager mediaSegmentManager,
++        IBackgroundMediaWorkGate backgroundMediaWorkGate)
+     {
+         _libraryManager = libraryManager;
+         _localization = localization;
+         _mediaSegmentManager = mediaSegmentManager;
++        _backgroundMediaWorkGate = backgroundMediaWorkGate;
+     }
+ 
+     /// <inheritdoc/>
+@@ -83,7 +90,6 @@ public class MediaSegmentExtractionTask : IScheduledTask
+ 
+             var baseItems = _libraryManager.GetItemList(query);
+             var currentPageCount = baseItems.Count;
+-            // TODO parallelize with Parallel.ForEach?
+             for (var i = 0; i < currentPageCount; i++)
+             {
+                 cancellationToken.ThrowIfCancellationRequested();
+@@ -92,8 +98,11 @@ public class MediaSegmentExtractionTask : IScheduledTask
+                 // Only local files supported
+                 if (item.IsFileProtocol && File.Exists(item.Path))
+                 {
+-                    var libraryOptions = _libraryManager.GetLibraryOptions(item);
+-                    await _mediaSegmentManager.RunSegmentPluginProviders(item, libraryOptions, false, cancellationToken).ConfigureAwait(false);
++                    await using (await _backgroundMediaWorkGate.AcquireAsync(cancellationToken).ConfigureAwait(false))
++                    {
++                        var libraryOptions = _libraryManager.GetLibraryOptions(item);
++                        await _mediaSegmentManager.RunSegmentPluginProviders(item, libraryOptions, false, cancellationToken).ConfigureAwait(false);
++                    }
+                 }
+ 
+                 // Update progress
+diff --git a/Jellyfin.Server.Implementations/MediaSegments/MediaSegmentManager.cs b/Jellyfin.Server.Implementations/MediaSegments/MediaSegmentManager.cs
+index be98f93dab..7cc6daa905 100644
+--- a/Jellyfin.Server.Implementations/MediaSegments/MediaSegmentManager.cs
++++ b/Jellyfin.Server.Implementations/MediaSegments/MediaSegmentManager.cs
+@@ -1,6 +1,5 @@
+ using System;
+ using System.Collections.Generic;
+-using System.Collections.Immutable;
+ using System.Globalization;
+ using System.Linq;
+ using System.Threading;
+@@ -89,20 +88,26 @@ public class MediaSegmentManager : IMediaSegmentManager
+                     continue;
+                 }
+ 
+-                IQueryable<MediaSegment> existingSegments;
+-                if (forceOverwrite)
+-                {
+-                    existingSegments = Array.Empty<MediaSegment>().AsQueryable();
+-                }
+-                else
++                var providerId = GetProviderId(provider.Name);
++
++                // Scheduled extraction passes forceOverwrite: false — skip providers that already
++                // have rows so expensive GetMediaSegments work is not repeated every run.
++                if (!forceOverwrite
++                    && await db.MediaSegments.AnyAsync(
++                        e => e.ItemId.Equals(baseItem.Id) && e.SegmentProviderId == providerId,
++                        cancellationToken).ConfigureAwait(false))
+                 {
+-                    existingSegments = db.MediaSegments.Where(e => e.ItemId.Equals(baseItem.Id) && e.SegmentProviderId == GetProviderId(provider.Name));
++                    _logger.LogDebug(
++                        "Skipping media segment extraction for {MediaPath}; provider {ProviderName} already has segments",
++                        baseItem.Path,
++                        provider.Name);
++                    continue;
+                 }
+ 
+                 var requestItem = new MediaSegmentGenerationRequest()
+                 {
+                     ItemId = baseItem.Id,
+-                    ExistingSegments = existingSegments.Select(e => Map(e)).ToArray()
++                    ExistingSegments = []
+                 };
+ 
+                 try
+@@ -110,43 +115,24 @@ public class MediaSegmentManager : IMediaSegmentManager
+                     var segments = await provider.GetMediaSegments(requestItem, cancellationToken)
+                         .ConfigureAwait(false);
+ 
+-                    if (!forceOverwrite)
+-                    {
+-                        var existingSegmentsList = existingSegments.ToArray(); // Cannot use requestItem's list, as the provider might tamper with its items.
+-                        if (segments.Count == requestItem.ExistingSegments.Count && segments.All(e => existingSegmentsList.Any(f =>
+-                        {
+-                            return
+-                                e.StartTicks == f.StartTicks &&
+-                                e.EndTicks == f.EndTicks &&
+-                                e.Type == f.Type;
+-                        })))
+-                        {
+-                            _logger.LogDebug("Media Segment provider {ProviderName} did not modify any segments for {MediaPath}", provider.Name, baseItem.Path);
+-                            continue;
+-                        }
+-
+-                        // delete existing media segments that were re-generated.
+-                        await existingSegments.ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+-                    }
+-
+-                    if (segments.Count == 0 && !requestItem.ExistingSegments.Any())
++                    if (segments.Count == 0)
+                     {
+                         _logger.LogDebug("Media Segment provider {ProviderName} did not find any segments for {MediaPath}", provider.Name, baseItem.Path);
+                         continue;
+                     }
+-                    else if (segments.Count == 0 && requestItem.ExistingSegments.Any())
+-                    {
+-                        _logger.LogDebug("Media Segment provider {ProviderName} deleted all segments for {MediaPath}", provider.Name, baseItem.Path);
+-                        continue;
+-                    }
+ 
+                     _logger.LogInformation("Media Segment provider {ProviderName} found {CountSegments} for {MediaPath}", provider.Name, segments.Count, baseItem.Path);
+-                    var providerId = GetProviderId(provider.Name);
++
++                    var entities = new List<MediaSegment>(segments.Count);
+                     foreach (var segment in segments)
+                     {
++                        ArgumentOutOfRangeException.ThrowIfLessThan(segment.EndTicks, segment.StartTicks);
+                         segment.ItemId = baseItem.Id;
+-                        await CreateSegmentAsync(segment, providerId).ConfigureAwait(false);
++                        entities.Add(Map(segment, providerId));
+                     }
++
++                    db.MediaSegments.AddRange(entities);
++                    await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                 }
+                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                 {
+diff --git a/MediaBrowser.Controller/Library/IBackgroundMediaWorkGate.cs b/MediaBrowser.Controller/Library/IBackgroundMediaWorkGate.cs
+new file mode 100644
+index 0000000000..70afc2db7c
+--- /dev/null
++++ b/MediaBrowser.Controller/Library/IBackgroundMediaWorkGate.cs
+@@ -0,0 +1,20 @@
++using System;
++using System.Threading;
++using System.Threading.Tasks;
++
++namespace MediaBrowser.Controller.Library;
++
++/// <summary>
++/// Limits concurrent background media work (segment extraction, chapter images)
++/// and yields while clients are actively playing.
++/// </summary>
++public interface IBackgroundMediaWorkGate
++{
++    /// <summary>
++    /// Waits until no session is playing (or the wait is cancelled), then acquires a
++    /// background work slot. Dispose the returned lease to release the slot.
++    /// </summary>
++    /// <param name="cancellationToken">Cancellation token.</param>
++    /// <returns>A lease that must be disposed to release the slot.</returns>
++    Task<IAsyncDisposable> AcquireAsync(CancellationToken cancellationToken);
++}
+diff --git a/MediaBrowser.Controller/LibraryTaskScheduler/LimitedConcurrencyLibraryScheduler.cs b/MediaBrowser.Controller/LibraryTaskScheduler/LimitedConcurrencyLibraryScheduler.cs
+index 6da398129a..eda972b530 100644
+--- a/MediaBrowser.Controller/LibraryTaskScheduler/LimitedConcurrencyLibraryScheduler.cs
++++ b/MediaBrowser.Controller/LibraryTaskScheduler/LimitedConcurrencyLibraryScheduler.cs
+@@ -110,8 +110,8 @@ public sealed class LimitedConcurrencyLibraryScheduler : ILimitedConcurrencyLibr
+         var fanoutConcurrency = _serverConfigurationManager.Configuration.LibraryScanFanoutConcurrency;
+         if (fanoutConcurrency <= 0)
+         {
+-            // in case the user did not set a limit manually, we can assume he has 3 or more cores as already checked by ShouldForceSequentialOperation.
+-            return Environment.ProcessorCount - 3;
++            // Leave roughly half the cores for Kestrel, DB, ffmpeg, and playback.
++            return Math.Max(1, Environment.ProcessorCount / 2);
+         }
+ 
+         return fanoutConcurrency;
+diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
+index 0dad188d50..9394159625 100644
+--- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
++++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
+@@ -134,7 +134,8 @@ namespace MediaBrowser.MediaEncoding.Encoder
+             var semaphoreCount = serverConfig.Configuration?.ParallelImageEncodingLimit ?? 0;
+             if (semaphoreCount < 1)
+             {
+-                semaphoreCount = Environment.ProcessorCount;
++                // Cap unset defaults so chapter/trickplay work cannot pin every core.
++                semaphoreCount = Math.Max(1, Environment.ProcessorCount / 4);
+             }
+ 
+             _thumbnailResourcePool = new(semaphoreCount);
+diff --git a/src/Jellyfin.Drawing/ImageProcessor.cs b/src/Jellyfin.Drawing/ImageProcessor.cs
+index 6ffb022842..e4f7b29385 100644
+--- a/src/Jellyfin.Drawing/ImageProcessor.cs
++++ b/src/Jellyfin.Drawing/ImageProcessor.cs
+@@ -68,7 +68,8 @@ public sealed class ImageProcessor : IImageProcessor, IDisposable
+         var semaphoreCount = config.Configuration.ParallelImageEncodingLimit;
+         if (semaphoreCount < 1)
+         {
+-            semaphoreCount = Environment.ProcessorCount;
++            // Cap unset defaults so background image work cannot pin every core.
++            semaphoreCount = Math.Max(1, Environment.ProcessorCount / 4);
+         }
+ 
+         _parallelEncodingLimit = new(semaphoreCount);
