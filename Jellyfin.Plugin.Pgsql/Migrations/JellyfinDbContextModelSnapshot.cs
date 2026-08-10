@@ -18,7 +18,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 #pragma warning disable 612, 618
             modelBuilder
                 .UseCollation("C")
-                .HasAnnotation("ProductVersion", "10.0.9")
+                .HasAnnotation("ProductVersion", "10.0.10")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -374,6 +374,9 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.HasIndex("Path");
 
                     b.HasIndex("PresentationUniqueKey");
+
+                    b.HasIndex("PrimaryVersionId")
+                        .HasFilter("\"PrimaryVersionId\" IS NOT NULL");
 
                     b.HasIndex("SeasonId");
 
@@ -803,22 +806,20 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Property<Guid>("ParentId")
                         .HasColumnType("uuid");
 
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer");
+
                     b.Property<Guid>("ChildId")
                         .HasColumnType("uuid");
 
                     b.Property<int>("ChildType")
                         .HasColumnType("integer");
 
-                    b.Property<int?>("SortOrder")
-                        .HasColumnType("integer");
-
-                    b.HasKey("ParentId", "ChildId");
+                    b.HasKey("ParentId", "SortOrder");
 
                     b.HasIndex("ChildId", "ChildType");
 
                     b.HasIndex("ParentId", "ChildType");
-
-                    b.HasIndex("ParentId", "SortOrder");
 
                     b.ToTable("LinkedChildren", (string)null);
                 });
@@ -1093,6 +1094,12 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("ChannelId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ChannelName")
+                        .HasColumnType("text");
+
                     b.Property<string>("ClientName")
                         .HasColumnType("text");
 
@@ -1103,6 +1110,12 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                         .HasColumnType("integer");
 
                     b.Property<string>("DeviceName")
+                        .HasColumnType("text");
+
+                    b.Property<string>("EpisodeTitle")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Genres")
                         .HasColumnType("text");
 
                     b.Property<Guid>("ItemId")
@@ -1135,6 +1148,9 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Property<string>("SeriesName")
                         .HasColumnType("text");
 
+                    b.Property<string>("ShowId")
+                        .HasColumnType("text");
+
                     b.Property<string>("TranscodeReasons")
                         .HasColumnType("text");
 
@@ -1148,14 +1164,14 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.HasIndex("DeviceId")
                         .HasFilter("\"DeviceId\" IS NOT NULL");
 
-                    b.HasIndex("ItemId", "DatePlayed");
-
-                    b.HasIndex("SeriesId", "DatePlayed")
-                        .HasFilter("\"SeriesId\" IS NOT NULL");
-
-                    b.HasIndex("UserId", "DatePlayed");
+                    b.HasIndex("ChannelId", "DatePlayed")
+                        .HasFilter("\"ChannelId\" IS NOT NULL");
 
                     b.HasIndex("DatePlayed", "PlayMethod");
+
+                    b.HasIndex("ItemId", "DatePlayed");
+
+                    b.HasIndex("UserId", "DatePlayed");
 
                     b.ToTable("PlaybackActivity");
                 });
@@ -1185,131 +1201,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasKey("Date");
 
-                    b.ToTable("PlaybackActivityDaily");
-                });
-
-            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.TasteModelEvalRun", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<double?>("Accuracy")
-                        .HasColumnType("double precision");
-
-                    b.Property<double?>("Auc")
-                        .HasColumnType("double precision");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("HoldoutCount")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("ModelPath")
-                        .HasColumnType("text");
-
-                    b.Property<int>("NegativeCount")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Notes")
-                        .HasColumnType("text");
-
-                    b.Property<int>("PositiveCount")
-                        .HasColumnType("integer");
-
-                    b.Property<double?>("PrecisionAt10")
-                        .HasColumnType("double precision");
-
-                    b.Property<long>("TrainDurationMs")
-                        .HasColumnType("bigint");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CreatedAt");
-
-                    b.ToTable("TasteModelEvalRuns");
-                });
-
-            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.UserTasteProfile", b =>
-                {
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("FeaturesJson")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("SampleCount")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("UserId");
-
-                    b.ToTable("UserTasteProfiles");
-                });
-
-            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.UserTasteRecommendation", b =>
-                {
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("ItemType")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("Rank")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid>("ItemId")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("Score")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Tier")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("UserId", "ItemType", "Rank");
-
-                    b.HasIndex("UserId", "ItemType");
-
-                    b.ToTable("UserTasteRecommendations");
-                });
-
-            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.UserTasteRecommendationImpression", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("ItemId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("ItemType")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("Rank")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("ServedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("UserId", "ItemId", "ServedAt");
-
-                    b.HasIndex("UserId", "ServedAt");
-
-                    b.ToTable("UserTasteRecommendationImpressions");
+                    b.ToTable("PlaybackActivityDaily", (string)null);
                 });
 
             modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.Preference", b =>
@@ -1457,6 +1349,49 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                         .IsUnique();
 
                     b.ToTable("DeviceOptions");
+                });
+
+            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.TasteModelEvalRun", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<double?>("Accuracy")
+                        .HasColumnType("double precision");
+
+                    b.Property<double?>("Auc")
+                        .HasColumnType("double precision");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("HoldoutCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ModelPath")
+                        .HasColumnType("text");
+
+                    b.Property<int>("NegativeCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("text");
+
+                    b.Property<int>("PositiveCount")
+                        .HasColumnType("integer");
+
+                    b.Property<double?>("PrecisionAt10")
+                        .HasColumnType("double precision");
+
+                    b.Property<long>("TrainDurationMs")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedAt");
+
+                    b.ToTable("TasteModelEvalRuns", (string)null);
                 });
 
             modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.TrickplayInfo", b =>
@@ -1675,6 +1610,89 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.HasIndex("UserId", "Played", "ItemId");
 
                     b.ToTable("UserData");
+                });
+
+            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.UserTasteProfile", b =>
+                {
+                    b.Property<Guid>("UserId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("FeaturesJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("SampleCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("UserId");
+
+                    b.ToTable("UserTasteProfiles", (string)null);
+                });
+
+            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.UserTasteRecommendation", b =>
+                {
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ItemType")
+                        .HasColumnType("text");
+
+                    b.Property<int>("Rank")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("ItemId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Score")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Tier")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("UserId", "ItemType", "Rank");
+
+                    b.HasIndex("UserId", "ItemType");
+
+                    b.ToTable("UserTasteRecommendations", (string)null);
+                });
+
+            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.UserTasteRecommendationImpression", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ItemId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ItemType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("Rank")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("ServedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId", "ServedAt");
+
+                    b.HasIndex("UserId", "ItemId", "ServedAt");
+
+                    b.ToTable("UserTasteRecommendationImpressions", (string)null);
                 });
 
             modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.AccessSchedule", b =>

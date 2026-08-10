@@ -1,5 +1,5 @@
 diff --git a/Jellyfin.Api/Controllers/UserLibraryController.cs b/Jellyfin.Api/Controllers/UserLibraryController.cs
-index 25f781e496..e61d34be89 100644
+index bb2ed9f7ea..29d2b7bb00 100644
 --- a/Jellyfin.Api/Controllers/UserLibraryController.cs
 +++ b/Jellyfin.Api/Controllers/UserLibraryController.cs
 @@ -15,6 +15,7 @@ using MediaBrowser.Controller.Entities;
@@ -10,35 +10,36 @@ index 25f781e496..e61d34be89 100644
  using MediaBrowser.Controller.Providers;
  using MediaBrowser.Model.Dto;
  using MediaBrowser.Model.Entities;
-@@ -40,6 +41,7 @@ public class UserLibraryController : BaseJellyfinApiController
-     private readonly IDtoService _dtoService;
+@@ -41,6 +42,7 @@ public class UserLibraryController : BaseJellyfinApiController
      private readonly IUserViewManager _userViewManager;
      private readonly IFileSystem _fileSystem;
+     private readonly IProviderManager _providerManager;
 +    private readonly ILiveTvManager _liveTvManager;
  
      /// <summary>
      /// Initializes a new instance of the <see cref="UserLibraryController"/> class.
-@@ -50,13 +52,15 @@ public class UserLibraryController : BaseJellyfinApiController
-     /// <param name="dtoService">Instance of the <see cref="IDtoService"/> interface.</param>
+@@ -52,6 +54,7 @@ public class UserLibraryController : BaseJellyfinApiController
      /// <param name="userViewManager">Instance of the <see cref="IUserViewManager"/> interface.</param>
      /// <param name="fileSystem">Instance of the <see cref="IFileSystem"/> interface.</param>
+     /// <param name="providerManager">Instance of the <see cref="IProviderManager"/> interface.</param>
 +    /// <param name="liveTvManager">Instance of the <see cref="ILiveTvManager"/> interface.</param>
      public UserLibraryController(
          IUserManager userManager,
          IUserDataManager userDataRepository,
-         ILibraryManager libraryManager,
+@@ -59,7 +62,8 @@ public class UserLibraryController : BaseJellyfinApiController
          IDtoService dtoService,
          IUserViewManager userViewManager,
--        IFileSystem fileSystem)
-+        IFileSystem fileSystem,
+         IFileSystem fileSystem,
+-        IProviderManager providerManager)
++        IProviderManager providerManager,
 +        ILiveTvManager liveTvManager)
      {
          _userManager = userManager;
          _userDataRepository = userDataRepository;
-@@ -64,20 +68,22 @@ public class UserLibraryController : BaseJellyfinApiController
-         _dtoService = dtoService;
+@@ -68,20 +72,22 @@ public class UserLibraryController : BaseJellyfinApiController
          _userViewManager = userViewManager;
          _fileSystem = fileSystem;
+         _providerManager = providerManager;
 +        _liveTvManager = liveTvManager;
      }
  
@@ -53,14 +54,14 @@ index 25f781e496..e61d34be89 100644
      [HttpGet("Items/{itemId}")]
      [ProducesResponseType(StatusCodes.Status200OK)]
 +    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-     public async Task<ActionResult<BaseItemDto>> GetItem(
+     public ActionResult<BaseItemDto> GetItem(
          [FromQuery] Guid? userId,
 -        [FromRoute, Required] Guid itemId)
 +        [FromRoute, Required] string itemId)
      {
          userId = RequestHelpers.GetUserId(User, userId);
          var user = _userManager.GetUserById(userId.Value);
-@@ -86,9 +92,14 @@ public class UserLibraryController : BaseJellyfinApiController
+@@ -90,9 +96,14 @@ public class UserLibraryController : BaseJellyfinApiController
              return NotFound();
          }
  
@@ -77,7 +78,7 @@ index 25f781e496..e61d34be89 100644
          if (item is null)
          {
              return NotFound();
-@@ -105,7 +116,7 @@ public class UserLibraryController : BaseJellyfinApiController
+@@ -109,7 +120,7 @@ public class UserLibraryController : BaseJellyfinApiController
      /// Gets an item from a user's library.
      /// </summary>
      /// <param name="userId">User id.</param>
@@ -86,16 +87,16 @@ index 25f781e496..e61d34be89 100644
      /// <response code="200">Item returned.</response>
      /// <returns>An <see cref="OkResult"/> containing the item.</returns>
      [HttpGet("Users/{userId}/Items/{itemId}")]
-@@ -114,7 +125,7 @@ public class UserLibraryController : BaseJellyfinApiController
+@@ -118,7 +129,7 @@ public class UserLibraryController : BaseJellyfinApiController
      [ApiExplorerSettings(IgnoreApi = true)]
-     public Task<ActionResult<BaseItemDto>> GetItemLegacy(
+     public ActionResult<BaseItemDto> GetItemLegacy(
          [FromRoute, Required] Guid userId,
 -        [FromRoute, Required] Guid itemId)
 +        [FromRoute, Required] string itemId)
          => GetItem(userId, itemId);
  
      /// <summary>
-@@ -704,4 +715,28 @@ public class UserLibraryController : BaseJellyfinApiController
+@@ -709,4 +720,28 @@ public class UserLibraryController : BaseJellyfinApiController
  
          return _userDataRepository.GetUserDataDto(item, user);
      }

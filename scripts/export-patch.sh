@@ -65,7 +65,7 @@ done) || true
 
 # Reset submodule to clean release tag
 echo "Resetting $TARGET submodule to clean state..."
-git -C "$TARGET" reset --hard v12.0-rc3 >/dev/null
+git -C "$TARGET" reset --hard v12.0-rc4 >/dev/null
 git -C "$TARGET" clean -fd >/dev/null
 
 # Backup target patch temporarily if it exists
@@ -117,7 +117,7 @@ echo "-----------------------------------------------------------------"
 
 # Reset submodule back to clean state
 echo "Resetting $TARGET submodule to clean state..."
-git -C "$TARGET" reset --hard v12.0-rc3 >/dev/null
+git -C "$TARGET" reset --hard v12.0-rc4 >/dev/null
 git -C "$TARGET" clean -fd >/dev/null
 
 if [ "$TARGET" = "jellyfin-web" ]; then

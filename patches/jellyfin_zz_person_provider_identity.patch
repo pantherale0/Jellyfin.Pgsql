@@ -1,5 +1,5 @@
 diff --git a/Emby.Server.Implementations/Dto/DtoService.cs b/Emby.Server.Implementations/Dto/DtoService.cs
-index 8cbf42585d..f61b723123 100644
+index 71c3b24907..84db4cd7e8 100644
 --- a/Emby.Server.Implementations/Dto/DtoService.cs
 +++ b/Emby.Server.Implementations/Dto/DtoService.cs
 @@ -786,60 +786,55 @@ namespace Emby.Server.Implementations.Dto
@@ -93,10 +93,10 @@ index 8cbf42585d..f61b723123 100644
  
              dto.People = list.ToArray();
 diff --git a/Emby.Server.Implementations/Library/LibraryManager.cs b/Emby.Server.Implementations/Library/LibraryManager.cs
-index 69d3b36c65..9f10c47d2e 100644
+index 88db93848f..40cd87ebcc 100644
 --- a/Emby.Server.Implementations/Library/LibraryManager.cs
 +++ b/Emby.Server.Implementations/Library/LibraryManager.cs
-@@ -1204,6 +1204,53 @@ namespace Emby.Server.Implementations.Library
+@@ -1209,6 +1209,53 @@ namespace Emby.Server.Implementations.Library
              return null;
          }
  
@@ -150,7 +150,7 @@ index 69d3b36c65..9f10c47d2e 100644
          /// <summary>
          /// Gets the studio.
          /// </summary>
-@@ -3455,7 +3502,7 @@ namespace Emby.Server.Implementations.Library
+@@ -3540,7 +3587,7 @@ namespace Emby.Server.Implementations.Library
                  {
                      try
                      {
@@ -159,7 +159,7 @@ index 69d3b36c65..9f10c47d2e 100644
                      }
                      catch (Exception ex)
                      {
-@@ -3466,6 +3513,7 @@ namespace Emby.Server.Implementations.Library
+@@ -3551,6 +3598,7 @@ namespace Emby.Server.Implementations.Library
                  .Where(i => i is not null)
                  .Where(i => query.User is null || i!.IsVisible(query.User))
                  .OfType<BaseItem>()
@@ -167,7 +167,7 @@ index 69d3b36c65..9f10c47d2e 100644
                  .ToList()
                  .AsReadOnly();
  
-@@ -3620,7 +3668,6 @@ namespace Emby.Server.Implementations.Library
+@@ -3705,7 +3753,6 @@ namespace Emby.Server.Implementations.Library
          private async Task SavePeopleMetadataAsync(IEnumerable<PersonInfo> people, CancellationToken cancellationToken)
          {
              var peopleList = people.ToList();
@@ -175,7 +175,7 @@ index 69d3b36c65..9f10c47d2e 100644
  
              foreach (var person in peopleList)
              {
-@@ -3629,16 +3676,14 @@ namespace Emby.Server.Implementations.Library
+@@ -3714,16 +3761,14 @@ namespace Emby.Server.Implementations.Library
                  var itemUpdateType = ItemUpdateType.MetadataDownload;
                  var saveEntity = false;
                  var createEntity = false;
@@ -195,7 +195,7 @@ index 69d3b36c65..9f10c47d2e 100644
                          var info = Directory.CreateDirectory(path);
                          personEntity = new Person()
                          {
-@@ -3662,11 +3707,22 @@ namespace Emby.Server.Implementations.Library
+@@ -3747,11 +3792,22 @@ namespace Emby.Server.Implementations.Library
  
                  foreach (var id in person.ProviderIds)
                  {
@@ -363,10 +363,10 @@ index dff9a473af..a6e91da97c 100644
                  .Where(p => !context.PeopleBaseItemMap.Any(m => m.PeopleId.Equals(p.Id)))
                  .ExecuteDeleteAsync(cancellationToken)
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-index c7dbd841d2..5e9296e8ce 100644
+index 4a567bb89a..a7e8075a4b 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-@@ -364,14 +364,32 @@ public sealed partial class BaseItemRepository
+@@ -371,14 +371,32 @@ public sealed partial class BaseItemRepository
  
          if (filter.PersonIds.Length > 0)
          {
@@ -405,7 +405,7 @@ index c7dbd841d2..5e9296e8ce 100644
                  .Where(e => context.PeopleBaseItemMap
                      .Any(m => m.ItemId == e.Id && peopleEntityIds.Contains(m.PeopleId)));
 diff --git a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
-index eb87b525fe..9dea7d7781 100644
+index 9611c5c13a..69b77f5f74 100644
 --- a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
 +++ b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
 @@ -7,6 +7,7 @@ using Jellyfin.Database.Implementations.Entities;
@@ -434,7 +434,7 @@ index eb87b525fe..9dea7d7781 100644
                  .Select(g => g.Min(e => e.Id));
              dbQuery = context.Peoples.AsNoTracking()
                  .Where(p => representativeIds.Contains(p.Id))
-@@ -103,24 +104,51 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -107,24 +108,51 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
              person.Role = person.Role?.Trim() ?? string.Empty;
          }
  
@@ -499,7 +499,7 @@ index eb87b525fe..9dea7d7781 100644
          context.Peoples.AddRange(toAdd);
          context.SaveChanges();
  
-@@ -132,8 +160,10 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -136,8 +164,10 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
  
          foreach (var person in people)
          {
@@ -512,7 +512,7 @@ index eb87b525fe..9dea7d7781 100644
              if (existingMap is null)
              {
                  context.PeopleBaseItemMap.Add(new PeopleBaseItemMap()
-@@ -201,6 +231,27 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -205,6 +235,27 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
          return result;
      }
  
@@ -540,7 +540,7 @@ index eb87b525fe..9dea7d7781 100644
      private PersonInfo Map(People people)
      {
          var mapping = people.BaseItems?.FirstOrDefault();
-@@ -216,16 +267,23 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -220,16 +271,23 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
              personInfo.Type = kind;
          }
  
@@ -1058,7 +1058,7 @@ index 6f71153fda..3e3f8e0bc3 100644
          /// Finds the by path.
          /// </summary>
 diff --git a/MediaBrowser.XbmcMetadata/Savers/BaseNfoSaver.cs b/MediaBrowser.XbmcMetadata/Savers/BaseNfoSaver.cs
-index 78907a5e68..c58aeb141f 100644
+index 5a9bbbef4f..85ce142ecb 100644
 --- a/MediaBrowser.XbmcMetadata/Savers/BaseNfoSaver.cs
 +++ b/MediaBrowser.XbmcMetadata/Savers/BaseNfoSaver.cs
 @@ -960,9 +960,27 @@ namespace MediaBrowser.XbmcMetadata.Savers
@@ -1167,10 +1167,10 @@ index 0000000000..bc0fe31c98
 +    }
 +}
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
-index fe87cf086a..033ad0005a 100644
+index ed82e3efa5..ff7fcf0f99 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
-@@ -1036,10 +1036,15 @@ namespace Jellyfin.Server.Implementations.Migrations
+@@ -1037,10 +1037,15 @@ namespace Jellyfin.Server.Implementations.Migrations
                      b.Property<string>("PersonType")
                          .HasColumnType("TEXT");
  
