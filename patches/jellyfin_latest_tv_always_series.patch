@@ -1,8 +1,8 @@
 diff --git a/Jellyfin.Api/Controllers/UserLibraryController.cs b/Jellyfin.Api/Controllers/UserLibraryController.cs
-index 25f781e496..45dc71058e 100644
+index ea134a4619..bb2ed9f7ea 100644
 --- a/Jellyfin.Api/Controllers/UserLibraryController.cs
 +++ b/Jellyfin.Api/Controllers/UserLibraryController.cs
-@@ -573,7 +573,7 @@ public class UserLibraryController : BaseJellyfinApiController
+@@ -575,7 +575,7 @@ public class UserLibraryController : BaseJellyfinApiController
              var item = tuple.Item2[0];
              var childCount = 0;
  
@@ -12,10 +12,10 @@ index 25f781e496..45dc71058e 100644
                  item = tuple.Item1;
                  childCount = tuple.Item2.Count;
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs
-index dc16c3b1b3..222234996d 100644
+index c7acf72043..2022cbfe9f 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs
-@@ -247,141 +247,60 @@ public sealed partial class BaseItemRepository
+@@ -291,142 +291,61 @@ public sealed partial class BaseItemRepository
          var allEpisodes = episodeQuery
              .OrderByDescending(e => e.DateCreated)
              .ThenByDescending(e => e.Id)
@@ -169,12 +169,45 @@ index dc16c3b1b3..222234996d 100644
 +            seriesResults.Add((firstRecentSeriesId, maxDate, mostRecentEpisodeId));
          }
  
+         // Step 5b: A container is what gets returned, so it has to pass the user's access
+-        // filters on its own - a matching episode does not make a Season or Series the user
++        // filters on its own - a matching episode does not make a Series the user
+         // may not see visible. Containers that don't pass are replaced by their episode.
+         if (RequiresParentalRestrictions(filter) && entitiesToFetch.Count > 0)
+         {
+@@ -439,27 +358,23 @@ public sealed partial class BaseItemRepository
+ 
+             for (var i = 0; i < seriesResults.Count; i++)
+             {
+-                var (seasonId, seriesId, maxDate, mostRecentEpisodeId) = seriesResults[i];
+-                if (seasonId.HasValue && !allowedContainerIds.Contains(seasonId.Value))
+-                {
+-                    seasonId = null;
+-                }
++                var (seriesId, maxDate, mostRecentEpisodeId) = seriesResults[i];
+ 
+                 if (seriesId.HasValue && !allowedContainerIds.Contains(seriesId.Value))
+                 {
+                     seriesId = null;
+                 }
+ 
+-                if (seasonId is null && seriesId is null)
++                if (seriesId is null)
+                 {
+                     entitiesToFetch.Add(mostRecentEpisodeId);
+                 }
+ 
+-                seriesResults[i] = (seasonId, seriesId, maxDate, mostRecentEpisodeId);
++                seriesResults[i] = (seriesId, maxDate, mostRecentEpisodeId);
+             }
+         }
+ 
 -        // Step 6: Fetch the Season/Series entities we decided to return
 +        // Step 5: Fetch the Series (or fallback Episode) entities we decided to return
          var entities = entitiesToFetch.Count > 0
              ? ApplyNavigations(
                      context.BaseItems.AsNoTracking().Where(e => entitiesToFetch.Contains(e.Id)),
-@@ -390,17 +309,11 @@ public sealed partial class BaseItemRepository
+@@ -468,17 +383,11 @@ public sealed partial class BaseItemRepository
                  .ToDictionary(e => e.Id)
              : [];
  

@@ -297,10 +297,10 @@ index 0000000000..7da04dcc9e
 +    }
 +}
 diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-index 66bf6ebd24..ed06261462 100644
+index 3755277a12..a00ceb8647 100644
 --- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 +++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-@@ -30,6 +30,7 @@ using MediaBrowser.Model.Dto;
+@@ -31,6 +31,7 @@ using MediaBrowser.Model.Dto;
  using MediaBrowser.Model.Entities;
  using MediaBrowser.Model.Globalization;
  using MediaBrowser.Model.IO;
@@ -308,7 +308,7 @@ index 66bf6ebd24..ed06261462 100644
  using MediaBrowser.Model.MediaInfo;
  using Microsoft.Extensions.Configuration;
  using Microsoft.Extensions.Logging;
-@@ -167,6 +168,15 @@ namespace MediaBrowser.MediaEncoding.Encoder
+@@ -169,6 +170,15 @@ namespace MediaBrowser.MediaEncoding.Encoder
  
          public bool IsVideoToolboxAv1DecodeAvailable => _isVideoToolboxAv1DecodeAvailable;
  
@@ -324,7 +324,7 @@ index 66bf6ebd24..ed06261462 100644
          [GeneratedRegex(@"[^\/\\]+?(\.[^\/\\\n.]+)?$")]
          private static partial Regex FfprobePathRegex();
  
-@@ -376,6 +386,12 @@ namespace MediaBrowser.MediaEncoding.Encoder
+@@ -378,6 +388,12 @@ namespace MediaBrowser.MediaEncoding.Encoder
              return _hwaccels.Contains(hwaccel, StringComparer.OrdinalIgnoreCase);
          }
  

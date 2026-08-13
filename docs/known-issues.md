@@ -62,5 +62,4 @@ These are **Jellyfin** project issues/PRs carried as patches in this repo — se
 | [jellyfin#16880](https://github.com/jellyfin/jellyfin/issues/16880) / [jellyfin#17177](https://github.com/jellyfin/jellyfin/issues/17177) | Live TV stop without `LiveStreamId` / orphaned open streams (`jellyfin_livetv_stream`) |
 | [jellyfin#13668](https://github.com/jellyfin/jellyfin/issues/13668) | HLS remux segment restart thrash |
 | [jellyfin#16823](https://github.com/jellyfin/jellyfin/issues/16823) | HDR10+ MPEG-TS SEI |
-| [jellyfin#15897](https://github.com/jellyfin/jellyfin/issues/15897) | Disabled plugin deletion |
 | [jellyfin-web#7651](https://github.com/jellyfin/jellyfin-web/issues/7651) | Chrome/Opera MKV DirectPlay false positive |

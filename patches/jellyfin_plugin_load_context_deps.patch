@@ -1,5 +1,5 @@
 diff --git a/Emby.Server.Implementations/Plugins/PluginManager.cs b/Emby.Server.Implementations/Plugins/PluginManager.cs
-index f699c99d85..d7b800f353 100644
+index 8d29d6a512..a48fae09ac 100644
 --- a/Emby.Server.Implementations/Plugins/PluginManager.cs
 +++ b/Emby.Server.Implementations/Plugins/PluginManager.cs
 @@ -127,7 +127,14 @@ namespace Emby.Server.Implementations.Plugins

@@ -178,7 +178,7 @@ A scheduled GitHub Actions workflow ([`.github/workflows/sync-migrations.yaml`](
 
 1. Detects new Jellyfin releases and SQLite schema migrations via the GitHub API
 2. Bumps NuGet refs, the Docker base image version, and both `jellyfin` / `jellyfin-web` submodule gitlinks to the same tag
-3. Verifies patches apply, builds the solution against patched jellyfin (catches new API surface even when no schema migration is needed), then leaves submodules clean
+3. Rebases `patches/` from the previous tag onto the new one (`scripts/rebase-patches.sh`), verifies they apply, builds the solution against patched jellyfin (catches new API surface even when no schema migration is needed), then leaves submodules clean
 4. **Only if** Jellyfin’s latest SQLite migration advanced: generates a PostgreSQL `Update_*` via model diff (SQLite migrations are **not** copied), post-processes PG-specific fixes, and validates against Postgres
 5. Opens a collaborator-only PR for review and merge
 
@@ -190,7 +190,7 @@ When the scheduled sync workflow fails, it automatically opens (or updates) a co
 
 ### Manual sync
 
-Initialize the submodule and run the sync script locally (requires PostgreSQL, `gh`, and `jq`):
+Initialize the submodule and run the sync script locally (requires `gh`, `jq`, and Docker Compose when generating `Update_*`). If core SQLite migrations advanced, sync starts `docker-compose.dev.yaml` **postgres** (not the full Jellyfin stack) when nothing is listening, then generates and validates `Update_*`.
 
 ```bash
 git submodule update --init jellyfin
@@ -198,7 +198,15 @@ git submodule update --init jellyfin
 ./scripts/sync-jellyfin-migrations.sh --version X.Y.Z
 ```
 
-Options: `--force` to re-run when state appears current, `--dry-run` to check drift and NuGet/TFM compatibility without modifying the repo.
+CI already provides Postgres (`POSTGRES_PASSWORD=jellyfin`). Local compose uses `jellyfin_secure_pass`. Override `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_PASSWORD` if your database is not that default.
+
+Options: `--force` to re-run when state appears current, `--dry-run` to check drift and NuGet/TFM compatibility without modifying the repo, `--skip-rebase` to leave `patches/` unchanged (apply-only, old behaviour).
+
+Standalone patch rebase (same machinery sync uses):
+
+```bash
+./scripts/rebase-patches.sh --from v12.0-rc4 --to v12.0-rc5
+```
 
 Major Jellyfin upgrades (e.g. 12.x) require `net10.0`, Microsoft 10.x, and updated Npgsql packages. These are managed in [`Directory.Build.props`](Directory.Build.props) (`PluginTargetFramework`, `MicrosoftPackageVersion`, etc.) and bumped automatically by the sync script — you do not need to edit the csproj manually.
 

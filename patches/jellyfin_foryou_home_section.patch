@@ -1,8 +1,8 @@
 diff --git a/Jellyfin.Api/Controllers/DisplayPreferencesController.cs b/Jellyfin.Api/Controllers/DisplayPreferencesController.cs
-index c1287fe3f4..d4f74d53aa 100644
+index c1287fe3f4..9bd7f897a6 100644
 --- a/Jellyfin.Api/Controllers/DisplayPreferencesController.cs
 +++ b/Jellyfin.Api/Controllers/DisplayPreferencesController.cs
-@@ -126,10 +126,12 @@
+@@ -126,10 +126,12 @@ public class DisplayPreferencesController : BaseJellyfinApiController
              HomeSectionType.Resume,
              HomeSectionType.ResumeAudio,
              HomeSectionType.ResumeBook,
@@ -15,7 +15,7 @@ index c1287fe3f4..d4f74d53aa 100644
          };
  
          if (!Guid.TryParse(displayPreferencesId, out var itemId))
-@@ -183,7 +185,7 @@
+@@ -183,7 +185,7 @@ public class DisplayPreferencesController : BaseJellyfinApiController
              var order = int.Parse(key.AsSpan().Slice("homesection".Length), CultureInfo.InvariantCulture);
              if (!Enum.TryParse<HomeSectionType>(displayPreferences.CustomPrefs[key], true, out var type))
              {
@@ -28,7 +28,7 @@ diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/HomeS
 index 6ba57e74d5..0b67cb1b0e 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/HomeSectionType.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/HomeSectionType.cs
-@@ -53,5 +53,10 @@
+@@ -53,5 +53,10 @@ public enum HomeSectionType
      /// <summary>
      /// Continue Reading.
      /// </summary>

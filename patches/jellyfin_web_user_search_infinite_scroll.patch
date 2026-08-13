@@ -252,10 +252,10 @@ index af7ba3d52f..093f59760a 100644
      );
  };
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 6af511410e..2158b3b04a 100755
+index ddfb4a1cc5..b578f07a87 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -308,7 +308,7 @@
+@@ -324,7 +324,7 @@
      "EnableHi10p": "Enable H.264 High 10 Profile",
      "EnableHi10pHelp": "Enable to avoid transcoding H.264 10-bit videos. Disable this option if the video displays blank frames.",
      "EnableInfiniteScroll": "Enable infinite scroll",

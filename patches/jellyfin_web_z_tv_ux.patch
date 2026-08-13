@@ -301,7 +301,7 @@ index e2d47ecb14..2719126601 100644
  
          tabElement.querySelector('.btnShuffle').addEventListener('click', shuffle);
 diff --git a/src/apps/legacy/controllers/session/login/index.js b/src/apps/legacy/controllers/session/login/index.js
-index b70a0b4870..7307d3e310 100644
+index 4246d3dce1..bd00361ff6 100644
 --- a/src/apps/legacy/controllers/session/login/index.js
 +++ b/src/apps/legacy/controllers/session/login/index.js
 @@ -6,6 +6,13 @@ import { ServerConnections } from 'lib/jellyfin-apiclient';
@@ -318,7 +318,7 @@ index b70a0b4870..7307d3e310 100644
  import dom from 'utils/dom';
  import loading from 'components/loading/loading';
  import layoutManager from 'components/layoutManager';
-@@ -24,10 +31,26 @@ import './login.scss';
+@@ -30,10 +37,26 @@ domPurify.setConfig({
  
  const enableFocusTransform = !browser.slow && !browser.edge;
  
@@ -345,7 +345,7 @@ index b70a0b4870..7307d3e310 100644
          loading.hide();
  
          onLoginSuccessful(user.Id, result.AccessToken, apiClient, url);
-@@ -48,6 +71,13 @@ function authenticateUserByName(page, apiClient, url, username, password) {
+@@ -54,6 +77,13 @@ function authenticateUserByName(page, apiClient, url, username, password) {
      });
  }
  
@@ -359,7 +359,7 @@ index b70a0b4870..7307d3e310 100644
  function authenticateQuickConnect(apiClient, targetUrl) {
      const url = apiClient.getUrl('/QuickConnect/Initiate');
      apiClient.ajax({ type: 'POST', url }, true).then(res => res.json()).then(function (json) {
-@@ -74,22 +104,24 @@ function authenticateQuickConnect(apiClient, targetUrl) {
+@@ -80,22 +110,24 @@ function authenticateQuickConnect(apiClient, targetUrl) {
  
                  clearInterval(interval);
  
@@ -396,7 +396,7 @@ index b70a0b4870..7307d3e310 100644
  
                  Dashboard.alert({
                      message: globalize.translate('QuickConnectDeactivated'),
-@@ -114,7 +146,36 @@ function authenticateQuickConnect(apiClient, targetUrl) {
+@@ -120,7 +152,36 @@ function authenticateQuickConnect(apiClient, targetUrl) {
  
  function onLoginSuccessful(id, accessToken, apiClient, url) {
      Dashboard.onServerChanged(id, accessToken, apiClient);
@@ -434,7 +434,7 @@ index b70a0b4870..7307d3e310 100644
  }
  
  function showManualForm(context, showCancel, focusPassword) {
-@@ -136,6 +197,46 @@ function showManualForm(context, showCancel, focusPassword) {
+@@ -142,6 +203,46 @@ function showManualForm(context, showCancel, focusPassword) {
      }
  }
  
@@ -481,7 +481,7 @@ index b70a0b4870..7307d3e310 100644
  function loadUserList(context, apiClient, users) {
      let html = '';
  
-@@ -152,11 +253,12 @@ function loadUserList(context, apiClient, users) {
+@@ -158,11 +259,12 @@ function loadUserList(context, apiClient, users) {
          }
  
          const cardBoxCssClass = 'cardBox cardBox-bottompadded';
@@ -495,7 +495,7 @@ index b70a0b4870..7307d3e310 100644
          let imgUrl;
  
          if (user.PrimaryImageTag) {
-@@ -227,12 +329,29 @@ export default function (view, params) {
+@@ -233,12 +335,29 @@ export default function (view, params) {
              const id = cardContent.getAttribute('data-userid');
              const name = cardContent.getAttribute('data-username');
              const haspw = cardContent.getAttribute('data-haspw');
@@ -526,7 +526,7 @@ index b70a0b4870..7307d3e310 100644
              } else {
                  context.querySelector('#txtManualName').value = name;
                  context.querySelector('#txtManualPassword').value = '';
-@@ -265,12 +384,14 @@ export default function (view, params) {
+@@ -271,12 +390,14 @@ export default function (view, params) {
      view.addEventListener('viewshow', function () {
          loading.show();
          libraryMenu.setTransparentMenu(true);
@@ -541,7 +541,7 @@ index b70a0b4870..7307d3e310 100644
  
          let autoQuickConnectStarted = false;
  
-@@ -280,8 +401,9 @@ export default function (view, params) {
+@@ -286,8 +407,9 @@ export default function (view, params) {
                      view.querySelector('.btnQuick').classList.remove('hide');
  
                      // TV remotes struggle with username/password (and SSO IdP UIs).
@@ -553,7 +553,7 @@ index b70a0b4870..7307d3e310 100644
                          autoQuickConnectStarted = true;
                          authenticateQuickConnect(apiClient, getTargetUrl());
                      }
-@@ -291,7 +413,8 @@ export default function (view, params) {
+@@ -297,7 +419,8 @@ export default function (view, params) {
                  console.debug('Failed to get QuickConnect status');
              });
  
@@ -563,7 +563,7 @@ index b70a0b4870..7307d3e310 100644
              if (users.length) {
                  showVisualForm();
                  loadUserList(view, apiClient, users);
-@@ -325,4 +448,3 @@ export default function (view, params) {
+@@ -331,4 +454,3 @@ export default function (view, params) {
          libraryMenu.setTransparentMenu(false);
      });
  }
@@ -776,10 +776,10 @@ index 029c0e4bb0..e4cebc990a 100644
                  onClick={onLogoutClick}
              >
 diff --git a/src/elements/emby-itemscontainer/emby-itemscontainer.js b/src/elements/emby-itemscontainer/emby-itemscontainer.js
-index a6e4158e8c..0692e56078 100644
+index 7ce51f477d..a4f300996e 100644
 --- a/src/elements/emby-itemscontainer/emby-itemscontainer.js
 +++ b/src/elements/emby-itemscontainer/emby-itemscontainer.js
-@@ -445,7 +445,14 @@ function onDataFetched(result) {
+@@ -439,7 +439,14 @@ function onDataFetched(result) {
          focusId = activeElement.getAttribute('data-id');
      }
  
@@ -1058,10 +1058,10 @@ index 0000000000..285da85792
 +    clearRememberedUserToken
 +};
 diff --git a/src/scripts/settings/userSettings.js b/src/scripts/settings/userSettings.js
-index 132e1781f0..caa049b4d3 100644
+index d720cf60e9..28db6fd0d2 100644
 --- a/src/scripts/settings/userSettings.js
 +++ b/src/scripts/settings/userSettings.js
-@@ -284,7 +284,9 @@ export class UserSettings {
+@@ -285,7 +285,9 @@ export class UserSettings {
              return this.set('fastFadein', val.toString(), false);
          }
  
@@ -1072,7 +1072,7 @@ index 132e1781f0..caa049b4d3 100644
      }
  
      /**
-@@ -297,7 +299,9 @@ export class UserSettings {
+@@ -298,7 +300,9 @@ export class UserSettings {
              return this.set('blurhash', val.toString(), false);
          }
  
@@ -1084,10 +1084,10 @@ index 132e1781f0..caa049b4d3 100644
  
      /**
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 9f98af9c59..b2e65b50ca 100755
+index 620f816d4b..333d4e460e 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -148,6 +148,7 @@
+@@ -154,6 +154,7 @@
      "ButtonShutdown": "Shutdown",
      "ButtonSignIn": "Sign In",
      "ButtonSignOut": "Sign Out",
@@ -1096,7 +1096,7 @@ index 9f98af9c59..b2e65b50ca 100755
      "ButtonSpace": "Space",
      "ButtonSplit": "Split",
 diff --git a/src/utils/dashboard.js b/src/utils/dashboard.js
-index 3390548ced..05e34241e4 100644
+index 9ae4237e55..f8b6d1193b 100644
 --- a/src/utils/dashboard.js
 +++ b/src/utils/dashboard.js
 @@ -15,6 +15,11 @@ import { setBackdropTransparency } from '../components/backdrop/backdrop';
@@ -1128,7 +1128,7 @@ index 3390548ced..05e34241e4 100644
          // Clear the query cache
          queryClient.clear();
          // Reset cached views
-@@ -112,6 +126,63 @@ export function logout() {
+@@ -116,6 +130,63 @@ export function logout() {
      });
  }
  
@@ -1192,7 +1192,7 @@ index 3390548ced..05e34241e4 100644
  export function getPluginUrl(name) {
      return 'configurationpage?name=' + encodeURIComponent(name);
  }
-@@ -266,6 +337,7 @@ const Dashboard = {
+@@ -247,6 +318,7 @@ const Dashboard = {
      getCurrentUserId,
      hideLoadingMsg,
      logout,

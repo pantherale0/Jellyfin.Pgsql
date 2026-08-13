@@ -1,4 +1,3 @@
-# Live TV stream hardening: rolling chunk buffers (LiveStreamKeepSeconds), configurable probe delay/analyzeduration/probesize, non-blocking live-stream open/close (global lock no longer held across network I/O), per-channel keyed open lock + ConsumerCount ownership in MediaSourceManager, reverse-close when stop omits LiveStreamId, 2-minute orphaned open-stream sweeper, LiveStreamOpenTimeoutMs for M3U SharedHttpStream connect/first-byte, dispose of streams that fail to open, structured diagnostic logging for open/share/FirstPull, SharedHttpStream for extensionless HTTP origins, and live.m3u8 open-before-ffmpeg-CLI so -i uses the post-open buffer Path.
 diff --git a/Emby.Server.Implementations/Library/LiveStreamHelper.cs b/Emby.Server.Implementations/Library/LiveStreamHelper.cs
 index 0ebfe3ae71..2b7df3e41e 100644
 --- a/Emby.Server.Implementations/Library/LiveStreamHelper.cs
@@ -505,7 +504,7 @@ index 97e00177b6..97801ddb6b 100644
          }
      }
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 828bdd6859..7c4d45779b 100644
+index 5d62332552..9c1d061741 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -317,10 +317,56 @@ namespace Emby.Server.Implementations.Session
@@ -583,7 +582,7 @@ index 828bdd6859..7c4d45779b 100644
          }
  
          private void StopIdleCheckTimer()
-@@ -669,46 +710,123 @@ namespace Emby.Server.Implementations.Session
+@@ -668,46 +709,123 @@ namespace Emby.Server.Implementations.Session
              {
                  StopIdleCheckTimer();
              }
@@ -730,7 +729,7 @@ index 828bdd6859..7c4d45779b 100644
          private BaseItem GetNowPlayingItem(SessionInfo session, Guid itemId)
          {
              if (session is null)
-@@ -1066,6 +1184,10 @@ namespace Emby.Server.Implementations.Session
+@@ -1065,6 +1183,10 @@ namespace Emby.Server.Implementations.Session
                  {
                      await CloseLiveStreamIfNeededAsync(info.LiveStreamId, session.Id).ConfigureAwait(false);
                  }
@@ -741,7 +740,7 @@ index 828bdd6859..7c4d45779b 100644
  
                  throw new ArgumentOutOfRangeException(nameof(info), "The PlaybackStopInfo's PositionTicks was negative.");
              }
-@@ -1139,6 +1261,10 @@ namespace Emby.Server.Implementations.Session
+@@ -1138,6 +1260,10 @@ namespace Emby.Server.Implementations.Session
              {
                  await CloseLiveStreamIfNeededAsync(info.LiveStreamId, session.Id).ConfigureAwait(false);
              }
@@ -753,7 +752,7 @@ index 828bdd6859..7c4d45779b 100644
              var eventArgs = new PlaybackStopEventArgs
              {
 diff --git a/Jellyfin.Api/Controllers/DynamicHlsController.cs b/Jellyfin.Api/Controllers/DynamicHlsController.cs
-index d5ccaeacde..07d6458d15 100644
+index 9245d37514..8db377c147 100644
 --- a/Jellyfin.Api/Controllers/DynamicHlsController.cs
 +++ b/Jellyfin.Api/Controllers/DynamicHlsController.cs
 @@ -16,6 +16,7 @@ using Jellyfin.Data.Enums;
@@ -922,7 +921,7 @@ index 2b6781a197..9464ee3cdc 100644
          /// Gets the media sources for an active recording.
          /// </summary>
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-index 2dcf6f38ed..3f86f25158 100644
+index 7da04943ca..a3caa3d545 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 @@ -1303,7 +1303,7 @@ namespace MediaBrowser.Controller.MediaEncoding
@@ -964,10 +963,10 @@ index 2dcf6f38ed..3f86f25158 100644
              if (!string.IsNullOrEmpty(ffmpegProbeSizeArgument))
              {
 diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-index 28e5b64034..0dad188d50 100644
+index a00ceb8647..9394159625 100644
 --- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 +++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-@@ -475,9 +475,12 @@ namespace MediaBrowser.MediaEncoding.Encoder
+@@ -476,9 +476,12 @@ namespace MediaBrowser.MediaEncoding.Encoder
                  extraArgs = analyzeDuration;
              }
  

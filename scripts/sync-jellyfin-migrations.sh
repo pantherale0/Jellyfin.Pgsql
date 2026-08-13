@@ -23,6 +23,7 @@ RESOLVED_DOTNET_EF_VERSION=""
 FORCE=false
 TARGET_VERSION=""
 DRY_RUN=false
+SKIP_REBASE=false
 
 usage() {
     cat <<EOF
@@ -34,6 +35,7 @@ Options:
   --version VERSION   Target Jellyfin version (default: latest release, including pre-releases)
   --force             Run sync even if state appears up to date
   --dry-run           Detect drift and report without making changes
+  --skip-rebase       Do not rewrite patches/ onto the new tag (fail on apply as before)
   -h, --help          Show this help
 
 Notes:
@@ -41,11 +43,21 @@ Notes:
   TargetFramework and Microsoft/Npgsql package versions are managed via Directory.Build.props
   and are updated automatically during sync.
 
+  When the Jellyfin tag changes, patch files are replayed as commits on the previous tag
+  and rebased onto the new tag (\`scripts/rebase-patches.sh\`). True merge conflicts still
+  need a manual export. Use --skip-rebase to keep the old apply-only behaviour.
+
   Update_* migrations are generated only when Jellyfin's SQLite migration set advances.
   Tag-only bumps (same latest core migration) update refs/submodules and verify patches,
   but do not run EF — patch schema belongs in dedicated plugin migrations, not Update_*.
   Every sync still applies server patches and builds the solution so new Jellyfin API
   surface (interface members, etc.) is caught even when no Update_* is generated.
+
+  Generating Update_* requires PostgreSQL. Locally the script starts
+  docker-compose.dev.yaml postgres (not the full stack) when nothing is
+  listening on POSTGRES_HOST:PORT. CI uses the workflow Postgres service.
+  Override POSTGRES_PASSWORD if your database is not the compose default
+  (jellyfin_secure_pass) or the CI default (jellyfin).
 EOF
 }
 
@@ -61,6 +73,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --dry-run)
             DRY_RUN=true
+            shift
+            ;;
+        --skip-rebase)
+            SKIP_REBASE=true
             shift
             ;;
         -h|--help)
@@ -88,6 +104,9 @@ require_cmd git
 require_cmd dotnet
 require_cmd sed
 require_cmd curl
+
+# shellcheck source=lib-ensure-dev-postgres.sh
+source "${SCRIPT_DIR}/lib-ensure-dev-postgres.sh"
 
 read_state() {
     jq -r "$1" "${STATE_FILE}"
@@ -293,6 +312,7 @@ begin_sync_backup() {
     cp "${STATE_FILE}" "${SYNC_BACKUP_DIR}/"
     cp "${REPO_ROOT}/.config/dotnet-tools.json" "${SYNC_BACKUP_DIR}/"
     cp -a "${MIGRATIONS_DIR}" "${SYNC_BACKUP_DIR}/Migrations"
+    cp -a "${REPO_ROOT}/patches" "${SYNC_BACKUP_DIR}/patches"
     git -C "${REPO_ROOT}/jellyfin" rev-parse HEAD > "${SYNC_BACKUP_DIR}/jellyfin_commit"
     if [[ -d "${REPO_ROOT}/jellyfin-web/.git" ]] || [[ -f "${REPO_ROOT}/jellyfin-web/.git" ]]; then
         git -C "${REPO_ROOT}/jellyfin-web" rev-parse HEAD > "${SYNC_BACKUP_DIR}/jellyfin_web_commit"
@@ -336,6 +356,10 @@ rollback_sync() {
     cp "${SYNC_BACKUP_DIR}/dotnet-tools.json" "${REPO_ROOT}/.config/"
     rm -rf "${MIGRATIONS_DIR}"
     cp -a "${SYNC_BACKUP_DIR}/Migrations" "${MIGRATIONS_DIR}"
+    if [[ -d "${SYNC_BACKUP_DIR}/patches" ]]; then
+        rm -rf "${REPO_ROOT}/patches"
+        cp -a "${SYNC_BACKUP_DIR}/patches" "${REPO_ROOT}/patches"
+    fi
 
     restore_submodule_commit jellyfin "${SYNC_BACKUP_DIR}/jellyfin_commit"
     restore_submodule_commit jellyfin-web "${SYNC_BACKUP_DIR}/jellyfin_web_commit"
@@ -378,6 +402,7 @@ write_failure_report() {
         echo "## Next steps"
         echo ""
         echo "- Review the workflow log and reproduce locally: \`./scripts/sync-jellyfin-migrations.sh --version ${TARGET_VERSION}\`"
+        echo "- If patches failed to apply, rebase with \`./scripts/rebase-patches.sh --from v${STATE_VERSION:-PREV} --to v${TARGET_VERSION}\` or export-patch.sh after resolving conflicts."
         echo "- Fix the underlying issue, then re-run the sync workflow or close this issue when resolved."
     } > "${FAILURE_REPORT}"
 }
@@ -462,9 +487,9 @@ verify_patches() {
     if ! bash "${SCRIPT_DIR}/apply-patches.sh" "${target}"; then
         local hint="Rebase matching files under \`patches/\` onto v${TARGET_VERSION}, then re-run sync."
         if [[ "${target}" == "jellyfin-web" ]]; then
-            hint="Rebase \`patches/jellyfin_web*.patch\` onto v${TARGET_VERSION}, then re-run sync."
+            hint="Rebase with \`./scripts/rebase-patches.sh --from v${STATE_VERSION} --to v${TARGET_VERSION} --target jellyfin-web\`, then re-run sync."
         else
-            hint="Rebase \`patches/jellyfin_*.patch\` (excluding jellyfin_web*) onto v${TARGET_VERSION}, then re-run sync."
+            hint="Rebase with \`./scripts/rebase-patches.sh --from v${STATE_VERSION} --to v${TARGET_VERSION} --target jellyfin\`, then re-run sync."
         fi
         fail_sync "apply-patches" \
             "Patches for \`${target}\` failed to apply on v${TARGET_VERSION}." \
@@ -473,6 +498,60 @@ verify_patches() {
     if [[ "${keep_applied}" != "true" ]]; then
         reset_submodule_clean "${target}"
     fi
+}
+
+rebase_patch_series() {
+    local from_tag="$1"
+    local to_tag="$2"
+
+    from_tag="${from_tag#v}"
+    to_tag="${to_tag#v}"
+    if [[ -z "${from_tag}" || -z "${to_tag}" || "${from_tag}" == "${to_tag}" ]]; then
+        return 0
+    fi
+    if [[ "${SKIP_REBASE}" == "true" ]]; then
+        echo "[sync] Skipping patch rebase (--skip-rebase)."
+        return 0
+    fi
+
+    # If the current patches already apply on the destination tag, do not replay
+    # them onto the old tag (that fails after a successful rebase rewrite).
+    echo "[sync] Checking whether patches already apply on v${to_tag}..."
+    if bash "${SCRIPT_DIR}/apply-patches.sh" jellyfin \
+        && { [[ ! -d "${REPO_ROOT}/jellyfin-web/.git" && ! -f "${REPO_ROOT}/jellyfin-web/.git" ]] \
+            || bash "${SCRIPT_DIR}/apply-patches.sh" jellyfin-web; }; then
+        echo "[sync] Patches already apply on v${to_tag}; skipping rebase."
+        reset_submodule_clean jellyfin
+        reset_submodule_clean jellyfin-web
+        echo "" >> "${SYNC_REPORT}"
+        echo "## Patches" >> "${SYNC_REPORT}"
+        echo "- Already applied on v${to_tag}; rebase skipped." >> "${SYNC_REPORT}"
+        return 0
+    fi
+
+    echo "[sync] Apply on v${to_tag} failed; rebasing patches v${from_tag} -> v${to_tag}..."
+    local report
+    report="$(mktemp)"
+    echo "[sync] Rebasing patches v${from_tag} -> v${to_tag}..."
+    if ! bash "${SCRIPT_DIR}/rebase-patches.sh" \
+        --from "v${from_tag}" \
+        --to "v${to_tag}" \
+        --conflict-report "${report}"; then
+        local details=""
+        if [[ -s "${report}" ]]; then
+            details="$(cat "${report}")"
+        fi
+        rm -f "${report}"
+        fail_sync "rebase-patches" \
+            "Could not rebase \`patches/\` from v${from_tag} onto v${to_tag}." \
+            "${details}"
+    fi
+    rm -f "${report}"
+
+    echo "" >> "${SYNC_REPORT}"
+    echo "## Patches" >> "${SYNC_REPORT}"
+    echo "- Rebased \`patches/\` from v${from_tag} onto v${to_tag}." >> "${SYNC_REPORT}"
+    git -C "${REPO_ROOT}" add patches 2>/dev/null || true
 }
 
 verify_solution_build() {
@@ -604,9 +683,24 @@ if [[ "${DRY_RUN}" == "true" ]]; then
         echo "[sync] Dry run: would skip EF migration generation (no new core migrations)."
     fi
     echo "[sync] Dry run: would apply patches and build the solution (API surface check)."
+    if version_gt "${TARGET_VERSION}" "${STATE_VERSION}" || [[ "${TARGET_VERSION}" != "${STATE_VERSION}" ]]; then
+        if [[ "${SKIP_REBASE}" == "true" ]]; then
+            echo "[sync] Dry run: would skip patch rebase (--skip-rebase)."
+        else
+            echo "[sync] Dry run: would rebase patches/ from v${STATE_VERSION} onto v${TARGET_VERSION}."
+        fi
+    fi
     if ! preflight_check "${TARGET_VERSION}"; then
         echo "[sync] Dry run: pre-flight failed — no changes were made."
         exit 1
+    fi
+    if [[ "${HAS_NEW_CORE_MIGRATIONS}" == "true" ]]; then
+        if postgres_is_ready; then
+            echo "[sync] Dry run: PostgreSQL is reachable (validate would run)."
+        else
+            echo "[sync] Dry run: PostgreSQL is not reachable at ${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}."
+            echo "[sync]          Real sync would start docker-compose.dev.yaml postgres (not the full stack)."
+        fi
     fi
     exit 0
 fi
@@ -616,6 +710,15 @@ if ! preflight_check "${TARGET_VERSION}"; then
         write_failure_report "pre-flight" "Pre-flight check failed." ""
     fi
     exit 1
+fi
+
+if [[ "${HAS_NEW_CORE_MIGRATIONS}" == "true" ]]; then
+    if ! ensure_dev_postgres "[sync]"; then
+        write_failure_report "pre-flight" \
+            "PostgreSQL was not available before generating Update_*." \
+            "Local sync starts docker-compose.dev.yaml postgres when localhost is down. CI uses the workflow Postgres service. Override POSTGRES_HOST/PORT/PASSWORD if needed."
+        exit 1
+    fi
 fi
 
 trap on_sync_exit EXIT
@@ -642,6 +745,9 @@ bump_version_refs "${TARGET_VERSION}"
 SYNC_STAGE="update-submodule"
 update_submodules "${TARGET_VERSION}"
 SUBMODULE_COMMIT="$(get_submodule_commit)"
+
+SYNC_STAGE="rebase-patches"
+rebase_patch_series "${STATE_VERSION}" "${TARGET_VERSION}"
 
 # Apply server patches and keep them for the solution build / optional EF generation.
 # Patch schema must live in dedicated plugin migrations — never rely on Update_* to capture it.

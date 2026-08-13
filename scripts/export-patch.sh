@@ -19,6 +19,7 @@ cd "$REPO_ROOT"
 
 PATCH_BASE=$(basename "$PATCH_ARG")
 PATCH_FILE="patches/$PATCH_BASE"
+STATE_FILE="$REPO_ROOT/.github/jellyfin-sync-state.json"
 
 # Determine target submodule based on naming convention
 case "$PATCH_BASE" in
@@ -32,6 +33,23 @@ case "$PATCH_BASE" in
         echo "Error: Patch filename must start with jellyfin_web_ or jellyfin_"
         exit 1
         ;;
+esac
+
+# Baseline tag: env override, then sync state, then exact tag at HEAD.
+BASE_TAG="${JELLYFIN_PATCH_BASE_TAG:-}"
+if [ -z "$BASE_TAG" ] && [ -f "$STATE_FILE" ]; then
+    BASE_TAG=$(jq -r '.jellyfinSubmoduleTag // empty' "$STATE_FILE" 2>/dev/null || true)
+fi
+if [ -z "$BASE_TAG" ]; then
+    BASE_TAG=$(git -C "$TARGET" describe --tags --exact-match HEAD 2>/dev/null || true)
+fi
+if [ -z "$BASE_TAG" ]; then
+    echo "Error: could not determine submodule release tag. Set JELLYFIN_PATCH_BASE_TAG (e.g. v12.0-rc5)."
+    exit 1
+fi
+case "$BASE_TAG" in
+    v*) ;;
+    *) BASE_TAG="v$BASE_TAG" ;;
 esac
 
 echo "================================================================="
@@ -64,8 +82,8 @@ git -C "$TARGET" diff > "$TEMP_CHANGES"
 done) || true
 
 # Reset submodule to clean release tag
-echo "Resetting $TARGET submodule to clean state..."
-git -C "$TARGET" reset --hard v12.0-rc4 >/dev/null
+echo "Resetting $TARGET submodule to clean $BASE_TAG..."
+git -C "$TARGET" reset --hard "$BASE_TAG" >/dev/null
 git -C "$TARGET" clean -fd >/dev/null
 
 # Backup target patch temporarily if it exists
@@ -116,8 +134,8 @@ grep "^diff --git" "$PATCH_FILE" | sed 's/diff --git a\//  - /' | sed 's/ b\/.*/
 echo "-----------------------------------------------------------------"
 
 # Reset submodule back to clean state
-echo "Resetting $TARGET submodule to clean state..."
-git -C "$TARGET" reset --hard v12.0-rc4 >/dev/null
+echo "Resetting $TARGET submodule to clean $BASE_TAG..."
+git -C "$TARGET" reset --hard "$BASE_TAG" >/dev/null
 git -C "$TARGET" clean -fd >/dev/null
 
 if [ "$TARGET" = "jellyfin-web" ]; then

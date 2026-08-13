@@ -5,9 +5,19 @@
 #   jellyfin_web*.patch  -> jellyfin-web/
 #   jellyfin_*.patch     -> jellyfin/  (excluding jellyfin_web*)
 #
-# Usage: apply-patches.sh [jellyfin|jellyfin-web|all] [patches-dir]
+# Usage:
+#   apply-patches.sh [jellyfin|jellyfin-web|all] [patches-dir]
+#   apply-patches.sh --list [jellyfin|jellyfin-web|all] [patches-dir]
+#
+# --list prints matching patch paths in apply order (no submodule reset).
 
 set -eu
+
+LIST_ONLY=0
+if [ "${1:-}" = "--list" ]; then
+    LIST_ONLY=1
+    shift
+fi
 
 TARGET="${1:-all}"
 PATCHES_DIR="${2:-patches}"
@@ -17,13 +27,54 @@ REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 cd "$REPO_ROOT"
 
 if [ "$TARGET" = "all" ]; then
-    "$0" jellyfin "$PATCHES_DIR"
-    "$0" jellyfin-web "$PATCHES_DIR"
+    "$0" $([ "$LIST_ONLY" = 1 ] && echo --list) jellyfin "$PATCHES_DIR"
+    "$0" $([ "$LIST_ONLY" = 1 ] && echo --list) jellyfin-web "$PATCHES_DIR"
     exit 0
 fi
 
+case "$TARGET" in
+    jellyfin|jellyfin-web)
+        ;;
+    *)
+        echo "Unknown target: $TARGET (expected jellyfin, jellyfin-web, or all)" >&2
+        exit 1
+        ;;
+esac
+
 if [ ! -d "$PATCHES_DIR" ]; then
+    if [ "$LIST_ONLY" = 1 ]; then
+        exit 0
+    fi
     echo "No patches directory found at $PATCHES_DIR; skipping."
+    exit 0
+fi
+
+patch_matches() {
+    base="$1"
+    case "$TARGET" in
+        jellyfin-web)
+            case "$base" in
+                jellyfin_web*.patch) return 0 ;;
+            esac
+            ;;
+        jellyfin)
+            case "$base" in
+                jellyfin_web*.patch) return 1 ;;
+                jellyfin_*.patch|jellyfin.patch) return 0 ;;
+            esac
+            ;;
+    esac
+    return 1
+}
+
+if [ "$LIST_ONLY" = 1 ]; then
+    # shellcheck disable=SC2012
+    for patch_file in $(ls "$PATCHES_DIR"/*.patch 2>/dev/null | sort); do
+        base=$(basename "$patch_file")
+        if patch_matches "$base"; then
+            echo "$patch_file"
+        fi
+    done
     exit 0
 fi
 
@@ -43,37 +94,20 @@ apply_patch() {
         /*) abs_patch="$patch_file" ;;
         *)  abs_patch="$REPO_ROOT/$patch_file" ;;
     esac
-    (cd "$TARGET" && git apply -p1 "$abs_patch")
+    if ! (cd "$TARGET" && git apply -p1 "$abs_patch"); then
+        echo "ERROR: $patch_file failed to apply to $TARGET/" >&2
+        exit 1
+    fi
 }
 
 found=0
 # shellcheck disable=SC2012
 for patch_file in $(ls "$PATCHES_DIR"/*.patch 2>/dev/null | sort); do
     base=$(basename "$patch_file")
-    case "$TARGET" in
-        jellyfin-web)
-            case "$base" in
-                jellyfin_web*.patch)
-                    apply_patch "$patch_file"
-                    found=1
-                    ;;
-            esac
-            ;;
-        jellyfin)
-            case "$base" in
-                jellyfin_web*.patch)
-                    ;; # handled by jellyfin-web target
-                jellyfin_*.patch|jellyfin.patch)
-                    apply_patch "$patch_file"
-                    found=1
-                    ;;
-            esac
-            ;;
-        *)
-            echo "Unknown target: $TARGET (expected jellyfin, jellyfin-web, or all)" >&2
-            exit 1
-            ;;
-    esac
+    if patch_matches "$base"; then
+        apply_patch "$patch_file"
+        found=1
+    fi
 done
 
 if [ "$found" -eq 0 ]; then

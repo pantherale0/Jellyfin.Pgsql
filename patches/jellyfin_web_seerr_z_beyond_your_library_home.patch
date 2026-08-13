@@ -1,4 +1,173 @@
---- a/src/components/homesections/sections/beyondYourLibrary.ts
+diff --git a/src/components/homeScreenSettings/homeScreenSettings.template.html b/src/components/homeScreenSettings/homeScreenSettings.template.html
+index c0b50a3385..91b8181cbd 100644
+--- a/src/components/homeScreenSettings/homeScreenSettings.template.html
++++ b/src/components/homeScreenSettings/homeScreenSettings.template.html
+@@ -22,6 +22,7 @@ <h2 class="sectionTitle">${Home}</h2>
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -37,6 +38,7 @@ <h2 class="sectionTitle">${Home}</h2>
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -52,6 +54,7 @@ <h2 class="sectionTitle">${Home}</h2>
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -67,6 +70,7 @@ <h2 class="sectionTitle">${Home}</h2>
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -82,6 +86,7 @@ <h2 class="sectionTitle">${Home}</h2>
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -97,6 +102,7 @@ <h2 class="sectionTitle">${Home}</h2>
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -112,6 +118,7 @@ <h2 class="sectionTitle">${Home}</h2>
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -127,6 +134,7 @@ <h2 class="sectionTitle">${Home}</h2>
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -142,6 +150,7 @@ <h2 class="sectionTitle">${Home}</h2>
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -157,6 +166,7 @@ <h2 class="sectionTitle">${Home}</h2>
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
+                 <option value="foryou">${HeaderForYou}</option>
++                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+diff --git a/src/components/homesections/homesections.js b/src/components/homesections/homesections.js
+index 8d82cc6c8a..17e1632a85 100644
+--- a/src/components/homesections/homesections.js
++++ b/src/components/homesections/homesections.js
+@@ -7,6 +7,7 @@ import Dashboard from 'utils/dashboard';
+ import { queryClient } from 'utils/query/queryClient';
+ 
+ import { loadRecordings } from './sections/activeRecordings';
++import { loadBeyondYourLibrary } from './sections/beyondYourLibrary';
+ import { loadForYou } from './sections/forYou';
+ import { loadLibraryButtons } from './sections/libraryButtons';
+ import { loadLibraryTiles } from './sections/libraryTiles';
+@@ -150,6 +151,8 @@ function loadSection(page, apiClient, user, userSettings, userViews, section, in
+         case HomeSectionType.ForYou:
+             loadForYou(elem, apiClient, options);
+             break;
++        case HomeSectionType.BeyondYourLibrary:
++            return loadBeyondYourLibrary(elem, apiClient, options);
+         case HomeSectionType.LatestMedia:
+             loadRecentlyAdded(elem, apiClient, user, userViews, options);
+             break;
+diff --git a/src/components/homesections/sections/beyondYourLibrary.scss b/src/components/homesections/sections/beyondYourLibrary.scss
+new file mode 100644
+index 0000000000..6f67f43eb1
+--- /dev/null
++++ b/src/components/homesections/sections/beyondYourLibrary.scss
+@@ -0,0 +1,55 @@
++.beyondYourLibraryScroller {
++    display: flex;
++    flex-direction: row;
++    gap: 0.85rem;
++    overflow-x: auto;
++    padding-bottom: 0.35rem;
++}
++
++.beyondYourLibraryCard {
++    flex: 0 0 auto;
++    width: 8.5rem;
++    display: flex;
++    flex-direction: column;
++    gap: 0.4rem;
++}
++
++.beyondYourLibraryPoster {
++    width: 8.5rem;
++    height: 12.75rem;
++    overflow: hidden;
++    border-radius: 0.25rem;
++    background: rgba(255, 255, 255, 0.08);
++}
++
++.beyondYourLibraryPoster img {
++    width: 100%;
++    height: 100%;
++    object-fit: cover;
++    display: block;
++}
++
++.beyondYourLibraryPosterPlaceholder {
++    width: 100%;
++    height: 100%;
++}
++
++.beyondYourLibraryTitle {
++    font-weight: 600;
++    font-size: 0.92em;
++    line-height: 1.25;
++    display: -webkit-box;
++    -webkit-line-clamp: 2;
++    -webkit-box-orient: vertical;
++    overflow: hidden;
++    min-height: 2.5em;
++}
++
++.beyondYourLibraryMeta {
++    font-size: 0.85em;
++}
++
++.beyondYourLibraryCard .emby-button {
++    width: 100%;
++    margin: 0;
++}
+diff --git a/src/components/homesections/sections/beyondYourLibrary.ts b/src/components/homesections/sections/beyondYourLibrary.ts
+new file mode 100644
+index 0000000000..49e354cd16
+--- /dev/null
 +++ b/src/components/homesections/sections/beyondYourLibrary.ts
 @@ -0,0 +1,272 @@
 +import type { ApiClient } from 'jellyfin-apiclient';
@@ -273,67 +442,11 @@
 +        elem.classList.add('hide');
 +    }
 +}
---- a/src/components/homesections/sections/beyondYourLibrary.scss
-+++ b/src/components/homesections/sections/beyondYourLibrary.scss
-@@ -0,0 +1,55 @@
-+.beyondYourLibraryScroller {
-+    display: flex;
-+    flex-direction: row;
-+    gap: 0.85rem;
-+    overflow-x: auto;
-+    padding-bottom: 0.35rem;
-+}
-+
-+.beyondYourLibraryCard {
-+    flex: 0 0 auto;
-+    width: 8.5rem;
-+    display: flex;
-+    flex-direction: column;
-+    gap: 0.4rem;
-+}
-+
-+.beyondYourLibraryPoster {
-+    width: 8.5rem;
-+    height: 12.75rem;
-+    overflow: hidden;
-+    border-radius: 0.25rem;
-+    background: rgba(255, 255, 255, 0.08);
-+}
-+
-+.beyondYourLibraryPoster img {
-+    width: 100%;
-+    height: 100%;
-+    object-fit: cover;
-+    display: block;
-+}
-+
-+.beyondYourLibraryPosterPlaceholder {
-+    width: 100%;
-+    height: 100%;
-+}
-+
-+.beyondYourLibraryTitle {
-+    font-weight: 600;
-+    font-size: 0.92em;
-+    line-height: 1.25;
-+    display: -webkit-box;
-+    -webkit-line-clamp: 2;
-+    -webkit-box-orient: vertical;
-+    overflow: hidden;
-+    min-height: 2.5em;
-+}
-+
-+.beyondYourLibraryMeta {
-+    font-size: 0.85em;
-+}
-+
-+.beyondYourLibraryCard .emby-button {
-+    width: 100%;
-+    margin: 0;
-+}
+diff --git a/src/constants/homeSectionType.ts b/src/constants/homeSectionType.ts
+index 0c03c483f2..4f670101e3 100644
 --- a/src/constants/homeSectionType.ts
 +++ b/src/constants/homeSectionType.ts
-@@ -11,7 +11,8 @@
+@@ -11,7 +11,8 @@ export enum HomeSectionType {
      NextUp = 'nextup',
      LiveTv = 'livetv',
      ResumeBook = 'resumebook',
@@ -343,110 +456,11 @@
  }
  
  // NOTE: This needs to match the server defaults
---- a/src/components/homesections/homesections.js
-+++ b/src/components/homesections/homesections.js
-@@ -7,6 +7,7 @@
- import { queryClient } from 'utils/query/queryClient';
- 
- import { loadRecordings } from './sections/activeRecordings';
-+import { loadBeyondYourLibrary } from './sections/beyondYourLibrary';
- import { loadForYou } from './sections/forYou';
- import { loadLibraryButtons } from './sections/libraryButtons';
- import { loadLibraryTiles } from './sections/libraryTiles';
-@@ -149,6 +150,8 @@
-         case HomeSectionType.ForYou:
-             loadForYou(elem, apiClient, options);
-             break;
-+        case HomeSectionType.BeyondYourLibrary:
-+            return loadBeyondYourLibrary(elem, apiClient, options);
-         case HomeSectionType.LatestMedia:
-             loadRecentlyAdded(elem, apiClient, user, userViews, options);
-             break;
---- a/src/components/homeScreenSettings/homeScreenSettings.template.html
-+++ b/src/components/homeScreenSettings/homeScreenSettings.template.html
-@@ -22,6 +22,7 @@
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-                 <option value="foryou">${HeaderForYou}</option>
-+                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
-@@ -37,6 +38,7 @@
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-                 <option value="foryou">${HeaderForYou}</option>
-+                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
-@@ -52,6 +54,7 @@
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-                 <option value="foryou">${HeaderForYou}</option>
-+                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
-@@ -67,6 +70,7 @@
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-                 <option value="foryou">${HeaderForYou}</option>
-+                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
-@@ -82,6 +86,7 @@
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-                 <option value="foryou">${HeaderForYou}</option>
-+                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
-@@ -97,6 +102,7 @@
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-                 <option value="foryou">${HeaderForYou}</option>
-+                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
-@@ -112,6 +118,7 @@
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-                 <option value="foryou">${HeaderForYou}</option>
-+                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
-@@ -127,6 +134,7 @@
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-                 <option value="foryou">${HeaderForYou}</option>
-+                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
-@@ -142,6 +150,7 @@
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-                 <option value="foryou">${HeaderForYou}</option>
-+                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
-@@ -157,6 +166,7 @@
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-                 <option value="foryou">${HeaderForYou}</option>
-+                <option value="beyondyourlibrary">${HeaderBeyondYourLibrary}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+index e183680127..64b3d633c4 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -460,6 +460,9 @@
+@@ -475,6 +475,9 @@
      "HeaderFetcherSettings": "Fetcher Settings",
      "HeaderFetchImages": "Fetch Images",
      "HeaderForKids": "For Kids",

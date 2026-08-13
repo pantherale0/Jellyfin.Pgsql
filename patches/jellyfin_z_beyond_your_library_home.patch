@@ -1,6 +1,8 @@
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/HomeSectionType.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/HomeSectionType.cs
+index 0b67cb1b0e..b52a86471b 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/HomeSectionType.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Enums/HomeSectionType.cs
-@@ -58,5 +58,10 @@
+@@ -58,5 +58,10 @@ public enum HomeSectionType
      /// <summary>
      /// For You taste recommendations.
      /// </summary>

@@ -123,6 +123,6 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 ## Library / plugin reliability
 
-**What:** Path-aware media refresh; BaseItem image-info dedupe; person provider-key identity; refuse deleting “disabled” plugins when the name is newly seen; fix plugin ALC so transitive deps (for example Redis) resolve from `.deps.json`.
+**What:** Path-aware media refresh; BaseItem image-info dedupe; person provider-key identity; fix plugin ALC so transitive deps (for example Redis) resolve from `.deps.json`. Disabled-plugin cleanup is stock Jellyfin as of v12.0-rc5 ([jellyfin#15897](https://github.com/jellyfin/jellyfin/issues/15897)).
 
 **Where:** [Library / metadata group](patches.md#5-library--metadata--plugin-loading); favorites-during-progress fix [jellyfin#14981](https://github.com/jellyfin/jellyfin/issues/14981).

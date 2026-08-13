@@ -1,5 +1,5 @@
 diff --git a/Emby.Server.Implementations/Library/Search/SearchManager.cs b/Emby.Server.Implementations/Library/Search/SearchManager.cs
-index a5be3f07bd..219fdca047 100644
+index 0e180753a6..4d638f00b2 100644
 --- a/Emby.Server.Implementations/Library/Search/SearchManager.cs
 +++ b/Emby.Server.Implementations/Library/Search/SearchManager.cs
 @@ -75,7 +75,7 @@ public class SearchManager : ISearchManager
@@ -11,7 +11,7 @@ index a5be3f07bd..219fdca047 100644
          SearchProviderQuery query,
          CancellationToken cancellationToken = default)
      {
-@@ -84,16 +84,16 @@ public class SearchManager : ISearchManager
+@@ -84,45 +84,54 @@ public class SearchManager : ISearchManager
  
          var searchTerm = query.SearchTerm.Trim().RemoveDiacritics();
  
@@ -26,37 +26,53 @@ index a5be3f07bd..219fdca047 100644
          await Task.WhenAll(externalTask, internalTask).ConfigureAwait(false);
  
          var externalResults = await externalTask.ConfigureAwait(false);
--        var fromExternal = externalResults.Count > 0;
--        IReadOnlyList<SearchResult> results;
 +        var fromExternal = externalResults.Items.Count > 0;
 +        SearchQueryResult results;
-         if (fromExternal)
-         {
-             results = externalResults;
-@@ -110,10 +110,8 @@ public class SearchManager : ISearchManager
++        if (fromExternal)
++        {
++            results = externalResults;
++        }
++        else
++        {
++            results = await internalTask.ConfigureAwait(false);
++            if (_internalProviders.Length > 0)
++            {
++                _logger.LogDebug("No results from external providers, using internal provider results");
++            }
++        }
+ 
          // Internal providers apply user-access filtering inline in their queries. External
          // providers don't know about user permissions, so they may return IDs from hidden
-         // libraries or items the user is otherwise blocked from. Run the post-filter only
--        // when results came from externals to close that gap. The Items controller's second
--        // roundtrip via folder.GetItems applies most of these again, but it does not restrict
--        // by TopParentIds when ItemIds is set.
--        if (fromExternal && results.Count > 0 && query.UserId.HasValue && !query.UserId.Value.IsEmpty())
-+        // when results came from externals to close that gap.
+         // libraries or items the user is otherwise blocked from. Filter them here to close
+         // that gap. The Items controller's second roundtrip via folder.GetItems applies most
+         // of these again, but it does not restrict by TopParentIds when ItemIds is set.
+-        if (externalResults.Count > 0 && query.UserId.HasValue && !query.UserId.Value.IsEmpty())
 +        if (fromExternal && results.Items.Count > 0 && query.UserId.HasValue && !query.UserId.Value.IsEmpty())
          {
              var user = _userManager.GetUserById(query.UserId.Value);
              if (user is not null)
-@@ -122,21 +120,24 @@ public class SearchManager : ISearchManager
+             {
+-                externalResults = await FilterByUserAccessAsync(externalResults, user, query, cancellationToken).ConfigureAwait(false);
++                results = await FilterByUserAccessAsync(results, user, query, cancellationToken).ConfigureAwait(false);
              }
          }
  
+-        if (externalResults.Count > 0)
 +        // External providers are collected without SQL paging; page the lightweight ID/score list here.
 +        if (fromExternal)
-+        {
+         {
+-            return externalResults;
 +            results = PageResults(results, query);
-+        }
-+
-         return results;
+         }
+ 
+-        var internalResults = await internalTask.ConfigureAwait(false);
+-        if (_internalProviders.Length > 0)
+-        {
+-            _logger.LogDebug("No results from external providers, using internal provider results");
+-        }
+-
+-        return internalResults;
++        return results;
      }
  
 -    private async Task<IReadOnlyList<SearchResult>> FilterByUserAccessAsync(
@@ -64,20 +80,18 @@ index a5be3f07bd..219fdca047 100644
 +    private async Task<SearchQueryResult> FilterByUserAccessAsync(
 +        SearchQueryResult candidates,
          User user,
+         SearchProviderQuery query,
          CancellationToken cancellationToken)
-     {
--        // SetUser populates parental rating + blocked/allowed tags. ConfigureUserAccess populates
--        // TopParentIds for the user's accessible libraries — we call it before assigning ItemIds
--        // because LibraryManager.AddUserToQuery skips TopParentIds when ItemIds is non-empty.
-         var accessFilter = new InternalItemsQuery(user);
-         _libraryManager.ConfigureUserAccess(accessFilter, user);
+@@ -133,7 +142,7 @@ public class SearchManager : ISearchManager
+         // ItemIds is non-empty.
+         var accessFilter = SearchQueryAccessFilter.Build(user, query, _libraryManager);
  
 -        Guid[] candidateIds = [.. candidates.Select(c => c.ItemId)];
 +        Guid[] candidateIds = [.. candidates.Items.Select(c => c.ItemId)];
  
          var dbContext = await _dbProvider.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
          await using (dbContext.ConfigureAwait(false))
-@@ -148,7 +149,7 @@ public class SearchManager : ISearchManager
+@@ -145,7 +154,7 @@ public class SearchManager : ISearchManager
              baseQuery = _queryHelpers.ApplyAccessFiltering(dbContext, baseQuery, accessFilter);
  
              var allowedCount = await baseQuery.CountAsync(cancellationToken).ConfigureAwait(false);
@@ -86,7 +100,7 @@ index a5be3f07bd..219fdca047 100644
              {
                  return candidates;
              }
-@@ -158,16 +159,16 @@ public class SearchManager : ISearchManager
+@@ -155,16 +164,16 @@ public class SearchManager : ISearchManager
                  .ToHashSetAsync(cancellationToken)
                  .ConfigureAwait(false);
  
@@ -108,7 +122,7 @@ index a5be3f07bd..219fdca047 100644
          }
      }
  
-@@ -178,13 +179,13 @@ public class SearchManager : ISearchManager
+@@ -175,13 +184,13 @@ public class SearchManager : ISearchManager
          ArgumentException.ThrowIfNullOrWhiteSpace(query.SearchTerm);
  
          var providerQuery = BuildProviderQuery(query);
@@ -126,7 +140,7 @@ index a5be3f07bd..219fdca047 100644
          var user = query.UserId.IsEmpty() ? null : _userManager.GetUserById(query.UserId);
  
          var excludeItemTypes = BuildExcludeItemTypes(query);
-@@ -204,6 +205,10 @@ public class SearchManager : ISearchManager
+@@ -201,6 +210,10 @@ public class SearchManager : ISearchManager
              IsNews = query.IsNews,
              IsSeries = query.IsSeries,
              IsSports = query.IsSports,
@@ -137,7 +151,7 @@ index a5be3f07bd..219fdca047 100644
              DtoOptions = new DtoOptions
              {
                  Fields =
-@@ -240,92 +245,126 @@ public class SearchManager : ISearchManager
+@@ -237,92 +250,126 @@ public class SearchManager : ISearchManager
              items = _libraryManager.GetItemList(internalQuery);
          }
  
@@ -296,7 +310,7 @@ index a5be3f07bd..219fdca047 100644
          var results = new List<SearchResult>();
          await foreach (var result in provider.SearchAsync(providerQuery, cancellationToken).ConfigureAwait(false))
          {
-@@ -336,7 +375,22 @@ public class SearchManager : ISearchManager
+@@ -333,7 +380,22 @@ public class SearchManager : ISearchManager
              }
          }
  
@@ -320,7 +334,7 @@ index a5be3f07bd..219fdca047 100644
      }
  
      private static void UpdateBestScore(Dictionary<Guid, float> bestScores, SearchResult result)
-@@ -377,6 +431,8 @@ public class SearchManager : ISearchManager
+@@ -374,6 +436,8 @@ public class SearchManager : ISearchManager
              ExcludeItemTypes = excludeItemTypes.ToArray(),
              MediaTypes = query.MediaTypes.ToArray(),
              Limit = query.Limit,
@@ -330,7 +344,7 @@ index a5be3f07bd..219fdca047 100644
          };
      }
 diff --git a/Emby.Server.Implementations/Library/Search/SqlSearchProvider.cs b/Emby.Server.Implementations/Library/Search/SqlSearchProvider.cs
-index bc766f1c8c..9c1cdef919 100644
+index c4d3b249d5..64259adc6e 100644
 --- a/Emby.Server.Implementations/Library/Search/SqlSearchProvider.cs
 +++ b/Emby.Server.Implementations/Library/Search/SqlSearchProvider.cs
 @@ -28,6 +28,7 @@ public class SqlSearchProvider : IInternalSearchProvider
@@ -394,7 +408,7 @@ index bc766f1c8c..9c1cdef919 100644
              dbQuery = ApplyTypeFilter(dbQuery, query.IncludeItemTypes, query.ExcludeItemTypes);
              dbQuery = ApplyMediaTypeFilter(dbQuery, query.MediaTypes);
              dbQuery = ApplyParentFilter(dbQuery, query.ParentId);
-             dbQuery = ApplyUserAccessFilter(dbContext, dbQuery, query.UserId);
+             dbQuery = ApplyUserAccessFilter(dbContext, dbQuery, query);
  
 +            var totalRecordCount = 0;
 +            if (query.EnableTotalRecordCount)
@@ -452,10 +466,10 @@ index bc766f1c8c..9c1cdef919 100644
          IQueryable<BaseItemEntity> query,
          BaseItemKind[] includeItemTypes,
 diff --git a/Jellyfin.Api/Controllers/ItemsController.cs b/Jellyfin.Api/Controllers/ItemsController.cs
-index c52a6cd7dc..e712dcb7db 100644
+index 385795e9f7..525396b7ee 100644
 --- a/Jellyfin.Api/Controllers/ItemsController.cs
 +++ b/Jellyfin.Api/Controllers/ItemsController.cs
-@@ -349,10 +349,12 @@ public class ItemsController : BaseJellyfinApiController
+@@ -350,10 +350,12 @@ public class ItemsController : BaseJellyfinApiController
          }
  
          // Build the query up front so the dispatch below can decide the path from it.
@@ -470,7 +484,7 @@ index c52a6cd7dc..e712dcb7db 100644
  
          if (!string.IsNullOrWhiteSpace(searchTerm))
          {
-@@ -363,17 +365,21 @@ public class ItemsController : BaseJellyfinApiController
+@@ -364,17 +366,21 @@ public class ItemsController : BaseJellyfinApiController
                  IncludeItemTypes = includeItemTypes,
                  ExcludeItemTypes = excludeItemTypes,
                  MediaTypes = mediaTypes,
@@ -498,7 +512,7 @@ index c52a6cd7dc..e712dcb7db 100644
              }
          }
  
-@@ -386,8 +392,9 @@ public class ItemsController : BaseJellyfinApiController
+@@ -387,8 +393,9 @@ public class ItemsController : BaseJellyfinApiController
              Recursive = recursive ?? false,
              OrderBy = RequestHelpers.GetOrderBy(sortBy, sortOrder),
              IsFavorite = isFavorite,
@@ -510,7 +524,7 @@ index c52a6cd7dc..e712dcb7db 100644
              IsMissing = isMissing,
              IsUnaired = isUnaired,
              CollapseBoxSetItems = collapseBoxSetItems,
-@@ -440,7 +447,7 @@ public class ItemsController : BaseJellyfinApiController
+@@ -441,7 +448,7 @@ public class ItemsController : BaseJellyfinApiController
              ParentId = parentId ?? Guid.Empty,
              IndexNumber = indexNumber,
              ParentIndexNumber = parentIndexNumber,
@@ -519,7 +533,7 @@ index c52a6cd7dc..e712dcb7db 100644
              ExcludeItemIds = excludeItemIds,
              DtoOptions = dtoOptions,
              SearchTerm = searchResultScores is null ? searchTerm : null,
-@@ -592,27 +599,22 @@ public class ItemsController : BaseJellyfinApiController
+@@ -593,27 +600,22 @@ public class ItemsController : BaseJellyfinApiController
          {
              // folder.GetItems applies user-access filtering via the InternalItemsQuery's User.
              result = folder.GetItems(query);
@@ -558,10 +572,10 @@ index c52a6cd7dc..e712dcb7db 100644
              }
          }
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-index 3357f874d2..257d7076bb 100644
+index 4be9b04baa..0304ae2650 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-@@ -183,8 +183,14 @@ public sealed partial class BaseItemRepository
+@@ -187,8 +187,14 @@ public sealed partial class BaseItemRepository
              }
              else
              {
@@ -578,7 +592,7 @@ index 3357f874d2..257d7076bb 100644
              }
          }
  
-@@ -358,13 +364,13 @@ public sealed partial class BaseItemRepository
+@@ -362,13 +368,13 @@ public sealed partial class BaseItemRepository
  
          if (filter.PersonIds.Length > 0)
          {
@@ -596,9 +610,9 @@ index 3357f874d2..257d7076bb 100644
 +                .Where(p => personNames.Contains(p.Name))
 +                .Select(p => p.Id);
  
+             var personTypes = filter.PersonTypes;
              baseQuery = baseQuery
-                 .Where(e => context.PeopleBaseItemMap
-@@ -410,10 +416,11 @@ public sealed partial class BaseItemRepository
+@@ -416,10 +422,11 @@ public sealed partial class BaseItemRepository
              }
              else
              {
@@ -613,7 +627,7 @@ index 3357f874d2..257d7076bb 100644
              }
          }
  
-@@ -1221,4 +1228,12 @@ public sealed partial class BaseItemRepository
+@@ -1180,4 +1187,12 @@ public sealed partial class BaseItemRepository
  
          return baseQuery;
      }
@@ -668,10 +682,10 @@ index 3b300ed38b..a52f49ece9 100644
          CancellationToken cancellationToken);
  
 diff --git a/MediaBrowser.Controller/Library/SearchProviderQuery.cs b/MediaBrowser.Controller/Library/SearchProviderQuery.cs
-index 845588c872..4ec91cadf5 100644
+index b1ff800fa0..79bbed6acf 100644
 --- a/MediaBrowser.Controller/Library/SearchProviderQuery.cs
 +++ b/MediaBrowser.Controller/Library/SearchProviderQuery.cs
-@@ -38,6 +38,16 @@ public class SearchProviderQuery
+@@ -42,6 +42,16 @@ public class SearchProviderQuery
      /// </summary>
      public int? Limit { get; init; }
  
@@ -686,8 +700,8 @@ index 845588c872..4ec91cadf5 100644
 +    public bool EnableTotalRecordCount { get; init; } = true;
 +
      /// <summary>
-     /// Gets the parent ID to scope the search.
-     /// </summary>
+     /// Gets the parent ID to scope the search. This scopes to the whole subtree, not just direct
+     /// children - callers routinely pass a library folder id and expect items nested arbitrarily
 diff --git a/MediaBrowser.Controller/Library/SearchQueryResult.cs b/MediaBrowser.Controller/Library/SearchQueryResult.cs
 new file mode 100644
 index 0000000000..f64af703b1

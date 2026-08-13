@@ -1,8 +1,8 @@
 diff --git a/src/apps/legacy/controllers/session/login/index.js b/src/apps/legacy/controllers/session/login/index.js
-index fd38855284..dea26b28d3 100644
+index dad0b7df2b..4246d3dce1 100644
 --- a/src/apps/legacy/controllers/session/login/index.js
 +++ b/src/apps/legacy/controllers/session/login/index.js
-@@ -272,10 +272,19 @@ export default function (view, params) {
+@@ -278,10 +278,19 @@ export default function (view, params) {
  
          const apiClient = getApiClient();
  

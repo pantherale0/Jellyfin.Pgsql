@@ -409,17 +409,6 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | Persist provider key; validation/merge uses identity helper; `zz_` applies last among server patches. |
 | **Related** | No public issue. |
 
-### `jellyfin_disabled_plugin_deletion.patch`
-
-| | |
-|---|---|
-| **Target** | `jellyfin` |
-| **What** | Avoid deleting disabled plugins merely because a new plugin name was observed. |
-| **Why** | Aggressive cleanup removed plugins unexpectedly. |
-| **Where** | `PluginManager.cs` |
-| **How** | Guard deletion path for disabled plugins. |
-| **Related** | [jellyfin#15897](https://github.com/jellyfin/jellyfin/issues/15897). |
-
 ### `jellyfin_plugin_load_context_deps.patch`
 
 | | |

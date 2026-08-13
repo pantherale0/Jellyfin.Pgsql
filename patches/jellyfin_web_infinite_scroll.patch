@@ -208,7 +208,7 @@ index 6ab2bb3cb0..a421f267a6 100644
          this.alphaPicker?.updateControls(query);
      };
 diff --git a/src/apps/legacy/controllers/movies/moviesrecommended.js b/src/apps/legacy/controllers/movies/moviesrecommended.js
-index 4570879d6f..c08f5335f3 100644
+index 0d107e5ba9..e2d11ae0b7 100644
 --- a/src/apps/legacy/controllers/movies/moviesrecommended.js
 +++ b/src/apps/legacy/controllers/movies/moviesrecommended.js
 @@ -266,6 +266,7 @@ export default function (view, params) {
@@ -777,7 +777,7 @@ index 74ec38eecf..22cece3510 100644
      };
  }
 diff --git a/src/apps/legacy/controllers/shows/tvrecommended.js b/src/apps/legacy/controllers/shows/tvrecommended.js
-index 27cf8789cb..0a084f5a73 100644
+index 53f272dd7e..8d528c3d21 100644
 --- a/src/apps/legacy/controllers/shows/tvrecommended.js
 +++ b/src/apps/legacy/controllers/shows/tvrecommended.js
 @@ -227,6 +227,7 @@ export default function (view, params) {
@@ -972,10 +972,10 @@ index 8f5a1c769e..3ab4fdd46f 100644
          <label>
              <input type="checkbox" is="emby-checkbox" id="chkBackdrops" />
 diff --git a/src/scripts/settings/userSettings.js b/src/scripts/settings/userSettings.js
-index 814ccbd5df..132e1781f0 100644
+index ec7eb179dd..d720cf60e9 100644
 --- a/src/scripts/settings/userSettings.js
 +++ b/src/scripts/settings/userSettings.js
-@@ -527,6 +527,19 @@ export class UserSettings {
+@@ -528,6 +528,19 @@ export class UserSettings {
          }
      }
  
@@ -995,7 +995,7 @@ index 814ccbd5df..132e1781f0 100644
      /**
       * Get or set max days for next up list.
       * @param {number|undefined} [val] - Max days for next up.
-@@ -761,6 +774,7 @@ export const setSubtitleAppearanceSettings = currentSettings.setSubtitleAppearan
+@@ -762,6 +775,7 @@ export const setSubtitleAppearanceSettings = currentSettings.setSubtitleAppearan
  export const getComicsPlayerSettings = currentSettings.getComicsPlayerSettings.bind(currentSettings);
  export const setComicsPlayerSettings = currentSettings.setComicsPlayerSettings.bind(currentSettings);
  export const setFilter = currentSettings.setFilter.bind(currentSettings);
@@ -1004,10 +1004,10 @@ index 814ccbd5df..132e1781f0 100644
  export const customCss = currentSettings.customCss.bind(currentSettings);
  export const disableCustomCss = currentSettings.disableCustomCss.bind(currentSettings);
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index a299004122..b3b71c260c 100755
+index baa9b57495..50f7d11d75 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -309,6 +309,8 @@
+@@ -313,6 +313,8 @@
      "EnableHardwareEncoding": "Enable hardware encoding",
      "EnableHi10p": "Enable H.264 High 10 Profile",
      "EnableHi10pHelp": "Enable to avoid transcoding H.264 10-bit videos. Disable this option if the video displays blank frames.",

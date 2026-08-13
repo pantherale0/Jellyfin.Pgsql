@@ -1,5 +1,5 @@
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemMapper.cs b/Jellyfin.Server.Implementations/Item/BaseItemMapper.cs
-index c64e6ac068..0c66aa58f2 100644
+index c2cb644c59..5ffe4afc0a 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemMapper.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemMapper.cs
 @@ -2,6 +2,7 @@
@@ -10,7 +10,7 @@ index c64e6ac068..0c66aa58f2 100644
  using System.Linq;
  using System.Reflection;
  using System.Text;
-@@ -340,7 +341,9 @@ public static class BaseItemMapper
+@@ -355,7 +356,9 @@ public static class BaseItemMapper
  
          if (dto.ImageInfos is not null)
          {
@@ -21,7 +21,7 @@ index c64e6ac068..0c66aa58f2 100644
          }
  
          if (dto is Trailer trailer)
-@@ -414,6 +417,36 @@ public static class BaseItemMapper
+@@ -429,6 +432,36 @@ public static class BaseItemMapper
          };
      }
  
@@ -59,7 +59,7 @@ index c64e6ac068..0c66aa58f2 100644
      /// Gets the type from a type name string.
      /// </summary>
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-index a4de9feb05..69ea47c5bc 100644
+index 05ff720ddf..8899ad4db6 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 @@ -25,7 +25,15 @@ public sealed partial class BaseItemRepository
@@ -79,7 +79,7 @@ index a4de9feb05..69ea47c5bc 100644
          dbQuery = dbQuery.AsSingleQuery();
  
          return dbQuery;
-@@ -71,18 +79,18 @@ public sealed partial class BaseItemRepository
+@@ -100,18 +108,18 @@ public sealed partial class BaseItemRepository
          {
              var groupedIds = dbQuery.GroupBy(e => new { e.PresentationUniqueKey, e.SeriesPresentationUniqueKey })
                  .Select(g => g.Where(e => e.PrimaryVersionId == null).Min(e => (Guid?)e.Id) ?? g.Min(e => (Guid?)e.Id));
@@ -101,7 +101,7 @@ index a4de9feb05..69ea47c5bc 100644
          }
          else
          {
-@@ -161,7 +169,7 @@ public sealed partial class BaseItemRepository
+@@ -190,7 +198,7 @@ public sealed partial class BaseItemRepository
              .Distinct();
  
          var collapsedIds = nonCollapsibleIds.Union(collapsibleNotInBoxSet).Union(boxSetIds);
@@ -110,7 +110,7 @@ index a4de9feb05..69ea47c5bc 100644
      }
  
      private static IQueryable<BaseItemEntity> ApplyBoxSetCollapsingAll(
-@@ -190,7 +198,7 @@ public sealed partial class BaseItemRepository
+@@ -219,7 +227,7 @@ public sealed partial class BaseItemRepository
              .Where(id => !childrenInBoxSet.Contains(id));
  
          var collapsedIds = notInBoxSet.Union(boxSetIds);
@@ -120,7 +120,7 @@ index a4de9feb05..69ea47c5bc 100644
  
      private static IQueryable<BaseItemEntity> ApplyNameFilters(IQueryable<BaseItemEntity> dbQuery, InternalItemsQuery filter)
 diff --git a/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs b/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs
-index b10f7c527e..73b3877f3d 100644
+index 3585f85c61..4055360aac 100644
 --- a/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs
 +++ b/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs
 @@ -171,7 +171,12 @@ public class ItemPersistenceService : IItemPersistenceService
@@ -137,8 +137,8 @@ index b10f7c527e..73b3877f3d 100644
  
          var context = await _dbProvider.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
          await using (context.ConfigureAwait(false))
-@@ -276,7 +281,7 @@ public class ItemPersistenceService : IItemPersistenceService
- 
+@@ -272,7 +277,7 @@ public class ItemPersistenceService : IItemPersistenceService
+             {
                  if (entity.Images is { Count: > 0 })
                  {
 -                    context.BaseItemImageInfos.AddRange(entity.Images);
@@ -293,20 +293,6 @@ index 0000000000..e43afb399d
 +        }
 +    }
 +}
-diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
-index fd18c035e6..f604d99f18 100644
---- a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
-+++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
-@@ -466,6 +466,9 @@ namespace Jellyfin.Server.Implementations.Migrations
- 
-                     b.HasIndex("ItemId", "ImageType");
- 
-+                    b.HasIndex("ItemId", "ImageType", "Path")
-+                        .IsUnique();
-+
-                     b.ToTable("BaseItemImageInfos");
- 
-                     b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
 diff --git a/tests/Jellyfin.Server.Implementations.Tests/Item/BaseItemMapperImageDedupeTests.cs b/tests/Jellyfin.Server.Implementations.Tests/Item/BaseItemMapperImageDedupeTests.cs
 new file mode 100644
 index 0000000000..3ca07935b0

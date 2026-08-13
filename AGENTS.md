@@ -45,9 +45,16 @@ When creating or updating a patch in `jellyfin/` or `jellyfin-web/`, run:
 
 It performs the following steps automatically:
 1. **Snapshots Working Edits:** Saves all modified and untracked files currently in `jellyfin/` or `jellyfin-web/`.
-2. **Isolates Baseline:** Resets the submodule to release tag (`v12.0-rc4`), removes the target patch file, applies preceding dependency patches (`./scripts/apply-patches.sh <target>`), and commits `baseline_deps`.
+2. **Isolates Baseline:** Resets the submodule to the current release tag (from `JELLYFIN_PATCH_BASE_TAG`, [`.github/jellyfin-sync-state.json`](.github/jellyfin-sync-state.json), or `git describe --exact-match`), removes the target patch file, applies preceding dependency patches (`./scripts/apply-patches.sh <target>`), and commits `baseline_deps`.
 3. **Restores & Diffs:** Restores all feature edits onto `baseline_deps`, stages untracked files (`git add -N`), and exports the complete multi-file diff to `patches/<patch_name>`.
-4. **Validates & Rebuilds:** Appends a trailing newline `\n` to prevent `git apply` EOF errors, resets the submodule back to clean `v12.0-rc4`, and runs `./scripts/build-web.sh`.
+4. **Validates & Rebuilds:** Appends a trailing newline `\n` to prevent `git apply` EOF errors, resets the submodule back to the same release tag, and runs `./scripts/build-web.sh`.
+
+When bumping Jellyfin versions, rebase the whole series instead of editing hunks by hand:
+
+```bash
+./scripts/rebase-patches.sh --from v12.0-rc4 --to v12.0-rc5
+./scripts/sync-jellyfin-migrations.sh --version 12.0-rc5
+```
 
 ### 3. Do not build Docker automatically
 
@@ -181,6 +188,7 @@ Docs are part of the change, not a follow-up. When you add, rename, remove, or m
 | `patches/` | All committed Jellyfin/Jellyfin-web diffs |
 | `docs/` | Overview, architecture, features, patch catalog, known issues |
 | `scripts/apply-patches.sh` | Applies patches by naming convention |
+| `scripts/rebase-patches.sh` | Rebases the patch series onto a new Jellyfin tag and rewrites `patches/` |
 | `scripts/export-patch.sh` | Snapshots submodule edits into patches & rebuilds web |
 | `scripts/start-dev.sh` | Dev stack entrypoint (user-run) |
 | `scripts/sync-jellyfin-migrations.sh` | Align plugin migrations with a Jellyfin release |

@@ -1,5 +1,5 @@
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs
-index 8556fb7bb3..a8c7af8b4c 100644
+index ee36be035b..6075dc05dd 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs
 @@ -48,6 +48,8 @@ public class BaseItemConfiguration : IEntityTypeConfiguration<BaseItemEntity>
@@ -1912,10 +1912,10 @@ index d477bc3713..58d5c83ae8 100644
              return await _listingsManager.GetProgramsAsync(channel, startDateUtc, endDateUtc, cancellationToken)
                  .ConfigureAwait(false);
 diff --git a/src/Jellyfin.LiveTv/Guide/GuideManager.cs b/src/Jellyfin.LiveTv/Guide/GuideManager.cs
-index 4e1b62cdf9..4c90cefd3c 100644
+index 41520f8789..2d014fa91e 100644
 --- a/src/Jellyfin.LiveTv/Guide/GuideManager.cs
 +++ b/src/Jellyfin.LiveTv/Guide/GuideManager.cs
-@@ -241,12 +241,22 @@ public class GuideManager : IGuideManager
+@@ -240,12 +240,22 @@ public class GuideManager : IGuideManager
  
                  var channelPrograms = (await service.GetProgramsAsync(currentChannel.ExternalId, start, end, cancellationToken).ConfigureAwait(false)).ToList();
  
@@ -1944,7 +1944,7 @@ index 4e1b62cdf9..4c90cefd3c 100644
  
                  var newPrograms = new List<LiveTvProgram>();
                  var updatedPrograms = new List<LiveTvProgram>();
-@@ -342,40 +352,47 @@ public class GuideManager : IGuideManager
+@@ -341,40 +351,47 @@ public class GuideManager : IGuideManager
              DtoOptions = new DtoOptions(false)
          });
  

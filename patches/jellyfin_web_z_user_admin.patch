@@ -135,10 +135,10 @@ index 0000000000..6e315b821a
 +
 +export type UserAdminMode = 'merge' | 'moveUserData';
 diff --git a/src/apps/dashboard/routes/_asyncRoutes.ts b/src/apps/dashboard/routes/_asyncRoutes.ts
-index 425be2f9d6..5f77cd83cf 100644
+index 8c6f336ede..4f82b508b7 100644
 --- a/src/apps/dashboard/routes/_asyncRoutes.ts
 +++ b/src/apps/dashboard/routes/_asyncRoutes.ts
-@@ -30,5 +30,6 @@ export const ASYNC_ADMIN_ROUTES: AsyncRoute[] = [
+@@ -31,5 +31,6 @@ export const ASYNC_ADMIN_ROUTES: AsyncRoute[] = [
      { path: 'tasks/:id', page: 'tasks/task', type: AppType.Dashboard },
      { path: 'users', type: AppType.Dashboard },
      { path: 'users/add', type: AppType.Dashboard },
@@ -563,10 +563,10 @@ index 0000000000..48c6a805a7
 +
 +export default UserMergePage;
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 2158b3b04a..aced686010 100755
+index 333d4e460e..d8d8cfd076 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -103,6 +103,7 @@
+@@ -115,6 +115,7 @@
      "ButtonAddServer": "Add Server",
      "ButtonAddTunerDevice": "Add Tuner Device",
      "ButtonAddUser": "Add User",
@@ -574,7 +574,7 @@ index 2158b3b04a..aced686010 100755
      "ButtonArrowLeft": "Left",
      "ButtonArrowRight": "Right",
      "ButtonAudioTracks": "Audio Tracks",
-@@ -580,6 +581,7 @@
+@@ -604,6 +605,7 @@
      "HeaderUploadLyrics": "Upload Lyrics",
      "HeaderUploadSubtitle": "Upload Subtitle",
      "HeaderUser": "User",
@@ -582,7 +582,7 @@ index 2158b3b04a..aced686010 100755
      "HeaderUsers": "Users",
      "HeaderVideoAdvanced": "Video Advanced",
      "HeaderVideoQuality": "Video Quality",
-@@ -1437,6 +1439,43 @@
+@@ -1466,6 +1468,43 @@
      "PlaybackErrorPlaceHolder": "This is a placeholder for physical media that Jellyfin cannot play. Please insert the disc to play.",
      "PlaybackRate": "Playback Speed",
      "PlaybackStatsEmpty": "No playback statistics recorded yet.",

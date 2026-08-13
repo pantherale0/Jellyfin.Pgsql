@@ -1,205 +1,5 @@
-diff --git a/src/apps/modern/routes/legacyRoutes/user.ts b/src/apps/modern/routes/legacyRoutes/user.ts
-index 2dd81a4b65..128809a254 100644
---- a/src/apps/modern/routes/legacyRoutes/user.ts
-+++ b/src/apps/modern/routes/legacyRoutes/user.ts
-@@ -37,6 +37,12 @@ export const LEGACY_USER_ROUTES: LegacyRoute[] = [
-             controller: 'user/playback/index',
-             view: 'user/playback/index.html'
-         }
-+    }, {
-+        path: 'mypreferencestaste',
-+        pageProps: {
-+            controller: 'user/taste/index',
-+            view: 'user/taste/index.html'
-+        }
-     }, {
-         path: 'mypreferencessubtitles',
-         pageProps: {
-diff --git a/src/apps/legacy/routes/legacyRoutes/user.ts b/src/apps/legacy/routes/legacyRoutes/user.ts
-index 612572a865..4aa60979d4 100644
---- a/src/apps/legacy/routes/legacyRoutes/user.ts
-+++ b/src/apps/legacy/routes/legacyRoutes/user.ts
-@@ -55,6 +55,12 @@ export const LEGACY_USER_ROUTES: LegacyRoute[] = [
-             controller: 'user/playback/index',
-             view: 'user/playback/index.html'
-         }
-+    }, {
-+        path: 'mypreferencestaste',
-+        pageProps: {
-+            controller: 'user/taste/index',
-+            view: 'user/taste/index.html'
-+        }
-     }, {
-         path: 'mypreferencessubtitles',
-         pageProps: {
-diff --git a/src/apps/legacy/routes/user/settings/index.tsx b/src/apps/legacy/routes/user/settings/index.tsx
-index 5739dca4f8..ed5900e500 100644
---- a/src/apps/legacy/routes/user/settings/index.tsx
-+++ b/src/apps/legacy/routes/user/settings/index.tsx
-@@ -181,6 +181,25 @@ const UserSettingsPage: FC = () => {
-                             </div>
-                         </LinkButton>
- 
-+                        <LinkButton
-+                            href={`#/mypreferencestaste?userId=${userId}`}
-+                            className='lnkTastePreferences listItem-border'
-+                            style={{
-+                                display: 'block',
-+                                margin: 0,
-+                                padding: 0
-+                            }}
-+                        >
-+                            <div className='listItem'>
-+                                <span className='material-icons listItemIcon listItemIcon-transparent psychology' aria-hidden='true' />
-+                                <div className='listItemBody'>
-+                                    <div className='listItemBodyText'>
-+                                        Taste
-+                                    </div>
-+                                </div>
-+                            </div>
-+                        </LinkButton>
-+
-                         <LinkButton
-                             href={`#/mypreferencessubtitles?userId=${userId}`}
-                             className='lnkSubtitlePreferences listItem-border'
-diff --git a/src/components/cardbuilder/Card/CardImageContainer.tsx b/src/components/cardbuilder/Card/CardImageContainer.tsx
-index 8701329854..63d228c94c 100644
---- a/src/components/cardbuilder/Card/CardImageContainer.tsx
-+++ b/src/components/cardbuilder/Card/CardImageContainer.tsx
-@@ -43,6 +43,7 @@ const CardImageContainer: FC<CardImageContainerProps> = ({
-                     {indicator.getMediaSourceIndicator()}
- 
-                     <Box className='cardIndicators'>
-+                        {indicator.getTasteIndicator()}
-                         {cardOptions.missingIndicator !== false
-                             && indicator.getMissingIndicator()}
- 
-diff --git a/src/components/cardbuilder/cardBuilder.js b/src/components/cardbuilder/cardBuilder.js
-index 659d9db65d..824a47ba7a 100644
---- a/src/components/cardbuilder/cardBuilder.js
-+++ b/src/components/cardbuilder/cardBuilder.js
-@@ -897,6 +897,7 @@ function buildCard(index, item, apiClient, options) {
-             indicatorsHtml += indicators.getMissingIndicator(item);
-         }
- 
-+        indicatorsHtml += indicators.getTasteIndicatorHtml(item);
-         indicatorsHtml += indicators.getSyncIndicator(item);
-         indicatorsHtml += indicators.getTimerIndicator(item);
- 
-diff --git a/src/components/indicators/indicators.js b/src/components/indicators/indicators.js
-index e5f3d4c3bb..49209b32c1 100644
---- a/src/components/indicators/indicators.js
-+++ b/src/components/indicators/indicators.js
-@@ -167,6 +167,16 @@ export function getMissingIndicator(item) {
-     return '';
- }
- 
-+export function getTasteIndicatorHtml(item) {
-+    const tier = item?.PgsqlTasteTier;
-+    if (tier !== 'high' && tier !== 'mid') {
-+        return '';
-+    }
-+
-+    const tierClass = tier === 'high' ? 'tasteIndicator-high' : 'tasteIndicator-mid';
-+    return `<div class="tasteIndicator indicator ${tierClass}" title="For you">For you</div>`;
-+}
-+
- export default {
-     getProgressHtml: getProgressHtml,
-     getProgressBarHtml: getProgressBarHtml,
-@@ -177,5 +187,6 @@ export default {
-     enablePlayedIndicator: enablePlayedIndicator,
-     getSyncIndicator: getSyncIndicator,
-     getTypeIndicator: getTypeIndicator,
--    getMissingIndicator: getMissingIndicator
-+    getMissingIndicator: getMissingIndicator,
-+    getTasteIndicatorHtml: getTasteIndicatorHtml
- };
-diff --git a/src/components/indicators/indicators.scss b/src/components/indicators/indicators.scss
-index 60aa8b8d9f..d2baae0954 100644
---- a/src/components/indicators/indicators.scss
-+++ b/src/components/indicators/indicators.scss
-@@ -112,3 +112,37 @@
-     font-weight: 500;
-     margin: 0 0.25em;
- }
-+
-+.tasteIndicator {
-+    width: auto;
-+    min-width: 0;
-+    height: auto;
-+    padding: 0.2em 0.55em;
-+    border-radius: 0.35em;
-+    font-size: 72%;
-+    font-weight: 600;
-+    letter-spacing: 0.02em;
-+    white-space: nowrap;
-+    color: #fff;
-+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
-+}
-+
-+.tasteIndicator-high {
-+    background: rgba(0, 164, 220, 0.92);
-+}
-+
-+.tasteIndicator-mid {
-+    background: rgba(80, 90, 100, 0.88);
-+}
-+
-+.cardIndicators .tasteIndicator {
-+    [dir="ltr"] & {
-+        margin-right: auto;
-+        order: -1;
-+    }
-+
-+    [dir="rtl"] & {
-+        margin-left: auto;
-+        order: -1;
-+    }
-+}
-diff --git a/src/components/indicators/useIndicator.tsx b/src/components/indicators/useIndicator.tsx
-index db0974df40..48962dfcd5 100644
---- a/src/components/indicators/useIndicator.tsx
-+++ b/src/components/indicators/useIndicator.tsx
-@@ -178,6 +178,26 @@ const useIndicator = (item: ItemDto) => {
-         return null;
-     };
- 
-+    const getTasteIndicator = () => {
-+        const tier = (item as ItemDto & { PgsqlTasteTier?: string }).PgsqlTasteTier;
-+        if (tier !== 'high' && tier !== 'mid') {
-+            return null;
-+        }
-+
-+        return (
-+            <Box
-+                className={classNames(
-+                    'tasteIndicator',
-+                    'indicator',
-+                    tier === 'high' ? 'tasteIndicator-high' : 'tasteIndicator-mid'
-+                )}
-+                title='For you'
-+            >
-+                For you
-+            </Box>
-+        );
-+    };
-+
-     const getProgress = (pct: number, progressOptions?: ProgressOptions) => {
-         const progressBarClass = classNames(
-             'itemLinearProgress',
-@@ -262,7 +282,8 @@ const useIndicator = (item: ItemDto) => {
-         getTimerIndicator,
-         getTypeIndicator,
-         getChildCountIndicator,
--        getPlayedIndicator
-+        getPlayedIndicator,
-+        getTasteIndicator
-     };
- };
- 
 diff --git a/src/apps/legacy/controllers/itemDetails/index.js b/src/apps/legacy/controllers/itemDetails/index.js
-index 4913eda48f..e5c7d57778 100755
+index db54947370..20facbc942 100755
 --- a/src/apps/legacy/controllers/itemDetails/index.js
 +++ b/src/apps/legacy/controllers/itemDetails/index.js
 @@ -37,6 +37,7 @@ import { renderComponent } from 'utils/reactUtils';
@@ -210,7 +10,7 @@ index 4913eda48f..e5c7d57778 100755
  import Dashboard from 'utils/dashboard';
  import Events from 'utils/events';
  import { getItemBackdropImageUrl } from 'utils/jellyfin-apiclient/backdropImage';
-@@ -1189,25 +1190,37 @@ function renderSimilarItems(page, item, context) {
+@@ -1257,25 +1258,37 @@ function renderSimilarItems(page, item, context) {
                  return;
              }
  
@@ -268,7 +68,7 @@ index 4913eda48f..e5c7d57778 100755
      }
  }
 diff --git a/src/apps/legacy/controllers/movies/moviesrecommended.js b/src/apps/legacy/controllers/movies/moviesrecommended.js
-index 2d350eb75e..462d8f5f28 100644
+index e2d11ae0b7..93dda1906b 100644
 --- a/src/apps/legacy/controllers/movies/moviesrecommended.js
 +++ b/src/apps/legacy/controllers/movies/moviesrecommended.js
 @@ -11,6 +11,7 @@ import globalize from 'lib/globalize';
@@ -279,7 +79,7 @@ index 2d350eb75e..462d8f5f28 100644
  import { LibraryTab } from 'types/libraryTab';
  import Dashboard from 'utils/dashboard';
  import Events from 'utils/events';
-@@ -173,14 +174,21 @@ function loadSuggestions(page, userId) {
+@@ -174,14 +175,21 @@ function loadSuggestions(page, userId, parentId) {
              return;
          }
  
@@ -309,7 +109,7 @@ index 2d350eb75e..462d8f5f28 100644
  }
  
 diff --git a/src/apps/legacy/controllers/shows/tvrecommended.js b/src/apps/legacy/controllers/shows/tvrecommended.js
-index 0a084f5a73..73841ebe14 100644
+index 8d528c3d21..89f0502c1b 100644
 --- a/src/apps/legacy/controllers/shows/tvrecommended.js
 +++ b/src/apps/legacy/controllers/shows/tvrecommended.js
 @@ -10,6 +10,7 @@ import globalize from 'lib/globalize';
@@ -805,6 +605,206 @@ index 0000000000..fc49f8055e
 +    margin-top: 1.5em;
 +    font-size: 0.85em;
 +}
+diff --git a/src/apps/legacy/routes/legacyRoutes/user.ts b/src/apps/legacy/routes/legacyRoutes/user.ts
+index 612572a865..4aa60979d4 100644
+--- a/src/apps/legacy/routes/legacyRoutes/user.ts
++++ b/src/apps/legacy/routes/legacyRoutes/user.ts
+@@ -55,6 +55,12 @@ export const LEGACY_USER_ROUTES: LegacyRoute[] = [
+             controller: 'user/playback/index',
+             view: 'user/playback/index.html'
+         }
++    }, {
++        path: 'mypreferencestaste',
++        pageProps: {
++            controller: 'user/taste/index',
++            view: 'user/taste/index.html'
++        }
+     }, {
+         path: 'mypreferencessubtitles',
+         pageProps: {
+diff --git a/src/apps/legacy/routes/user/settings/index.tsx b/src/apps/legacy/routes/user/settings/index.tsx
+index 5739dca4f8..ed5900e500 100644
+--- a/src/apps/legacy/routes/user/settings/index.tsx
++++ b/src/apps/legacy/routes/user/settings/index.tsx
+@@ -181,6 +181,25 @@ const UserSettingsPage: FC = () => {
+                             </div>
+                         </LinkButton>
+ 
++                        <LinkButton
++                            href={`#/mypreferencestaste?userId=${userId}`}
++                            className='lnkTastePreferences listItem-border'
++                            style={{
++                                display: 'block',
++                                margin: 0,
++                                padding: 0
++                            }}
++                        >
++                            <div className='listItem'>
++                                <span className='material-icons listItemIcon listItemIcon-transparent psychology' aria-hidden='true' />
++                                <div className='listItemBody'>
++                                    <div className='listItemBodyText'>
++                                        Taste
++                                    </div>
++                                </div>
++                            </div>
++                        </LinkButton>
++
+                         <LinkButton
+                             href={`#/mypreferencessubtitles?userId=${userId}`}
+                             className='lnkSubtitlePreferences listItem-border'
+diff --git a/src/apps/modern/routes/legacyRoutes/user.ts b/src/apps/modern/routes/legacyRoutes/user.ts
+index 2dd81a4b65..128809a254 100644
+--- a/src/apps/modern/routes/legacyRoutes/user.ts
++++ b/src/apps/modern/routes/legacyRoutes/user.ts
+@@ -37,6 +37,12 @@ export const LEGACY_USER_ROUTES: LegacyRoute[] = [
+             controller: 'user/playback/index',
+             view: 'user/playback/index.html'
+         }
++    }, {
++        path: 'mypreferencestaste',
++        pageProps: {
++            controller: 'user/taste/index',
++            view: 'user/taste/index.html'
++        }
+     }, {
+         path: 'mypreferencessubtitles',
+         pageProps: {
+diff --git a/src/components/cardbuilder/Card/CardImageContainer.tsx b/src/components/cardbuilder/Card/CardImageContainer.tsx
+index 8701329854..63d228c94c 100644
+--- a/src/components/cardbuilder/Card/CardImageContainer.tsx
++++ b/src/components/cardbuilder/Card/CardImageContainer.tsx
+@@ -43,6 +43,7 @@ const CardImageContainer: FC<CardImageContainerProps> = ({
+                     {indicator.getMediaSourceIndicator()}
+ 
+                     <Box className='cardIndicators'>
++                        {indicator.getTasteIndicator()}
+                         {cardOptions.missingIndicator !== false
+                             && indicator.getMissingIndicator()}
+ 
+diff --git a/src/components/cardbuilder/cardBuilder.js b/src/components/cardbuilder/cardBuilder.js
+index 605597497c..b9cfb748d4 100644
+--- a/src/components/cardbuilder/cardBuilder.js
++++ b/src/components/cardbuilder/cardBuilder.js
+@@ -899,6 +899,7 @@ function buildCard(index, item, apiClient, options) {
+             indicatorsHtml += indicators.getMissingIndicator(item);
+         }
+ 
++        indicatorsHtml += indicators.getTasteIndicatorHtml(item);
+         indicatorsHtml += indicators.getSyncIndicator(item);
+         indicatorsHtml += indicators.getTimerIndicator(item);
+ 
+diff --git a/src/components/indicators/indicators.js b/src/components/indicators/indicators.js
+index e5f3d4c3bb..49209b32c1 100644
+--- a/src/components/indicators/indicators.js
++++ b/src/components/indicators/indicators.js
+@@ -167,6 +167,16 @@ export function getMissingIndicator(item) {
+     return '';
+ }
+ 
++export function getTasteIndicatorHtml(item) {
++    const tier = item?.PgsqlTasteTier;
++    if (tier !== 'high' && tier !== 'mid') {
++        return '';
++    }
++
++    const tierClass = tier === 'high' ? 'tasteIndicator-high' : 'tasteIndicator-mid';
++    return `<div class="tasteIndicator indicator ${tierClass}" title="For you">For you</div>`;
++}
++
+ export default {
+     getProgressHtml: getProgressHtml,
+     getProgressBarHtml: getProgressBarHtml,
+@@ -177,5 +187,6 @@ export default {
+     enablePlayedIndicator: enablePlayedIndicator,
+     getSyncIndicator: getSyncIndicator,
+     getTypeIndicator: getTypeIndicator,
+-    getMissingIndicator: getMissingIndicator
++    getMissingIndicator: getMissingIndicator,
++    getTasteIndicatorHtml: getTasteIndicatorHtml
+ };
+diff --git a/src/components/indicators/indicators.scss b/src/components/indicators/indicators.scss
+index 60aa8b8d9f..d2baae0954 100644
+--- a/src/components/indicators/indicators.scss
++++ b/src/components/indicators/indicators.scss
+@@ -112,3 +112,37 @@
+     font-weight: 500;
+     margin: 0 0.25em;
+ }
++
++.tasteIndicator {
++    width: auto;
++    min-width: 0;
++    height: auto;
++    padding: 0.2em 0.55em;
++    border-radius: 0.35em;
++    font-size: 72%;
++    font-weight: 600;
++    letter-spacing: 0.02em;
++    white-space: nowrap;
++    color: #fff;
++    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
++}
++
++.tasteIndicator-high {
++    background: rgba(0, 164, 220, 0.92);
++}
++
++.tasteIndicator-mid {
++    background: rgba(80, 90, 100, 0.88);
++}
++
++.cardIndicators .tasteIndicator {
++    [dir="ltr"] & {
++        margin-right: auto;
++        order: -1;
++    }
++
++    [dir="rtl"] & {
++        margin-left: auto;
++        order: -1;
++    }
++}
+diff --git a/src/components/indicators/useIndicator.tsx b/src/components/indicators/useIndicator.tsx
+index db0974df40..48962dfcd5 100644
+--- a/src/components/indicators/useIndicator.tsx
++++ b/src/components/indicators/useIndicator.tsx
+@@ -178,6 +178,26 @@ const useIndicator = (item: ItemDto) => {
+         return null;
+     };
+ 
++    const getTasteIndicator = () => {
++        const tier = (item as ItemDto & { PgsqlTasteTier?: string }).PgsqlTasteTier;
++        if (tier !== 'high' && tier !== 'mid') {
++            return null;
++        }
++
++        return (
++            <Box
++                className={classNames(
++                    'tasteIndicator',
++                    'indicator',
++                    tier === 'high' ? 'tasteIndicator-high' : 'tasteIndicator-mid'
++                )}
++                title='For you'
++            >
++                For you
++            </Box>
++        );
++    };
++
+     const getProgress = (pct: number, progressOptions?: ProgressOptions) => {
+         const progressBarClass = classNames(
+             'itemLinearProgress',
+@@ -262,7 +282,8 @@ const useIndicator = (item: ItemDto) => {
+         getTimerIndicator,
+         getTypeIndicator,
+         getChildCountIndicator,
+-        getPlayedIndicator
++        getPlayedIndicator,
++        getTasteIndicator
+     };
+ };
+ 
 diff --git a/src/scripts/tasteMatch.js b/src/scripts/tasteMatch.js
 new file mode 100644
 index 0000000000..63f7bca665

@@ -425,10 +425,10 @@ index 0000000000..0bb08cf31f
 +    return info as TranscodingInfoExtensions;
 +};
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index ca332ec938..4625abce1b 100755
+index 64b3d633c4..7075e9178b 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -933,6 +933,13 @@
+@@ -939,6 +939,13 @@
      "LabelQsvDeviceHelp": "Specify the device for Intel QSV on a multi-GPU system. On Linux, this is the render node, e.g., /dev/dri/renderD128. On Windows, this is the device index starting from 0. Leave blank unless you know what you are doing.",
      "LabelQuickConnectCode": "Quick Connect code",
      "LabelReasonForTranscoding": "Reason for transcoding",

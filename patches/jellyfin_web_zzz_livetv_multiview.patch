@@ -1,8 +1,8 @@
 diff --git a/src/apps/dashboard/features/users/components/Profile.tsx b/src/apps/dashboard/features/users/components/Profile.tsx
-index 3522432572..84a79c1826 100644
+index 013238cb8d..3c32c211fe 100644
 --- a/src/apps/dashboard/features/users/components/Profile.tsx
 +++ b/src/apps/dashboard/features/users/components/Profile.tsx
-@@ -189,6 +189,7 @@ const Profile = ({ userDto }: ProfileProps) => {
+@@ -196,6 +196,7 @@ const Profile = ({ userDto }: ProfileProps) => {
          (page.querySelector('.chkEnableDownloading') as HTMLInputElement).checked = !!userDto.Policy?.EnableContentDownloading;
          (page.querySelector('.chkManageLiveTv') as HTMLInputElement).checked = !!userDto.Policy?.EnableLiveTvManagement;
          (page.querySelector('.chkEnableLiveTvAccess') as HTMLInputElement).checked = !!userDto.Policy?.EnableLiveTvAccess;
@@ -10,7 +10,7 @@ index 3522432572..84a79c1826 100644
          (page.querySelector('.chkEnableMediaPlayback') as HTMLInputElement).checked = !!userDto.Policy?.EnableMediaPlayback;
          (page.querySelector('.chkEnableAudioPlaybackTranscoding') as HTMLInputElement).checked = !!userDto.Policy?.EnableAudioPlaybackTranscoding;
          (page.querySelector('.chkEnableVideoPlaybackTranscoding') as HTMLInputElement).checked = !!userDto.Policy?.EnableVideoPlaybackTranscoding;
-@@ -227,6 +228,7 @@ const Profile = ({ userDto }: ProfileProps) => {
+@@ -234,6 +235,7 @@ const Profile = ({ userDto }: ProfileProps) => {
              user.Policy.EnableRemoteControlOfOtherUsers = (page.querySelector('.chkEnableRemoteControlOtherUsers') as HTMLInputElement).checked;
              user.Policy.EnableLiveTvManagement = (page.querySelector('.chkManageLiveTv') as HTMLInputElement).checked;
              user.Policy.EnableLiveTvAccess = (page.querySelector('.chkEnableLiveTvAccess') as HTMLInputElement).checked;
@@ -18,7 +18,7 @@ index 3522432572..84a79c1826 100644
              user.Policy.EnableSharedDeviceControl = (page.querySelector('.chkRemoteControlSharedDevices') as HTMLInputElement).checked;
              user.Policy.EnableMediaPlayback = (page.querySelector('.chkEnableMediaPlayback') as HTMLInputElement).checked;
              user.Policy.EnableAudioPlaybackTranscoding = (page.querySelector('.chkEnableAudioPlaybackTranscoding') as HTMLInputElement).checked;
-@@ -399,6 +401,10 @@ const Profile = ({ userDto }: ProfileProps) => {
+@@ -418,6 +420,10 @@ const Profile = ({ userDto }: ProfileProps) => {
                              className='chkManageLiveTv'
                              title='OptionAllowManageLiveTv'
                          />
@@ -94,7 +94,7 @@ index 57b11092d7..788b7aedbe 100644
                      <span class="xlargePaperIconButton material-icons airplay" aria-hidden="true"></span>
                  </button>
 diff --git a/src/apps/legacy/controllers/playback/video/index.js b/src/apps/legacy/controllers/playback/video/index.js
-index 8737a03078..e416d15393 100644
+index fdde2c5582..679a39bd3b 100644
 --- a/src/apps/legacy/controllers/playback/video/index.js
 +++ b/src/apps/legacy/controllers/playback/video/index.js
 @@ -12,6 +12,7 @@ import dom from 'utils/dom';
@@ -141,7 +141,7 @@ index 8737a03078..e416d15393 100644
          if (enableProgressByTimeOfDay) {
              setDisplayTime(startTimeText, displayItem.StartDate);
              setDisplayTime(endTimeText, displayItem.EndDate);
-@@ -1768,6 +1798,26 @@ export default function (view) {
+@@ -1770,6 +1800,26 @@ export default function (view) {
          playbackManager.toggleAirPlay(currentPlayer);
      });
      view.querySelector('.btnVideoOsdSettings').addEventListener('click', onSettingsButtonClick);
@@ -1359,10 +1359,10 @@ index 0000000000..60cf54af05
 +const multiviewManager = new MultiviewManager();
 +export default multiviewManager;
 diff --git a/src/scripts/settings/userSettings.js b/src/scripts/settings/userSettings.js
-index 409e52ba94..0ecc5c012a 100644
+index b515e76fbc..d8a53a2769 100644
 --- a/src/scripts/settings/userSettings.js
 +++ b/src/scripts/settings/userSettings.js
-@@ -210,6 +210,14 @@ export class UserSettings {
+@@ -211,6 +211,14 @@ export class UserSettings {
          return toBoolean(this.get('enableCinemaMode', false), true);
      }
  
@@ -1377,7 +1377,7 @@ index 409e52ba94..0ecc5c012a 100644
      /**
       * Get or set 'Enable Audio Normalization' state.
       * @param {string|undefined} val - Flag to enable 'Enable Audio Normalization' or undefined.
-@@ -751,6 +759,7 @@ export const allowedAudioChannels = currentSettings.allowedAudioChannels.bind(cu
+@@ -752,6 +760,7 @@ export const allowedAudioChannels = currentSettings.allowedAudioChannels.bind(cu
  export const preferFmp4HlsContainer = currentSettings.preferFmp4HlsContainer.bind(currentSettings);
  export const limitSegmentLength = currentSettings.limitSegmentLength.bind(currentSettings);
  export const enableCinemaMode = currentSettings.enableCinemaMode.bind(currentSettings);
@@ -1386,10 +1386,10 @@ index 409e52ba94..0ecc5c012a 100644
  export const enableNextVideoInfoOverlay = currentSettings.enableNextVideoInfoOverlay.bind(currentSettings);
  export const enableVideoRemainingTime = currentSettings.enableVideoRemainingTime.bind(currentSettings);
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index c565ff3d03..013812c1bd 100755
+index 1b3b286949..a39d7bbf98 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -1345,6 +1345,10 @@
+@@ -1351,6 +1351,10 @@
      "Option3D": "3D",
      "OptionAllowAudioPlaybackTranscoding": "Allow audio playback that requires transcoding",
      "OptionAllowBrowsingLiveTv": "Allow Live TV access",
