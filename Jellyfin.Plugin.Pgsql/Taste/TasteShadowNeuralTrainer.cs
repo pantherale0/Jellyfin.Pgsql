@@ -17,12 +17,14 @@ using Microsoft.ML;
 namespace Jellyfin.Plugin.Pgsql.Taste;
 
 /// <summary>
-/// Trains a shadow Microsoft.ML ranker, evaluates on holdout data, and never serves live rankings.
+/// Trains a shadow Microsoft.ML ranker and evaluates on a time-based holdout.
+/// Live serving is gated by <see cref="TasteOptions.UseNeuralForServing"/>.
 /// </summary>
 public sealed class TasteShadowNeuralTrainer
 {
-    private const float HoldoutFraction = 0.2f;
     private const int MinTotalPairs = 20;
+    private const float HardGenreNegativeFraction = 0.7f;
+    private const int TopGenreCount = 5;
 
     private readonly ILogger<TasteShadowNeuralTrainer> _logger;
 
@@ -57,6 +59,7 @@ public sealed class TasteShadowNeuralTrainer
         var movieType = itemTypeLookup.BaseItemKindNames[BaseItemKind.Movie];
         var seriesType = itemTypeLookup.BaseItemKindNames[BaseItemKind.Series];
         var episodeType = itemTypeLookup.BaseItemKindNames[BaseItemKind.Episode];
+        itemTypeLookup.BaseItemKindNames.TryGetValue(BaseItemKind.BoxSet, out var boxSetType);
         var profiles = await context.UserTasteProfiles.AsNoTracking()
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -66,10 +69,11 @@ public sealed class TasteShadowNeuralTrainer
                 .ConfigureAwait(false);
         }
 
-        var examples = new List<TasteExample>();
+        var examples = new List<TimedExample>();
         var now = DateTime.UtcNow;
         var lookbackDays = TasteOptions.Current.LookbackDays;
         var cutoff = now.AddDays(-lookbackDays);
+        var rng = new Random(42);
 
         foreach (var profile in profiles)
         {
@@ -86,6 +90,16 @@ public sealed class TasteShadowNeuralTrainer
                     cancellationToken)
                 .ConfigureAwait(false);
 
+            var skipNegatives = await LoadImpressionSkipNegativesAsync(
+                    context,
+                    profile.UserId,
+                    cutoff,
+                    now,
+                    labeled.Select(l => l.ItemId).ToHashSet(),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            labeled.AddRange(skipNegatives);
+
             if (labeled.Count == 0)
             {
                 continue;
@@ -94,38 +108,51 @@ public sealed class TasteShadowNeuralTrainer
             var labeledSet = labeled.Select(l => l.ItemId).ToHashSet();
             var positiveCount = labeled.Count(l => l.IsPositive);
             var negativeNeeded = Math.Max(positiveCount, 5);
-            var movieNegatives = await context.BaseItems.AsNoTracking()
-                .Where(i => i.Type == movieType && !labeledSet.Contains(i.Id))
-                .OrderBy(i => i.Id)
-                .Select(i => i.Id)
-                .Take(negativeNeeded)
-                .ToListAsync(cancellationToken)
+            var movieNegatives = await SampleCatalogNegativesAsync(
+                    context,
+                    movieType,
+                    payload,
+                    labeledSet,
+                    negativeNeeded,
+                    rng,
+                    cancellationToken)
                 .ConfigureAwait(false);
-            var seriesNegatives = await context.BaseItems.AsNoTracking()
-                .Where(i => i.Type == seriesType && !labeledSet.Contains(i.Id))
-                .OrderBy(i => i.Id)
-                .Select(i => i.Id)
-                .Take(negativeNeeded)
-                .ToListAsync(cancellationToken)
+            var seriesNegatives = await SampleCatalogNegativesAsync(
+                    context,
+                    seriesType,
+                    payload,
+                    labeledSet,
+                    negativeNeeded,
+                    rng,
+                    cancellationToken)
                 .ConfigureAwait(false);
             var catalogNegatives = movieNegatives.Concat(seriesNegatives).Distinct().ToList();
 
             var allIds = labeled.Select(l => l.ItemId).Concat(catalogNegatives).Distinct().ToList();
-            var featuresByItem = await LoadCandidateFeaturesAsync(context, allIds, cancellationToken)
+            var featuresByItem = await TasteCandidateFeatureLoader
+                .LoadAsync(context, allIds, cancellationToken, seriesType, boxSetType)
                 .ConfigureAwait(false);
 
             foreach (var row in labeled.Where(l => featuresByItem.ContainsKey(l.ItemId)))
             {
-                examples.Add(ToExample(payload, featuresByItem[row.ItemId], row.IsPositive, row.Weight));
+                examples.Add(new TimedExample(
+                    TasteNeuralExampleBuilder.Create(payload, featuresByItem[row.ItemId], row.IsPositive, row.Weight),
+                    profile.UserId,
+                    row.EventUtc,
+                    isCatalogNegative: false));
             }
 
             foreach (var id in catalogNegatives.Where(featuresByItem.ContainsKey))
             {
-                examples.Add(ToExample(
-                    payload,
-                    featuresByItem[id],
-                    label: false,
-                    weight: TasteEngagementWeights.NeuralCatalogNegativeWeight));
+                examples.Add(new TimedExample(
+                    TasteNeuralExampleBuilder.Create(
+                        payload,
+                        featuresByItem[id],
+                        label: false,
+                        weight: TasteEngagementWeights.NeuralCatalogNegativeWeight),
+                    profile.UserId,
+                    cutoff,
+                    isCatalogNegative: true));
             }
         }
 
@@ -139,32 +166,43 @@ public sealed class TasteShadowNeuralTrainer
                 .ConfigureAwait(false);
         }
 
-        var rng = new Random(42);
-        var shuffled = examples.OrderBy(_ => rng.Next()).ToList();
-        var holdoutCount = Math.Max(1, (int)(shuffled.Count * HoldoutFraction));
-        var holdout = shuffled.Take(holdoutCount).ToList();
-        var train = shuffled.Skip(holdoutCount).ToList();
-        if (train.Count < 10)
+        var labeledForSplit = examples.Where(e => !e.IsCatalogNegative).ToList();
+        var minEvent = labeledForSplit.Count > 0
+            ? labeledForSplit.Min(e => e.EventUtc)
+            : examples.Min(e => e.EventUtc);
+        var splitPreview = TasteEvalMetrics.SplitByEventTime(
+            labeledForSplit.Count > 0 ? labeledForSplit : examples,
+            e => e.EventUtc,
+            TasteEvalMetrics.DefaultHoldoutFraction);
+        var catalogMid = TasteEvalMetrics.TrainWindowMidpoint(minEvent, splitPreview.WindowStart);
+        foreach (var row in examples.Where(e => e.IsCatalogNegative))
+        {
+            row.EventUtc = catalogMid;
+        }
+
+        var split = TasteEvalMetrics.SplitByEventTime(
+            examples,
+            e => e.EventUtc,
+            TasteEvalMetrics.DefaultHoldoutFraction);
+        var trainRows = split.Train;
+        var holdoutRows = split.Holdout;
+        if (trainRows.Count < 10)
         {
             return await PersistSkipAsync(context, sw.ElapsedMilliseconds, "Holdout left too few train rows", cancellationToken)
                 .ConfigureAwait(false);
         }
 
+        var train = trainRows.Select(r => r.Example).ToList();
+        var holdout = holdoutRows.Select(r => r.Example).ToList();
+
         var mlContext = new MLContext(seed: 42);
         var trainData = mlContext.Data.LoadFromEnumerable(train);
         var pipeline = mlContext.Transforms
-            .Concatenate(
-                "Features",
-                nameof(TasteExample.GenreOverlap),
-                nameof(TasteExample.TagOverlap),
-                nameof(TasteExample.StudioOverlap),
-                nameof(TasteExample.DirectorOverlap),
-                nameof(TasteExample.ActorOverlap),
-                nameof(TasteExample.RatingDistance))
+            .Concatenate("Features", TasteNeuralExample.FeatureColumnNames)
             .Append(mlContext.BinaryClassification.Trainers.SdcaLogisticRegression(
-                labelColumnName: nameof(TasteExample.Label),
+                labelColumnName: nameof(TasteNeuralExample.Label),
                 featureColumnName: "Features",
-                exampleWeightColumnName: nameof(TasteExample.Weight)));
+                exampleWeightColumnName: nameof(TasteNeuralExample.Weight)));
 
         var model = pipeline.Fit(trainData);
         Directory.CreateDirectory(modelDirectory);
@@ -178,15 +216,29 @@ public sealed class TasteShadowNeuralTrainer
         var predictions = model.Transform(holdoutData);
         var metrics = mlContext.BinaryClassification.Evaluate(
             predictions,
-            labelColumnName: nameof(TasteExample.Label),
+            labelColumnName: nameof(TasteNeuralExample.Label),
             scoreColumnName: "Score");
 
         var scored = mlContext.Data
-            .CreateEnumerable<TastePrediction>(predictions, reuseRowObject: false)
-            .Select((p, i) => (Score: p.Probability, Label: holdout[i].Label))
-            .OrderByDescending(x => x.Score)
+            .CreateEnumerable<TasteNeuralPrediction>(predictions, reuseRowObject: false)
+            .Select((p, i) => (Score: p.Probability, Label: holdout[i].Label, UserId: holdoutRows[i].UserId))
             .ToList();
-        var precisionAt10 = PrecisionAtK(scored, 10);
+        var rankedGlobal = scored
+            .OrderByDescending(x => x.Score)
+            .Select(x => (x.Score, x.Label))
+            .ToList();
+        var precisionAt10 = TasteEvalMetrics.PrecisionAtK(rankedGlobal, 10);
+        var meanPrecisionAt10 = TasteEvalMetrics.MeanPrecisionAtK(
+            scored.Select(x => (x.UserId, x.Score, x.Label)),
+            10);
+
+        var engage = await TasteForYouEngageMetrics.ComputeAsync(
+                context,
+                DateTime.UtcNow,
+                lookbackDays,
+                TasteEngagementWeights.ImpressionSkipConfirmDays,
+                cancellationToken)
+            .ConfigureAwait(false);
 
         sw.Stop();
         var run = new TasteModelEvalRun
@@ -194,14 +246,24 @@ public sealed class TasteShadowNeuralTrainer
             Id = Guid.NewGuid(),
             CreatedAt = DateTime.UtcNow,
             TrainDurationMs = sw.ElapsedMilliseconds,
-            PositiveCount = examples.Count(e => e.Label),
-            NegativeCount = examples.Count(e => !e.Label),
+            PositiveCount = examples.Count(e => e.Example.Label),
+            NegativeCount = examples.Count(e => !e.Example.Label),
             HoldoutCount = holdout.Count,
             Accuracy = metrics.Accuracy,
             Auc = metrics.AreaUnderRocCurve,
             PrecisionAt10 = precisionAt10,
             ModelPath = fileName,
-            Notes = "Weighted training (completion + For You impressions)"
+            Notes = "Weighted training (completion + For You impressions + hard negatives)",
+            SplitType = TasteEvalMetrics.SplitTypeTimeBased,
+            HoldoutFraction = TasteEvalMetrics.DefaultHoldoutFraction,
+            HoldoutWindowStart = split.WindowStart,
+            HoldoutWindowEnd = split.WindowEnd,
+            TrainCount = train.Count,
+            MeanPrecisionAt10 = meanPrecisionAt10,
+            ForYouEngageRate = engage.Rate,
+            ForYouEngageWindowDays = engage.WindowDays,
+            ForYouImpressionCount = engage.ImpressionCount,
+            ForYouEngageCount = engage.EngageCount
         };
 
         context.TasteModelEvalRuns.Add(run);
@@ -219,6 +281,145 @@ public sealed class TasteShadowNeuralTrainer
         }
 
         return run;
+    }
+
+    private static async Task<List<Guid>> SampleCatalogNegativesAsync(
+        JellyfinDbContext context,
+        string itemType,
+        UserTasteFeaturePayload payload,
+        HashSet<Guid> labeledSet,
+        int negativeNeeded,
+        Random rng,
+        CancellationToken cancellationToken)
+    {
+        if (negativeNeeded <= 0)
+        {
+            return [];
+        }
+
+        var hardCount = (int)Math.Round(negativeNeeded * HardGenreNegativeFraction);
+        var randomCount = Math.Max(0, negativeNeeded - hardCount);
+        var selected = new List<Guid>(negativeNeeded);
+
+        var topGenres = payload.Genres
+            .OrderByDescending(kvp => kvp.Value)
+            .ThenBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase)
+            .Take(TopGenreCount)
+            .Select(kvp => kvp.Key)
+            .Where(g => !string.IsNullOrWhiteSpace(g))
+            .ToList();
+
+        if (topGenres.Count > 0 && hardCount > 0)
+        {
+            var hardPool = await context.ItemValuesMap.AsNoTracking()
+                .Where(m => m.ItemValue.Type == ItemValueType.Genre
+                    && topGenres.Contains(m.ItemValue.CleanValue)
+                    && m.Item.Type == itemType
+                    && !m.Item.IsVirtualItem
+                    && !labeledSet.Contains(m.ItemId))
+                .Select(m => m.ItemId)
+                .Distinct()
+                .Take(Math.Max(hardCount * 8, 40))
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            selected.AddRange(ShuffleTake(hardPool, hardCount, rng));
+        }
+
+        var selectedSet = selected.ToHashSet();
+        selectedSet.UnionWith(labeledSet);
+        var randomPool = await context.BaseItems.AsNoTracking()
+            .Where(i => i.Type == itemType && !i.IsVirtualItem && !selectedSet.Contains(i.Id))
+            .Select(i => i.Id)
+            .Take(Math.Max(randomCount * 8, 40))
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        selected.AddRange(ShuffleTake(randomPool, randomCount, rng));
+
+        // Backfill if hard/random pools were short.
+        if (selected.Count < negativeNeeded)
+        {
+            var fillSet = selected.ToHashSet();
+            fillSet.UnionWith(labeledSet);
+            var fillPool = await context.BaseItems.AsNoTracking()
+                .Where(i => i.Type == itemType && !i.IsVirtualItem && !fillSet.Contains(i.Id))
+                .Select(i => i.Id)
+                .Take(negativeNeeded - selected.Count)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            selected.AddRange(fillPool);
+        }
+
+        return selected.Distinct().Take(negativeNeeded).ToList();
+    }
+
+    private static List<Guid> ShuffleTake(List<Guid> pool, int count, Random rng)
+    {
+        if (pool.Count == 0 || count <= 0)
+        {
+            return [];
+        }
+
+        for (var i = pool.Count - 1; i > 0; i--)
+        {
+            var j = rng.Next(i + 1);
+            (pool[i], pool[j]) = (pool[j], pool[i]);
+        }
+
+        return pool.Take(Math.Min(count, pool.Count)).ToList();
+    }
+
+    private static async Task<List<LabeledMedia>> LoadImpressionSkipNegativesAsync(
+        JellyfinDbContext context,
+        Guid userId,
+        DateTime cutoff,
+        DateTime nowUtc,
+        HashSet<Guid> alreadyLabeled,
+        CancellationToken cancellationToken)
+    {
+        var confirmBefore = nowUtc.AddDays(-TasteEngagementWeights.ImpressionSkipConfirmDays);
+        var impressions = await context.UserTasteRecommendationImpressions.AsNoTracking()
+            .Where(i => i.UserId == userId
+                && i.ServedAt >= cutoff
+                && i.ServedAt <= confirmBefore
+                && !alreadyLabeled.Contains(i.ItemId))
+            .Select(i => new { i.ItemId, i.ServedAt })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (impressions.Count == 0)
+        {
+            return [];
+        }
+
+        var itemIds = impressions.Select(i => i.ItemId).Distinct().ToList();
+        var engaged = await context.UserData.AsNoTracking()
+            .Where(ud => ud.UserId == userId
+                && itemIds.Contains(ud.ItemId)
+                && (ud.IsFavorite
+                    || ud.Likes == true
+                    || ud.Played
+                    || ud.PlayCount > 0
+                    || ud.PlaybackPositionTicks > 0))
+            .Select(ud => ud.ItemId)
+            .Distinct()
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var engagedSet = engaged.ToHashSet();
+
+        return impressions
+            .Where(i => !engagedSet.Contains(i.ItemId))
+            .GroupBy(i => i.ItemId)
+            .Select(g =>
+            {
+                var servedAt = g.Min(x => x.ServedAt);
+                var weight = TasteEngagementWeights.ApplyNeuralRecencyDecay(
+                    TasteEngagementWeights.NeuralImpressionSkipWeight,
+                    servedAt,
+                    nowUtc);
+                return new LabeledMedia(g.Key, false, weight, servedAt);
+            })
+            .ToList();
     }
 
     private static async Task<List<LabeledMedia>> LoadLabeledMediaAsync(
@@ -280,7 +481,7 @@ public sealed class TasteShadowNeuralTrainer
             var weight = recommended.Contains(seriesId)
                 ? TasteEngagementWeights.NeuralRecPositiveWeight
                 : TasteEngagementWeights.NeuralDeepPlayWeight;
-            labeled.Add(new LabeledMedia(seriesId, true, weight));
+            labeled.Add(new LabeledMedia(seriesId, true, weight, cutoff));
         }
 
         return labeled;
@@ -396,145 +597,8 @@ public sealed class TasteShadowNeuralTrainer
                 continue;
             }
 
-            labeled.Add(new LabeledMedia(itemId, isPositive, weight));
+            labeled.Add(new LabeledMedia(itemId, isPositive, weight, lastPlayed ?? cutoff));
         }
-    }
-
-    private static async Task<Dictionary<Guid, TasteCandidateFeatures>> LoadCandidateFeaturesAsync(
-        JellyfinDbContext context,
-        List<Guid> itemIds,
-        CancellationToken cancellationToken)
-    {
-        var valueRows = await context.ItemValuesMap.AsNoTracking()
-            .Where(m => itemIds.Contains(m.ItemId)
-                && (m.ItemValue.Type == ItemValueType.Genre
-                    || m.ItemValue.Type == ItemValueType.Tags
-                    || m.ItemValue.Type == ItemValueType.Studios))
-            .Select(m => new { m.ItemId, m.ItemValue.Type, m.ItemValue.CleanValue })
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        var peopleRows = await context.PeopleBaseItemMap.AsNoTracking()
-            .Where(m => itemIds.Contains(m.ItemId)
-                && (m.People.PersonType == nameof(PersonKind.Director)
-                    || m.People.PersonType == nameof(PersonKind.Actor)
-                    || m.People.PersonType == nameof(PersonKind.GuestStar)))
-            .Select(m => new { m.ItemId, m.PeopleId, m.People.PersonType })
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        var ratings = await context.BaseItems.AsNoTracking()
-            .Where(i => itemIds.Contains(i.Id))
-            .Select(i => new { i.Id, i.CommunityRating })
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        var result = new Dictionary<Guid, TasteCandidateFeatures>();
-        foreach (var id in itemIds)
-        {
-            var genres = valueRows
-                .Where(r => r.ItemId == id && r.Type == ItemValueType.Genre)
-                .Select(r => r.CleanValue)
-                .Where(v => !string.IsNullOrWhiteSpace(v))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            var tags = valueRows
-                .Where(r => r.ItemId == id && r.Type == ItemValueType.Tags)
-                .Select(r => r.CleanValue)
-                .Where(v => !string.IsNullOrWhiteSpace(v))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            var studios = valueRows
-                .Where(r => r.ItemId == id && r.Type == ItemValueType.Studios)
-                .Select(r => r.CleanValue)
-                .Where(v => !string.IsNullOrWhiteSpace(v))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            var directors = peopleRows
-                .Where(r => r.ItemId == id && r.PersonType == nameof(PersonKind.Director))
-                .Select(r => r.PeopleId)
-                .Distinct()
-                .ToList();
-            var actors = peopleRows
-                .Where(r => r.ItemId == id && r.PersonType != nameof(PersonKind.Director))
-                .Select(r => r.PeopleId)
-                .Distinct()
-                .ToList();
-            var rating = ratings.FirstOrDefault(r => r.Id == id)?.CommunityRating;
-
-            result[id] = new TasteCandidateFeatures(genres, tags, studios, directors, actors, rating);
-        }
-
-        return result;
-    }
-
-    private static TasteExample ToExample(
-        UserTasteFeaturePayload profile,
-        TasteCandidateFeatures features,
-        bool label,
-        float weight)
-    {
-        return new TasteExample
-        {
-            Label = label,
-            Weight = weight,
-            GenreOverlap = SumWeights(profile.Genres, features.Genres),
-            TagOverlap = SumWeights(profile.Tags, features.Tags),
-            StudioOverlap = SumWeights(profile.Studios, features.Studios),
-            DirectorOverlap = SumGuidWeights(profile.Directors, features.DirectorIds),
-            ActorOverlap = SumGuidWeights(profile.Actors, features.ActorIds),
-            RatingDistance = RatingDistance(profile, features.CommunityRating)
-        };
-    }
-
-    private static float SumWeights(Dictionary<string, float> weights, IReadOnlyCollection<string> values)
-    {
-        float sum = 0f;
-        foreach (var value in values.Where(weights.ContainsKey))
-        {
-            sum += weights[value];
-        }
-
-        return sum;
-    }
-
-    private static float SumGuidWeights(Dictionary<string, float> weights, IReadOnlyCollection<Guid> ids)
-    {
-        float sum = 0f;
-        foreach (var weight in ids
-                     .Select(id =>
-                         weights.TryGetValue(id.ToString("N"), out var w)
-                         || weights.TryGetValue(id.ToString("D"), out w)
-                             ? (float?)w
-                             : null)
-                     .Where(w => w.HasValue)
-                     .Select(w => w!.Value))
-        {
-            sum += weight;
-        }
-
-        return sum;
-    }
-
-    private static float RatingDistance(UserTasteFeaturePayload profile, float? rating)
-    {
-        if (rating is null || profile.RatingMean is null)
-        {
-            return 0f;
-        }
-
-        return Math.Abs(rating.Value - profile.RatingMean.Value);
-    }
-
-    private static double PrecisionAtK(List<(float Score, bool Label)> ranked, int k)
-    {
-        if (ranked.Count == 0)
-        {
-            return 0;
-        }
-
-        var top = ranked.Take(Math.Min(k, ranked.Count)).ToList();
-        return top.Count(x => x.Label) / (double)top.Count;
     }
 
     private static async Task<TasteModelEvalRun> PersistSkipAsync(
@@ -551,46 +615,41 @@ public sealed class TasteShadowNeuralTrainer
             PositiveCount = 0,
             NegativeCount = 0,
             HoldoutCount = 0,
-            Notes = notes
+            Notes = notes,
+            SplitType = TasteEvalMetrics.SplitTypeTimeBased
         };
         context.TasteModelEvalRuns.Add(run);
         await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         return run;
     }
 
-    private sealed class TasteExample
+    private sealed class TimedExample
     {
-        public bool Label { get; set; }
+        public TimedExample(TasteNeuralExample example, Guid userId, DateTime eventUtc, bool isCatalogNegative)
+        {
+            Example = example;
+            UserId = userId;
+            EventUtc = eventUtc;
+            IsCatalogNegative = isCatalogNegative;
+        }
 
-        public float Weight { get; set; } = 1f;
+        public TasteNeuralExample Example { get; }
 
-        public float GenreOverlap { get; set; }
+        public Guid UserId { get; }
 
-        public float TagOverlap { get; set; }
+        public DateTime EventUtc { get; set; }
 
-        public float StudioOverlap { get; set; }
-
-        public float DirectorOverlap { get; set; }
-
-        public float ActorOverlap { get; set; }
-
-        public float RatingDistance { get; set; }
-    }
-
-    private sealed class TastePrediction
-    {
-        public bool Label { get; set; }
-
-        public float Probability { get; set; }
+        public bool IsCatalogNegative { get; }
     }
 
     private sealed class LabeledMedia
     {
-        public LabeledMedia(Guid itemId, bool isPositive, float weight)
+        public LabeledMedia(Guid itemId, bool isPositive, float weight, DateTime eventUtc)
         {
             ItemId = itemId;
             IsPositive = isPositive;
             Weight = weight;
+            EventUtc = eventUtc;
         }
 
         public Guid ItemId { get; }
@@ -598,5 +657,7 @@ public sealed class TasteShadowNeuralTrainer
         public bool IsPositive { get; }
 
         public float Weight { get; }
+
+        public DateTime EventUtc { get; }
     }
 }

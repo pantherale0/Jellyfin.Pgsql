@@ -23,6 +23,7 @@ public sealed class UserTasteProfileBuilder
     private const string DirectorType = nameof(PersonKind.Director);
     private const string ActorType = nameof(PersonKind.Actor);
     private const string GuestStarType = nameof(PersonKind.GuestStar);
+    private const string WriterType = nameof(PersonKind.Writer);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -63,6 +64,7 @@ public sealed class UserTasteProfileBuilder
         var movieType = itemTypeLookup.BaseItemKindNames[BaseItemKind.Movie];
         var seriesType = itemTypeLookup.BaseItemKindNames[BaseItemKind.Series];
         var episodeType = itemTypeLookup.BaseItemKindNames[BaseItemKind.Episode];
+        itemTypeLookup.BaseItemKindNames.TryGetValue(BaseItemKind.BoxSet, out var boxSetType);
         var cutoff = DateTime.UtcNow.AddDays(-lookbackDays);
 
         var userDataUserIds = await context.UserData.AsNoTracking()
@@ -108,7 +110,8 @@ public sealed class UserTasteProfileBuilder
                     episodeType,
                     cutoff,
                     minSamples,
-                    cancellationToken)
+                    cancellationToken,
+                    boxSetType)
                 .ConfigureAwait(false);
             maxMediaSignalsSeen = Math.Max(maxMediaSignalsSeen, outcome.MediaSignalCount);
             maxMovieSignalsSeen = Math.Max(maxMovieSignalsSeen, outcome.MovieSignalCount);
@@ -173,6 +176,7 @@ public sealed class UserTasteProfileBuilder
     /// <param name="cutoff">Earliest history date (UTC).</param>
     /// <param name="minSamples">Minimum samples to persist.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="boxSetType">Optional BoxSet BaseItem type name for collection rollup.</param>
     /// <returns>Whether a profile was written and signal counts.</returns>
     public async Task<RebuildUserOutcome> RebuildUserAsync(
         JellyfinDbContext context,
@@ -182,7 +186,8 @@ public sealed class UserTasteProfileBuilder
         string episodeType,
         DateTime cutoff,
         int minSamples,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? boxSetType = null)
     {
         var (signals, movieCount, seriesCount) = await LoadPositiveSignalsAsync(
                 context,
@@ -212,16 +217,42 @@ public sealed class UserTasteProfileBuilder
             .Where(m => itemIds.Contains(m.ItemId)
                 && (m.People.PersonType == DirectorType
                     || m.People.PersonType == ActorType
-                    || m.People.PersonType == GuestStarType))
+                    || m.People.PersonType == GuestStarType
+                    || m.People.PersonType == WriterType))
             .Select(m => new { m.ItemId, m.PeopleId, m.People.PersonType })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        var ratings = await context.BaseItems.AsNoTracking()
-            .Where(i => itemIds.Contains(i.Id) && i.CommunityRating != null)
-            .Select(i => new { i.Id, Rating = i.CommunityRating!.Value })
+        var itemMeta = await context.BaseItems.AsNoTracking()
+            .Where(i => itemIds.Contains(i.Id))
+            .Select(i => new
+            {
+                i.Id,
+                Rating = i.CommunityRating,
+                i.ProductionYear,
+                i.RunTimeTicks,
+                i.InheritedParentalRatingValue,
+                i.OriginalLanguage,
+                i.ProductionLocations
+            })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
+        var metaById = itemMeta.ToDictionary(r => r.Id);
+
+        var boxSetRows = Array.Empty<(Guid ItemId, Guid BoxSetId)>();
+        if (!string.IsNullOrWhiteSpace(boxSetType))
+        {
+            var loaded = await context.LinkedChildren.AsNoTracking()
+                .Where(lc => itemIds.Contains(lc.ChildId) && lc.ChildType == LinkedChildType.Manual)
+                .Join(
+                    context.BaseItems.AsNoTracking().Where(bs => bs.Type == boxSetType),
+                    lc => lc.ParentId,
+                    bs => bs.Id,
+                    (lc, bs) => new { ItemId = lc.ChildId, BoxSetId = lc.ParentId })
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            boxSetRows = loaded.Select(r => (r.ItemId, r.BoxSetId)).ToArray();
+        }
 
         var payload = new UserTasteFeaturePayload();
         var genreRaw = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
@@ -229,7 +260,14 @@ public sealed class UserTasteProfileBuilder
         var studioRaw = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
         var directorRaw = new Dictionary<string, float>(StringComparer.Ordinal);
         var actorRaw = new Dictionary<string, float>(StringComparer.Ordinal);
+        var writerRaw = new Dictionary<string, float>(StringComparer.Ordinal);
+        var boxSetRaw = new Dictionary<string, float>(StringComparer.Ordinal);
+        var languageRaw = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+        var countryRaw = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
         var ratingSamples = new List<float>();
+        var yearSamples = new List<float>();
+        var runtimeSamples = new List<float>();
+        var parentalSamples = new List<float>();
 
         foreach (var (itemId, weight) in signals)
         {
@@ -257,16 +295,55 @@ public sealed class UserTasteProfileBuilder
                 {
                     directorRaw[key] = directorRaw.GetValueOrDefault(key) + weight;
                 }
+                else if (row.PersonType == WriterType)
+                {
+                    writerRaw[key] = writerRaw.GetValueOrDefault(key) + weight;
+                }
                 else
                 {
                     actorRaw[key] = actorRaw.GetValueOrDefault(key) + weight;
                 }
             }
 
-            var rating = ratings.FirstOrDefault(r => r.Id == itemId);
-            if (rating is not null)
+            foreach (var (_, boxSetId) in boxSetRows.Where(r => r.ItemId == itemId))
             {
-                ratingSamples.Add(rating.Rating);
+                var key = boxSetId.ToString("N", CultureInfo.InvariantCulture);
+                boxSetRaw[key] = boxSetRaw.GetValueOrDefault(key) + weight;
+            }
+
+            if (!metaById.TryGetValue(itemId, out var meta))
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(meta.OriginalLanguage))
+            {
+                languageRaw[meta.OriginalLanguage] = languageRaw.GetValueOrDefault(meta.OriginalLanguage) + weight;
+            }
+
+            foreach (var country in TasteCandidateFeatureLoader.SplitPipeValues(meta.ProductionLocations))
+            {
+                countryRaw[country] = countryRaw.GetValueOrDefault(country) + weight;
+            }
+
+            if (meta.Rating is float rating)
+            {
+                ratingSamples.Add(rating);
+            }
+
+            if (meta.ProductionYear is int year)
+            {
+                yearSamples.Add(year);
+            }
+
+            if (meta.RunTimeTicks is long runtime and > 0)
+            {
+                runtimeSamples.Add(runtime);
+            }
+
+            if (meta.InheritedParentalRatingValue is int parental)
+            {
+                parentalSamples.Add(parental);
             }
         }
 
@@ -275,13 +352,40 @@ public sealed class UserTasteProfileBuilder
         payload.Studios = Normalize(studioRaw);
         payload.Directors = Normalize(directorRaw);
         payload.Actors = Normalize(actorRaw);
+        payload.Writers = Normalize(writerRaw);
+        payload.BoxSets = Normalize(boxSetRaw);
+        payload.Languages = Normalize(languageRaw);
+        payload.Countries = Normalize(countryRaw);
 
-        if (ratingSamples.Count > 0)
+        AssignBandStats(ratingSamples, (mean, p25, p75) =>
         {
-            ratingSamples.Sort();
-            payload.RatingMean = ratingSamples.Average();
-            payload.RatingP25 = Percentile(ratingSamples, 0.25f);
-            payload.RatingP75 = Percentile(ratingSamples, 0.75f);
+            payload.RatingMean = mean;
+            payload.RatingP25 = p25;
+            payload.RatingP75 = p75;
+        });
+        AssignBandStats(yearSamples, (mean, p25, p75) =>
+        {
+            payload.YearMean = mean;
+            payload.YearP25 = p25;
+            payload.YearP75 = p75;
+        });
+        AssignBandStats(runtimeSamples, (mean, p25, p75) =>
+        {
+            payload.RuntimeMeanTicks = mean;
+            payload.RuntimeP25Ticks = p25;
+            payload.RuntimeP75Ticks = p75;
+        });
+        AssignBandStats(parentalSamples, (mean, p25, p75) =>
+        {
+            payload.ParentalMean = mean;
+            payload.ParentalP25 = p25;
+            payload.ParentalP75 = p75;
+        });
+
+        var typedTotal = movieCount + seriesCount;
+        if (typedTotal > 0)
+        {
+            payload.SeriesShare = seriesCount / (float)typedTotal;
         }
 
         var entity = await context.UserTasteProfiles
@@ -842,6 +946,17 @@ public sealed class UserTasteProfileBuilder
         }
 
         return positive.ToDictionary(kvp => kvp.Key, kvp => kvp.Value / sum, raw.Comparer);
+    }
+
+    private static void AssignBandStats(List<float> samples, Action<float, float, float> assign)
+    {
+        if (samples.Count == 0)
+        {
+            return;
+        }
+
+        samples.Sort();
+        assign(samples.Average(), Percentile(samples, 0.25f), Percentile(samples, 0.75f));
     }
 
     private static float Percentile(List<float> sorted, float percentile)

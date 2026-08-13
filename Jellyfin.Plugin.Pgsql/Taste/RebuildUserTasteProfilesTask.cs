@@ -21,6 +21,7 @@ public sealed class RebuildUserTasteProfilesTask : IScheduledTask, IConfigurable
     private readonly UserTasteProfileBuilder _builder;
     private readonly TasteShadowNeuralTrainer _shadowTrainer;
     private readonly UserTasteProfileStore _profileStore;
+    private readonly TasteNeuralModelStore _modelStore;
     private readonly ILogger<RebuildUserTasteProfilesTask> _logger;
 
     /// <summary>
@@ -31,6 +32,7 @@ public sealed class RebuildUserTasteProfilesTask : IScheduledTask, IConfigurable
     /// <param name="builder">Profile builder.</param>
     /// <param name="shadowTrainer">Shadow trainer.</param>
     /// <param name="profileStore">Profile cache store.</param>
+    /// <param name="modelStore">Loaded shadow model store.</param>
     /// <param name="logger">Logger.</param>
     public RebuildUserTasteProfilesTask(
         IDbContextFactory<JellyfinDbContext> dbProvider,
@@ -38,6 +40,7 @@ public sealed class RebuildUserTasteProfilesTask : IScheduledTask, IConfigurable
         UserTasteProfileBuilder builder,
         TasteShadowNeuralTrainer shadowTrainer,
         UserTasteProfileStore profileStore,
+        TasteNeuralModelStore modelStore,
         ILogger<RebuildUserTasteProfilesTask> logger)
     {
         _dbProvider = dbProvider;
@@ -45,6 +48,7 @@ public sealed class RebuildUserTasteProfilesTask : IScheduledTask, IConfigurable
         _builder = builder;
         _shadowTrainer = shadowTrainer;
         _profileStore = profileStore;
+        _modelStore = modelStore;
         _logger = logger;
     }
 
@@ -109,13 +113,16 @@ public sealed class RebuildUserTasteProfilesTask : IScheduledTask, IConfigurable
             {
                 try
                 {
-                    var modelDir = ResolveModelDirectory();
-                    await _shadowTrainer.TrainAndEvaluateAsync(
+                    var run = await _shadowTrainer.TrainAndEvaluateAsync(
                             context,
                             _itemTypeLookup,
-                            modelDir,
+                            TasteModelPaths.ResolveDirectory(),
                             cancellationToken)
                         .ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(run?.ModelPath))
+                    {
+                        await _modelStore.ReloadAsync(cancellationToken).ConfigureAwait(false);
+                    }
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or IOException or ObjectDisposedException
                     or UnauthorizedAccessException or AggregateException or NotSupportedException)
@@ -131,12 +138,5 @@ public sealed class RebuildUserTasteProfilesTask : IScheduledTask, IConfigurable
         }
 
         progress.Report(100);
-    }
-
-    private static string ResolveModelDirectory()
-    {
-        var root = Plugin.Instance?.DataFolderPath
-            ?? Path.Join(Path.GetTempPath(), "jellyfin-pgsql-taste");
-        return Path.Join(root, "taste-models");
     }
 }

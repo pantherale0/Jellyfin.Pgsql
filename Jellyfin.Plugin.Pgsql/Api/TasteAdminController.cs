@@ -26,14 +26,19 @@ public sealed class TasteAdminController : ControllerBase
     private const int MaxLimit = 200;
 
     private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
+    private readonly TasteNeuralModelStore _modelStore;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TasteAdminController"/> class.
     /// </summary>
     /// <param name="dbProvider">Database context factory.</param>
-    public TasteAdminController(IDbContextFactory<JellyfinDbContext> dbProvider)
+    /// <param name="modelStore">Loaded shadow model store.</param>
+    public TasteAdminController(
+        IDbContextFactory<JellyfinDbContext> dbProvider,
+        TasteNeuralModelStore modelStore)
     {
         _dbProvider = dbProvider;
+        _modelStore = modelStore;
     }
 
     /// <summary>
@@ -51,11 +56,24 @@ public sealed class TasteAdminController : ControllerBase
         var take = Math.Clamp(limit, 1, MaxLimit);
         var options = TasteOptions.Current;
 
+        if (!_modelStore.HasAttemptedLoad)
+        {
+            await _modelStore.ReloadAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         await using var context = await _dbProvider.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         var rows = await context.TasteModelEvalRuns.AsNoTracking()
             .OrderByDescending(e => e.CreatedAt)
             .Take(take)
             .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var engage = await TasteForYouEngageMetrics.ComputeAsync(
+                context,
+                DateTime.UtcNow,
+                options.LookbackDays,
+                TasteEngagementWeights.ImpressionSkipConfirmDays,
+                cancellationToken)
             .ConfigureAwait(false);
 
         var runs = rows.Select(ToDto).ToList();
@@ -65,7 +83,13 @@ public sealed class TasteAdminController : ControllerBase
             {
                 TasteEnabled = options.EnableTasteProfiles,
                 ShadowTrainingEnabled = options.EnableNeuralShadowTraining,
-                NeuralServingEnabled = options.UseNeuralForServing
+                NeuralServingEnabled = options.UseNeuralForServing,
+                NeuralModelLoaded = _modelStore.IsLoaded,
+                NeuralModelPath = _modelStore.ModelFileName,
+                ForYouEngageRate = engage.Rate,
+                ForYouEngageWindowDays = engage.WindowDays,
+                ForYouImpressionCount = engage.ImpressionCount,
+                ForYouEngageCount = engage.EngageCount
             },
             Latest = runs.Count > 0 ? runs[0] : null,
             Runs = runs
@@ -89,6 +113,16 @@ public sealed class TasteAdminController : ControllerBase
             Accuracy = row.Accuracy,
             Auc = row.Auc,
             PrecisionAt10 = row.PrecisionAt10,
+            MeanPrecisionAt10 = row.MeanPrecisionAt10,
+            SplitType = row.SplitType,
+            HoldoutFraction = row.HoldoutFraction,
+            HoldoutWindowStart = row.HoldoutWindowStart,
+            HoldoutWindowEnd = row.HoldoutWindowEnd,
+            TrainCount = row.TrainCount,
+            ForYouEngageRate = row.ForYouEngageRate,
+            ForYouEngageWindowDays = row.ForYouEngageWindowDays,
+            ForYouImpressionCount = row.ForYouImpressionCount,
+            ForYouEngageCount = row.ForYouEngageCount,
             ModelPath = string.IsNullOrWhiteSpace(row.ModelPath) ? null : Path.GetFileName(row.ModelPath),
             Notes = row.Notes,
             Succeeded = hasMetrics

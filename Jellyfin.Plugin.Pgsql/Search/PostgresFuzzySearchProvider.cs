@@ -172,6 +172,10 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
         var dbContext = await _dbProvider.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         await using (dbContext.ConfigureAwait(false))
         {
+            await using var threshold = includeFuzzy
+                ? await PgTrgmThresholdScope.BeginAsync(dbContext, WordTrigramSimilarity, cancellationToken).ConfigureAwait(false)
+                : null;
+
             var baseQuery = dbContext.BaseItems
                 .AsNoTracking()
                 .Where(e => e.Id != PlaceholderId)
@@ -258,6 +262,11 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
             }
 
             var items = rows.Select(x => new SearchResult(x.Id, x.Score)).ToArray();
+            if (threshold is not null)
+            {
+                await threshold.CommitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             return new SearchQueryResult(items, totalRecordCount);
         }
     }
@@ -412,16 +421,16 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
             PgSearchDbFunctions.TokenLevenshteinMatch(e.CleanName, cleanSearchTerm, maxEditDistance)
             || (e.OriginalTitle != null
                 && PgSearchDbFunctions.TokenLevenshteinMatch(e.OriginalTitle, cleanSearchTerm, maxEditDistance))
-            || PgSearchDbFunctions.WordSimilarity(cleanSearchTerm, e.CleanName!) >= WordTrigramSimilarity
+            || PgSearchDbFunctions.IsWordSimilar(cleanSearchTerm, e.CleanName)
             || (e.OriginalTitle != null
-                && PgSearchDbFunctions.WordSimilarity(cleanSearchTerm, e.OriginalTitle) >= WordTrigramSimilarity)
+                && PgSearchDbFunctions.IsWordSimilar(cleanSearchTerm, e.OriginalTitle))
             || PgSearchDbFunctions.TrigramSimilarity(e.CleanName!, cleanSearchTerm) >= StrongTrigramSimilarity);
 
         var byValueFuzzy = query.Where(e =>
             e.ItemValues!.Any(ivm =>
                 (ivm.ItemValue.Type == ItemValueType.Genre || ivm.ItemValue.Type == ItemValueType.Tags)
                 && (PgSearchDbFunctions.TokenLevenshteinMatch(ivm.ItemValue.CleanValue, cleanSearchTerm, maxEditDistance)
-                    || PgSearchDbFunctions.WordSimilarity(cleanSearchTerm, ivm.ItemValue.CleanValue) >= WordTrigramSimilarity)));
+                    || PgSearchDbFunctions.IsWordSimilar(cleanSearchTerm, ivm.ItemValue.CleanValue))));
 
         return byTitleFuzzy.Union(byValueFuzzy);
     }

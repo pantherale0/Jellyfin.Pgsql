@@ -12,9 +12,14 @@ internal sealed class TasteOptions
     private static readonly Lazy<TasteOptions> LazyCurrent = new(Resolve);
 
     /// <summary>
+    /// Gets or sets a test override for <see cref="Current"/>. Tests must clear this after use.
+    /// </summary>
+    internal static TasteOptions? TestOverride { get; set; }
+
+    /// <summary>
     /// Gets the resolved options for the current process.
     /// </summary>
-    public static TasteOptions Current => LazyCurrent.Value;
+    public static TasteOptions Current => TestOverride ?? LazyCurrent.Value;
 
     /// <summary>
     /// Gets a value indicating whether linear taste re-ranking and profile rebuild are enabled.
@@ -88,5 +93,34 @@ internal sealed class TasteOptions
         }
 
         return Math.Clamp(value, min, max);
+    }
+
+    /// <summary>
+    /// Builds options for tests without reading process environment.
+    /// </summary>
+    /// <param name="enableTasteProfiles">Whether taste is enabled.</param>
+    /// <param name="enableNeuralShadowTraining">Whether shadow training is enabled.</param>
+    /// <param name="useNeuralForServing">Whether neural serving is enabled.</param>
+    /// <param name="lookbackDays">History lookback.</param>
+    /// <param name="minSamples">Minimum samples.</param>
+    /// <param name="maxTasteBonus">Absolute taste bonus cap.</param>
+    /// <returns>Options instance.</returns>
+    internal static TasteOptions CreateForTests(
+        bool enableTasteProfiles = true,
+        bool enableNeuralShadowTraining = true,
+        bool useNeuralForServing = false,
+        int lookbackDays = 730,
+        int minSamples = 3,
+        int maxTasteBonus = 180)
+    {
+        return new TasteOptions
+        {
+            EnableTasteProfiles = enableTasteProfiles,
+            EnableNeuralShadowTraining = enableNeuralShadowTraining,
+            UseNeuralForServing = useNeuralForServing,
+            LookbackDays = lookbackDays,
+            MinSamples = minSamples,
+            MaxTasteBonus = maxTasteBonus
+        };
     }
 }

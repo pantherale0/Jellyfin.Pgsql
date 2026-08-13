@@ -42,6 +42,7 @@ public sealed class TasteRecommendationService
     private readonly UserTasteProfileStore _profileStore;
     private readonly IItemTypeLookup _itemTypeLookup;
     private readonly IQueryResultCache _cache;
+    private readonly TasteNeuralModelStore _modelStore;
     private readonly ILogger<TasteRecommendationService> _logger;
 
     /// <summary>
@@ -51,18 +52,21 @@ public sealed class TasteRecommendationService
     /// <param name="profileStore">Taste profile store.</param>
     /// <param name="itemTypeLookup">Item type name lookup.</param>
     /// <param name="cache">Query result cache (Redis/memory).</param>
+    /// <param name="modelStore">Loaded shadow model store.</param>
     /// <param name="logger">Logger.</param>
     public TasteRecommendationService(
         IDbContextFactory<JellyfinDbContext> dbProvider,
         UserTasteProfileStore profileStore,
         IItemTypeLookup itemTypeLookup,
         IQueryResultCache cache,
+        TasteNeuralModelStore modelStore,
         ILogger<TasteRecommendationService> logger)
     {
         _dbProvider = dbProvider;
         _profileStore = profileStore;
         _itemTypeLookup = itemTypeLookup;
         _cache = cache;
+        _modelStore = modelStore;
         _logger = logger;
     }
 
@@ -431,9 +435,19 @@ public sealed class TasteRecommendationService
             return [];
         }
 
-        var features = await TasteCandidateFeatureLoader.LoadAsync(context, unplayedIds, cancellationToken)
+        _itemTypeLookup.BaseItemKindNames.TryGetValue(BaseItemKind.Series, out var seriesTypeName);
+        _itemTypeLookup.BaseItemKindNames.TryGetValue(BaseItemKind.BoxSet, out var boxSetTypeName);
+        var features = await TasteCandidateFeatureLoader
+            .LoadAsync(context, unplayedIds, cancellationToken, seriesTypeName, boxSetTypeName)
+            .ConfigureAwait(false);
+        var skipIds = await LoadConfirmedImpressionSkipIdsAsync(
+                context,
+                userId,
+                unplayedIds,
+                cancellationToken)
             .ConfigureAwait(false);
         var options = TasteOptions.Current;
+        var neural = TasteNeuralScoring.TryPredict(_modelStore, profile, features, unplayedIds);
         var scored = new List<(Guid Id, int Score)>(unplayedIds.Count);
         foreach (var itemId in unplayedIds)
         {
@@ -442,7 +456,17 @@ public sealed class TasteRecommendationService
                 continue;
             }
 
-            var score = LinearTasteScorer.ComputeBonus(profile, candidate, options.MaxTasteBonus);
+            var linear = LinearTasteScorer.ComputeBonus(profile, candidate, options.MaxTasteBonus);
+            var score = TasteScoreCombiner.Blend(
+                linear,
+                TasteNeuralScoring.Probability(neural, itemId),
+                options.UseNeuralForServing,
+                options.MaxTasteBonus);
+            if (skipIds.Contains(itemId))
+            {
+                score = Math.Max(0, score - LinearTasteScorer.ImpressionSkipPenalty);
+            }
+
             if (score > 0)
             {
                 scored.Add((itemId, score));
@@ -450,6 +474,49 @@ public sealed class TasteRecommendationService
         }
 
         return SampleFeed(scored, limit, PoolSize, rng);
+    }
+
+    private static async Task<HashSet<Guid>> LoadConfirmedImpressionSkipIdsAsync(
+        JellyfinDbContext context,
+        Guid userId,
+        List<Guid> candidateIds,
+        CancellationToken cancellationToken)
+    {
+        if (candidateIds.Count == 0)
+        {
+            return [];
+        }
+
+        var now = DateTime.UtcNow;
+        var confirmBefore = now.AddDays(-TasteEngagementWeights.ImpressionSkipConfirmDays);
+        var impressed = await context.UserTasteRecommendationImpressions.AsNoTracking()
+            .Where(i => i.UserId == userId
+                && i.ServedAt <= confirmBefore
+                && candidateIds.Contains(i.ItemId))
+            .Select(i => i.ItemId)
+            .Distinct()
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (impressed.Count == 0)
+        {
+            return [];
+        }
+
+        var engaged = await context.UserData.AsNoTracking()
+            .Where(ud => ud.UserId == userId
+                && impressed.Contains(ud.ItemId)
+                && (ud.IsFavorite
+                    || ud.Likes == true
+                    || ud.Played
+                    || ud.PlayCount > 0
+                    || ud.PlaybackPositionTicks > 0))
+            .Select(ud => ud.ItemId)
+            .Distinct()
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var engagedSet = engaged.ToHashSet();
+        return impressed.Where(id => !engagedSet.Contains(id)).ToHashSet();
     }
 
     private async Task<IReadOnlyList<TasteMatchItem>> LoadFromDatabaseAsync(

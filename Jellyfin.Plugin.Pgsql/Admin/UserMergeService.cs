@@ -821,6 +821,7 @@ public sealed class UserMergeService
             var movieType = _itemTypeLookup.BaseItemKindNames[BaseItemKind.Movie];
             var seriesType = _itemTypeLookup.BaseItemKindNames[BaseItemKind.Series];
             var episodeType = _itemTypeLookup.BaseItemKindNames[BaseItemKind.Episode];
+            _itemTypeLookup.BaseItemKindNames.TryGetValue(BaseItemKind.BoxSet, out var boxSetType);
             var cutoff = DateTime.UtcNow.AddDays(-options.LookbackDays);
             var outcome = await _tasteBuilder.RebuildUserAsync(
                     context,
@@ -830,7 +831,8 @@ public sealed class UserMergeService
                     episodeType,
                     cutoff,
                     options.MinSamples,
-                    cancellationToken)
+                    cancellationToken,
+                    boxSetType)
                 .ConfigureAwait(false);
             counts.TasteProfileTargetRebuilt = outcome.Upserted;
             _tasteStore.InvalidateAll();

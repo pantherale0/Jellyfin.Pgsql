@@ -127,6 +127,12 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             }
         }
 
+        // Plugin-only: core has no MediaSegment ItemId index. HasSegments / GetSegments /
+        // extraction skip-checks all filter by ItemId. Keep this in OnModelCreating so
+        // Update_* sync cannot treat the index as drift and drop it again (rc5 did).
+        modelBuilder.Entity<MediaSegment>()
+            .HasIndex(e => e.ItemId);
+
         modelBuilder.Entity<PlaybackActivity>(entity =>
         {
             entity.HasOne(e => e.User)
@@ -203,6 +209,11 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             modelBuilder,
             nameof(Jellyfin.Plugin.Pgsql.Search.PgSearchDbFunctions.WordSimilarity),
             "word_similarity",
+            [typeof(string), typeof(string)]);
+        RegisterSearchDbFunction(
+            modelBuilder,
+            nameof(Jellyfin.Plugin.Pgsql.Search.PgSearchDbFunctions.IsWordSimilar),
+            "jellyfin_word_similar",
             [typeof(string), typeof(string)]);
         RegisterSearchDbFunction(
             modelBuilder,

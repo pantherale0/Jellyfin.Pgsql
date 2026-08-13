@@ -19,6 +19,9 @@ public static class TasteEngagementWeights
     /// <summary>Days without a later play required to confirm abandon.</summary>
     public const int AbandonNoReturnDays = 14;
 
+    /// <summary>Days after a For You impression before an unengaged item counts as a skip.</summary>
+    public const int ImpressionSkipConfirmDays = AbandonNoReturnDays;
+
     /// <summary>Hours within which duplicate For You impressions for the same item are skipped.</summary>
     public const int ImpressionDedupeHours = 24;
 
@@ -54,6 +57,12 @@ public static class TasteEngagementWeights
 
     /// <summary>Neural sample weight for random catalog negatives.</summary>
     public const float NeuralCatalogNegativeWeight = 1.0f;
+
+    /// <summary>Neural sample weight for confirmed For You impression skips (no later engagement).</summary>
+    public const float NeuralImpressionSkipWeight = 0.75f;
+
+    /// <summary>Half-life window (days) for neural labeled-sample recency decay.</summary>
+    public const double NeuralRecencyHalfLifeDays = 180.0;
 
     /// <summary>Minimum watched duration (ticks) before a short play can count as abandon.</summary>
     public static readonly long MinAbandonWatchTicks = TimeSpan.FromSeconds(60).Ticks;
@@ -190,7 +199,7 @@ public static class TasteEngagementWeights
         if (input.Likes == false)
         {
             isPositive = false;
-            sampleWeight = NeuralAbandonWeight;
+            sampleWeight = ApplyNeuralRecencyDecay(NeuralAbandonWeight, input.LastPlayedUtc, nowUtc);
             return true;
         }
 
@@ -202,22 +211,55 @@ public static class TasteEngagementWeights
                 sampleWeight = input.WasRecommended
                     ? NeuralRecPositiveWeight
                     : (input.IsFavorite ? NeuralFavoriteWeight : NeuralLikeWeight);
-                return true;
+                break;
             case TasteEngagementKind.DeepPlay:
                 isPositive = true;
                 sampleWeight = input.WasRecommended ? NeuralRecPositiveWeight : NeuralDeepPlayWeight;
-                return true;
+                break;
             case TasteEngagementKind.MidPlay:
                 isPositive = true;
                 sampleWeight = input.WasRecommended ? NeuralRecPositiveWeight : NeuralMidPlayWeight;
-                return true;
+                break;
             case TasteEngagementKind.Abandon:
                 isPositive = false;
                 sampleWeight = input.WasRecommended ? NeuralRecAbandonWeight : NeuralAbandonWeight;
-                return true;
+                break;
             default:
                 return false;
         }
+
+        sampleWeight = ApplyNeuralRecencyDecay(sampleWeight, input.LastPlayedUtc, nowUtc);
+        return true;
+    }
+
+    /// <summary>
+    /// Applies exponential recency decay to a neural sample weight.
+    /// </summary>
+    /// <param name="weight">Base sample weight.</param>
+    /// <param name="eventUtc">Event time (play or impression), or null.</param>
+    /// <param name="nowUtc">Current UTC time.</param>
+    /// <returns>Decayed weight (unchanged when event time is missing).</returns>
+    public static float ApplyNeuralRecencyDecay(float weight, DateTime? eventUtc, DateTime nowUtc)
+    {
+        if (eventUtc is not DateTime when)
+        {
+            return weight;
+        }
+
+        var ageDays = Math.Max(0, (nowUtc - when.ToUniversalTime()).TotalDays);
+        return weight * (float)Math.Exp(-ageDays / NeuralRecencyHalfLifeDays);
+    }
+
+    /// <summary>
+    /// Whether a For You impression is old enough to count as a confirmed skip.
+    /// </summary>
+    /// <param name="servedAtUtc">Impression time UTC.</param>
+    /// <param name="nowUtc">Current UTC time.</param>
+    /// <returns>True when the confirm window has elapsed.</returns>
+    public static bool IsConfirmedImpressionSkip(DateTime servedAtUtc, DateTime nowUtc)
+    {
+        var ageDays = (nowUtc - servedAtUtc.ToUniversalTime()).TotalDays;
+        return ageDays >= ImpressionSkipConfirmDays;
     }
 
     /// <summary>
