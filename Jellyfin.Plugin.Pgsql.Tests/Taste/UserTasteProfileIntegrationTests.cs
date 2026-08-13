@@ -127,10 +127,10 @@ public sealed class UserTasteProfileIntegrationTests
         var factory = new TestDbContextFactory(_fixture.ConnectionString);
         await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
 
-        var userId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000bs01");
-        var movieId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000bs11");
-        var seriesId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000bs12");
-        var comedyGenre = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000bsa1");
+        var userId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000b501");
+        var movieId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000b511");
+        var seriesId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000b512");
+        var comedyGenre = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000b5a1");
         var runtime = TimeSpan.FromMinutes(110).Ticks;
 
         Guid[] users = [userId];
@@ -194,13 +194,13 @@ public sealed class UserTasteProfileIntegrationTests
         var factory = new TestDbContextFactory(_fixture.ConnectionString);
         await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
 
-        var userId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000wl01");
-        var favoriteId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000wl11");
-        var overlapId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000wl12");
-        var plainId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000wl13");
-        var boxSetId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000wl20");
-        var writerId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000wl30");
-        var comedyGenre = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000wla1");
+        var userId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000d101");
+        var favoriteId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000d111");
+        var overlapId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000d112");
+        var plainId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000d113");
+        var boxSetId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000d120");
+        var writerId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000d130");
+        var comedyGenre = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000d1a1");
         var boxSetType = typeof(MediaBrowser.Controller.Entities.Movies.BoxSet).FullName!;
 
         Guid[] users = [userId];

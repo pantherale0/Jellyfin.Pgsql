@@ -77,6 +77,37 @@ public static class TasteEvalMetrics
     }
 
     /// <summary>
+    /// Returns true when <paramref name="labels"/> contains at least one positive and one negative.
+    /// ML.NET ROC AUC is undefined for a single-class holdout.
+    /// </summary>
+    /// <param name="labels">Binary labels.</param>
+    /// <returns>True when both classes are present.</returns>
+    public static bool HasBothBinaryClasses(IEnumerable<bool> labels)
+    {
+        ArgumentNullException.ThrowIfNull(labels);
+        var sawPositive = false;
+        var sawNegative = false;
+        foreach (var label in labels)
+        {
+            if (label)
+            {
+                sawPositive = true;
+            }
+            else
+            {
+                sawNegative = true;
+            }
+
+            if (sawPositive && sawNegative)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Global precision at K on a score-ranked list.
     /// </summary>
     /// <param name="ranked">Rows already ordered by descending score.</param>
