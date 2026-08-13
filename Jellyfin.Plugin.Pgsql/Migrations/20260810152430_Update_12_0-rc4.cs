@@ -32,6 +32,26 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                 oldType: "integer",
                 oldNullable: true);
 
+            // Existing rows often share SortOrder 0 (or NULL, now 0). PostgreSQL rejects
+            // PRIMARY KEY (ParentId, SortOrder) until each parent has unique sort values.
+            // Keep every child; only compact order per parent.
+            migrationBuilder.Sql(
+                """
+                WITH ranked AS (
+                  SELECT ctid,
+                         ROW_NUMBER() OVER (
+                           PARTITION BY "ParentId"
+                           ORDER BY "SortOrder", "ChildId"
+                         ) - 1 AS new_sort
+                  FROM "LinkedChildren"
+                )
+                UPDATE "LinkedChildren" AS lc
+                SET "SortOrder" = ranked.new_sort
+                FROM ranked
+                WHERE lc.ctid = ranked.ctid
+                  AND lc."SortOrder" IS DISTINCT FROM ranked.new_sort;
+                """);
+
             migrationBuilder.AddPrimaryKey(
                 name: "PK_LinkedChildren",
                 table: "LinkedChildren",
