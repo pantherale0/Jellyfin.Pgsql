@@ -1,11 +1,8 @@
-# Lazy transcoding pipeline probe (EnsureProbed on admin GetSessions; RegisterPending at ffmpeg start).
-# Also exposes Speed/TranscodeBufferTicks/Pipeline on TranscodingInfo and HW-accel strip for non-admins.
-# Syncs Request.LiveStreamId after AcquireResources open so StreamState.Dispose does not close early.
 diff --git a/Emby.Server.Implementations/ApplicationHost.cs b/Emby.Server.Implementations/ApplicationHost.cs
-index 5b97ec8547..742421b194 100644
+index e6e3d645fe..242866ab5c 100644
 --- a/Emby.Server.Implementations/ApplicationHost.cs
 +++ b/Emby.Server.Implementations/ApplicationHost.cs
-@@ -626,6 +626,7 @@ namespace Emby.Server.Implementations
+@@ -630,6 +630,7 @@ namespace Emby.Server.Implementations
              serviceCollection.AddSingleton<IKeyframeManager, KeyframeManager>();
  
              serviceCollection.AddSingleton<IAttachmentExtractor, MediaBrowser.MediaEncoding.Attachments.AttachmentExtractor>();
@@ -14,7 +11,7 @@ index 5b97ec8547..742421b194 100644
              serviceCollection.AddSingleton<ITranscodeManager, TranscodeManager>();
              serviceCollection.AddScoped<MediaInfoHelper>();
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 76d901b095..b291850955 100644
+index fdf2866ebf..dd94a1b215 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -30,6 +30,7 @@ using MediaBrowser.Controller.Events.Authentication;
@@ -59,7 +56,7 @@ index 76d901b095..b291850955 100644
          }
  
          /// <summary>
-@@ -2619,12 +2624,31 @@ namespace Emby.Server.Implementations.Session
+@@ -2618,12 +2623,31 @@ namespace Emby.Server.Implementations.Session
  
              if (!userIsAdmin)
              {
@@ -253,10 +250,10 @@ index 2702e3bc09..4e1e6ea388 100644
          }
      }
 diff --git a/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs b/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
-index 56990d0b82..a5d13e823e 100644
+index 5045030b9b..7319bde9e3 100644
 --- a/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
-@@ -121,6 +121,16 @@ public sealed class TranscodingJob : IDisposable
+@@ -126,6 +126,16 @@ public sealed class TranscodingJob : IDisposable
      /// </summary>
      public int? BitRate { get; set; }
  
@@ -306,7 +303,7 @@ index 195dda5fe8..829d1068fd 100644
  
      /// <summary>
 diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
-index 78bb881ec2..60c3636848 100644
+index dfc057f611..5b144b0296 100644
 --- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
 +++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
 @@ -44,6 +44,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable

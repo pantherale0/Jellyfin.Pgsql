@@ -1,8 +1,8 @@
 diff --git a/Emby.Server.Implementations/ApplicationHost.cs b/Emby.Server.Implementations/ApplicationHost.cs
-index 69e23bcb63..0b3b6aa236 100644
+index acc6dc7849..e6e3d645fe 100644
 --- a/Emby.Server.Implementations/ApplicationHost.cs
 +++ b/Emby.Server.Implementations/ApplicationHost.cs
-@@ -722,8 +722,16 @@ namespace Emby.Server.Implementations
+@@ -748,8 +748,16 @@ namespace Emby.Server.Implementations
  
              Resolve<IMediaSourceManager>().AddParts(GetExports<IMediaSourceProvider>());
  

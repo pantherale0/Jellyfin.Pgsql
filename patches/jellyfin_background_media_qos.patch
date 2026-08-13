@@ -1,5 +1,5 @@
 diff --git a/Emby.Server.Implementations/ApplicationHost.cs b/Emby.Server.Implementations/ApplicationHost.cs
-index 742421b194..242866ab5c 100644
+index 1a54565863..acc6dc7849 100644
 --- a/Emby.Server.Implementations/ApplicationHost.cs
 +++ b/Emby.Server.Implementations/ApplicationHost.cs
 @@ -607,6 +607,10 @@ namespace Emby.Server.Implementations
@@ -631,10 +631,10 @@ index 6da398129a..eda972b530 100644
  
          return fanoutConcurrency;
 diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-index 0dad188d50..9394159625 100644
+index 0ddd378352..71084c650d 100644
 --- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 +++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-@@ -134,7 +134,8 @@ namespace MediaBrowser.MediaEncoding.Encoder
+@@ -133,7 +133,8 @@ namespace MediaBrowser.MediaEncoding.Encoder
              var semaphoreCount = serverConfig.Configuration?.ParallelImageEncodingLimit ?? 0;
              if (semaphoreCount < 1)
              {
@@ -645,7 +645,7 @@ index 0dad188d50..9394159625 100644
  
              _thumbnailResourcePool = new(semaphoreCount);
 diff --git a/src/Jellyfin.Drawing/ImageProcessor.cs b/src/Jellyfin.Drawing/ImageProcessor.cs
-index 6ffb022842..e4f7b29385 100644
+index ad1b216970..adeeb26465 100644
 --- a/src/Jellyfin.Drawing/ImageProcessor.cs
 +++ b/src/Jellyfin.Drawing/ImageProcessor.cs
 @@ -68,7 +68,8 @@ public sealed class ImageProcessor : IImageProcessor, IDisposable

@@ -252,7 +252,7 @@ index 0000000000..712f6c91da
 +
 +export default isTvClient;
 diff --git a/src/scripts/settings/userSettings.js b/src/scripts/settings/userSettings.js
-index caa049b4d3..409e52ba94 100644
+index 28db6fd0d2..b515e76fbc 100644
 --- a/src/scripts/settings/userSettings.js
 +++ b/src/scripts/settings/userSettings.js
 @@ -8,6 +8,7 @@ import { queryClient } from 'utils/query/queryClient';
@@ -263,7 +263,7 @@ index caa049b4d3..409e52ba94 100644
  import appSettings from './appSettings';
  
  const DISPLAY_PREFERENCES_ID = 'usersettings';
-@@ -541,6 +542,11 @@ export class UserSettings {
+@@ -542,6 +543,11 @@ export class UserSettings {
              return this.set('enableInfiniteScroll', val.toString(), false);
          }
  

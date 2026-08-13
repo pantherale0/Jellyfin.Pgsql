@@ -1,5 +1,5 @@
 diff --git a/src/components/homesections/homesections.js b/src/components/homesections/homesections.js
-index b7379aa13b..df1a88c10e 100644
+index 17e1632a85..99c40dc826 100644
 --- a/src/components/homesections/homesections.js
 +++ b/src/components/homesections/homesections.js
 @@ -24,7 +24,8 @@ import 'elements/emby-button/emby-button';
@@ -29,7 +29,7 @@ index b7379aa13b..df1a88c10e 100644
      }
  
      return sections;
-@@ -66,8 +69,10 @@ export function loadSections(elem, apiClient, user, userSettings) {
+@@ -67,8 +70,10 @@ export function loadSections(elem, apiClient, user, userSettings) {
              let html = '';
  
              if (userViews.length) {
@@ -42,7 +42,7 @@ index b7379aa13b..df1a88c10e 100644
                  for (let i = 0; i < totalSectionCount; i++) {
                      html += '<div class="verticalSection section' + i + '"></div>';
                  }
-@@ -75,7 +80,7 @@ export function loadSections(elem, apiClient, user, userSettings) {
+@@ -76,7 +81,7 @@ export function loadSections(elem, apiClient, user, userSettings) {
                  elem.innerHTML = html;
                  elem.classList.add('homeSectionsContainer');
  

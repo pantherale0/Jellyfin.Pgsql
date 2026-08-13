@@ -558,7 +558,7 @@ index 0000000000..27e5c3d81e
 +    return `${sign}${delta.toFixed(3)}`;
 +};
 diff --git a/src/apps/dashboard/routes/_asyncRoutes.ts b/src/apps/dashboard/routes/_asyncRoutes.ts
-index 5f77cd83cf..4f82b508b7 100644
+index 425be2f9d6..8c6f336ede 100644
 --- a/src/apps/dashboard/routes/_asyncRoutes.ts
 +++ b/src/apps/dashboard/routes/_asyncRoutes.ts
 @@ -26,6 +26,7 @@ export const ASYNC_ADMIN_ROUTES: AsyncRoute[] = [
@@ -638,10 +638,10 @@ index 0000000000..bbf9ecb40f
 +
 +Component.displayName = 'TasteModelsPage';
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 3b73ab0d7f..53da82e789 100755
+index b578f07a87..620f816d4b 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -521,6 +521,7 @@
+@@ -539,6 +539,7 @@
      "HeaderPlayback": "Media playback",
      "HeaderPlaybackError": "Playback Error",
      "HeaderPlaybackStatistics": "Playback statistics",
@@ -649,7 +649,7 @@ index 3b73ab0d7f..53da82e789 100755
      "HeaderPlayOn": "Play On",
      "HeaderPleaseSignIn": "Please sign in",
      "HeaderPortRanges": "Firewall and Proxy Settings",
-@@ -1731,6 +1732,38 @@
+@@ -1718,6 +1719,38 @@
      "TableOfContents": "Table of Contents",
      "Tags": "Tags",
      "TagsValue": "Tags: {0}",

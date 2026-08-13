@@ -11,7 +11,8 @@ How this repository builds a PostgreSQL-backed Jellyfin image without committing
 | [`jellyfin/`](../jellyfin/), [`jellyfin-web/`](../jellyfin-web/) | Upstream git submodules — **patch targets only**; keep working trees clean of committed local edits |
 | [`patches/`](../patches/) | All server/web customizations as flat `*.patch` files |
 | [`scripts/apply-patches.sh`](../scripts/apply-patches.sh) | Routes and applies patches by filename |
-| [`scripts/sync-jellyfin-migrations.sh`](../scripts/sync-jellyfin-migrations.sh) | Align plugin EF migrations with a Jellyfin release |
+| [`scripts/rebase-patches.sh`](../scripts/rebase-patches.sh) | Replays the patch series onto a new Jellyfin tag and rewrites `patches/` |
+| [`scripts/sync-jellyfin-migrations.sh`](../scripts/sync-jellyfin-migrations.sh) | Align plugin EF migrations with a Jellyfin release; starts compose `postgres` locally when needed |
 | [`scripts/start-dev.sh`](../scripts/start-dev.sh) | Local OIDC/RBAC stack via `docker-compose.dev.yaml` |
 | [`docker/`](../docker/) | Production image build (Dockerfile, entrypoint, migrator) |
 
@@ -35,6 +36,14 @@ Patches are applied in **lexicographic order** (`ls | sort`). Prefixes encode la
 - `jellyfin_zz_*` / `jellyfin_web_zz_*` run last (for example person identity, Emby import UI).
 
 Some patches document explicit prerequisites in a `#` preamble when apply order matters beyond lexicographic sort. Those comments are authoritative when refreshing patches.
+
+When bumping Jellyfin tags, do **not** hand-edit hunk line numbers. Replay the series:
+
+```bash
+./scripts/rebase-patches.sh --from v12.0-rc4 --to v12.0-rc5
+```
+
+That applies each patch as a commit on `--from`, `git rebase --onto` the new tag, and writes updated `patches/*.patch` files. Hunks that only fail because surrounding lines moved are merged automatically. Remaining **content** conflicts are reported (patch name + files) and must be resolved with `export-patch.sh`. SQLite `*ModelSnapshot.cs` conflicts are skipped by keeping the new upstream snapshot (this fork’s schema lives in plugin migrations). `sync-jellyfin-migrations.sh` runs this automatically when the target tag differs from [`.github/jellyfin-sync-state.json`](../.github/jellyfin-sync-state.json).
 
 ```bash
 # Used by Docker / CI
@@ -77,7 +86,7 @@ During `docker build` ([`docker/Dockerfile`](../docker/Dockerfile)):
 
 CI workflows (build, test, publish) apply jellyfin patches the same way.
 
-**Migration sync and patches:** fork schema (playback activity, taste entities, people provider key, indexes, …) belongs in **dedicated** plugin migrations authored with the patch. Sync does **not** use `Update_*` to capture patch schema. On each sync it applies server patches, builds the solution (API surface check), optionally generates `Update_*` when core SQLite migrations advanced, then resets the submodule.
+**Migration sync and patches:** fork schema (playback activity, taste entities, people provider key, indexes, …) belongs in **dedicated** plugin migrations authored with the patch. Sync does **not** use `Update_*` to capture patch schema. On each version bump it rebases `patches/` onto the new tag, applies server patches, builds the solution (API surface check), optionally generates `Update_*` when core SQLite migrations advanced, then resets the submodule.
 
 ## Plugin modules (high level)
 
@@ -98,9 +107,9 @@ Inside `Jellyfin.Plugin.Pgsql`:
 
 ## Migration sync (summary)
 
-A scheduled workflow detects new Jellyfin releases, bumps refs (including **both** `jellyfin` and `jellyfin-web` to the same tag), verifies patches apply, and opens a collaborator-only PR. Docker publish is blocked until sync state matches the target version. Failures open/update issues labeled `migration-sync-failure` (see [known issues](known-issues.md)).
+A scheduled workflow detects new Jellyfin releases, bumps refs (including **both** `jellyfin` and `jellyfin-web` to the same tag), rebases `patches/` onto that tag, verifies they apply, and opens a collaborator-only PR. Docker publish is blocked until sync state matches the target version. Failures open/update issues labeled `migration-sync-failure` (see [known issues](known-issues.md)).
 
-`Update_*` PostgreSQL migrations are generated **only when Jellyfin’s SQLite migration set advances**. Tag-only bumps (same latest core migration id) update version refs and submodule pointers, verify patches, and **build the solution** against patched jellyfin (so new interface members and other API breaks fail sync early), but skip EF. When an `Update_*` is needed, SQLite migrations are **not** copied — EF diffs the patched design-time model against the existing PG snapshot (upstream delta only, assuming fork schema already has dedicated migrations), then post-processes PG-specific fixes and validates against Postgres.
+`Update_*` PostgreSQL migrations are generated **only when Jellyfin’s SQLite migration set advances**. Tag-only bumps (same latest core migration id) update version refs and submodule pointers, verify patches, and **build the solution** against patched jellyfin (so new interface members and other API breaks fail sync early), but skip EF. When an `Update_*` is needed, SQLite migrations are **not** copied — EF diffs the patched design-time model against the existing PG snapshot (upstream delta only, assuming fork schema already has dedicated migrations), then post-processes PG-specific fixes and validates against Postgres. Local sync starts `docker-compose.dev.yaml` postgres (not Jellyfin or Keycloak) if nothing is listening, **before** bumping refs or generating the migration, so a missing database does not generate `Update_*` and then roll it back. CI uses the workflow Postgres service instead.
 
 Operator-facing sync and release steps: [README — Release flow](../README.md#release-flow).
 

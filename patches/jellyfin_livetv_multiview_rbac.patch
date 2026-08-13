@@ -1,8 +1,8 @@
 diff --git a/Jellyfin.Data/UserEntityExtensions.cs b/Jellyfin.Data/UserEntityExtensions.cs
-index 0fc8d3cd25..dfcc4f27a1 100644
+index c6468daa2e..10c76da026 100644
 --- a/Jellyfin.Data/UserEntityExtensions.cs
 +++ b/Jellyfin.Data/UserEntityExtensions.cs
-@@ -185,6 +185,7 @@ public static class UserEntityExtensions
+@@ -202,6 +202,7 @@ public static class UserEntityExtensions
          entity.Permissions.Add(new Permission(PermissionKind.EnableSyncTranscoding, true));
          entity.Permissions.Add(new Permission(PermissionKind.EnableAudioPlaybackTranscoding, true));
          entity.Permissions.Add(new Permission(PermissionKind.EnableLiveTvAccess, true));

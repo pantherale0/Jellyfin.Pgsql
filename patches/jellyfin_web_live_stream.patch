@@ -1,7 +1,5 @@
-# Live TV encoding UI: KeepSeconds, probe options, LiveStreamOpenTimeoutMs
-#
 diff --git a/src/apps/dashboard/routes/playback/transcoding.tsx b/src/apps/dashboard/routes/playback/transcoding.tsx
-index 13da3e666b..eae31cf56b 100644
+index e0f72a8c78..4fbce2fcf4 100644
 --- a/src/apps/dashboard/routes/playback/transcoding.tsx
 +++ b/src/apps/dashboard/routes/playback/transcoding.tsx
 @@ -21,7 +21,16 @@ import Alert from '@mui/material/Alert';
@@ -22,7 +20,7 @@ index 13da3e666b..eae31cf56b 100644
  import { HardwareAccelerationType } from '@jellyfin/sdk/lib/generated-client/models/hardware-acceleration-type';
  import { ServerConnections } from 'lib/jellyfin-apiclient';
  import { getSystemApi } from '@jellyfin/sdk/lib/utils/api/system-api';
-@@ -884,6 +893,78 @@ export const Component = () => {
+@@ -1002,6 +1011,78 @@ export const Component = () => {
                                  }}
                              />
  
@@ -102,7 +100,7 @@ index 13da3e666b..eae31cf56b 100644
                                  {globalize.translate('Save')}
                              </Button>
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 693468f439..9bbc42b0f4 100755
+index 50f7d11d75..6af0352959 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
 @@ -41,6 +41,16 @@

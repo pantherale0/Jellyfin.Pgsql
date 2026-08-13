@@ -70,7 +70,7 @@ index 0000000000..4d14bb3f0a
 +}
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/UserTasteProfile.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/UserTasteProfile.cs
 new file mode 100644
-index 0000000000..2a4c8e1f01
+index 0000000000..3d8b5eaa97
 --- /dev/null
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/UserTasteProfile.cs
 @@ -0,0 +1,29 @@
@@ -104,15 +104,13 @@ index 0000000000..2a4c8e1f01
 +    public DateTime UpdatedAt { get; set; }
 +}
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
-index 1111111111..2222222222 100644
+index 0388e09077..0ee2a81c21 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
-@@ -181,6 +181,16 @@ public class JellyfinDbContext(DbContextOptions<JellyfinDbContext> options, ILog
-     /// <summary>
-     /// Gets the <see cref="DbSet{TEntity}"/> containing daily playback activity rollups.
+@@ -183,6 +183,16 @@ public class JellyfinDbContext(DbContextOptions<JellyfinDbContext> options, ILog
      /// </summary>
      public DbSet<PlaybackActivityDaily> PlaybackActivityDaily => Set<PlaybackActivityDaily>();
-+
+ 
 +    /// <summary>
 +    /// Gets the <see cref="DbSet{TEntity}"/> containing user taste profiles.
 +    /// </summary>
@@ -122,7 +120,7 @@ index 1111111111..2222222222 100644
 +    /// Gets the <see cref="DbSet{TEntity}"/> containing shadow taste-model evaluation runs.
 +    /// </summary>
 +    public DbSet<TasteModelEvalRun> TasteModelEvalRuns => Set<TasteModelEvalRun>();
- 
++
      /*public DbSet<Artwork> Artwork => Set<Artwork>();
  
      public DbSet<Book> Books => Set<Book>();

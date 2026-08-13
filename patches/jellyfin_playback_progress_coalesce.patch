@@ -1,6 +1,5 @@
-# Coalesce PlaybackProgress UserData writes (30s / seek threshold) to cut DB load during watch.
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 828bdd6859..03a2b4f41f 100644
+index 9c1d061741..977de9255e 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -48,6 +48,10 @@ namespace Emby.Server.Implementations.Session
@@ -27,7 +26,7 @@ index 828bdd6859..03a2b4f41f 100644
          private Timer _idleTimer;
          private Timer _inactiveTimer;
  
-@@ -982,14 +992,31 @@ namespace Emby.Server.Implementations.Session
+@@ -1099,14 +1109,31 @@ namespace Emby.Server.Implementations.Session
  
              if (changed)
              {
@@ -66,7 +65,7 @@ index 828bdd6859..03a2b4f41f 100644
                  }
              }
  
-@@ -1000,6 +1027,29 @@ namespace Emby.Server.Implementations.Session
+@@ -1117,6 +1144,29 @@ namespace Emby.Server.Implementations.Session
              }
          }
  
@@ -96,7 +95,7 @@ index 828bdd6859..03a2b4f41f 100644
          private static bool UpdatePlaybackSettings(User user, PlaybackProgressInfo info, UserItemData data)
          {
              var changed = false;
-@@ -1192,6 +1242,8 @@ namespace Emby.Server.Implementations.Session
+@@ -1317,6 +1367,8 @@ namespace Emby.Server.Implementations.Session
                  playedVideo.PropagatePlayedState(user, true);
              }
  

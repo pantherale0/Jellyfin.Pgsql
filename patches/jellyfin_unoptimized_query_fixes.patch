@@ -1,8 +1,8 @@
 diff --git a/Emby.Server.Implementations/Library/LibraryManager.cs b/Emby.Server.Implementations/Library/LibraryManager.cs
-index de44e2ada5..88db93848f 100644
+index 6a39b2177d..66a1a976ce 100644
 --- a/Emby.Server.Implementations/Library/LibraryManager.cs
 +++ b/Emby.Server.Implementations/Library/LibraryManager.cs
-@@ -1224,6 +1224,70 @@ namespace Emby.Server.Implementations.Library
+@@ -1237,6 +1237,70 @@ namespace Emby.Server.Implementations.Library
              return GetItemByNameId<Studio>(Studio.GetPath(name));
          }
  
@@ -73,7 +73,7 @@ index de44e2ada5..88db93848f 100644
          public Guid GetGenreId(string name)
          {
              return GetItemByNameId<Genre>(Genre.GetPath(name));
-@@ -3640,14 +3704,20 @@ namespace Emby.Server.Implementations.Library
+@@ -3693,14 +3757,20 @@ namespace Emby.Server.Implementations.Library
  
          private async Task SavePeopleMetadataAsync(IEnumerable<PersonInfo> people, CancellationToken cancellationToken)
          {
@@ -209,7 +209,7 @@ index 525396b7ee..be435d79e3 100644
  
          // Apply default sorting if none requested
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-index f447308f40..301995a2c2 100644
+index 8cda44b0f4..76b3a95067 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 @@ -340,6 +340,16 @@ public sealed partial class BaseItemRepository
@@ -338,7 +338,7 @@ index f447308f40..301995a2c2 100644
      /// <summary>
      /// Builds a query for descendants of an ancestor with user access filtering applied.
      /// Uses recursive CTE to traverse both hierarchical (AncestorIds) and linked (LinkedChildren) relationships.
-@@ -621,4 +733,24 @@ public sealed partial class BaseItemRepository
+@@ -739,4 +851,24 @@ public sealed partial class BaseItemRepository
                  && (descendants.Any(d => d.Id == lc.ChildId)
                      || context.AncestorIds.Any(a => a.ParentItemId == lc.ChildId && descendants.Any(d => d.Id == a.ItemId))));
      }
@@ -364,7 +364,7 @@ index f447308f40..301995a2c2 100644
 +    }
  }
 diff --git a/Jellyfin.Server.Implementations/Item/LinkedChildrenService.cs b/Jellyfin.Server.Implementations/Item/LinkedChildrenService.cs
-index 5f1d9bf87a..5b277a26e7 100644
+index 40300b7fa2..65873187e0 100644
 --- a/Jellyfin.Server.Implementations/Item/LinkedChildrenService.cs
 +++ b/Jellyfin.Server.Implementations/Item/LinkedChildrenService.cs
 @@ -7,6 +7,7 @@ using System.Collections.Generic;
@@ -375,7 +375,7 @@ index 5f1d9bf87a..5b277a26e7 100644
  using MediaBrowser.Controller.Entities.Audio;
  using MediaBrowser.Controller.Persistence;
  using Microsoft.EntityFrameworkCore;
-@@ -90,6 +91,34 @@ public class LinkedChildrenService : ILinkedChildrenService
+@@ -109,6 +110,34 @@ public class LinkedChildrenService : ILinkedChildrenService
          return result;
      }
  
@@ -411,10 +411,10 @@ index 5f1d9bf87a..5b277a26e7 100644
      public IReadOnlyList<Guid> GetManualLinkedParentIds(Guid childId, BaseItemKind? parentType = null)
      {
 diff --git a/MediaBrowser.Controller/Library/ILibraryManager.cs b/MediaBrowser.Controller/Library/ILibraryManager.cs
-index 6d85a1e401..6f71153fda 100644
+index ca686fbd9d..7d2d3d34aa 100644
 --- a/MediaBrowser.Controller/Library/ILibraryManager.cs
 +++ b/MediaBrowser.Controller/Library/ILibraryManager.cs
-@@ -690,6 +690,12 @@ namespace MediaBrowser.Controller.Library
+@@ -705,6 +705,12 @@ namespace MediaBrowser.Controller.Library
  
          Guid GetStudioId(string name);
  
@@ -428,10 +428,10 @@ index 6d85a1e401..6f71153fda 100644
  
          Guid GetMusicGenreId(string name);
 diff --git a/MediaBrowser.Controller/Persistence/ILinkedChildrenService.cs b/MediaBrowser.Controller/Persistence/ILinkedChildrenService.cs
-index a4614fc125..71b50265c6 100644
+index 79c29410e4..45bfb54c06 100644
 --- a/MediaBrowser.Controller/Persistence/ILinkedChildrenService.cs
 +++ b/MediaBrowser.Controller/Persistence/ILinkedChildrenService.cs
-@@ -26,6 +26,13 @@ public interface ILinkedChildrenService
+@@ -35,6 +35,13 @@ public interface ILinkedChildrenService
      /// <returns>A map of the artist name and the potential matches.</returns>
      IReadOnlyDictionary<string, MusicArtist[]> FindArtists(IReadOnlyList<string> artistNames);
  
@@ -512,29 +512,6 @@ index 0000000000..6daa40e267
 +        }
 +    }
 +}
-diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
-index 3df836f865..ed82e3efa5 100644
---- a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
-+++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
-@@ -382,6 +382,8 @@ namespace Jellyfin.Server.Implementations.Migrations
- 
-                     b.HasIndex("SeriesName");
- 
-+                    b.HasIndex("SeriesName", "DateCreated");
-+
-                     b.HasIndex("ExtraType", "OwnerId");
- 
-                     b.HasIndex("TopParentId", "Id");
-@@ -1469,6 +1471,9 @@ namespace Jellyfin.Server.Implementations.Migrations
- 
-                     b.HasIndex("UserId", "PlaybackPositionTicks");
- 
-+                    b.HasIndex("UserId", "Rating")
-+                        .HasFilter("\"Rating\" >= 6.5");
-+
-                     b.HasIndex("UserId", "Played", "ItemId");
- 
-                     b.ToTable("UserData");
 diff --git a/src/Jellyfin.LiveTv/LiveTvManager.cs b/src/Jellyfin.LiveTv/LiveTvManager.cs
 index 9826424134..529462548b 100644
 --- a/src/Jellyfin.LiveTv/LiveTvManager.cs

@@ -848,8 +848,6 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ItemId");
-
                     b.ToTable("MediaSegments");
                 });
 
@@ -1048,11 +1046,11 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasKey("ItemId", "PeopleId", "Role");
 
-                    b.HasIndex("PeopleId");
-
                     b.HasIndex("ItemId", "ListOrder");
 
                     b.HasIndex("ItemId", "SortOrder");
+
+                    b.HasIndex("PeopleId", "ItemId");
 
                     b.ToTable("PeopleBaseItemMap");
                 });

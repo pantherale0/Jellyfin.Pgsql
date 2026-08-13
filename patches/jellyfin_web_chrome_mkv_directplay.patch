@@ -1,6 +1,5 @@
-# Disable false-positive MKV DirectPlay on Chrome/Opera (jellyfin-web#7651) so codec-compatible MKV remuxes via HLS.
 diff --git a/src/scripts/browserDeviceProfile.js b/src/scripts/browserDeviceProfile.js
-index c92757f5bd..b895e82e58 100644
+index 3503024f42..e80b6f7730 100644
 --- a/src/scripts/browserDeviceProfile.js
 +++ b/src/scripts/browserDeviceProfile.js
 @@ -220,6 +220,13 @@ function testCanPlayMkv(videoTestElement) {

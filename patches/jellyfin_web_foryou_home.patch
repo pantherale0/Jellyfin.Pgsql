@@ -1,6 +1,112 @@
+diff --git a/src/components/homeScreenSettings/homeScreenSettings.template.html b/src/components/homeScreenSettings/homeScreenSettings.template.html
+index a46e7327f2..c0b50a3385 100644
+--- a/src/components/homeScreenSettings/homeScreenSettings.template.html
++++ b/src/components/homeScreenSettings/homeScreenSettings.template.html
+@@ -21,6 +21,7 @@ <h2 class="sectionTitle">${Home}</h2>
+             <select is="emby-select" id="selectHomeSection1" label="{section1label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -35,6 +36,7 @@ <h2 class="sectionTitle">${Home}</h2>
+             <select is="emby-select" id="selectHomeSection2" label="{section2label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -49,6 +51,7 @@ <h2 class="sectionTitle">${Home}</h2>
+             <select is="emby-select" id="selectHomeSection3" label="{section3label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -63,6 +66,7 @@ <h2 class="sectionTitle">${Home}</h2>
+             <select is="emby-select" id="selectHomeSection4" label="{section4label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -77,6 +81,7 @@ <h2 class="sectionTitle">${Home}</h2>
+             <select is="emby-select" id="selectHomeSection5" label="{section5label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -91,6 +96,7 @@ <h2 class="sectionTitle">${Home}</h2>
+             <select is="emby-select" id="selectHomeSection6" label="{section6label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -105,6 +111,7 @@ <h2 class="sectionTitle">${Home}</h2>
+             <select is="emby-select" id="selectHomeSection7" label="{section7label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -119,6 +126,7 @@ <h2 class="sectionTitle">${Home}</h2>
+             <select is="emby-select" id="selectHomeSection8" label="{section8label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -133,6 +141,7 @@ <h2 class="sectionTitle">${Home}</h2>
+             <select is="emby-select" id="selectHomeSection9" label="{section9label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+@@ -147,6 +156,7 @@ <h2 class="sectionTitle">${Home}</h2>
+             <select is="emby-select" id="selectHomeSection10" label="{section10label}">
+                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
+                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
++                <option value="foryou">${HeaderForYou}</option>
+                 <option value="activerecordings">${HeaderActiveRecordings}</option>
+                 <option value="resume">${HeaderContinueWatching}</option>
+                 <option value="resumeaudio">${HeaderContinueListening}</option>
+diff --git a/src/components/homesections/homesections.js b/src/components/homesections/homesections.js
+index 1a0363757a..8d82cc6c8a 100644
+--- a/src/components/homesections/homesections.js
++++ b/src/components/homesections/homesections.js
+@@ -7,6 +7,7 @@ import Dashboard from 'utils/dashboard';
+ import { queryClient } from 'utils/query/queryClient';
+ 
+ import { loadRecordings } from './sections/activeRecordings';
++import { loadForYou } from './sections/forYou';
+ import { loadLibraryButtons } from './sections/libraryButtons';
+ import { loadLibraryTiles } from './sections/libraryTiles';
+ import { loadLiveTV } from './sections/liveTv';
+@@ -146,6 +147,9 @@ function loadSection(page, apiClient, user, userSettings, userViews, section, in
+         case HomeSectionType.ActiveRecordings:
+             loadRecordings(elem, true, apiClient, options);
+             break;
++        case HomeSectionType.ForYou:
++            loadForYou(elem, apiClient, options);
++            break;
+         case HomeSectionType.LatestMedia:
+             loadRecentlyAdded(elem, apiClient, user, userViews, options);
+             break;
 diff --git a/src/components/homesections/sections/forYou.ts b/src/components/homesections/sections/forYou.ts
 new file mode 100644
-index 0000000000..1111111111
+index 0000000000..7c4e3c2051
 --- /dev/null
 +++ b/src/components/homesections/sections/forYou.ts
 @@ -0,0 +1,187 @@
@@ -192,10 +298,10 @@ index 0000000000..1111111111
 +    renderForYouRow(showsFrag, apiClient, 'HeaderForYouShows', 'Series', options);
 +}
 diff --git a/src/constants/homeSectionType.ts b/src/constants/homeSectionType.ts
-index 2222222222..3333333333 100644
+index 5865fc82dc..0c03c483f2 100644
 --- a/src/constants/homeSectionType.ts
 +++ b/src/constants/homeSectionType.ts
-@@ -10,7 +10,8 @@
+@@ -10,7 +10,8 @@ export enum HomeSectionType {
      LatestMedia = 'latestmedia',
      NextUp = 'nextup',
      LiveTv = 'livetv',
@@ -205,7 +311,7 @@ index 2222222222..3333333333 100644
  }
  
  // NOTE: This needs to match the server defaults
-@@ -20,10 +21,10 @@
+@@ -20,10 +21,10 @@ export const DEFAULT_SECTIONS: HomeSectionType[] = [
      HomeSectionType.Resume,
      HomeSectionType.ResumeAudio,
      HomeSectionType.ResumeBook,
@@ -217,117 +323,11 @@ index 2222222222..3333333333 100644
 -    HomeSectionType.None,
      HomeSectionType.None
  ];
-diff --git a/src/components/homesections/homesections.js b/src/components/homesections/homesections.js
-index 2222222222..3333333333 100644
---- a/src/components/homesections/homesections.js
-+++ b/src/components/homesections/homesections.js
-@@ -7,6 +7,7 @@
- import { queryClient } from 'utils/query/queryClient';
- 
- import { loadRecordings } from './sections/activeRecordings';
-+import { loadForYou } from './sections/forYou';
- import { loadLibraryButtons } from './sections/libraryButtons';
- import { loadLibraryTiles } from './sections/libraryTiles';
- import { loadLiveTV } from './sections/liveTv';
-@@ -145,6 +146,9 @@
-         case HomeSectionType.ActiveRecordings:
-             loadRecordings(elem, true, apiClient, options);
-             break;
-+        case HomeSectionType.ForYou:
-+            loadForYou(elem, apiClient, options);
-+            break;
-         case HomeSectionType.LatestMedia:
-             loadRecentlyAdded(elem, apiClient, user, userViews, options);
-             break;
-diff --git a/src/components/homeScreenSettings/homeScreenSettings.template.html b/src/components/homeScreenSettings/homeScreenSettings.template.html
-index 2222222222..3333333333 100644
---- a/src/components/homeScreenSettings/homeScreenSettings.template.html
-+++ b/src/components/homeScreenSettings/homeScreenSettings.template.html
-@@ -21,6 +21,7 @@
-             <select is="emby-select" id="selectHomeSection1" label="{section1label}">
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-+                <option value="foryou">${HeaderForYou}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
-@@ -35,6 +36,7 @@
-             <select is="emby-select" id="selectHomeSection2" label="{section2label}">
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-+                <option value="foryou">${HeaderForYou}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
-@@ -49,6 +51,7 @@
-             <select is="emby-select" id="selectHomeSection3" label="{section3label}">
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-+                <option value="foryou">${HeaderForYou}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
-@@ -63,6 +66,7 @@
-             <select is="emby-select" id="selectHomeSection4" label="{section4label}">
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-+                <option value="foryou">${HeaderForYou}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
-@@ -77,6 +81,7 @@
-             <select is="emby-select" id="selectHomeSection5" label="{section5label}">
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-+                <option value="foryou">${HeaderForYou}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
-@@ -91,6 +96,7 @@
-             <select is="emby-select" id="selectHomeSection6" label="{section6label}">
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-+                <option value="foryou">${HeaderForYou}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
-@@ -105,6 +111,7 @@
-             <select is="emby-select" id="selectHomeSection7" label="{section7label}">
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-+                <option value="foryou">${HeaderForYou}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
-@@ -119,6 +126,7 @@
-             <select is="emby-select" id="selectHomeSection8" label="{section8label}">
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-+                <option value="foryou">${HeaderForYou}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
-@@ -133,6 +141,7 @@
-             <select is="emby-select" id="selectHomeSection9" label="{section9label}">
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-+                <option value="foryou">${HeaderForYou}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
-@@ -147,6 +156,7 @@
-             <select is="emby-select" id="selectHomeSection10" label="{section10label}">
-                 <option value="smalllibrarytiles">${HeaderMyMedia}</option>
-                 <option value="librarybuttons">${HeaderMyMediaSmall}</option>
-+                <option value="foryou">${HeaderForYou}</option>
-                 <option value="activerecordings">${HeaderActiveRecordings}</option>
-                 <option value="resume">${HeaderContinueWatching}</option>
-                 <option value="resumeaudio">${HeaderContinueListening}</option>
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 2222222222..3333333333 100644
+index a6b093a5fd..5b103ce040 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -460,6 +460,9 @@
+@@ -463,6 +463,9 @@
      "HeaderFetcherSettings": "Fetcher Settings",
      "HeaderFetchImages": "Fetch Images",
      "HeaderForKids": "For Kids",

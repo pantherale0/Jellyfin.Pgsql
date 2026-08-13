@@ -1,6 +1,6 @@
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/UserTasteRecommendationImpression.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/UserTasteRecommendationImpression.cs
 new file mode 100644
-index 0000000000..1111111111
+index 0000000000..7f1547c250
 --- /dev/null
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/UserTasteRecommendationImpression.cs
 @@ -0,0 +1,39 @@
@@ -44,10 +44,10 @@ index 0000000000..1111111111
 +    public DateTime ServedAt { get; set; }
 +}
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
-index 3333333333..4444444444 100644
+index ab74048c66..78d54907c3 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
-@@ -199,6 +199,11 @@
+@@ -198,6 +198,11 @@ public class JellyfinDbContext(DbContextOptions<JellyfinDbContext> options, ILog
      /// </summary>
      public DbSet<UserTasteRecommendation> UserTasteRecommendations => Set<UserTasteRecommendation>();
  

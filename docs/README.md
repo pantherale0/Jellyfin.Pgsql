@@ -7,7 +7,7 @@ Guides for the [pantherale0/Jellyfin.Pgsql](https://github.com/pantherale0/Jelly
 | [Overview](overview.md) | Everyone | What this fork is; **benefits** and **drawbacks** |
 | [Architecture](architecture.md) | Maintainers | Plugins, submodules, patch routing, Docker composition |
 | [Features](features.md) | Operators | Feature → config → patch/plugin map |
-| [Patches](patches.md) | Maintainers | Full **what / why / where / how** catalog (all 55 patches) + issue links |
+| [Patches](patches.md) | Maintainers | Full **what / why / where / how** catalog (all `patches/*.patch` files) + issue links |
 | [Known issues](known-issues.md) | Everyone | Fork tracker, operational caveats, inherited upstream issues |
 
 Quick start, env vars, SSO setup, SQLite migration, and release flow remain in the root [README](../README.md).

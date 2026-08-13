@@ -1,6 +1,6 @@
 diff --git a/src/apps/dashboard/components/widgets/ActiveRecordingsWidget.tsx b/src/apps/dashboard/components/widgets/ActiveRecordingsWidget.tsx
 new file mode 100644
-index 0000000000..47c7c2ff08
+index 0000000000..a745142419
 --- /dev/null
 +++ b/src/apps/dashboard/components/widgets/ActiveRecordingsWidget.tsx
 @@ -0,0 +1,75 @@
@@ -80,18 +80,18 @@ index 0000000000..47c7c2ff08
 +
 +export default ActiveRecordingsWidget;
 diff --git a/src/apps/dashboard/routes/index.tsx b/src/apps/dashboard/routes/index.tsx
-index 5a6c475d39..d8c69b962b 100644
+index d50c7278df..46aeba3020 100644
 --- a/src/apps/dashboard/routes/index.tsx
 +++ b/src/apps/dashboard/routes/index.tsx
-@@ -14,6 +14,7 @@ import ConfirmDialog from 'components/ConfirmDialog';
+@@ -20,6 +20,7 @@ import useRestartServer from '../features/system/api/useRestartServer';
  import useLiveTasks from '../features/tasks/hooks/useLiveTasks';
  import RunningTasksWidget from '../components/widgets/RunningTasksWidget';
  import DevicesWidget from '../components/widgets/DevicesWidget';
 +import ActiveRecordingsWidget from '../components/widgets/ActiveRecordingsWidget';
  import { useStartTask } from '../features/tasks/api/useStartTask';
  import ItemCountsWidget from '../components/widgets/ItemCountsWidget';
- import { TaskState } from '@jellyfin/sdk/lib/generated-client/models/task-state';
-@@ -104,6 +105,7 @@ export const Component = () => {
+ 
+@@ -118,6 +119,7 @@ export const Component = () => {
                              <ItemCountsWidget />
                              <RunningTasksWidget tasks={tasks} />
                              <DevicesWidget />

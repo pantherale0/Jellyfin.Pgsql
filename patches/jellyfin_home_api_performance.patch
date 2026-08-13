@@ -1,8 +1,8 @@
 diff --git a/Jellyfin.Server.Implementations/Item/NextUpService.cs b/Jellyfin.Server.Implementations/Item/NextUpService.cs
-index 725b4cfaac..76dd62c049 100644
+index f478daef23..5ba161bed2 100644
 --- a/Jellyfin.Server.Implementations/Item/NextUpService.cs
 +++ b/Jellyfin.Server.Implementations/Item/NextUpService.cs
-@@ -170,7 +170,7 @@ public class NextUpService : INextUpService
+@@ -165,7 +165,7 @@ public class NextUpService : INextUpService
                  .Where(e => e.ParentIndexNumber == 0)
                  .Where(e => !e.IsVirtualItem);
              specialsQuery = _queryHelpers.ApplyAccessFiltering(context, specialsQuery, filter);
@@ -11,7 +11,7 @@ index 725b4cfaac..76dd62c049 100644
  
              foreach (var special in specialsQuery)
              {
-@@ -305,7 +305,7 @@ public class NextUpService : INextUpService
+@@ -300,7 +300,7 @@ public class NextUpService : INextUpService
          if (nextEpisodeIds.Count > 0)
          {
              var nextQuery = context.BaseItems.AsNoTracking().Where(e => nextEpisodeIds.Contains(e.Id));
@@ -1883,25 +1883,3 @@ index 0000000000..766d101690
 +        }
 +    }
 +}
-diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
-index fd18c035e6..0d1a608c9a 100644
---- a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
-+++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
-@@ -396,6 +396,8 @@ namespace Jellyfin.Server.Implementations.Migrations
- 
-                     b.HasIndex("Type", "TopParentId", "StartDate");
- 
-+                    b.HasIndex("Type", "TopParentId", "ChannelId", "StartDate");
-+
-                     b.HasIndex("MediaType", "TopParentId", "IsVirtualItem", "PresentationUniqueKey");
- 
-                     b.HasIndex("TopParentId", "IsFolder", "IsVirtualItem", "DateCreated");
-@@ -1461,6 +1463,8 @@ namespace Jellyfin.Server.Implementations.Migrations
- 
-                     b.HasIndex("UserId", "ItemId", "LastPlayedDate");
- 
-+                    b.HasIndex("UserId", "PlaybackPositionTicks");
-+
-                     b.HasIndex("UserId", "Played", "ItemId");
- 
-                     b.ToTable("UserData");

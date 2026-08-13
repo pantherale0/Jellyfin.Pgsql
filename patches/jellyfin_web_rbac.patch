@@ -1,8 +1,8 @@
 diff --git a/src/apps/dashboard/features/users/components/Profile.tsx b/src/apps/dashboard/features/users/components/Profile.tsx
-index ec3268aceb..3522432572 100644
+index 7ec6ff7654..013238cb8d 100644
 --- a/src/apps/dashboard/features/users/components/Profile.tsx
 +++ b/src/apps/dashboard/features/users/components/Profile.tsx
-@@ -167,8 +167,14 @@ const Profile = ({ userDto }: ProfileProps) => {
+@@ -174,8 +174,14 @@ const Profile = ({ userDto }: ProfileProps) => {
          disabledUserBanner.classList.toggle('hide', !userDto.Policy?.IsDisabled);
  
          const txtUserName = page.querySelector('#txtUserName') as HTMLInputElement;
@@ -21,11 +21,11 @@ index ec3268aceb..3522432572 100644
  
 diff --git a/src/apps/dashboard/features/users/components/SSOMappings.tsx b/src/apps/dashboard/features/users/components/SSOMappings.tsx
 new file mode 100644
-index 0000000000..996ba24bde
+index 0000000000..d64d74a11b
 --- /dev/null
 +++ b/src/apps/dashboard/features/users/components/SSOMappings.tsx
-@@ -0,0 +1,378 @@
-+import React, { useEffect, useState, useCallback } from 'react';
+@@ -0,0 +1,676 @@
++import React, { useEffect, useState, useCallback, useMemo } from 'react';
 +import { useApi } from 'hooks/useApi';
 +import Box from '@mui/material/Box';
 +import Button from '@mui/material/Button';
@@ -45,6 +45,8 @@ index 0000000000..996ba24bde
 +import DialogContent from '@mui/material/DialogContent';
 +import DialogTitle from '@mui/material/DialogTitle';
 +import IconButton from '@mui/material/IconButton';
++import Chip from '@mui/material/Chip';
++import Autocomplete from '@mui/material/Autocomplete';
 +import EditIcon from '@mui/icons-material/Edit';
 +import DeleteIcon from '@mui/icons-material/Delete';
 +import AddIcon from '@mui/icons-material/Add';
@@ -55,11 +57,28 @@ index 0000000000..996ba24bde
 +    enabledFolders: string[];
 +    permissions: Record<string, boolean>;
 +    blockUnratedItems: string[];
++    allowedTags: string[];
++    blockedTags: string[];
++    allowedLiveTvChannels: string[];
++    allowedLiveTvCategories: string[];
 +}
 +
 +interface LibraryFolder {
 +    id: string;
 +    name: string;
++}
++
++interface LiveTvChannelOption {
++    id: string;
++    name: string;
++    number: string;
++    channelGroup: string;
++    tags: string[];
++}
++
++interface LiveTvAllowlistResponse {
++    channels: LiveTvChannelOption[];
++    categories: string[];
 +}
 +
 +const AVAILABLE_PERMISSIONS = [
@@ -88,60 +107,159 @@ index 0000000000..996ba24bde
 +    { key: 'Series', label: 'Shows' }
 +];
 +
++const CAMEL_CASE_ACCEPT = 'application/json; profile="CamelCase"';
++
++const emptyMappingForm = () => ({
++    groupName: '',
++    enableAllFolders: true,
++    selectedFolders: [] as string[],
++    selectedPermissions: {} as Record<string, boolean>,
++    selectedUnratedItems: [] as string[],
++    allowedTags: [] as string[],
++    blockedTags: [] as string[],
++    allowedLiveTvChannels: [] as string[],
++    allowedLiveTvCategories: [] as string[],
++    allowedTagInput: '',
++    blockedTagInput: '',
++    categoryFilter: ''
++});
++
++const normalizeChannelId = (id: string) => id.replace(/-/g, '').toLowerCase();
++
++const channelLabel = (channel: LiveTvChannelOption) => {
++    const number = channel.number?.trim();
++    const name = channel.name?.trim() || channel.id;
++    return number ? `${number} · ${name}` : name;
++};
++
++const TagChipEditor = ({
++    label,
++    help,
++    tags,
++    inputValue,
++    onInputChange,
++    onAdd,
++    onRemove
++}: {
++    label: string;
++    help: string;
++    tags: string[];
++    inputValue: string;
++    onInputChange: (value: string) => void;
++    onAdd: () => void;
++    onRemove: (tag: string) => void;
++}) => (
++    <Box>
++        <Typography variant='subtitle1' sx={{ fontWeight: 600, mb: 0.5 }}>{label}</Typography>
++        <Typography variant='body2' color='textSecondary' sx={{ mb: 1 }}>{help}</Typography>
++        <Stack direction='row' spacing={1} sx={{ mb: 1 }}>
++            <TextField
++                size='small'
++                fullWidth
++                label='Add tag'
++                value={inputValue}
++                onChange={e => onInputChange(e.target.value)}
++                onKeyDown={e => {
++                    if (e.key === 'Enter') {
++                        e.preventDefault();
++                        onAdd();
++                    }
++                }}
++            />
++            <Button variant='outlined' onClick={onAdd} disabled={!inputValue.trim()}>Add</Button>
++        </Stack>
++        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
++            {tags.length === 0 ? (
++                <Typography variant='body2' color='textSecondary'>None</Typography>
++            ) : tags.map(tag => (
++                <Chip key={tag} label={tag} onDelete={() => onRemove(tag)} />
++            ))}
++        </Box>
++    </Box>
++);
++
 +const SSOMappings = () => {
 +    const { api } = useApi();
 +    const [ mappings, setMappings ] = useState<Mapping[]>([]);
 +    const [ libraries, setLibraries ] = useState<LibraryFolder[]>([]);
++    const [ liveTvChannels, setLiveTvChannels ] = useState<LiveTvChannelOption[]>([]);
++    const [ liveTvCategories, setLiveTvCategories ] = useState<string[]>([]);
 +    const [ loading, setLoading ] = useState(true);
 +    const [ error, setError ] = useState<string | null>(null);
 +    const [ isDialogOpen, setIsDialogOpen ] = useState(false);
 +    const [ editingIndex, setEditingIndex ] = useState<number | null>(null);
++    const [ form, setForm ] = useState(emptyMappingForm);
 +
-+    // Form states
-+    const [ groupName, setGroupName ] = useState('');
-+    const [ enableAllFolders, setEnableAllFolders ] = useState(true);
-+    const [ selectedFolders, setSelectedFolders ] = useState<string[]>([]);
-+    const [ selectedPermissions, setSelectedPermissions ] = useState<Record<string, boolean>>({});
-+    const [ selectedUnratedItems, setSelectedUnratedItems ] = useState<string[]>([]);
++    const authHeaders = useMemo(() => {
++        if (!api) return null;
++        return {
++            baseURL: api.basePath,
++            headers: {
++                Authorization: api.authorizationHeader,
++                Accept: CAMEL_CASE_ACCEPT
++            }
++        };
++    }, [ api ]);
++
++    const channelById = useMemo(() => {
++        const map = new Map<string, LiveTvChannelOption>();
++        for (const channel of liveTvChannels) {
++            map.set(normalizeChannelId(channel.id), channel);
++        }
++        return map;
++    }, [ liveTvChannels ]);
++
++    const selectedChannelOptions = useMemo(
++        () => form.allowedLiveTvChannels
++            .map(id => channelById.get(normalizeChannelId(id)))
++            .filter((c): c is LiveTvChannelOption => !!c),
++        [ form.allowedLiveTvChannels, channelById ]
++    );
++
++    const filteredCategories = useMemo(() => {
++        const q = form.categoryFilter.trim().toLowerCase();
++        if (!q) return liveTvCategories;
++        return liveTvCategories.filter(c => c.toLowerCase().includes(q));
++    }, [ liveTvCategories, form.categoryFilter ]);
 +
 +    const fetchData = useCallback(async () => {
-+        if (!api) return;
++        if (!api || !authHeaders) return;
 +        setLoading(true);
 +        setError(null);
 +        try {
-+            const requestConfig = {
-+                baseURL: api.basePath,
-+                headers: { Authorization: api.authorizationHeader }
-+            };
-+            const [ configRes, libRes ] = await Promise.all([
-+                api.axiosInstance.get<Mapping[]>('/sso/rbac/config', requestConfig),
-+                api.axiosInstance.get<LibraryFolder[]>('/sso/rbac/libraries', requestConfig)
++            const [ configRes, libRes, liveTvRes ] = await Promise.all([
++                api.axiosInstance.get<Mapping[]>('/sso/rbac/config', authHeaders),
++                api.axiosInstance.get<LibraryFolder[]>('/sso/rbac/libraries', authHeaders),
++                api.axiosInstance.get<LiveTvAllowlistResponse>('/sso/rbac/livetv', authHeaders)
 +            ]);
 +
 +            setMappings((configRes.data || []).map((m: Mapping) => ({
 +                ...m,
-+                blockUnratedItems: m.blockUnratedItems || []
++                blockUnratedItems: m.blockUnratedItems || [],
++                allowedTags: m.allowedTags || [],
++                blockedTags: m.blockedTags || [],
++                allowedLiveTvChannels: m.allowedLiveTvChannels || [],
++                allowedLiveTvCategories: m.allowedLiveTvCategories || []
 +            })));
 +            setLibraries(libRes.data || []);
++            setLiveTvChannels(liveTvRes.data?.channels || []);
++            setLiveTvCategories(liveTvRes.data?.categories || []);
 +        } catch (err: any) {
 +            setError(err.message || 'An error occurred.');
 +        } finally {
 +            setLoading(false);
 +        }
-+    }, [ api ]);
++    }, [ api, authHeaders ]);
 +
 +    useEffect(() => {
 +        fetchData();
 +    }, [ fetchData ]);
 +
 +    const saveMappings = async (updatedMappings: Mapping[]) => {
-+        if (!api) return;
++        if (!api || !authHeaders) return;
 +        setError(null);
 +        try {
-+            await api.axiosInstance.post('/sso/rbac/config', updatedMappings, {
-+                baseURL: api.basePath,
-+                headers: { Authorization: api.authorizationHeader }
-+            });
++            await api.axiosInstance.post('/sso/rbac/config', updatedMappings, authHeaders);
 +            setMappings(updatedMappings);
 +        } catch (err: any) {
 +            setError(err.message || 'Failed to save mappings.');
@@ -150,28 +268,31 @@ index 0000000000..996ba24bde
 +
 +    const handleAddClick = () => {
 +        setEditingIndex(null);
-+        setGroupName('');
-+        setEnableAllFolders(true);
-+        setSelectedFolders([]);
-+        setSelectedPermissions({});
-+        setSelectedUnratedItems([]);
++        setForm(emptyMappingForm());
 +        setIsDialogOpen(true);
 +    };
 +
 +    const handleEditClick = (index: number) => {
 +        const mapping = mappings[index];
 +        setEditingIndex(index);
-+        setGroupName(mapping.oidcGroup);
-+        setEnableAllFolders(mapping.enableAllFolders);
-+        setSelectedFolders(mapping.enabledFolders || []);
-+        setSelectedPermissions(mapping.permissions || {});
-+        setSelectedUnratedItems(mapping.blockUnratedItems || []);
++        setForm({
++            ...emptyMappingForm(),
++            groupName: mapping.oidcGroup,
++            enableAllFolders: mapping.enableAllFolders,
++            selectedFolders: mapping.enabledFolders || [],
++            selectedPermissions: mapping.permissions || {},
++            selectedUnratedItems: mapping.blockUnratedItems || [],
++            allowedTags: mapping.allowedTags || [],
++            blockedTags: mapping.blockedTags || [],
++            allowedLiveTvChannels: (mapping.allowedLiveTvChannels || []).map(normalizeChannelId),
++            allowedLiveTvCategories: mapping.allowedLiveTvCategories || []
++        });
 +        setIsDialogOpen(true);
 +    };
 +
 +    const handleDeleteClick = (index: number) => {
 +        const updated = mappings.filter((_, i) => i !== index);
-+        saveMappings(updated);
++        void saveMappings(updated);
 +    };
 +
 +    const handleDialogClose = () => {
@@ -179,14 +300,18 @@ index 0000000000..996ba24bde
 +    };
 +
 +    const handleDialogSave = () => {
-+        if (!groupName.trim()) return;
++        if (!form.groupName.trim()) return;
 +
 +        const newMapping: Mapping = {
-+            oidcGroup: groupName.trim(),
-+            enableAllFolders,
-+            enabledFolders: enableAllFolders ? [] : selectedFolders,
-+            permissions: selectedPermissions,
-+            blockUnratedItems: selectedUnratedItems
++            oidcGroup: form.groupName.trim(),
++            enableAllFolders: form.enableAllFolders,
++            enabledFolders: form.enableAllFolders ? [] : form.selectedFolders,
++            permissions: form.selectedPermissions,
++            blockUnratedItems: form.selectedUnratedItems,
++            allowedTags: form.allowedTags,
++            blockedTags: form.blockedTags,
++            allowedLiveTvChannels: form.allowedLiveTvChannels,
++            allowedLiveTvCategories: form.allowedLiveTvCategories
 +        };
 +
 +        let updated: Mapping[];
@@ -196,28 +321,70 @@ index 0000000000..996ba24bde
 +            updated = [ ...mappings, newMapping ];
 +        }
 +
-+        saveMappings(updated);
++        void saveMappings(updated);
 +        setIsDialogOpen(false);
 +    };
 +
 +    const handleFolderToggle = (folderId: string) => {
-+        setSelectedFolders(prev =>
-+            prev.includes(folderId) ? prev.filter(id => id !== folderId) : [ ...prev, folderId ]
-+        );
++        setForm(prev => ({
++            ...prev,
++            selectedFolders: prev.selectedFolders.includes(folderId)
++                ? prev.selectedFolders.filter(id => id !== folderId)
++                : [ ...prev.selectedFolders, folderId ]
++        }));
 +    };
 +
 +    const handlePermissionToggle = (key: string) => {
-+        setSelectedPermissions(prev => ({
++        setForm(prev => ({
 +            ...prev,
-+            [key]: !prev[key]
++            selectedPermissions: {
++                ...prev.selectedPermissions,
++                [key]: !prev.selectedPermissions[key]
++            }
 +        }));
 +    };
 +
 +    const handleUnratedItemToggle = (key: string) => {
-+        setSelectedUnratedItems(prev =>
-+            prev.includes(key) ? prev.filter(k => k !== key) : [ ...prev, key ]
-+        );
++        setForm(prev => ({
++            ...prev,
++            selectedUnratedItems: prev.selectedUnratedItems.includes(key)
++                ? prev.selectedUnratedItems.filter(k => k !== key)
++                : [ ...prev.selectedUnratedItems, key ]
++        }));
 +    };
++
++    const addTag = (kind: 'allowedTags' | 'blockedTags', inputKey: 'allowedTagInput' | 'blockedTagInput') => {
++        setForm(prev => {
++            const value = prev[inputKey].trim();
++            if (!value) return prev;
++            if (prev[kind].some(t => t.toLowerCase() === value.toLowerCase())) {
++                return { ...prev, [inputKey]: '' };
++            }
++            return {
++                ...prev,
++                [kind]: [ ...prev[kind], value ],
++                [inputKey]: ''
++            };
++        });
++    };
++
++    const removeTag = (kind: 'allowedTags' | 'blockedTags', tag: string) => {
++        setForm(prev => ({
++            ...prev,
++            [kind]: prev[kind].filter(t => t !== tag)
++        }));
++    };
++
++    const handleCategoryToggle = (category: string) => {
++        setForm(prev => ({
++            ...prev,
++            allowedLiveTvCategories: prev.allowedLiveTvCategories.includes(category)
++                ? prev.allowedLiveTvCategories.filter(c => c !== category)
++                : [ ...prev.allowedLiveTvCategories, category ]
++        }));
++    };
++
++    const liveTvUnratedBlocked = form.selectedUnratedItems.includes('LiveTvChannel');
 +
 +    if (loading) {
 +        return (
@@ -287,6 +454,23 @@ index 0000000000..996ba24bde
 +                                            .map(i => i.label)
 +                                            .join(', ') || 'None'}
 +                                    </Typography>
++                                    <Typography variant='body2' color='textSecondary'>
++                                        <strong>Allowed Tags:</strong>{' '}
++                                        {(mapping.allowedTags || []).length > 0
++                                            ? `${mapping.allowedTags.length} tag(s)`
++                                            : 'None'}
++                                    </Typography>
++                                    <Typography variant='body2' color='textSecondary'>
++                                        <strong>Blocked Tags:</strong>{' '}
++                                        {(mapping.blockedTags || []).length > 0
++                                            ? `${mapping.blockedTags.length} tag(s)`
++                                            : 'None'}
++                                    </Typography>
++                                    <Typography variant='body2' color='textSecondary'>
++                                        <strong>Live TV Allowlist:</strong>{' '}
++                                        {(mapping.allowedLiveTvCategories || []).length} categor{(mapping.allowedLiveTvCategories || []).length === 1 ? 'y' : 'ies'},{' '}
++                                        {(mapping.allowedLiveTvChannels || []).length} channel{(mapping.allowedLiveTvChannels || []).length === 1 ? '' : 's'}
++                                    </Typography>
 +                                </Stack>
 +                            </Paper>
 +                        </Grid>
@@ -302,8 +486,8 @@ index 0000000000..996ba24bde
 +                            label='OIDC Group / Role Name'
 +                            variant='outlined'
 +                            fullWidth
-+                            value={groupName}
-+                            onChange={e => setGroupName(e.target.value)}
++                            value={form.groupName}
++                            onChange={e => setForm(prev => ({ ...prev, groupName: e.target.value }))}
 +                        />
 +
 +                        <Box>
@@ -311,13 +495,13 @@ index 0000000000..996ba24bde
 +                            <FormControlLabel
 +                                control={
 +                                    <Checkbox
-+                                        checked={enableAllFolders}
-+                                        onChange={e => setEnableAllFolders(e.target.checked)}
++                                        checked={form.enableAllFolders}
++                                        onChange={e => setForm(prev => ({ ...prev, enableAllFolders: e.target.checked }))}
 +                                    />
 +                                }
 +                                label='Grant access to all libraries'
 +                            />
-+                            {!enableAllFolders && (
++                            {!form.enableAllFolders && (
 +                                <Box sx={{ pl: 3, mt: 1 }}>
 +                                    <Typography variant='body2' sx={{ mb: 1 }} color='textSecondary'>Select libraries to allow:</Typography>
 +                                    <FormGroup>
@@ -327,7 +511,7 @@ index 0000000000..996ba24bde
 +                                                    <FormControlLabel
 +                                                        control={
 +                                                            <Checkbox
-+                                                                checked={selectedFolders.includes(lib.id)}
++                                                                checked={form.selectedFolders.includes(lib.id)}
 +                                                                onChange={() => handleFolderToggle(lib.id)}
 +                                                            />
 +                                                        }
@@ -352,7 +536,7 @@ index 0000000000..996ba24bde
 +                                            <FormControlLabel
 +                                                control={
 +                                                    <Checkbox
-+                                                        checked={!!selectedPermissions[perm.key]}
++                                                        checked={!!form.selectedPermissions[perm.key]}
 +                                                        onChange={() => handlePermissionToggle(perm.key)}
 +                                                    />
 +                                                }
@@ -378,7 +562,7 @@ index 0000000000..996ba24bde
 +                                            <FormControlLabel
 +                                                control={
 +                                                    <Checkbox
-+                                                        checked={selectedUnratedItems.includes(item.key)}
++                                                        checked={form.selectedUnratedItems.includes(item.key)}
 +                                                        onChange={() => handleUnratedItemToggle(item.key)}
 +                                                    />
 +                                                }
@@ -388,12 +572,126 @@ index 0000000000..996ba24bde
 +                                    ))}
 +                                </Grid>
 +                            </FormGroup>
++                            {liveTvUnratedBlocked && (
++                                <Alert severity='info' sx={{ mt: 2 }}>
++                                    Live TV is blocked when unrated. Use the Live TV allowlist below to approve specific channels or categories.
++                                </Alert>
++                            )}
++                        </Box>
++
++                        <Divider />
++
++                        <TagChipEditor
++                            label='Allowed Tags'
++                            help='When set, library items must include at least one of these tags. Whitelisted Live TV bypasses this requirement.'
++                            tags={form.allowedTags}
++                            inputValue={form.allowedTagInput}
++                            onInputChange={value => setForm(prev => ({ ...prev, allowedTagInput: value }))}
++                            onAdd={() => addTag('allowedTags', 'allowedTagInput')}
++                            onRemove={tag => removeTag('allowedTags', tag)}
++                        />
++
++                        <TagChipEditor
++                            label='Blocked Tags'
++                            help='Hide any item (including Live TV) that carries one of these tags.'
++                            tags={form.blockedTags}
++                            inputValue={form.blockedTagInput}
++                            onInputChange={value => setForm(prev => ({ ...prev, blockedTagInput: value }))}
++                            onAdd={() => addTag('blockedTags', 'blockedTagInput')}
++                            onRemove={tag => removeTag('blockedTags', tag)}
++                        />
++
++                        <Divider />
++
++                        <Box sx={{ opacity: liveTvUnratedBlocked ? 1 : 0.55 }}>
++                            <Typography variant='subtitle1' sx={{ fontWeight: 600, mb: 0.5 }}>Live TV Allowlist</Typography>
++                            <Typography variant='body2' color='textSecondary' sx={{ mb: 2 }}>
++                                {liveTvUnratedBlocked
++                                    ? 'Channels and categories listed here remain visible when unrated Live TV is blocked.'
++                                    : 'Enable “Live TV” under Block Unrated Items to use this allowlist.'}
++                            </Typography>
++
++                            <Typography variant='subtitle2' sx={{ fontWeight: 600, mb: 1 }}>Categories</Typography>
++                            <TextField
++                                size='small'
++                                fullWidth
++                                label='Filter categories'
++                                value={form.categoryFilter}
++                                disabled={!liveTvUnratedBlocked}
++                                onChange={e => setForm(prev => ({ ...prev, categoryFilter: e.target.value }))}
++                                sx={{ mb: 1 }}
++                            />
++                            {liveTvCategories.length === 0 ? (
++                                <Typography variant='body2' color='textSecondary' sx={{ mb: 2 }}>
++                                    No channel categories found. M3U group-title values appear after a Live TV guide refresh.
++                                </Typography>
++                            ) : (
++                                <FormGroup sx={{ mb: 2, maxHeight: 180, overflow: 'auto', border: 1, borderColor: 'divider', borderRadius: 1, p: 1 }}>
++                                    <Grid container spacing={1}>
++                                        {filteredCategories.map(category => (
++                                            <Grid size={{ xs: 12, sm: 6 }} key={category}>
++                                                <FormControlLabel
++                                                    control={
++                                                        <Checkbox
++                                                            disabled={!liveTvUnratedBlocked}
++                                                            checked={form.allowedLiveTvCategories.includes(category)}
++                                                            onChange={() => handleCategoryToggle(category)}
++                                                        />
++                                                    }
++                                                    label={category}
++                                                />
++                                            </Grid>
++                                        ))}
++                                    </Grid>
++                                </FormGroup>
++                            )}
++
++                            <Typography variant='subtitle2' sx={{ fontWeight: 600, mb: 1 }}>Individual Channels</Typography>
++                            <Autocomplete
++                                multiple
++                                disabled={!liveTvUnratedBlocked}
++                                options={liveTvChannels}
++                                value={selectedChannelOptions}
++                                onChange={(_, value) => setForm(prev => ({
++                                    ...prev,
++                                    allowedLiveTvChannels: value.map(c => normalizeChannelId(c.id))
++                                }))}
++                                groupBy={option => option.channelGroup?.trim() || 'Ungrouped'}
++                                getOptionLabel={channelLabel}
++                                isOptionEqualToValue={(a, b) => normalizeChannelId(a.id) === normalizeChannelId(b.id)}
++                                filterOptions={(options, state) => {
++                                    const q = state.inputValue.trim().toLowerCase();
++                                    if (!q) return options;
++                                    return options.filter(o =>
++                                        o.name.toLowerCase().includes(q)
++                                        || (o.number || '').toLowerCase().includes(q)
++                                        || (o.channelGroup || '').toLowerCase().includes(q)
++                                    );
++                                }}
++                                renderInput={params => (
++                                    <TextField
++                                        {...params}
++                                        label='Search channels by name or number'
++                                        placeholder='Type to search…'
++                                    />
++                                )}
++                                renderOption={(props, option) => (
++                                    <li {...props} key={option.id}>
++                                        <Stack spacing={0}>
++                                            <Typography variant='body2'>{channelLabel(option)}</Typography>
++                                            {option.channelGroup ? (
++                                                <Typography variant='caption' color='textSecondary'>{option.channelGroup}</Typography>
++                                            ) : null}
++                                        </Stack>
++                                    </li>
++                                )}
++                            />
 +                        </Box>
 +                    </Stack>
 +                </DialogContent>
 +                <DialogActions>
 +                    <Button onClick={handleDialogClose}>Cancel</Button>
-+                    <Button onClick={handleDialogSave} variant='contained' color='primary' disabled={!groupName.trim()}>
++                    <Button onClick={handleDialogSave} variant='contained' color='primary' disabled={!form.groupName.trim()}>
 +                        Save
 +                    </Button>
 +                </DialogActions>
@@ -570,590 +868,3 @@ index 094f1d81ad..6d1adff6d7 100644
              </div>
          </Page>
  
-diff --git a/src/apps/dashboard/features/users/components/SSOMappings.tsx b/src/apps/dashboard/features/users/components/SSOMappings.tsx
-index 996ba24bde..c818294baf 100644
---- a/src/apps/dashboard/features/users/components/SSOMappings.tsx
-+++ b/src/apps/dashboard/features/users/components/SSOMappings.tsx
-@@ -1,4 +1,4 @@
--import React, { useEffect, useState, useCallback } from 'react';
-+import React, { useEffect, useState, useCallback, useMemo } from 'react';
- import { useApi } from 'hooks/useApi';
- import Box from '@mui/material/Box';
- import Button from '@mui/material/Button';
-@@ -18,6 +18,8 @@ import DialogActions from '@mui/material/DialogActions';
- import DialogContent from '@mui/material/DialogContent';
- import DialogTitle from '@mui/material/DialogTitle';
- import IconButton from '@mui/material/IconButton';
-+import Chip from '@mui/material/Chip';
-+import Autocomplete from '@mui/material/Autocomplete';
- import EditIcon from '@mui/icons-material/Edit';
- import DeleteIcon from '@mui/icons-material/Delete';
- import AddIcon from '@mui/icons-material/Add';
-@@ -28,6 +30,10 @@ interface Mapping {
-     enabledFolders: string[];
-     permissions: Record<string, boolean>;
-     blockUnratedItems: string[];
-+    allowedTags: string[];
-+    blockedTags: string[];
-+    allowedLiveTvChannels: string[];
-+    allowedLiveTvCategories: string[];
- }
- 
- interface LibraryFolder {
-@@ -35,6 +41,19 @@ interface LibraryFolder {
-     name: string;
- }
- 
-+interface LiveTvChannelOption {
-+    id: string;
-+    name: string;
-+    number: string;
-+    channelGroup: string;
-+    tags: string[];
-+}
-+
-+interface LiveTvAllowlistResponse {
-+    channels: LiveTvChannelOption[];
-+    categories: string[];
-+}
-+
- const AVAILABLE_PERMISSIONS = [
-     { key: 'IsAdministrator', label: 'Is Administrator' },
-     { key: 'EnableContentDeletion', label: 'Enable Content Deletion' },
-@@ -60,60 +79,159 @@ const AVAILABLE_UNRATED_ITEMS = [
-     { key: 'Series', label: 'Shows' }
- ];
- 
-+const CAMEL_CASE_ACCEPT = 'application/json; profile="CamelCase"';
-+
-+const emptyMappingForm = () => ({
-+    groupName: '',
-+    enableAllFolders: true,
-+    selectedFolders: [] as string[],
-+    selectedPermissions: {} as Record<string, boolean>,
-+    selectedUnratedItems: [] as string[],
-+    allowedTags: [] as string[],
-+    blockedTags: [] as string[],
-+    allowedLiveTvChannels: [] as string[],
-+    allowedLiveTvCategories: [] as string[],
-+    allowedTagInput: '',
-+    blockedTagInput: '',
-+    categoryFilter: ''
-+});
-+
-+const normalizeChannelId = (id: string) => id.replace(/-/g, '').toLowerCase();
-+
-+const channelLabel = (channel: LiveTvChannelOption) => {
-+    const number = channel.number?.trim();
-+    const name = channel.name?.trim() || channel.id;
-+    return number ? `${number} · ${name}` : name;
-+};
-+
-+const TagChipEditor = ({
-+    label,
-+    help,
-+    tags,
-+    inputValue,
-+    onInputChange,
-+    onAdd,
-+    onRemove
-+}: {
-+    label: string;
-+    help: string;
-+    tags: string[];
-+    inputValue: string;
-+    onInputChange: (value: string) => void;
-+    onAdd: () => void;
-+    onRemove: (tag: string) => void;
-+}) => (
-+    <Box>
-+        <Typography variant='subtitle1' sx={{ fontWeight: 600, mb: 0.5 }}>{label}</Typography>
-+        <Typography variant='body2' color='textSecondary' sx={{ mb: 1 }}>{help}</Typography>
-+        <Stack direction='row' spacing={1} sx={{ mb: 1 }}>
-+            <TextField
-+                size='small'
-+                fullWidth
-+                label='Add tag'
-+                value={inputValue}
-+                onChange={e => onInputChange(e.target.value)}
-+                onKeyDown={e => {
-+                    if (e.key === 'Enter') {
-+                        e.preventDefault();
-+                        onAdd();
-+                    }
-+                }}
-+            />
-+            <Button variant='outlined' onClick={onAdd} disabled={!inputValue.trim()}>Add</Button>
-+        </Stack>
-+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-+            {tags.length === 0 ? (
-+                <Typography variant='body2' color='textSecondary'>None</Typography>
-+            ) : tags.map(tag => (
-+                <Chip key={tag} label={tag} onDelete={() => onRemove(tag)} />
-+            ))}
-+        </Box>
-+    </Box>
-+);
-+
- const SSOMappings = () => {
-     const { api } = useApi();
-     const [ mappings, setMappings ] = useState<Mapping[]>([]);
-     const [ libraries, setLibraries ] = useState<LibraryFolder[]>([]);
-+    const [ liveTvChannels, setLiveTvChannels ] = useState<LiveTvChannelOption[]>([]);
-+    const [ liveTvCategories, setLiveTvCategories ] = useState<string[]>([]);
-     const [ loading, setLoading ] = useState(true);
-     const [ error, setError ] = useState<string | null>(null);
-     const [ isDialogOpen, setIsDialogOpen ] = useState(false);
-     const [ editingIndex, setEditingIndex ] = useState<number | null>(null);
-+    const [ form, setForm ] = useState(emptyMappingForm);
-+
-+    const authHeaders = useMemo(() => {
-+        if (!api) return null;
-+        return {
-+            baseURL: api.basePath,
-+            headers: {
-+                Authorization: api.authorizationHeader,
-+                Accept: CAMEL_CASE_ACCEPT
-+            }
-+        };
-+    }, [ api ]);
-+
-+    const channelById = useMemo(() => {
-+        const map = new Map<string, LiveTvChannelOption>();
-+        for (const channel of liveTvChannels) {
-+            map.set(normalizeChannelId(channel.id), channel);
-+        }
-+        return map;
-+    }, [ liveTvChannels ]);
-+
-+    const selectedChannelOptions = useMemo(
-+        () => form.allowedLiveTvChannels
-+            .map(id => channelById.get(normalizeChannelId(id)))
-+            .filter((c): c is LiveTvChannelOption => !!c),
-+        [ form.allowedLiveTvChannels, channelById ]
-+    );
- 
--    // Form states
--    const [ groupName, setGroupName ] = useState('');
--    const [ enableAllFolders, setEnableAllFolders ] = useState(true);
--    const [ selectedFolders, setSelectedFolders ] = useState<string[]>([]);
--    const [ selectedPermissions, setSelectedPermissions ] = useState<Record<string, boolean>>({});
--    const [ selectedUnratedItems, setSelectedUnratedItems ] = useState<string[]>([]);
-+    const filteredCategories = useMemo(() => {
-+        const q = form.categoryFilter.trim().toLowerCase();
-+        if (!q) return liveTvCategories;
-+        return liveTvCategories.filter(c => c.toLowerCase().includes(q));
-+    }, [ liveTvCategories, form.categoryFilter ]);
- 
-     const fetchData = useCallback(async () => {
--        if (!api) return;
-+        if (!api || !authHeaders) return;
-         setLoading(true);
-         setError(null);
-         try {
--            const requestConfig = {
--                baseURL: api.basePath,
--                headers: { Authorization: api.authorizationHeader }
--            };
--            const [ configRes, libRes ] = await Promise.all([
--                api.axiosInstance.get<Mapping[]>('/sso/rbac/config', requestConfig),
--                api.axiosInstance.get<LibraryFolder[]>('/sso/rbac/libraries', requestConfig)
-+            const [ configRes, libRes, liveTvRes ] = await Promise.all([
-+                api.axiosInstance.get<Mapping[]>('/sso/rbac/config', authHeaders),
-+                api.axiosInstance.get<LibraryFolder[]>('/sso/rbac/libraries', authHeaders),
-+                api.axiosInstance.get<LiveTvAllowlistResponse>('/sso/rbac/livetv', authHeaders)
-             ]);
- 
-             setMappings((configRes.data || []).map((m: Mapping) => ({
-                 ...m,
--                blockUnratedItems: m.blockUnratedItems || []
-+                blockUnratedItems: m.blockUnratedItems || [],
-+                allowedTags: m.allowedTags || [],
-+                blockedTags: m.blockedTags || [],
-+                allowedLiveTvChannels: m.allowedLiveTvChannels || [],
-+                allowedLiveTvCategories: m.allowedLiveTvCategories || []
-             })));
-             setLibraries(libRes.data || []);
-+            setLiveTvChannels(liveTvRes.data?.channels || []);
-+            setLiveTvCategories(liveTvRes.data?.categories || []);
-         } catch (err: any) {
-             setError(err.message || 'An error occurred.');
-         } finally {
-             setLoading(false);
-         }
--    }, [ api ]);
-+    }, [ api, authHeaders ]);
- 
-     useEffect(() => {
-         fetchData();
-     }, [ fetchData ]);
- 
-     const saveMappings = async (updatedMappings: Mapping[]) => {
--        if (!api) return;
-+        if (!api || !authHeaders) return;
-         setError(null);
-         try {
--            await api.axiosInstance.post('/sso/rbac/config', updatedMappings, {
--                baseURL: api.basePath,
--                headers: { Authorization: api.authorizationHeader }
--            });
-+            await api.axiosInstance.post('/sso/rbac/config', updatedMappings, authHeaders);
-             setMappings(updatedMappings);
-         } catch (err: any) {
-             setError(err.message || 'Failed to save mappings.');
-@@ -122,28 +240,31 @@ const SSOMappings = () => {
- 
-     const handleAddClick = () => {
-         setEditingIndex(null);
--        setGroupName('');
--        setEnableAllFolders(true);
--        setSelectedFolders([]);
--        setSelectedPermissions({});
--        setSelectedUnratedItems([]);
-+        setForm(emptyMappingForm());
-         setIsDialogOpen(true);
-     };
- 
-     const handleEditClick = (index: number) => {
-         const mapping = mappings[index];
-         setEditingIndex(index);
--        setGroupName(mapping.oidcGroup);
--        setEnableAllFolders(mapping.enableAllFolders);
--        setSelectedFolders(mapping.enabledFolders || []);
--        setSelectedPermissions(mapping.permissions || {});
--        setSelectedUnratedItems(mapping.blockUnratedItems || []);
-+        setForm({
-+            ...emptyMappingForm(),
-+            groupName: mapping.oidcGroup,
-+            enableAllFolders: mapping.enableAllFolders,
-+            selectedFolders: mapping.enabledFolders || [],
-+            selectedPermissions: mapping.permissions || {},
-+            selectedUnratedItems: mapping.blockUnratedItems || [],
-+            allowedTags: mapping.allowedTags || [],
-+            blockedTags: mapping.blockedTags || [],
-+            allowedLiveTvChannels: (mapping.allowedLiveTvChannels || []).map(normalizeChannelId),
-+            allowedLiveTvCategories: mapping.allowedLiveTvCategories || []
-+        });
-         setIsDialogOpen(true);
-     };
- 
-     const handleDeleteClick = (index: number) => {
-         const updated = mappings.filter((_, i) => i !== index);
--        saveMappings(updated);
-+        void saveMappings(updated);
-     };
- 
-     const handleDialogClose = () => {
-@@ -151,14 +272,18 @@ const SSOMappings = () => {
-     };
- 
-     const handleDialogSave = () => {
--        if (!groupName.trim()) return;
-+        if (!form.groupName.trim()) return;
- 
-         const newMapping: Mapping = {
--            oidcGroup: groupName.trim(),
--            enableAllFolders,
--            enabledFolders: enableAllFolders ? [] : selectedFolders,
--            permissions: selectedPermissions,
--            blockUnratedItems: selectedUnratedItems
-+            oidcGroup: form.groupName.trim(),
-+            enableAllFolders: form.enableAllFolders,
-+            enabledFolders: form.enableAllFolders ? [] : form.selectedFolders,
-+            permissions: form.selectedPermissions,
-+            blockUnratedItems: form.selectedUnratedItems,
-+            allowedTags: form.allowedTags,
-+            blockedTags: form.blockedTags,
-+            allowedLiveTvChannels: form.allowedLiveTvChannels,
-+            allowedLiveTvCategories: form.allowedLiveTvCategories
-         };
- 
-         let updated: Mapping[];
-@@ -168,29 +293,71 @@ const SSOMappings = () => {
-             updated = [ ...mappings, newMapping ];
-         }
- 
--        saveMappings(updated);
-+        void saveMappings(updated);
-         setIsDialogOpen(false);
-     };
- 
-     const handleFolderToggle = (folderId: string) => {
--        setSelectedFolders(prev =>
--            prev.includes(folderId) ? prev.filter(id => id !== folderId) : [ ...prev, folderId ]
--        );
-+        setForm(prev => ({
-+            ...prev,
-+            selectedFolders: prev.selectedFolders.includes(folderId)
-+                ? prev.selectedFolders.filter(id => id !== folderId)
-+                : [ ...prev.selectedFolders, folderId ]
-+        }));
-     };
- 
-     const handlePermissionToggle = (key: string) => {
--        setSelectedPermissions(prev => ({
-+        setForm(prev => ({
-             ...prev,
--            [key]: !prev[key]
-+            selectedPermissions: {
-+                ...prev.selectedPermissions,
-+                [key]: !prev.selectedPermissions[key]
-+            }
-         }));
-     };
- 
-     const handleUnratedItemToggle = (key: string) => {
--        setSelectedUnratedItems(prev =>
--            prev.includes(key) ? prev.filter(k => k !== key) : [ ...prev, key ]
--        );
-+        setForm(prev => ({
-+            ...prev,
-+            selectedUnratedItems: prev.selectedUnratedItems.includes(key)
-+                ? prev.selectedUnratedItems.filter(k => k !== key)
-+                : [ ...prev.selectedUnratedItems, key ]
-+        }));
-+    };
-+
-+    const addTag = (kind: 'allowedTags' | 'blockedTags', inputKey: 'allowedTagInput' | 'blockedTagInput') => {
-+        setForm(prev => {
-+            const value = prev[inputKey].trim();
-+            if (!value) return prev;
-+            if (prev[kind].some(t => t.toLowerCase() === value.toLowerCase())) {
-+                return { ...prev, [inputKey]: '' };
-+            }
-+            return {
-+                ...prev,
-+                [kind]: [ ...prev[kind], value ],
-+                [inputKey]: ''
-+            };
-+        });
-+    };
-+
-+    const removeTag = (kind: 'allowedTags' | 'blockedTags', tag: string) => {
-+        setForm(prev => ({
-+            ...prev,
-+            [kind]: prev[kind].filter(t => t !== tag)
-+        }));
-     };
- 
-+    const handleCategoryToggle = (category: string) => {
-+        setForm(prev => ({
-+            ...prev,
-+            allowedLiveTvCategories: prev.allowedLiveTvCategories.includes(category)
-+                ? prev.allowedLiveTvCategories.filter(c => c !== category)
-+                : [ ...prev.allowedLiveTvCategories, category ]
-+        }));
-+    };
-+
-+    const liveTvUnratedBlocked = form.selectedUnratedItems.includes('LiveTvChannel');
-+
-     if (loading) {
-         return (
-             <Box display='flex' justifyContent='center' alignItems='center' p={4}>
-@@ -259,6 +426,23 @@ const SSOMappings = () => {
-                                             .map(i => i.label)
-                                             .join(', ') || 'None'}
-                                     </Typography>
-+                                    <Typography variant='body2' color='textSecondary'>
-+                                        <strong>Allowed Tags:</strong>{' '}
-+                                        {(mapping.allowedTags || []).length > 0
-+                                            ? `${mapping.allowedTags.length} tag(s)`
-+                                            : 'None'}
-+                                    </Typography>
-+                                    <Typography variant='body2' color='textSecondary'>
-+                                        <strong>Blocked Tags:</strong>{' '}
-+                                        {(mapping.blockedTags || []).length > 0
-+                                            ? `${mapping.blockedTags.length} tag(s)`
-+                                            : 'None'}
-+                                    </Typography>
-+                                    <Typography variant='body2' color='textSecondary'>
-+                                        <strong>Live TV Allowlist:</strong>{' '}
-+                                        {(mapping.allowedLiveTvCategories || []).length} categor{(mapping.allowedLiveTvCategories || []).length === 1 ? 'y' : 'ies'},{' '}
-+                                        {(mapping.allowedLiveTvChannels || []).length} channel{(mapping.allowedLiveTvChannels || []).length === 1 ? '' : 's'}
-+                                    </Typography>
-                                 </Stack>
-                             </Paper>
-                         </Grid>
-@@ -274,8 +458,8 @@ const SSOMappings = () => {
-                             label='OIDC Group / Role Name'
-                             variant='outlined'
-                             fullWidth
--                            value={groupName}
--                            onChange={e => setGroupName(e.target.value)}
-+                            value={form.groupName}
-+                            onChange={e => setForm(prev => ({ ...prev, groupName: e.target.value }))}
-                         />
- 
-                         <Box>
-@@ -283,13 +467,13 @@ const SSOMappings = () => {
-                             <FormControlLabel
-                                 control={
-                                     <Checkbox
--                                        checked={enableAllFolders}
--                                        onChange={e => setEnableAllFolders(e.target.checked)}
-+                                        checked={form.enableAllFolders}
-+                                        onChange={e => setForm(prev => ({ ...prev, enableAllFolders: e.target.checked }))}
-                                     />
-                                 }
-                                 label='Grant access to all libraries'
-                             />
--                            {!enableAllFolders && (
-+                            {!form.enableAllFolders && (
-                                 <Box sx={{ pl: 3, mt: 1 }}>
-                                     <Typography variant='body2' sx={{ mb: 1 }} color='textSecondary'>Select libraries to allow:</Typography>
-                                     <FormGroup>
-@@ -299,7 +483,7 @@ const SSOMappings = () => {
-                                                     <FormControlLabel
-                                                         control={
-                                                             <Checkbox
--                                                                checked={selectedFolders.includes(lib.id)}
-+                                                                checked={form.selectedFolders.includes(lib.id)}
-                                                                 onChange={() => handleFolderToggle(lib.id)}
-                                                             />
-                                                         }
-@@ -324,7 +508,7 @@ const SSOMappings = () => {
-                                             <FormControlLabel
-                                                 control={
-                                                     <Checkbox
--                                                        checked={!!selectedPermissions[perm.key]}
-+                                                        checked={!!form.selectedPermissions[perm.key]}
-                                                         onChange={() => handlePermissionToggle(perm.key)}
-                                                     />
-                                                 }
-@@ -350,7 +534,7 @@ const SSOMappings = () => {
-                                             <FormControlLabel
-                                                 control={
-                                                     <Checkbox
--                                                        checked={selectedUnratedItems.includes(item.key)}
-+                                                        checked={form.selectedUnratedItems.includes(item.key)}
-                                                         onChange={() => handleUnratedItemToggle(item.key)}
-                                                     />
-                                                 }
-@@ -360,12 +544,126 @@ const SSOMappings = () => {
-                                     ))}
-                                 </Grid>
-                             </FormGroup>
-+                            {liveTvUnratedBlocked && (
-+                                <Alert severity='info' sx={{ mt: 2 }}>
-+                                    Live TV is blocked when unrated. Use the Live TV allowlist below to approve specific channels or categories.
-+                                </Alert>
-+                            )}
-+                        </Box>
-+
-+                        <Divider />
-+
-+                        <TagChipEditor
-+                            label='Allowed Tags'
-+                            help='When set, library items must include at least one of these tags. Whitelisted Live TV bypasses this requirement.'
-+                            tags={form.allowedTags}
-+                            inputValue={form.allowedTagInput}
-+                            onInputChange={value => setForm(prev => ({ ...prev, allowedTagInput: value }))}
-+                            onAdd={() => addTag('allowedTags', 'allowedTagInput')}
-+                            onRemove={tag => removeTag('allowedTags', tag)}
-+                        />
-+
-+                        <TagChipEditor
-+                            label='Blocked Tags'
-+                            help='Hide any item (including Live TV) that carries one of these tags.'
-+                            tags={form.blockedTags}
-+                            inputValue={form.blockedTagInput}
-+                            onInputChange={value => setForm(prev => ({ ...prev, blockedTagInput: value }))}
-+                            onAdd={() => addTag('blockedTags', 'blockedTagInput')}
-+                            onRemove={tag => removeTag('blockedTags', tag)}
-+                        />
-+
-+                        <Divider />
-+
-+                        <Box sx={{ opacity: liveTvUnratedBlocked ? 1 : 0.55 }}>
-+                            <Typography variant='subtitle1' sx={{ fontWeight: 600, mb: 0.5 }}>Live TV Allowlist</Typography>
-+                            <Typography variant='body2' color='textSecondary' sx={{ mb: 2 }}>
-+                                {liveTvUnratedBlocked
-+                                    ? 'Channels and categories listed here remain visible when unrated Live TV is blocked.'
-+                                    : 'Enable “Live TV” under Block Unrated Items to use this allowlist.'}
-+                            </Typography>
-+
-+                            <Typography variant='subtitle2' sx={{ fontWeight: 600, mb: 1 }}>Categories</Typography>
-+                            <TextField
-+                                size='small'
-+                                fullWidth
-+                                label='Filter categories'
-+                                value={form.categoryFilter}
-+                                disabled={!liveTvUnratedBlocked}
-+                                onChange={e => setForm(prev => ({ ...prev, categoryFilter: e.target.value }))}
-+                                sx={{ mb: 1 }}
-+                            />
-+                            {liveTvCategories.length === 0 ? (
-+                                <Typography variant='body2' color='textSecondary' sx={{ mb: 2 }}>
-+                                    No channel categories found. M3U group-title values appear after a Live TV guide refresh.
-+                                </Typography>
-+                            ) : (
-+                                <FormGroup sx={{ mb: 2, maxHeight: 180, overflow: 'auto', border: 1, borderColor: 'divider', borderRadius: 1, p: 1 }}>
-+                                    <Grid container spacing={1}>
-+                                        {filteredCategories.map(category => (
-+                                            <Grid size={{ xs: 12, sm: 6 }} key={category}>
-+                                                <FormControlLabel
-+                                                    control={
-+                                                        <Checkbox
-+                                                            disabled={!liveTvUnratedBlocked}
-+                                                            checked={form.allowedLiveTvCategories.includes(category)}
-+                                                            onChange={() => handleCategoryToggle(category)}
-+                                                        />
-+                                                    }
-+                                                    label={category}
-+                                                />
-+                                            </Grid>
-+                                        ))}
-+                                    </Grid>
-+                                </FormGroup>
-+                            )}
-+
-+                            <Typography variant='subtitle2' sx={{ fontWeight: 600, mb: 1 }}>Individual Channels</Typography>
-+                            <Autocomplete
-+                                multiple
-+                                disabled={!liveTvUnratedBlocked}
-+                                options={liveTvChannels}
-+                                value={selectedChannelOptions}
-+                                onChange={(_, value) => setForm(prev => ({
-+                                    ...prev,
-+                                    allowedLiveTvChannels: value.map(c => normalizeChannelId(c.id))
-+                                }))}
-+                                groupBy={option => option.channelGroup?.trim() || 'Ungrouped'}
-+                                getOptionLabel={channelLabel}
-+                                isOptionEqualToValue={(a, b) => normalizeChannelId(a.id) === normalizeChannelId(b.id)}
-+                                filterOptions={(options, state) => {
-+                                    const q = state.inputValue.trim().toLowerCase();
-+                                    if (!q) return options;
-+                                    return options.filter(o =>
-+                                        o.name.toLowerCase().includes(q)
-+                                        || (o.number || '').toLowerCase().includes(q)
-+                                        || (o.channelGroup || '').toLowerCase().includes(q)
-+                                    );
-+                                }}
-+                                renderInput={params => (
-+                                    <TextField
-+                                        {...params}
-+                                        label='Search channels by name or number'
-+                                        placeholder='Type to search…'
-+                                    />
-+                                )}
-+                                renderOption={(props, option) => (
-+                                    <li {...props} key={option.id}>
-+                                        <Stack spacing={0}>
-+                                            <Typography variant='body2'>{channelLabel(option)}</Typography>
-+                                            {option.channelGroup ? (
-+                                                <Typography variant='caption' color='textSecondary'>{option.channelGroup}</Typography>
-+                                            ) : null}
-+                                        </Stack>
-+                                    </li>
-+                                )}
-+                            />
-                         </Box>
-                     </Stack>
-                 </DialogContent>
-                 <DialogActions>
-                     <Button onClick={handleDialogClose}>Cancel</Button>
--                    <Button onClick={handleDialogSave} variant='contained' color='primary' disabled={!groupName.trim()}>
-+                    <Button onClick={handleDialogSave} variant='contained' color='primary' disabled={!form.groupName.trim()}>
-                         Save
-                     </Button>
-                 </DialogActions>
