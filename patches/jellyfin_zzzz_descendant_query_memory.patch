@@ -38,12 +38,12 @@ index bfd0fac34a..3dfc5ab75c 100644
  
 -        var descendants = TraverseHierarchyDown(context, [parentId]);
 +        var hierarchical = context.AncestorIds
-+            .Where(a => a.ParentItemId == EF.Parameter(parentId))
++            .Where(a => a.ParentItemId.Equals(EF.Parameter(parentId)))
 +            .Select(a => a.ItemId);
  
 -        descendants.Remove(parentId);
 +        var directLinked = context.LinkedChildren
-+            .Where(lc => lc.ParentId == EF.Parameter(parentId))
++            .Where(lc => lc.ParentId.Equals(EF.Parameter(parentId)))
 +            .Select(lc => lc.ChildId);
  
 -        return descendants.AsQueryable();
@@ -74,7 +74,7 @@ index bfd0fac34a..3dfc5ab75c 100644
 -
 -        return descendants.AsQueryable();
 +        return context.AncestorIds
-+            .Where(a => a.ParentItemId == EF.Parameter(parentId))
++            .Where(a => a.ParentItemId.Equals(EF.Parameter(parentId)))
 +            .Select(a => a.ItemId);
      }
  
@@ -226,11 +226,11 @@ index bfd0fac34a..3dfc5ab75c 100644
 -
 -        return visited;
 +        var closureIds = context.AncestorIds
-+            .Where(a => a.ParentItemId == EF.Parameter(parentId))
++            .Where(a => a.ParentItemId.Equals(EF.Parameter(parentId)))
 +            .Select(a => a.ItemId);
 +
 +        var firstWave = context.LinkedChildren
-+            .Where(lc => lc.ParentId == EF.Parameter(parentId) || closureIds.Contains(lc.ParentId))
++            .Where(lc => lc.ParentId.Equals(EF.Parameter(parentId)) || closureIds.Contains(lc.ParentId))
 +            .Join(
 +                context.BaseItems.Where(b => b.IsFolder),
 +                lc => lc.ChildId,
