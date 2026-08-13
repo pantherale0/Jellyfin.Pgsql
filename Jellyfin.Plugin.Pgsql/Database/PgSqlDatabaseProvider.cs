@@ -153,6 +153,11 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
                 .HasFilter("\"DeviceId\" IS NOT NULL");
             entity.HasIndex(e => new { e.ChannelId, e.DatePlayed })
                 .HasFilter("\"ChannelId\" IS NOT NULL");
+            // Plugin-only: core has no SeriesId+DatePlayed index. Taste episode rollup
+            // and series-scoped playback reads filter this way. Keep it in OnModelCreating
+            // so Update_* sync cannot treat it as drift and drop it again (rc4 did).
+            entity.HasIndex(e => new { e.SeriesId, e.DatePlayed })
+                .HasFilter("\"SeriesId\" IS NOT NULL");
         });
 
         modelBuilder.Entity<PlaybackActivityDaily>(entity =>

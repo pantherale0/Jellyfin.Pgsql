@@ -63,13 +63,16 @@ internal static class PostgreSqlCompat
     private const string EnsureSearchSqlHelpersSql = """
         CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
+        -- Inlined to `ILIKE` so GIN/gist pg_trgm indexes on the haystack can be used.
+        -- STRICT: NULL haystack returns NULL (false in WHERE) without coalesce wrapping.
         CREATE OR REPLACE FUNCTION jellyfin_ilike(haystack text, pattern text)
         RETURNS boolean
         LANGUAGE sql
         IMMUTABLE
         PARALLEL SAFE
+        STRICT
         AS $func$
-          SELECT coalesce(haystack, '') ILIKE pattern ESCAPE '\'
+          SELECT haystack ILIKE pattern ESCAPE '\'
         $func$;
 
         -- Inlined to `<%` so GIN/gist pg_trgm indexes on the haystack can be used.

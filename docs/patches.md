@@ -98,7 +98,29 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Why** | On PostgreSQL the rc5 “names backed by an item the user can access” predicate re-evaluated the full accessible-item set per by-name row and congested search / people / genre listings. |
 | **Where** | `BaseItemRepository.QueryBuilding.cs` (`ApplyItemByNameAccessFiltering`) |
 | **How** | Project accessible item ids once, then `PeopleBaseItemMap` / `ItemValuesMap` `Contains` (hash semi-join) instead of `Any(Any(Any()))`. |
-| **Related** | Applies after other QueryBuilding patches. No public issue. |
+| **Related** | Applies after other QueryBuilding patches. Companion: `jellyfin_zzzz_people_query_perf`. No public issue. |
+
+### `jellyfin_zzzz_people_query_perf.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Batches `HasSegments` for all versions in `GetMediaSources`, and drops `Name.ToUpper().Contains` on `/Persons` name search. |
+| **Why** | Item details called `HasSegments` once per media source (new DbContext each time). People name search wrapped `Name` in `upper()`, so `IX_Peoples_Name_trgm` could not be used. Name collapse to one row per identity is already in `jellyfin_zz_person_provider_identity`. |
+| **Where** | `IMediaSegmentManager`, `MediaSegmentManager`, `BaseItem.GetMediaSources` / `GetVersionInfo`, `PeopleRepository.TranslateQuery` |
+| **How** | One `ItemId IN (...)` lookup, then a set membership check per version. `NameContains` uses `Name.Contains` without `ToUpper()`. Applies in the `zzzz_` band after `zzz_byname`. |
+| **Related** | `jellyfin_zz_person_provider_identity`, `jellyfin_background_media_qos` (`IX_MediaSegments_ItemId`). No public issue. |
+
+### `jellyfin_zzzz_descendant_query_memory.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Stops `DescendantQueryHelper` from materializing whole descendant / subtitle-folder id sets and handing them to EF as `AsQueryable()`. |
+| **Why** | Opening `/web/#/home` (and other recursive item queries) inlined one SQL literal per GUID, recompiled on every distinct set, and grew the compiled-query cache without bound — RSS jumping from hundreds of MB to the process ceiling. |
+| **Where** | `src/Jellyfin.Database/Jellyfin.Database.Implementations/DescendantQueryHelper.cs` |
+| **How** | Hierarchical descendants/ancestors stay as `AncestorIds` subqueries (`EF.Parameter` / `WhereOneOrMany`). BoxSet/Playlist links are walked only as the small set of linked *folders*, cycle-guarded. Call sites keep the same `IQueryable<Guid>` API. |
+| **Related** | Upstream [jellyfin#17602](https://github.com/jellyfin/jellyfin/issues/17602); approach from [PR #17607](https://github.com/jellyfin/jellyfin/pull/17607) without the disputed hop-limit rewrite. Applies in the `zzzz_` band (`zzzz_descendant` before `zzzz_people`). |
 
 ### `jellyfin_home_api_performance.patch`
 
@@ -417,8 +439,8 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **What** | Person identity keyed by provider IDs (`ProviderKey`) rather than name-only merging. |
 | **Why** | Name collisions duplicate or merge distinct people incorrectly. |
 | **Where** | `PersonIdentity`, `PeopleRepository`, `PeopleHelper`, NFO saver, people validation task, people migration, DTO mapping |
-| **How** | Persist provider key; validation/merge uses identity helper; `zz_` applies last among server patches. |
-| **Related** | No public issue. |
+| **How** | Persist provider key; validation/merge uses identity helper; `/Persons` collapse is a `GroupBy`/`Min(Id)` semi-join. `zz_` applies before `zzz_` / `zzzz_` follow-ups. |
+| **Related** | Companion listing/search tweaks: `jellyfin_zzzz_people_query_perf`. No public issue. |
 
 ### `jellyfin_plugin_load_context_deps.patch`
 

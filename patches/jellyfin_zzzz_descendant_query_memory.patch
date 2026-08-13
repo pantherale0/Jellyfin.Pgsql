@@ -1,0 +1,369 @@
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/DescendantQueryHelper.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/DescendantQueryHelper.cs
+index bfd0fac34a..3dfc5ab75c 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/DescendantQueryHelper.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/DescendantQueryHelper.cs
+@@ -4,13 +4,27 @@ using System.Linq;
+ using System.Linq.Expressions;
+ using Jellyfin.Database.Implementations.Entities;
+ using Jellyfin.Database.Implementations.MatchCriteria;
++using Microsoft.EntityFrameworkCore;
+ 
+ namespace Jellyfin.Database.Implementations;
+ 
+ /// <summary>
+-/// Provides methods for querying item hierarchies using iterative traversal.
+-/// Uses AncestorIds and LinkedChildren tables for parent-child traversal.
++/// Provides methods for querying item hierarchies using <see cref="AncestorId"/> and <see cref="LinkedChildEntity"/>.
+ /// </summary>
++/// <remarks>
++/// <para>
++/// <see cref="AncestorId"/> is a closure (one row per ancestor of the chain, plus collection folders),
++/// so hierarchical descendants and ancestors are a single index seek on <c>ParentItemId</c> /
++/// <c>ItemId</c>. <see cref="LinkedChildEntity"/> has no closure, so BoxSet/Playlist containers are
++/// walked iteratively — bounded by link edges, not library size, and cycle-guarded.
++/// </para>
++/// <para>
++/// Returned <see cref="IQueryable{T}"/> values are real database queries. They must not be built by
++/// materializing an id <see cref="HashSet{T}"/> and calling <c>AsQueryable()</c>: EF would inline
++/// one SQL literal per id, recompile on every distinct set, and grow the compiled-query cache without
++/// bound (see jellyfin/jellyfin#17602).
++/// </para>
++/// </remarks>
+ public static class DescendantQueryHelper
+ {
+     /// <summary>
+@@ -32,11 +46,28 @@ public static class DescendantQueryHelper
+     {
+         ArgumentNullException.ThrowIfNull(context);
+ 
+-        var descendants = TraverseHierarchyDown(context, [parentId]);
++        var hierarchical = context.AncestorIds
++            .Where(a => a.ParentItemId == EF.Parameter(parentId))
++            .Select(a => a.ItemId);
+ 
+-        descendants.Remove(parentId);
++        var directLinked = context.LinkedChildren
++            .Where(lc => lc.ParentId == EF.Parameter(parentId))
++            .Select(lc => lc.ChildId);
+ 
+-        return descendants.AsQueryable();
++        var linkedFolders = ResolveLinkedContainers(context, parentId);
++        if (linkedFolders.Count == 0)
++        {
++            return hierarchical.Union(directLinked);
++        }
++
++        var extraHierarchical = context.AncestorIds
++            .WhereOneOrMany(linkedFolders, a => a.ParentItemId)
++            .Select(a => a.ItemId);
++        var extraLinked = context.LinkedChildren
++            .WhereOneOrMany(linkedFolders, lc => lc.ParentId)
++            .Select(lc => lc.ChildId);
++
++        return hierarchical.Union(directLinked).Union(extraHierarchical).Union(extraLinked);
+     }
+ 
+     /// <summary>
+@@ -51,17 +82,15 @@ public static class DescendantQueryHelper
+     {
+         ArgumentNullException.ThrowIfNull(context);
+ 
+-        var descendants = TraverseHierarchyDownOwned(context, [parentId]);
+-
+-        descendants.Remove(parentId);
+-
+-        return descendants.AsQueryable();
++        return context.AncestorIds
++            .Where(a => a.ParentItemId == EF.Parameter(parentId))
++            .Select(a => a.ItemId);
+     }
+ 
+     /// <summary>
+     /// Gets all owned descendant IDs for multiple parent items in a single traversal.
+     /// More efficient than calling <see cref="GetOwnedDescendantIds"/> per parent because
+-    /// it performs one traversal for all seeds instead of N separate traversals.
++    /// it performs one query for all seeds instead of N separate traversals.
+     /// </summary>
+     /// <param name="context">Database context.</param>
+     /// <param name="parentIds">Parent item IDs.</param>
+@@ -77,11 +106,12 @@ public static class DescendantQueryHelper
+         }
+ 
+         var seedSet = new HashSet<Guid>(parentIds);
+-        var descendants = TraverseHierarchyDownOwned(context, seedSet);
++        var descendants = context.AncestorIds
++            .WhereOneOrMany(parentIds, e => e.ParentItemId)
++            .Select(e => e.ItemId)
++            .ToHashSet();
+ 
+-        // Remove the seed IDs — callers want only descendants
+         descendants.ExceptWith(seedSet);
+-
+         return descendants;
+     }
+ 
+@@ -96,33 +126,52 @@ public static class DescendantQueryHelper
+     {
+         ArgumentNullException.ThrowIfNull(context);
+         ArgumentNullException.ThrowIfNull(criteria);
+-        var matchingItemIds = criteria switch
++
++        var matchingItemIds = MatchingItemIds(context, criteria);
++
++        var hierarchyAncestors = context.AncestorIds
++            .Where(a => matchingItemIds.Contains(a.ItemId))
++            .Select(a => a.ParentItemId)
++            .Distinct();
++
++        var linkParents = ResolveLinkParents(context, matchingItemIds, hierarchyAncestors);
++        if (linkParents.Count == 0)
++        {
++            return hierarchyAncestors;
++        }
++
++        var linked = context.BaseItems
++            .WhereOneOrMany(linkParents, b => b.Id)
++            .Select(b => b.Id);
++
++        return hierarchyAncestors.Union(linked);
++    }
++
++    private static IQueryable<Guid> MatchingItemIds(JellyfinDbContext context, FolderMatchCriteria criteria)
++    {
++        return criteria switch
+         {
+             HasSubtitles => context.MediaStreamInfos
+                 .Where(ms => ms.StreamType == MediaStreamTypeEntity.Subtitle)
+                 .Select(ms => ms.ItemId)
+-                .Distinct()
+-                .ToHashSet(),
++                .Distinct(),
+             HasChapterImages => context.Chapters
+                 .Where(c => c.ImagePath != null)
+                 .Select(c => c.ItemId)
+-                .Distinct()
+-                .ToHashSet(),
+-            HasMediaStreamType m => GetMatchingMediaStreamItemIds(context, m),
++                .Distinct(),
++            HasMediaStreamType m => MatchingMediaStreamItemIds(context, m),
+             _ => throw new ArgumentOutOfRangeException(nameof(criteria), $"Unknown criteria type: {criteria.GetType().Name}")
+         };
+-
+-        var ancestors = TraverseHierarchyUp(context, matchingItemIds);
+-
+-        return ancestors.AsQueryable();
+     }
+ 
+-    private static HashSet<Guid> GetMatchingMediaStreamItemIds(JellyfinDbContext context, HasMediaStreamType criteria)
++    private static IQueryable<Guid> MatchingMediaStreamItemIds(JellyfinDbContext context, HasMediaStreamType criteria)
+     {
++        var hasUndetermined = criteria.Language.Contains("und");
++
+         var query = context.MediaStreamInfos
+             .Where(ms => ms.StreamType == criteria.StreamType
+                    && (criteria.Language.Contains(ms.Language)
+-                       || (criteria.Language.Contains("und") && string.IsNullOrEmpty(ms.Language)))); // und = undetermined
++                       || (hasUndetermined && string.IsNullOrEmpty(ms.Language))));
+ 
+         if (criteria.IsExternal.HasValue)
+         {
+@@ -130,130 +179,107 @@ public static class DescendantQueryHelper
+             query = query.Where(ms => ms.IsExternal == isExternal);
+         }
+ 
+-        return query.Select(ms => ms.ItemId).Distinct().ToHashSet();
++        return query.Select(ms => ms.ItemId).Distinct();
+     }
+ 
+     /// <summary>
+-    /// Traverses DOWN the hierarchy from parent folders to find all descendants.
++    /// Folders reachable as LinkedChildren from <paramref name="parentId"/> or from any
++    /// hierarchical descendant of it, then nested BoxSet/Playlist folders from those.
++    /// Result is the set of link-parent containers, not the media they contain.
+     /// </summary>
+-    private static HashSet<Guid> TraverseHierarchyDown(JellyfinDbContext context, ICollection<Guid> startIds)
++    private static List<Guid> ResolveLinkedContainers(JellyfinDbContext context, Guid parentId)
+     {
+-        var visited = new HashSet<Guid>(startIds);
+-        var folderStack = new HashSet<Guid>(startIds);
+-
+-        while (folderStack.Count != 0)
+-        {
+-            var currentFolders = folderStack.ToArray();
+-            folderStack.Clear();
+-
+-            var directChildren = context.AncestorIds
+-                .WhereOneOrMany(currentFolders, e => e.ParentItemId)
+-                .Select(e => e.ItemId)
+-                .ToArray();
+-
+-            var linkedChildren = context.LinkedChildren
+-                .WhereOneOrMany(currentFolders, e => e.ParentId)
+-                .Select(e => e.ChildId)
+-                .ToArray();
+-
+-            var allChildren = directChildren.Concat(linkedChildren).Distinct().ToArray();
+-
+-            if (allChildren.Length == 0)
+-            {
+-                break;
+-            }
+-
+-            var childFolders = context.BaseItems
+-                .WhereOneOrMany(allChildren, e => e.Id)
+-                .Where(e => e.IsFolder)
+-                .Select(e => e.Id)
+-                .ToHashSet();
+-
+-            foreach (var childId in allChildren)
+-            {
+-                if (visited.Add(childId) && childFolders.Contains(childId))
+-                {
+-                    folderStack.Add(childId);
+-                }
+-            }
+-        }
+-
+-        return visited;
++        var closureIds = context.AncestorIds
++            .Where(a => a.ParentItemId == EF.Parameter(parentId))
++            .Select(a => a.ItemId);
++
++        var firstWave = context.LinkedChildren
++            .Where(lc => lc.ParentId == EF.Parameter(parentId) || closureIds.Contains(lc.ParentId))
++            .Join(
++                context.BaseItems.Where(b => b.IsFolder),
++                lc => lc.ChildId,
++                b => b.Id,
++                (lc, b) => b.Id)
++            .Distinct()
++            .ToList();
++
++        return ExpandLinkedFolders(context, firstWave);
+     }
+ 
+     /// <summary>
+-    /// Traverses DOWN the hierarchy using only AncestorIds (ownership), not LinkedChildren.
++    /// BoxSet/Playlist ids that link to a matching item or to a folder ancestor of one,
++    /// then outer collections that link to those collections.
+     /// </summary>
+-    private static HashSet<Guid> TraverseHierarchyDownOwned(JellyfinDbContext context, ICollection<Guid> startIds)
++    private static List<Guid> ResolveLinkParents(
++        JellyfinDbContext context,
++        IQueryable<Guid> matchingItemIds,
++        IQueryable<Guid> hierarchyAncestors)
+     {
+-        var visited = new HashSet<Guid>(startIds);
+-        var folderStack = new HashSet<Guid>(startIds);
++        var firstWave = context.LinkedChildren
++            .Where(lc => matchingItemIds.Contains(lc.ChildId) || hierarchyAncestors.Contains(lc.ChildId))
++            .Select(lc => lc.ParentId)
++            .Distinct()
++            .ToList();
+ 
+-        while (folderStack.Count != 0)
++        if (firstWave.Count == 0)
+         {
+-            var currentFolders = folderStack.ToArray();
+-            folderStack.Clear();
+-
+-            var directChildren = context.AncestorIds
+-                .WhereOneOrMany(currentFolders, e => e.ParentItemId)
+-                .Select(e => e.ItemId)
+-                .ToArray();
++            return firstWave;
++        }
+ 
+-            if (directChildren.Length == 0)
+-            {
+-                break;
+-            }
++        var visited = new HashSet<Guid>(firstWave);
++        var frontier = firstWave;
+ 
+-            var childFolders = context.BaseItems
+-                .WhereOneOrMany(directChildren, e => e.Id)
+-                .Where(e => e.IsFolder)
+-                .Select(e => e.Id)
+-                .ToHashSet();
++        while (frontier.Count > 0)
++        {
++            var next = context.LinkedChildren
++                .WhereOneOrMany(frontier, lc => lc.ChildId)
++                .Select(lc => lc.ParentId)
++                .ToList();
+ 
+-            foreach (var childId in directChildren)
++            frontier = [];
++            foreach (var id in next)
+             {
+-                if (visited.Add(childId) && childFolders.Contains(childId))
++                if (visited.Add(id))
+                 {
+-                    folderStack.Add(childId);
++                    frontier.Add(id);
+                 }
+             }
+         }
+ 
+-        return visited;
++        return visited.ToList();
+     }
+ 
+-    /// <summary>
+-    /// Traverses UP the hierarchy from items to find all ancestor folders.
+-    /// </summary>
+-    private static HashSet<Guid> TraverseHierarchyUp(JellyfinDbContext context, ICollection<Guid> startIds)
++    private static List<Guid> ExpandLinkedFolders(JellyfinDbContext context, List<Guid> firstWave)
+     {
+-        var ancestors = new HashSet<Guid>();
+-        var itemStack = new HashSet<Guid>(startIds);
+-
+-        while (itemStack.Count != 0)
++        if (firstWave.Count == 0)
+         {
+-            var currentItems = itemStack.ToArray();
+-            itemStack.Clear();
+-
+-            var ancestorParents = context.AncestorIds
+-                .WhereOneOrMany(currentItems, e => e.ItemId)
+-                .Select(e => e.ParentItemId)
+-                .ToArray();
++            return firstWave;
++        }
+ 
+-            var linkedParents = context.LinkedChildren
+-                .WhereOneOrMany(currentItems, e => e.ChildId)
+-                .Select(e => e.ParentId)
+-                .ToArray();
++        var visited = new HashSet<Guid>(firstWave);
++        var frontier = firstWave;
+ 
+-            foreach (var parentId in ancestorParents.Concat(linkedParents))
++        while (frontier.Count > 0)
++        {
++            var next = context.LinkedChildren
++                .WhereOneOrMany(frontier, lc => lc.ParentId)
++                .Join(
++                    context.BaseItems.Where(b => b.IsFolder),
++                    lc => lc.ChildId,
++                    b => b.Id,
++                    (lc, b) => b.Id)
++                .ToList();
++
++            frontier = [];
++            foreach (var id in next)
+             {
+-                if (ancestors.Add(parentId))
++                if (visited.Add(id))
+                 {
+-                    itemStack.Add(parentId);
++                    frontier.Add(id);
+                 }
+             }
+         }
+ 
+-        return ancestors;
++        return visited.ToList();
+     }
+ }

@@ -38,8 +38,18 @@ internal sealed class TestDbContextFactory : IDbContextFactory<JellyfinDbContext
                 LANGUAGE sql
                 IMMUTABLE
                 PARALLEL SAFE
+                STRICT
                 AS $func$
-                  SELECT coalesce(haystack, '') ILIKE pattern ESCAPE '\'
+                  SELECT haystack ILIKE pattern ESCAPE '\'
+                $func$;
+                CREATE OR REPLACE FUNCTION jellyfin_word_similar(needle text, haystack text)
+                RETURNS boolean
+                LANGUAGE sql
+                IMMUTABLE
+                PARALLEL SAFE
+                STRICT
+                AS $func$
+                  SELECT needle <% haystack
                 $func$;
                 """;
             command.ExecuteNonQuery();

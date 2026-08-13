@@ -20,7 +20,7 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 **How:** Cache keys are per user and per view (never shared across users). Failures fall back to stock Jellyfin queries. Default Latest TTL is 120s (visible lag after scans).
 
-**Patches that help home/query load:** [`jellyfin_home_api_performance`](patches.md#jellyfin_home_api_performancepatch), [`jellyfin_unoptimized_query_fixes`](patches.md#jellyfin_unoptimized_query_fixespatch), [`jellyfin_query_split_userdata`](patches.md#jellyfin_query_split_userdatapatch), [`jellyfin_latest_tv_always_series`](patches.md#jellyfin_latest_tv_always_seriespatch), [`jellyfin_zzz_byname_access_semijoin`](patches.md#jellyfin_zzz_byname_access_semijoinpatch).
+**Patches that help home/query load:** [`jellyfin_home_api_performance`](patches.md#jellyfin_home_api_performancepatch), [`jellyfin_unoptimized_query_fixes`](patches.md#jellyfin_unoptimized_query_fixespatch), [`jellyfin_query_split_userdata`](patches.md#jellyfin_query_split_userdatapatch), [`jellyfin_latest_tv_always_series`](patches.md#jellyfin_latest_tv_always_seriespatch), [`jellyfin_zzz_byname_access_semijoin`](patches.md#jellyfin_zzz_byname_access_semijoinpatch), [`jellyfin_zzzz_descendant_query_memory`](patches.md#jellyfin_zzzz_descendant_query_memorypatch), [`jellyfin_zzzz_people_query_perf`](patches.md#jellyfin_zzzz_people_query_perfpatch).
 
 ## Fuzzy search (PostgreSQL)
 
@@ -28,7 +28,9 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 **Where:** [`Jellyfin.Plugin.Pgsql/Search/`](../Jellyfin.Plugin.Pgsql/Search/); patches [`jellyfin_search_performance`](patches.md#jellyfin_search_performancepatch), [`jellyfin_disable_sql_search_provider`](patches.md#jellyfin_disable_sql_search_providerpatch); web infinite scroll on search ([`jellyfin_web_user_search_infinite_scroll`](patches.md#jellyfin_web_user_search_infinite_scrollpatch)).
 
-**How:** Plugin registers an `ISearchProvider`. ApplicationHost prefers PostgreSQL similarity for “Similar” and excludes `SqlSearchProvider` from search parts. Fuzzy title matching uses the indexable pg_trgm `<%` operator (`jellyfin_word_similar`) with a per-transaction similarity threshold so `IX_BaseItems_CleanName_trgm` can be used. More Like This scores franchise titles the same way (one batched `<%` / `ILIKE` pass instead of a `word_similarity()` scan per source) and hides already-played candidates with a `UserData` lookup on the short candidate list rather than the rc5 folder-descendant `IsPlayed` SQL.
+**How:** Plugin registers an `ISearchProvider`. ApplicationHost prefers PostgreSQL similarity for “Similar” and excludes `SqlSearchProvider` from search parts. Fuzzy title matching uses only the indexable pg_trgm `<%` operator (`jellyfin_word_similar`) with a per-transaction similarity threshold so `IX_BaseItems_CleanName_trgm` can be used — Levenshtein and function-form `similarity()` are not OR’d into the same filter (those force a sequential scan). Total-count is computed from the page when it is not full; `CountAsync` of the union runs only when the page is full and the client asked for a total. Genre/tag `ILIKE` goes through `jellyfin_ilike`, which inlines to `haystack ILIKE pattern` so GIN trigram indexes on OriginalTitle / Genres / Tags can be used. More Like This scores franchise titles the same way (one batched `<%` / `ILIKE` pass instead of a `word_similarity()` scan per source) and hides already-played candidates with a `UserData` lookup on the short candidate list rather than the rc5 folder-descendant `IsPlayed` SQL.
+
+**People listings:** `/Persons` collapse (one row per provider key or lowercased name) lives in [`jellyfin_zz_person_provider_identity`](patches.md#jellyfin_zz_person_provider_identitypatch). Name-contains search and batched `HasSegments` on media-source builds are in [`jellyfin_zzzz_people_query_perf`](patches.md#jellyfin_zzzz_people_query_perfpatch).
 
 ## Single Sign-On (OIDC) and RBAC
 
@@ -117,7 +119,7 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 **What:** Library scan, media-segment extraction, and chapter-image work yield while playback is active and use more conservative unset concurrency defaults so the server stays usable under load.
 
-**Where:** [`jellyfin_background_media_qos`](patches.md#jellyfin_background_media_qospatch); PG index `IX_MediaSegments_ItemId` (`AddMediaSegmentsItemIdIndex`, restored after the rc5 sync drop by `RestoreMediaSegmentsItemIdIndex`).
+**Where:** [`jellyfin_background_media_qos`](patches.md#jellyfin_background_media_qospatch); PG index `IX_MediaSegments_ItemId` (`AddMediaSegmentsItemIdIndex`, restored after the rc5 sync drop by `RestoreMediaSegmentsItemIdIndex`); batched `HasSegments` in [`jellyfin_zzzz_people_query_perf`](patches.md#jellyfin_zzzz_people_query_perfpatch).
 
 **How:** Raise throughput explicitly via `LibraryScanFanoutConcurrency` and/or `ParallelImageEncodingLimit` in server config if overnight jobs should use more cores. Segment extraction skips items that already have provider rows (`forceOverwrite: false`). Extreme scan memory/OOM is unchanged — see [known issues](known-issues.md).
 
