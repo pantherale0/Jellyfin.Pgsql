@@ -48,6 +48,16 @@ public sealed class TasteEvalAndServeTests
     }
 
     [Fact]
+    public void HasBothBinaryClasses_RequiresPositiveAndNegative()
+    {
+        Assert.False(TasteEvalMetrics.HasBothBinaryClasses([]));
+        Assert.False(TasteEvalMetrics.HasBothBinaryClasses([true, true]));
+        Assert.False(TasteEvalMetrics.HasBothBinaryClasses([false, false]));
+        Assert.True(TasteEvalMetrics.HasBothBinaryClasses([true, false]));
+        Assert.True(TasteEvalMetrics.HasBothBinaryClasses([false, true, true]));
+    }
+
+    [Fact]
     public void PrecisionAtK_UsesMinOfKAndN()
     {
         var ranked = new (float Score, bool Label)[]

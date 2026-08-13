@@ -212,25 +212,42 @@ public sealed class TasteShadowNeuralTrainer
         var modelPath = Path.Join(modelDirectory, fileName);
         mlContext.Model.Save(model, trainData.Schema, modelPath);
 
-        var holdoutData = mlContext.Data.LoadFromEnumerable(holdout);
-        var predictions = model.Transform(holdoutData);
-        var metrics = mlContext.BinaryClassification.Evaluate(
-            predictions,
-            labelColumnName: nameof(TasteNeuralExample.Label),
-            scoreColumnName: "Score");
+        double? auc = null;
+        double? accuracy = null;
+        double precisionAt10 = 0;
+        double meanPrecisionAt10 = 0;
+        var notes = "Weighted training (completion + For You impressions + hard negatives)";
+        if (holdout.Count > 0)
+        {
+            var holdoutData = mlContext.Data.LoadFromEnumerable(holdout);
+            var predictions = model.Transform(holdoutData);
+            if (TasteEvalMetrics.HasBothBinaryClasses(holdout.Select(e => e.Label)))
+            {
+                var metrics = mlContext.BinaryClassification.Evaluate(
+                    predictions,
+                    labelColumnName: nameof(TasteNeuralExample.Label),
+                    scoreColumnName: "Score");
+                auc = metrics.AreaUnderRocCurve;
+                accuracy = metrics.Accuracy;
+            }
+            else
+            {
+                notes += "; AUC skipped (holdout has a single class)";
+            }
 
-        var scored = mlContext.Data
-            .CreateEnumerable<TasteNeuralPrediction>(predictions, reuseRowObject: false)
-            .Select((p, i) => (Score: p.Probability, Label: holdout[i].Label, UserId: holdoutRows[i].UserId))
-            .ToList();
-        var rankedGlobal = scored
-            .OrderByDescending(x => x.Score)
-            .Select(x => (x.Score, x.Label))
-            .ToList();
-        var precisionAt10 = TasteEvalMetrics.PrecisionAtK(rankedGlobal, 10);
-        var meanPrecisionAt10 = TasteEvalMetrics.MeanPrecisionAtK(
-            scored.Select(x => (x.UserId, x.Score, x.Label)),
-            10);
+            var scored = mlContext.Data
+                .CreateEnumerable<TasteNeuralPrediction>(predictions, reuseRowObject: false)
+                .Select((p, i) => (Score: p.Probability, Label: holdout[i].Label, UserId: holdoutRows[i].UserId))
+                .ToList();
+            var rankedGlobal = scored
+                .OrderByDescending(x => x.Score)
+                .Select(x => (x.Score, x.Label))
+                .ToList();
+            precisionAt10 = TasteEvalMetrics.PrecisionAtK(rankedGlobal, 10);
+            meanPrecisionAt10 = TasteEvalMetrics.MeanPrecisionAtK(
+                scored.Select(x => (x.UserId, x.Score, x.Label)),
+                10);
+        }
 
         var engage = await TasteForYouEngageMetrics.ComputeAsync(
                 context,
@@ -249,11 +266,11 @@ public sealed class TasteShadowNeuralTrainer
             PositiveCount = examples.Count(e => e.Example.Label),
             NegativeCount = examples.Count(e => !e.Example.Label),
             HoldoutCount = holdout.Count,
-            Accuracy = metrics.Accuracy,
-            Auc = metrics.AreaUnderRocCurve,
+            Accuracy = accuracy,
+            Auc = auc,
             PrecisionAt10 = precisionAt10,
             ModelPath = fileName,
-            Notes = "Weighted training (completion + For You impressions + hard negatives)",
+            Notes = notes,
             SplitType = TasteEvalMetrics.SplitTypeTimeBased,
             HoldoutFraction = TasteEvalMetrics.DefaultHoldoutFraction,
             HoldoutWindowStart = split.WindowStart,
