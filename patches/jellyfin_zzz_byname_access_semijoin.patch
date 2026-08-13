@@ -1,0 +1,43 @@
+diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
+--- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
++++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
+@@ -706,26 +706,33 @@ public sealed partial class BaseItemRepository
+             context.BaseItems.AsNoTracking(),
+             new InternalItemsQuery(filter.User) { TopParentIds = topParentIds, IncludeOwnedItems = true });
+ 
++        // Semi-join (IN/EXISTS over a projected id set) rather than nested Any(Any(Any())).
++        // Postgres can hash the reachable names/values once; the previous shape re-evaluated
++        // the full accessible-item query per person/genre/studio row.
++        var accessibleItemIds = accessibleItems.Select(i => i.Id);
++
+         var personType = _itemTypeLookup.BaseItemKindNames[BaseItemKind.Person];
+         if (itemByNameTypes.Contains(personType))
+         {
+-            baseQuery = baseQuery.Where(e => e.Type != personType
+-                || context.Peoples.Any(p => p.Name == e.Name
+-                    && context.PeopleBaseItemMap.Any(m => m.PeopleId == p.Id && accessibleItems.Any(i => i.Id == m.ItemId))));
++            var allowedPersonNames = context.PeopleBaseItemMap
++                .Where(m => accessibleItemIds.Contains(m.ItemId))
++                .Select(m => m.People.Name);
++            baseQuery = baseQuery.Where(e => e.Type != personType || allowedPersonNames.Contains(e.Name));
+         }
+ 
+         foreach (var (kind, valueTypes) in _itemByNameValueTypes)
+         {
+             var typeName = _itemTypeLookup.BaseItemKindNames[kind];
+             if (!itemByNameTypes.Contains(typeName))
+             {
+                 continue;
+             }
+ 
+-            baseQuery = baseQuery.Where(e => e.Type != typeName
+-                || context.ItemValues.Any(v => valueTypes.Contains(v.Type) && v.CleanValue == e.CleanName
+-                    && context.ItemValuesMap.Any(m => m.ItemValueId == v.ItemValueId && accessibleItems.Any(i => i.Id == m.ItemId))));
++            var allowedValues = context.ItemValuesMap
++                .Where(m => valueTypes.Contains(m.ItemValue.Type) && accessibleItemIds.Contains(m.ItemId))
++                .Select(m => m.ItemValue.CleanValue);
++            baseQuery = baseQuery.Where(e => e.Type != typeName || allowedValues.Contains(e.CleanName));
+         }
+ 
+         return baseQuery;
+     }

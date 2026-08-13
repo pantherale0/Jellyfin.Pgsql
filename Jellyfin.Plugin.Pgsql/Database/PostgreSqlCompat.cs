@@ -71,6 +71,18 @@ internal static class PostgreSqlCompat
         AS $func$
           SELECT coalesce(haystack, '') ILIKE pattern ESCAPE '\'
         $func$;
+
+        -- Inlined to `<%` so GIN/gist pg_trgm indexes on the haystack can be used.
+        -- Threshold comes from pg_trgm.word_similarity_threshold (set per transaction).
+        CREATE OR REPLACE FUNCTION jellyfin_word_similar(needle text, haystack text)
+        RETURNS boolean
+        LANGUAGE sql
+        IMMUTABLE
+        PARALLEL SAFE
+        STRICT
+        AS $func$
+          SELECT needle <% haystack
+        $func$;
         """;
 
     public static void EnsureUuidAggregates(string connectionString, ILogger logger)
@@ -114,7 +126,7 @@ internal static class PostgreSqlCompat
 
             if (logger.IsEnabled(LogLevel.Debug))
             {
-                logger.LogDebug("Ensured PostgreSQL search SQL helpers (jellyfin_ilike, pg_trgm) are available");
+                logger.LogDebug("Ensured PostgreSQL search SQL helpers (jellyfin_ilike, jellyfin_word_similar, pg_trgm) are available");
             }
         }
         catch (NpgsqlException ex)

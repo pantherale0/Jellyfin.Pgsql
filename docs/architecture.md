@@ -97,7 +97,7 @@ Inside `Jellyfin.Plugin.Pgsql`:
 | `Database/` | Npgsql provider, connection string / timeout, backups |
 | `Migrations/` | PostgreSQL EF migrations (synced from Jellyfin + fork entities) |
 | `Query/` | Latest/Resume/NextUp cache and PG-optimised Latest SQL |
-| `Search/` | Trigram / franchise-oriented fuzzy search provider |
+| `Search/` | Trigram / franchise-oriented fuzzy search (`<%` / `jellyfin_word_similar` on GIN) |
 | `Taste/` | Profile rebuild, scoring, recommendations |
 | `Api/` | Taste, Emby import, user admin, plugin stats controllers |
 | `Admin/EmbyImport/` | Emby SQLite userdata import pipeline |

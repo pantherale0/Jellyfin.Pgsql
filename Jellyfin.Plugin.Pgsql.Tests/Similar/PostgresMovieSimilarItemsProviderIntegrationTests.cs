@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Plugin.Pgsql.Query;
 using Jellyfin.Plugin.Pgsql.Similar;
 using Jellyfin.Plugin.Pgsql.Taste;
 using Jellyfin.Plugin.Pgsql.Tests.Infrastructure;
@@ -133,6 +134,10 @@ public sealed class PostgresMovieSimilarItemsProviderIntegrationTests
             itemTypeLookup.Object,
             config.Object,
             tasteStore,
+            new TasteNeuralModelStore(
+                factory,
+                new MemoryQueryResultCache(),
+                NullLogger<TasteNeuralModelStore>.Instance),
             NullLogger<PostgresMovieSimilarItemsProvider>.Instance);
     }
 

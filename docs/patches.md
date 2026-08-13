@@ -87,7 +87,18 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Why** | Large libraries on Postgres amplify N+1 and unindexed filters that were tolerable on SQLite. |
 | **Where** | `LibraryManager`, `ItemsController`, `TVSeriesManager`, `BaseItemRepository.QueryBuilding`, `LinkedChildrenService`, query-index migration |
 | **How** | Query rewrites (including user-data sort join helpers) + `AddQueryPerformanceIndexes` migration (mirrored to PG via sync). Played/resumable TranslateQuery shapes from earlier forks were superseded by upstream rc4 query rewrites. |
-| **Related** | Motivated by scale reports such as upstream [JPVenson#34](https://github.com/JPVenson/Jellyfin.Pgsql/issues/34) / [#35](https://github.com/JPVenson/Jellyfin.Pgsql/issues/35) (context, not a direct fix ticket). |
+| **Related** | Motivated by scale reports such as upstream [JPVenson#34](https://github.com/JPVenson/Jellyfin.Pgsql/issues/34) / [#35](https://github.com/JPVenson/Jellyfin.Pgsql/issues/35) (context, not a direct fix ticket). Companion: `jellyfin_zzz_byname_access_semijoin`. |
+
+### `jellyfin_zzz_byname_access_semijoin.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Rewrites rc5 people/genre/studio/artist access filtering from nested correlated `EXISTS` to a semi-join over reachable item ids. |
+| **Why** | On PostgreSQL the rc5 “names backed by an item the user can access” predicate re-evaluated the full accessible-item set per by-name row and congested search / people / genre listings. |
+| **Where** | `BaseItemRepository.QueryBuilding.cs` (`ApplyItemByNameAccessFiltering`) |
+| **How** | Project accessible item ids once, then `PeopleBaseItemMap` / `ItemValuesMap` `Contains` (hash semi-join) instead of `Any(Any(Any()))`. |
+| **Related** | Applies after other QueryBuilding patches. No public issue. |
 
 ### `jellyfin_home_api_performance.patch`
 
@@ -351,7 +362,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **What** | Caps background scan/segment/chapter work and yields while clients are playing so the API stays responsive. |
 | **Why** | Library scan, media-segment extraction, and chapter-image ffmpeg work saturated CPU/IO/DB and made the server sluggish. |
 | **Where** | `BackgroundMediaWorkGate`, `LimitedConcurrencyLibraryScheduler`, `MediaSegmentExtractionTask`, `MediaSegmentManager`, `ChapterManager`, `ChapterImagesTask`, `MediaEncoder`, `ImageProcessor`, `ApplicationHost` |
-| **How** | Shared gate delays under `NowPlayingItem` and limits concurrency (from `ParallelImageEncodingLimit` or `ProcessorCount/4`); unset scan fanout uses `ProcessorCount/2`; segment task skips providers that already have rows and bulk-inserts; chapter task pages and skips videos that already have images; chapter extract (task + in-scan) goes through the gate; unset image-encoding pools default to `ProcessorCount/4`. Companion PG index: `IX_MediaSegments_ItemId` (`AddMediaSegmentsItemIdIndex`). |
+| **How** | Shared gate delays under `NowPlayingItem` and limits concurrency (from `ParallelImageEncodingLimit` or `ProcessorCount/4`); unset scan fanout uses `ProcessorCount/2`; segment task skips providers that already have rows and bulk-inserts; chapter task pages and skips videos that already have images; chapter extract (task + in-scan) goes through the gate; unset image-encoding pools default to `ProcessorCount/4`. Companion PG index: `IX_MediaSegments_ItemId` (`AddMediaSegmentsItemIdIndex`). `Update_12_0-rc5` dropped that index as false drift; `RestoreMediaSegmentsItemIdIndex` puts it back and plugin `OnModelCreating` now owns it so later syncs keep it. |
 | **Related** | No public issue. Does not fix scan OOM ([JPVenson#36](https://github.com/JPVenson/Jellyfin.Pgsql/issues/36)). |
 
 ### `jellyfin_library_image_parental.patch`
@@ -462,7 +473,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | | |
 |---|---|
 | **Target** | `jellyfin` |
-| **What** | DB entities for `UserTasteProfile` and `TasteModelEvalRun`. |
+| **What** | DB entities for `UserTasteProfile` and `TasteModelEvalRun` (including time-split and For You engage-rate columns). |
 | **Why** | Persist taste vectors and admin eval runs in the system DB (synced to PG). |
 | **Where** | Entity classes + `JellyfinDbContext` |
 | **How** | Schema only; logic lives in the plugin. |
@@ -528,7 +539,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | | |
 |---|---|
 | **Target** | `jellyfin-web` |
-| **What** | Admin Reports → Taste models shadow-eval UI (late `z_` patch). |
+| **What** | Admin Reports → Taste models shadow-eval UI (late `z_` patch): Mean P@10, For You engage rate, time-split, and neural-loaded vs serving-flag chips. |
 | **Why** | Evaluate recommendation model quality without exposing metrics on user APIs. |
 | **Where** | `tasteModels/**`, reports drawer/route |
 | **How** | Admin-only dashboard calling `TasteAdminController`. |

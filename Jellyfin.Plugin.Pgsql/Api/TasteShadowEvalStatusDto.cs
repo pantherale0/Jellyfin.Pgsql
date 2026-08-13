@@ -13,4 +13,22 @@ public sealed class TasteShadowEvalStatusDto
 
     /// <summary>Gets or sets a value indicating whether neural scores may affect live ranking.</summary>
     public bool NeuralServingEnabled { get; set; }
+
+    /// <summary>Gets or sets a value indicating whether a shadow model is loaded for inference.</summary>
+    public bool NeuralModelLoaded { get; set; }
+
+    /// <summary>Gets or sets the loaded model filename, or null.</summary>
+    public string? NeuralModelPath { get; set; }
+
+    /// <summary>Gets or sets the live matured For You impression→engage rate.</summary>
+    public double? ForYouEngageRate { get; set; }
+
+    /// <summary>Gets or sets the For You engage window in days.</summary>
+    public int ForYouEngageWindowDays { get; set; }
+
+    /// <summary>Gets or sets the matured distinct For You impression count.</summary>
+    public int ForYouImpressionCount { get; set; }
+
+    /// <summary>Gets or sets the matured For You engage count.</summary>
+    public int ForYouEngageCount { get; set; }
 }

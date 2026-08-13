@@ -45,6 +45,7 @@ public sealed class PostgresSeriesSimilarItemsProvider : ILocalSimilarItemsProvi
     private readonly IItemQueryHelpers _queryHelpers;
     private readonly IItemTypeLookup _itemTypeLookup;
     private readonly UserTasteProfileStore _tasteProfileStore;
+    private readonly TasteNeuralModelStore _modelStore;
     private readonly ILogger<PostgresSeriesSimilarItemsProvider> _logger;
 
     /// <summary>
@@ -54,18 +55,21 @@ public sealed class PostgresSeriesSimilarItemsProvider : ILocalSimilarItemsProvi
     /// <param name="queryHelpers">Shared item query helpers.</param>
     /// <param name="itemTypeLookup">Base item type name lookup.</param>
     /// <param name="tasteProfileStore">User taste profile cache.</param>
+    /// <param name="modelStore">Loaded shadow model store.</param>
     /// <param name="logger">Logger.</param>
     public PostgresSeriesSimilarItemsProvider(
         IDbContextFactory<JellyfinDbContext> dbProvider,
         IItemQueryHelpers queryHelpers,
         IItemTypeLookup itemTypeLookup,
         UserTasteProfileStore tasteProfileStore,
+        TasteNeuralModelStore modelStore,
         ILogger<PostgresSeriesSimilarItemsProvider> logger)
     {
         _dbProvider = dbProvider;
         _queryHelpers = queryHelpers;
         _itemTypeLookup = itemTypeLookup;
         _tasteProfileStore = tasteProfileStore;
+        _modelStore = modelStore;
         _logger = logger;
     }
 
@@ -109,19 +113,34 @@ public sealed class PostgresSeriesSimilarItemsProvider : ILocalSimilarItemsProvi
                 ExcludeItemIds = [.. query.ExcludeItemIds, item.Id],
                 DtoOptions = dtoOptions,
                 EnableGroupByMetadataKey = true,
-                EnableTotalRecordCount = false,
-                IsPlayed = false
+                EnableTotalRecordCount = false
             };
 
             _queryHelpers.PrepareFilterQuery(filter);
             var baseQuery = _queryHelpers.PrepareItemQuery(context, filter);
             baseQuery = _queryHelpers.TranslateQuery(baseQuery, context, filter);
 
+            HashSet<Guid> playedSet = [];
+            if (query.User is not null)
+            {
+                var userId = query.User.Id;
+                var playedIds = await context.UserData.AsNoTracking()
+                    .Where(ud => ud.UserId == userId && ud.Played && topIds.Contains(ud.ItemId))
+                    .Select(ud => ud.ItemId)
+                    .ToListAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                playedSet = playedIds.ToHashSet();
+            }
+
             var accessible = await baseQuery
                 .WhereOneOrMany(topIds, e => e.Id)
                 .Select(e => new { e.Id, e.PresentationUniqueKey, e.ProductionYear, e.SortName })
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
+            if (playedSet.Count > 0)
+            {
+                accessible = accessible.Where(a => !playedSet.Contains(a.Id)).ToList();
+            }
 
             var orderedIds = accessible
                 .OrderByDescending(a => scores.GetValueOrDefault(a.Id))
@@ -276,8 +295,6 @@ public sealed class PostgresSeriesSimilarItemsProvider : ILocalSimilarItemsProvi
             return;
         }
 
-        _ = options.UseNeuralForServing;
-
         var profile = await _tasteProfileStore.TryGetAsync(userId.Value, cancellationToken).ConfigureAwait(false);
         if (profile is null)
         {
@@ -285,9 +302,13 @@ public sealed class PostgresSeriesSimilarItemsProvider : ILocalSimilarItemsProvi
         }
 
         var candidateIds = scores.Keys.ToList();
-        var featuresByItem = await TasteCandidateFeatureLoader.LoadAsync(context, candidateIds, cancellationToken)
+        var seriesType = _itemTypeLookup.BaseItemKindNames[BaseItemKind.Series];
+        _itemTypeLookup.BaseItemKindNames.TryGetValue(BaseItemKind.BoxSet, out var boxSetType);
+        var featuresByItem = await TasteCandidateFeatureLoader
+            .LoadAsync(context, candidateIds, cancellationToken, seriesType, boxSetType)
             .ConfigureAwait(false);
         var cap = Math.Min(options.MaxTasteBonus, SeriesSimilarityWeights.MaxTasteBonus);
+        var neural = TasteNeuralScoring.TryPredict(_modelStore, profile.Value.Payload, featuresByItem, candidateIds);
         foreach (var candidateId in candidateIds)
         {
             if (!featuresByItem.TryGetValue(candidateId, out var features))
@@ -295,7 +316,12 @@ public sealed class PostgresSeriesSimilarItemsProvider : ILocalSimilarItemsProvi
                 continue;
             }
 
-            var bonus = LinearTasteScorer.ComputeBonus(profile.Value.Payload, features, cap);
+            var linear = LinearTasteScorer.ComputeBonus(profile.Value.Payload, features, cap);
+            var bonus = TasteScoreCombiner.Blend(
+                linear,
+                TasteNeuralScoring.Probability(neural, candidateId),
+                options.UseNeuralForServing,
+                cap);
             if (bonus > 0)
             {
                 scores[candidateId] = scores[candidateId] + bonus;

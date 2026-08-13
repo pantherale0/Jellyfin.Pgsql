@@ -162,6 +162,53 @@ public sealed class TasteRecommendationServiceTests
     }
 
     [PostgresTestFact]
+    public async Task Materialize_ConfirmedImpressionSkip_LowersScore()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+        await SeedCorpusAsync(dbContext).ConfigureAwait(false);
+        await RebuildProfileAsync(dbContext).ConfigureAwait(false);
+
+        await dbContext.UserTasteRecommendationImpressions
+            .Where(i => i.UserId == TasteUserId)
+            .ExecuteDeleteAsync()
+            .ConfigureAwait(false);
+
+        var service = CreateService(factory, new FakeQueryResultCache());
+        await service.RebuildUserFeedsAsync(TasteUserId, default).ConfigureAwait(false);
+
+        var before = await dbContext.UserTasteRecommendations.AsNoTracking()
+            .Where(r => r.UserId == TasteUserId && r.ItemId == UnplayedComedyId && r.ItemType == "Movie")
+            .Select(r => r.Score)
+            .FirstOrDefaultAsync()
+            .ConfigureAwait(false);
+        Assert.True(before > 0);
+
+        dbContext.UserTasteRecommendationImpressions.Add(new UserTasteRecommendationImpression
+        {
+            Id = Guid.NewGuid(),
+            UserId = TasteUserId,
+            ItemId = UnplayedComedyId,
+            ItemType = "Movie",
+            Rank = 0,
+            ServedAt = DateTime.UtcNow.AddDays(-20)
+        });
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        await service.RebuildUserFeedsAsync(TasteUserId, default).ConfigureAwait(false);
+        var after = await dbContext.UserTasteRecommendations.AsNoTracking()
+            .Where(r => r.UserId == TasteUserId && r.ItemId == UnplayedComedyId && r.ItemType == "Movie")
+            .Select(r => r.Score)
+            .FirstOrDefaultAsync()
+            .ConfigureAwait(false);
+
+        Assert.True(after < before);
+        Assert.Equal(before - LinearTasteScorer.ImpressionSkipPenalty, after);
+    }
+
+    [PostgresTestFact]
     public async Task Serve_RecordsImpressions_AndDedupesWithin24Hours()
     {
         Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
@@ -280,6 +327,7 @@ public sealed class TasteRecommendationServiceTests
         await dbContext.UserData.Where(u => u.UserId == TasteUserId).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.UserTasteProfiles.Where(p => p.UserId == TasteUserId).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.UserTasteRecommendations.Where(r => r.UserId == TasteUserId).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.UserTasteRecommendationImpressions.Where(i => i.UserId == TasteUserId).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.ItemValuesMap.Where(m => ids.Contains(m.ItemId)).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.BaseItems.Where(i => ids.Contains(i.Id)).ExecuteDeleteAsync().ConfigureAwait(false);
 
@@ -350,8 +398,14 @@ public sealed class TasteRecommendationServiceTests
             tasteStore,
             CreateItemTypeLookup().Object,
             cache,
+            CreateModelStore(factory, cache),
             NullLogger<TasteRecommendationService>.Instance);
     }
+
+    private static TasteNeuralModelStore CreateModelStore(
+        TestDbContextFactory factory,
+        IQueryResultCache cache)
+        => new(factory, cache, NullLogger<TasteNeuralModelStore>.Instance);
 
     private sealed class FakeQueryResultCache : IQueryResultCache
     {

@@ -36,6 +36,18 @@ public static class PgSearchDbFunctions
         => throw new InvalidOperationException("This method is for EF Core SQL translation only.");
 
     /// <summary>
+    /// Indexable pg_trgm <c>&lt;%</c> (word-similarity) operator. Uses
+    /// <c>pg_trgm.word_similarity_threshold</c>; set that with
+    /// <see cref="PgTrgmThresholdScope"/> before executing the query.
+    /// </summary>
+    /// <param name="source">Needle / query fragment.</param>
+    /// <param name="target">Haystack title or value.</param>
+    /// <returns>True when word similarity meets the session threshold.</returns>
+    [DbFunction("jellyfin_word_similar")]
+    public static bool IsWordSimilar(string source, string? target)
+        => throw new InvalidOperationException("This method is for EF Core SQL translation only.");
+
+    /// <summary>
     /// pg_trgm <c>similarity(source, target)</c>.
     /// </summary>
     /// <param name="source">Haystack.</param>

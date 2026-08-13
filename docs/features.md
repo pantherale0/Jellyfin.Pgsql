@@ -20,7 +20,7 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 **How:** Cache keys are per user and per view (never shared across users). Failures fall back to stock Jellyfin queries. Default Latest TTL is 120s (visible lag after scans).
 
-**Patches that help home/query load:** [`jellyfin_home_api_performance`](patches.md#jellyfin_home_api_performancepatch), [`jellyfin_unoptimized_query_fixes`](patches.md#jellyfin_unoptimized_query_fixespatch), [`jellyfin_query_split_userdata`](patches.md#jellyfin_query_split_userdatapatch), [`jellyfin_latest_tv_always_series`](patches.md#jellyfin_latest_tv_always_seriespatch).
+**Patches that help home/query load:** [`jellyfin_home_api_performance`](patches.md#jellyfin_home_api_performancepatch), [`jellyfin_unoptimized_query_fixes`](patches.md#jellyfin_unoptimized_query_fixespatch), [`jellyfin_query_split_userdata`](patches.md#jellyfin_query_split_userdatapatch), [`jellyfin_latest_tv_always_series`](patches.md#jellyfin_latest_tv_always_seriespatch), [`jellyfin_zzz_byname_access_semijoin`](patches.md#jellyfin_zzz_byname_access_semijoinpatch).
 
 ## Fuzzy search (PostgreSQL)
 
@@ -28,7 +28,7 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 **Where:** [`Jellyfin.Plugin.Pgsql/Search/`](../Jellyfin.Plugin.Pgsql/Search/); patches [`jellyfin_search_performance`](patches.md#jellyfin_search_performancepatch), [`jellyfin_disable_sql_search_provider`](patches.md#jellyfin_disable_sql_search_providerpatch); web infinite scroll on search ([`jellyfin_web_user_search_infinite_scroll`](patches.md#jellyfin_web_user_search_infinite_scrollpatch)).
 
-**How:** Plugin registers an `ISearchProvider`. ApplicationHost prefers PostgreSQL similarity for “Similar” and excludes `SqlSearchProvider` from search parts.
+**How:** Plugin registers an `ISearchProvider`. ApplicationHost prefers PostgreSQL similarity for “Similar” and excludes `SqlSearchProvider` from search parts. Fuzzy title matching uses the indexable pg_trgm `<%` operator (`jellyfin_word_similar`) with a per-transaction similarity threshold so `IX_BaseItems_CleanName_trgm` can be used. More Like This scores franchise titles the same way (one batched `<%` / `ILIKE` pass instead of a `word_similarity()` scan per source) and hides already-played candidates with a `UserData` lookup on the short candidate list rather than the rc5 folder-descendant `IsPlayed` SQL.
 
 ## Single Sign-On (OIDC) and RBAC
 
@@ -66,7 +66,7 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 ## Taste profiles, For You, and taste models
 
-**What:** Per-user taste profiles and precomputed recommendations; home “For You” section; user taste identity UI; admin shadow-eval reports for taste models. Engagement weighting uses completion-aware playback (short abandons are negatives; deep watches/favorites are positives) and For You impression logs so recommended→engage is boosted and recommended→abandon is penalized more strongly. The neural model remains shadow-only (`UseNeuralForServing` off).
+**What:** Per-user taste profiles and precomputed recommendations; home “For You” section; user taste identity UI; admin shadow-eval reports for taste models. Engagement weighting uses completion-aware playback (short abandons are negatives; deep watches/favorites are positives) and For You impression logs so recommended→engage is boosted and recommended→abandon is penalized more strongly. Profiles also store year / runtime / parental bands, movie-vs-series share, writers, box-set membership, original language, and production country; live linear scoring (For You, similar, match badges) applies soft penalties outside those bands, boosts writer / collection / language / country overlap, and demotes confirmed For You skips (impressed, no later engagement, after a 14-day confirm window). Shadow neural training uses the same axes, mixes genre-matched hard catalog negatives with random ones, treats confirmed impression skips as weak negatives, and applies recency decay on labeled sample weights. Evaluation uses a time-based holdout (newest 20% of the event span), global Precision@10, per-user Mean Precision@10, and a matured For You impression→engage rate (14-day window). When `Pgsql_TASTE_NEURAL_SERVE` is on and a shadow zip loads, live For You / similar / match scores blend 50% neural with 50% linear and fall back to linear if the model is missing or corrupt. Neural serving stays **off** by default.
 
 **Where:**
 
@@ -117,7 +117,7 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 **What:** Library scan, media-segment extraction, and chapter-image work yield while playback is active and use more conservative unset concurrency defaults so the server stays usable under load.
 
-**Where:** [`jellyfin_background_media_qos`](patches.md#jellyfin_background_media_qospatch); PG index migration `AddMediaSegmentsItemIdIndex` (`IX_MediaSegments_ItemId`).
+**Where:** [`jellyfin_background_media_qos`](patches.md#jellyfin_background_media_qospatch); PG index `IX_MediaSegments_ItemId` (`AddMediaSegmentsItemIdIndex`, restored after the rc5 sync drop by `RestoreMediaSegmentsItemIdIndex`).
 
 **How:** Raise throughput explicitly via `LibraryScanFanoutConcurrency` and/or `ParallelImageEncodingLimit` in server config if overnight jobs should use more cores. Segment extraction skips items that already have provider rows (`forceOverwrite: false`). Extreme scan memory/OOM is unchanged — see [known issues](known-issues.md).
 

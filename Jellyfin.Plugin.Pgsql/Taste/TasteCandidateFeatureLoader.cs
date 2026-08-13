@@ -19,20 +19,43 @@ public static class TasteCandidateFeatureLoader
     [
         nameof(PersonKind.Director),
         nameof(PersonKind.Actor),
-        nameof(PersonKind.GuestStar)
+        nameof(PersonKind.GuestStar),
+        nameof(PersonKind.Writer)
     ];
 
     /// <summary>
-    /// Loads genre/tag/studio/people/rating features for the given items.
+    /// Splits a pipe-delimited metadata field into distinct tokens.
+    /// </summary>
+    /// <param name="raw">Raw stored value.</param>
+    /// <returns>Distinct trimmed tokens.</returns>
+    public static IReadOnlyList<string> SplitPipeValues(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return [];
+        }
+
+        return raw.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(v => v.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Loads genre/tag/studio/people/rating/year/runtime/parental/language/box-set features for the given items.
     /// </summary>
     /// <param name="context">Database context.</param>
     /// <param name="itemIds">Item ids.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="seriesType">Optional BaseItem type name for series; when null, <see cref="TasteCandidateFeatures.IsSeries"/> is false.</param>
+    /// <param name="boxSetType">Optional BoxSet BaseItem type name for collection membership.</param>
     /// <returns>Features keyed by item id.</returns>
     public static async Task<Dictionary<Guid, TasteCandidateFeatures>> LoadAsync(
         JellyfinDbContext context,
         IReadOnlyList<Guid> itemIds,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? seriesType = null,
+        string? boxSetType = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         if (itemIds.Count == 0)
@@ -56,11 +79,36 @@ public static class TasteCandidateFeatureLoader
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        var ratings = await context.BaseItems.AsNoTracking()
+        var baseRows = await context.BaseItems.AsNoTracking()
             .Where(i => idList.Contains(i.Id))
-            .Select(i => new { i.Id, i.CommunityRating })
+            .Select(i => new
+            {
+                i.Id,
+                i.CommunityRating,
+                i.ProductionYear,
+                i.RunTimeTicks,
+                i.InheritedParentalRatingValue,
+                i.Type,
+                i.OriginalLanguage,
+                i.ProductionLocations
+            })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
+
+        List<(Guid ItemId, Guid BoxSetId)> boxSetRows = [];
+        if (!string.IsNullOrWhiteSpace(boxSetType))
+        {
+            var loaded = await context.LinkedChildren.AsNoTracking()
+                .Where(lc => idList.Contains(lc.ChildId) && lc.ChildType == LinkedChildType.Manual)
+                .Join(
+                    context.BaseItems.AsNoTracking().Where(bs => bs.Type == boxSetType),
+                    lc => lc.ParentId,
+                    bs => bs.Id,
+                    (lc, bs) => new { ItemId = lc.ChildId, BoxSetId = lc.ParentId })
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            boxSetRows = loaded.Select(r => (r.ItemId, r.BoxSetId)).ToList();
+        }
 
         var result = new Dictionary<Guid, TasteCandidateFeatures>();
         foreach (var id in idList)
@@ -89,12 +137,40 @@ public static class TasteCandidateFeatureLoader
                 .Distinct()
                 .ToList();
             var actors = peopleRows
-                .Where(r => r.ItemId == id && r.PersonType != nameof(PersonKind.Director))
+                .Where(r => r.ItemId == id
+                    && (r.PersonType == nameof(PersonKind.Actor) || r.PersonType == nameof(PersonKind.GuestStar)))
                 .Select(r => r.PeopleId)
                 .Distinct()
                 .ToList();
-            var rating = ratings.FirstOrDefault(r => r.Id == id)?.CommunityRating;
-            result[id] = new TasteCandidateFeatures(genres, tags, studios, directors, actors, rating);
+            var writers = peopleRows
+                .Where(r => r.ItemId == id && r.PersonType == nameof(PersonKind.Writer))
+                .Select(r => r.PeopleId)
+                .Distinct()
+                .ToList();
+            var boxSets = boxSetRows
+                .Where(r => r.ItemId == id)
+                .Select(r => r.BoxSetId)
+                .Distinct()
+                .ToList();
+            var baseRow = baseRows.FirstOrDefault(r => r.Id == id);
+            var isSeries = seriesType is not null
+                && baseRow?.Type is string itemType
+                && string.Equals(itemType, seriesType, StringComparison.Ordinal);
+            result[id] = new TasteCandidateFeatures(
+                genres,
+                tags,
+                studios,
+                directors,
+                actors,
+                baseRow?.CommunityRating,
+                baseRow?.ProductionYear,
+                baseRow?.RunTimeTicks,
+                baseRow?.InheritedParentalRatingValue,
+                isSeries,
+                writers,
+                boxSets,
+                baseRow?.OriginalLanguage,
+                SplitPipeValues(baseRow?.ProductionLocations));
         }
 
         return result;

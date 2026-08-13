@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations;
+using MediaBrowser.Controller.Persistence;
 using Microsoft.EntityFrameworkCore;
 
 namespace Jellyfin.Plugin.Pgsql.Taste;
@@ -19,18 +21,26 @@ public sealed class TasteMatchService
 
     private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
     private readonly UserTasteProfileStore _profileStore;
+    private readonly IItemTypeLookup _itemTypeLookup;
+    private readonly TasteNeuralModelStore _modelStore;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TasteMatchService"/> class.
     /// </summary>
     /// <param name="dbProvider">Database context factory.</param>
     /// <param name="profileStore">Taste profile store.</param>
+    /// <param name="itemTypeLookup">Item type name lookup.</param>
+    /// <param name="modelStore">Loaded shadow model store.</param>
     public TasteMatchService(
         IDbContextFactory<JellyfinDbContext> dbProvider,
-        UserTasteProfileStore profileStore)
+        UserTasteProfileStore profileStore,
+        IItemTypeLookup itemTypeLookup,
+        TasteNeuralModelStore modelStore)
     {
         _dbProvider = dbProvider;
         _profileStore = profileStore;
+        _itemTypeLookup = itemTypeLookup;
+        _modelStore = modelStore;
     }
 
     /// <summary>
@@ -64,9 +74,17 @@ public sealed class TasteMatchService
             var featureIdsByRequestId = await ResolveFeatureItemIdsAsync(context, capped, cancellationToken)
                 .ConfigureAwait(false);
             var featureIds = featureIdsByRequestId.Values.Distinct().ToList();
-            var features = await TasteCandidateFeatureLoader.LoadAsync(context, featureIds, cancellationToken)
+            _itemTypeLookup.BaseItemKindNames.TryGetValue(BaseItemKind.Series, out var seriesTypeName);
+            _itemTypeLookup.BaseItemKindNames.TryGetValue(BaseItemKind.BoxSet, out var boxSetTypeName);
+            var features = await TasteCandidateFeatureLoader
+                .LoadAsync(context, featureIds, cancellationToken, seriesTypeName, boxSetTypeName)
                 .ConfigureAwait(false);
             var options = TasteOptions.Current;
+            var neural = TasteNeuralScoring.TryPredict(
+                _modelStore,
+                profile.Value.Payload,
+                features,
+                featureIds);
             var scored = new List<(Guid Id, int Score)>();
             foreach (var requestId in capped)
             {
@@ -80,7 +98,12 @@ public sealed class TasteMatchService
                     continue;
                 }
 
-                var score = LinearTasteScorer.ComputeBonus(profile.Value.Payload, candidate, options.MaxTasteBonus);
+                var linear = LinearTasteScorer.ComputeBonus(profile.Value.Payload, candidate, options.MaxTasteBonus);
+                var score = TasteScoreCombiner.Blend(
+                    linear,
+                    TasteNeuralScoring.Probability(neural, featureId),
+                    options.UseNeuralForServing,
+                    options.MaxTasteBonus);
                 if (score > 0)
                 {
                     scored.Add((requestId, score));

@@ -93,7 +93,32 @@ public sealed class TasteEngagementWeightsTests
         var input = Base(maxTicks: NinetySeconds, runTime: TwoHourRuntime, lastPlayedDaysAgo: 20, wasRecommended: true);
         Assert.True(TasteEngagementWeights.TryGetNeuralExample(input, Now, out var positive, out var weight));
         Assert.False(positive);
-        Assert.Equal(TasteEngagementWeights.NeuralRecAbandonWeight, weight);
+        var expected = TasteEngagementWeights.ApplyNeuralRecencyDecay(
+            TasteEngagementWeights.NeuralRecAbandonWeight,
+            Now.AddDays(-20),
+            Now);
+        Assert.Equal(expected, weight);
+    }
+
+    [Fact]
+    public void ApplyNeuralRecencyDecay_AgesSampleWeight()
+    {
+        var fresh = TasteEngagementWeights.ApplyNeuralRecencyDecay(2f, Now, Now);
+        var aged = TasteEngagementWeights.ApplyNeuralRecencyDecay(2f, Now.AddDays(-180), Now);
+        Assert.Equal(2f, fresh);
+        Assert.True(aged < fresh);
+        Assert.InRange(aged, 0.7f, 0.8f);
+    }
+
+    [Fact]
+    public void IsConfirmedImpressionSkip_RequiresConfirmWindow()
+    {
+        Assert.False(TasteEngagementWeights.IsConfirmedImpressionSkip(Now.AddDays(-3), Now));
+        Assert.True(TasteEngagementWeights.IsConfirmedImpressionSkip(Now.AddDays(-14), Now));
+        Assert.Equal(
+            TasteEngagementWeights.AbandonNoReturnDays,
+            TasteEngagementWeights.ImpressionSkipConfirmDays);
+        Assert.Equal(0.75f, TasteEngagementWeights.NeuralImpressionSkipWeight);
     }
 
     [Fact]

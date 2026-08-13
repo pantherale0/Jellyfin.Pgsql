@@ -36,5 +36,5 @@ public sealed class PostgresSeriesSimilarItemsProviderUnitTests
     }
 
     private static PostgresSeriesSimilarItemsProvider CreateProviderWithoutDeps()
-        => new(null!, null!, null!, null!, null!);
+        => new(null!, null!, null!, null!, null!, null!);
 }

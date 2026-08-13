@@ -55,6 +55,7 @@ public sealed class PostgresMovieSimilarItemsProvider :
     private readonly IItemTypeLookup _itemTypeLookup;
     private readonly IServerConfigurationManager _serverConfigurationManager;
     private readonly UserTasteProfileStore _tasteProfileStore;
+    private readonly TasteNeuralModelStore _modelStore;
     private readonly ILogger<PostgresMovieSimilarItemsProvider> _logger;
 
     /// <summary>
@@ -65,6 +66,7 @@ public sealed class PostgresMovieSimilarItemsProvider :
     /// <param name="itemTypeLookup">Base item type name lookup.</param>
     /// <param name="serverConfigurationManager">Server configuration.</param>
     /// <param name="tasteProfileStore">User taste profile cache.</param>
+    /// <param name="modelStore">Loaded shadow model store.</param>
     /// <param name="logger">Logger.</param>
     public PostgresMovieSimilarItemsProvider(
         IDbContextFactory<JellyfinDbContext> dbProvider,
@@ -72,6 +74,7 @@ public sealed class PostgresMovieSimilarItemsProvider :
         IItemTypeLookup itemTypeLookup,
         IServerConfigurationManager serverConfigurationManager,
         UserTasteProfileStore tasteProfileStore,
+        TasteNeuralModelStore modelStore,
         ILogger<PostgresMovieSimilarItemsProvider> logger)
     {
         _dbProvider = dbProvider;
@@ -79,6 +82,7 @@ public sealed class PostgresMovieSimilarItemsProvider :
         _itemTypeLookup = itemTypeLookup;
         _serverConfigurationManager = serverConfigurationManager;
         _tasteProfileStore = tasteProfileStore;
+        _modelStore = modelStore;
         _logger = logger;
     }
 
@@ -176,8 +180,7 @@ public sealed class PostgresMovieSimilarItemsProvider :
                 DtoOptions = dtoOptions,
                 EnableGroupByMetadataKey = true,
                 EnableTotalRecordCount = false,
-                IsMovie = true,
-                IsPlayed = false
+                IsMovie = true
             };
 
             _queryHelpers.PrepareFilterQuery(filter);
@@ -185,6 +188,12 @@ public sealed class PostgresMovieSimilarItemsProvider :
             baseQuery = _queryHelpers.TranslateQuery(baseQuery, context, filter);
 
             var allCandidateIdsList = allCandidateIds.ToList();
+            var playedIds = await LoadPlayedItemIdsAsync(
+                    context,
+                    query.User?.Id,
+                    allCandidateIdsList,
+                    cancellationToken)
+                .ConfigureAwait(false);
             var accessibleItems = await baseQuery
                 .WhereOneOrMany(allCandidateIdsList, e => e.Id)
                 .Select(e => new
@@ -196,6 +205,10 @@ public sealed class PostgresMovieSimilarItemsProvider :
                 })
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
+            if (playedIds.Count > 0)
+            {
+                accessibleItems = accessibleItems.Where(x => !playedIds.Contains(x.Id)).ToList();
+            }
 
             var allOrderedIds = new HashSet<Guid>();
             var perSourceOrderedIds = new Dictionary<Guid, List<Guid>>();
@@ -339,9 +352,6 @@ public sealed class PostgresMovieSimilarItemsProvider :
             return;
         }
 
-        // UseNeuralForServing stays gated off: shadow models do not affect live ranking in this pass.
-        _ = options.UseNeuralForServing;
-
         var profile = await _tasteProfileStore.TryGetAsync(userId.Value, cancellationToken).ConfigureAwait(false);
         if (profile is null)
         {
@@ -354,8 +364,14 @@ public sealed class PostgresMovieSimilarItemsProvider :
             return;
         }
 
-        var featuresByItem = await TasteCandidateFeatureLoader.LoadAsync(context, candidateIds, cancellationToken)
+        _itemTypeLookup.BaseItemKindNames.TryGetValue(BaseItemKind.BoxSet, out var boxSetTypeName);
+        var featuresByItem = await TasteCandidateFeatureLoader.LoadAsync(
+                context,
+                candidateIds,
+                cancellationToken,
+                boxSetType: boxSetTypeName)
             .ConfigureAwait(false);
+        var neural = TasteNeuralScoring.TryPredict(_modelStore, profile.Value.Payload, featuresByItem, candidateIds);
         foreach (var scoreMap in result.Values)
         {
             foreach (var candidateId in scoreMap.Keys.ToList())
@@ -365,7 +381,12 @@ public sealed class PostgresMovieSimilarItemsProvider :
                     continue;
                 }
 
-                var bonus = LinearTasteScorer.ComputeBonus(profile.Value.Payload, features, options.MaxTasteBonus);
+                var linear = LinearTasteScorer.ComputeBonus(profile.Value.Payload, features, options.MaxTasteBonus);
+                var bonus = TasteScoreCombiner.Blend(
+                    linear,
+                    TasteNeuralScoring.Probability(neural, candidateId),
+                    options.UseNeuralForServing,
+                    options.MaxTasteBonus);
                 if (bonus > 0)
                 {
                     scoreMap[candidateId] = scoreMap[candidateId] + bonus;
@@ -444,6 +465,7 @@ public sealed class PostgresMovieSimilarItemsProvider :
     {
         var movieType = _itemTypeLookup.BaseItemKindNames[BaseItemKind.Movie];
         var trailerType = _itemTypeLookup.BaseItemKindNames[BaseItemKind.Trailer];
+        var types = new[] { movieType, trailerType };
 
         var sources = await context.BaseItems.AsNoTracking()
             .Where(e => sourceIds.Contains(e.Id))
@@ -451,68 +473,127 @@ public sealed class PostgresMovieSimilarItemsProvider :
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        // MaxBatchSourceItems keeps per-source SQL fan-out bounded.
-        foreach (var source in sources)
+        var namedSources = sources
+            .Where(s => !string.IsNullOrWhiteSpace(s.CleanName))
+            .ToList();
+        if (namedSources.Count == 0)
         {
-            if (string.IsNullOrWhiteSpace(source.CleanName))
+            return;
+        }
+
+        var sourceIdsArr = namedSources.Select(s => s.Id).ToArray();
+        var sourceNamesArr = namedSources.Select(s => s.CleanName!).ToArray();
+
+        var tokenSourceIds = new List<Guid>();
+        var tokenValues = new List<string>();
+        foreach (var source in namedSources)
+        {
+            foreach (var token in FranchiseTitleHelper.ExtractSignificantTokens(source.CleanName))
+            {
+                tokenSourceIds.Add(source.Id);
+                tokenValues.Add(EscapeLikeLiteral(token));
+            }
+        }
+
+        await using var threshold = await PgTrgmThresholdScope
+            .BeginAsync(context, MovieSimilarityWeights.TitleWordSimilarityFloor, cancellationToken)
+            .ConfigureAwait(false);
+
+        // `<%` (via SET LOCAL threshold) can use IX_BaseItems_CleanName_trgm instead of
+        // evaluating word_similarity() against every movie/trailer.
+        var similarRows = await context.Database
+            .SqlQuery<FranchiseSimilarityRow>($"""
+                SELECT s.sid AS "SourceId", e."Id" AS "CandidateId",
+                       word_similarity(s.sname, e."CleanName") AS "Similarity"
+                FROM unnest({sourceIdsArr}, {sourceNamesArr}) AS s(sid, sname)
+                JOIN "BaseItems" e
+                  ON e."Type" = ANY({types})
+                 AND e."CleanName" IS NOT NULL
+                 AND NOT e."IsVirtualItem"
+                 AND e."Id" <> s.sid
+                 AND s.sname <% e."CleanName"
+                """)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        foreach (var row in similarRows)
+        {
+            if (!result.TryGetValue(row.SourceId, out var scoreMap))
             {
                 continue;
             }
 
-            var sourceName = source.CleanName;
-            var scoreMap = result[source.Id];
-
-            var similarRows = await context.BaseItems.AsNoTracking()
-                .Where(e => (e.Type == movieType || e.Type == trailerType)
-                    && e.CleanName != null
-                    && !e.IsVirtualItem
-                    && e.Id != source.Id
-                    && PgSearchDbFunctions.WordSimilarity(sourceName, e.CleanName)
-                        >= MovieSimilarityWeights.TitleWordSimilarityFloor)
-                .Select(e => new
-                {
-                    e.Id,
-                    Similarity = PgSearchDbFunctions.WordSimilarity(sourceName, e.CleanName!)
-                })
-                .ToListAsync(cancellationToken)
-                .ConfigureAwait(false);
-
-            foreach (var row in similarRows)
+            var franchiseScore = FranchiseTitleHelper.FranchiseScoreFromWordSimilarity(row.Similarity);
+            if (franchiseScore > 0)
             {
-                var franchiseScore = FranchiseTitleHelper.FranchiseScoreFromWordSimilarity(row.Similarity);
-                if (franchiseScore > 0)
-                {
-                    ApplyFranchiseBand(scoreMap, row.Id, franchiseScore);
-                }
-            }
-
-            var sourceTokens = FranchiseTitleHelper.ExtractSignificantTokens(sourceName);
-            foreach (var token in sourceTokens)
-            {
-                var tokenMatches = await context.BaseItems.AsNoTracking()
-                    .Where(e => (e.Type == movieType || e.Type == trailerType)
-                        && e.CleanName != null
-                        && !e.IsVirtualItem
-                        && e.Id != source.Id
-                        && e.CleanName.Contains(token))
-                    .Select(e => new { e.Id, e.CleanName })
-                    .ToListAsync(cancellationToken)
-                    .ConfigureAwait(false);
-
-                foreach (var match in tokenMatches)
-                {
-                    if (!FranchiseTitleHelper.SharesSignificantToken(sourceName, match.CleanName))
-                    {
-                        continue;
-                    }
-
-                    ApplyFranchiseBand(
-                        scoreMap,
-                        match.Id,
-                        MovieSimilarityWeights.SharedSignificantTokenWeight);
-                }
+                ApplyFranchiseBand(scoreMap, row.CandidateId, franchiseScore);
             }
         }
+
+        if (tokenSourceIds.Count == 0)
+        {
+            await threshold.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var tokenSourceIdsArr = tokenSourceIds.ToArray();
+        var tokenValuesArr = tokenValues.ToArray();
+        var tokenRows = await context.Database
+            .SqlQuery<FranchiseTokenRow>($"""
+                SELECT s.sid AS "SourceId", e."Id" AS "CandidateId", e."CleanName" AS "CleanName"
+                FROM unnest({tokenSourceIdsArr}, {tokenValuesArr}) AS s(sid, token)
+                JOIN "BaseItems" e
+                  ON e."Type" = ANY({types})
+                 AND e."CleanName" IS NOT NULL
+                 AND NOT e."IsVirtualItem"
+                 AND e."Id" <> s.sid
+                 AND e."CleanName" ILIKE ('%' || s.token || '%') ESCAPE '\'
+                """)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var sourceNameById = namedSources.ToDictionary(s => s.Id, s => s.CleanName!);
+        foreach (var row in tokenRows)
+        {
+            if (!result.TryGetValue(row.SourceId, out var scoreMap)
+                || !sourceNameById.TryGetValue(row.SourceId, out var sourceName)
+                || !FranchiseTitleHelper.SharesSignificantToken(sourceName, row.CleanName))
+            {
+                continue;
+            }
+
+            ApplyFranchiseBand(
+                scoreMap,
+                row.CandidateId,
+                MovieSimilarityWeights.SharedSignificantTokenWeight);
+        }
+
+        await threshold.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static string EscapeLikeLiteral(string value)
+        => value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("%", "\\%", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal);
+
+    private static async Task<HashSet<Guid>> LoadPlayedItemIdsAsync(
+        JellyfinDbContext context,
+        Guid? userId,
+        List<Guid> candidateIds,
+        CancellationToken cancellationToken)
+    {
+        if (userId is null || candidateIds.Count == 0)
+        {
+            return [];
+        }
+
+        var played = await context.UserData.AsNoTracking()
+            .Where(ud => ud.UserId == userId && ud.Played && candidateIds.Contains(ud.ItemId))
+            .Select(ud => ud.ItemId)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return played.ToHashSet();
     }
 
     private static async Task ApplyItemValueScoresAsync(
@@ -551,12 +632,15 @@ public sealed class PostgresMovieSimilarItemsProvider :
         }
     }
 
-    private static async Task ApplyPersonScoresAsync(
+    private async Task ApplyPersonScoresAsync(
         List<Guid> sourceIds,
         JellyfinDbContext context,
         Dictionary<Guid, Dictionary<Guid, int>> result,
         CancellationToken cancellationToken)
     {
+        var movieType = _itemTypeLookup.BaseItemKindNames[BaseItemKind.Movie];
+        var trailerType = _itemTypeLookup.BaseItemKindNames[BaseItemKind.Trailer];
+
         var personSourceRows = await context.PeopleBaseItemMap.AsNoTracking()
             .Where(m => sourceIds.Contains(m.ItemId) && ScoredPersonTypes.Contains(m.People.PersonType))
             .Select(m => new { m.ItemId, m.PeopleId, m.People.PersonType })
@@ -568,11 +652,10 @@ public sealed class PostgresMovieSimilarItemsProvider :
             return;
         }
 
+        var peopleIds = personSourceRows.Select(r => r.PeopleId).Distinct().ToList();
         var personCandidateRows = await context.PeopleBaseItemMap.AsNoTracking()
-            .Where(m => context.PeopleBaseItemMap
-                .Where(s => sourceIds.Contains(s.ItemId) && ScoredPersonTypes.Contains(s.People.PersonType))
-                .Select(s => s.PeopleId)
-                .Contains(m.PeopleId))
+            .Where(m => peopleIds.Contains(m.PeopleId)
+                && (m.Item.Type == movieType || m.Item.Type == trailerType))
             .Select(m => new { m.ItemId, m.PeopleId })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -646,5 +729,23 @@ public sealed class PostgresMovieSimilarItemsProvider :
         {
             _logger.LogWarning(ex, "Movie similarity scoring phase '{Phase}' failed; continuing with remaining signals", phaseName);
         }
+    }
+
+    private sealed class FranchiseSimilarityRow
+    {
+        public Guid SourceId { get; set; }
+
+        public Guid CandidateId { get; set; }
+
+        public double Similarity { get; set; }
+    }
+
+    private sealed class FranchiseTokenRow
+    {
+        public Guid SourceId { get; set; }
+
+        public Guid CandidateId { get; set; }
+
+        public string? CleanName { get; set; }
     }
 }

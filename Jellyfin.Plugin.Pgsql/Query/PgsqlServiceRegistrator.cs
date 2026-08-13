@@ -43,6 +43,7 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
             // Server layout changed; keep the core repository untouched, but still wire taste feeds.
             serviceCollection.AddSingleton<IQueryResultCache>(_ => new MemoryQueryResultCache());
             serviceCollection.AddSingleton<IQueryCacheVersionStore>(_ => new MemoryQueryCacheVersionStore());
+            serviceCollection.AddSingleton<TasteNeuralModelStore>();
             serviceCollection.AddSingleton<TasteRecommendationService>();
             return;
         }
@@ -50,6 +51,7 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<QueryRuntimeStats>();
         serviceCollection.AddSingleton<IQueryCacheVersionStore>(CreateVersionStore);
         serviceCollection.AddSingleton<IQueryResultCache>(CreateCache);
+        serviceCollection.AddSingleton<TasteNeuralModelStore>();
         serviceCollection.AddSingleton<TasteRecommendationService>();
 
         serviceCollection.AddSingleton(sp => new CachedItemLoader(

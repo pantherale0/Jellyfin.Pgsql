@@ -848,6 +848,8 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("ItemId");
+
                     b.ToTable("MediaSegments");
                 });
 
@@ -1366,8 +1368,32 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int?>("ForYouEngageCount")
+                        .HasColumnType("integer");
+
+                    b.Property<double?>("ForYouEngageRate")
+                        .HasColumnType("double precision");
+
+                    b.Property<int?>("ForYouEngageWindowDays")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("ForYouImpressionCount")
+                        .HasColumnType("integer");
+
                     b.Property<int>("HoldoutCount")
                         .HasColumnType("integer");
+
+                    b.Property<double?>("HoldoutFraction")
+                        .HasColumnType("double precision");
+
+                    b.Property<DateTime?>("HoldoutWindowEnd")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("HoldoutWindowStart")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<double?>("MeanPrecisionAt10")
+                        .HasColumnType("double precision");
 
                     b.Property<string>("ModelPath")
                         .HasColumnType("text");
@@ -1383,6 +1409,12 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.Property<double?>("PrecisionAt10")
                         .HasColumnType("double precision");
+
+                    b.Property<string>("SplitType")
+                        .HasColumnType("text");
+
+                    b.Property<int>("TrainCount")
+                        .HasColumnType("integer");
 
                     b.Property<long>("TrainDurationMs")
                         .HasColumnType("bigint");

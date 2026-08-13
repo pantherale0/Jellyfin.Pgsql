@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Plugin.Pgsql.Query;
 using Jellyfin.Plugin.Pgsql.Similar;
 using Jellyfin.Plugin.Pgsql.Taste;
 using Jellyfin.Plugin.Pgsql.Tests.Infrastructure;
@@ -15,6 +16,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
+using DbLinkedChildType = Jellyfin.Database.Implementations.Entities.LinkedChildType;
 
 namespace Jellyfin.Plugin.Pgsql.Tests.Taste;
 
@@ -118,6 +120,253 @@ public sealed class UserTasteProfileIntegrationTests
     }
 
     [PostgresTestFact]
+    public async Task Rebuild_WritesYearRuntimeParentalAndSeriesShare()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+
+        var userId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000bs01");
+        var movieId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000bs11");
+        var seriesId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000bs12");
+        var comedyGenre = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000bsa1");
+        var runtime = TimeSpan.FromMinutes(110).Ticks;
+
+        Guid[] users = [userId];
+        Guid[] items = [movieId, seriesId];
+        await dbContext.UserData.Where(u => users.Contains(u.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.UserTasteProfiles.Where(p => users.Contains(p.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.ItemValuesMap.Where(m => items.Contains(m.ItemId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.BaseItems.Where(i => items.Contains(i.Id)).ExecuteDeleteAsync().ConfigureAwait(false);
+
+        if (!await dbContext.Users.AnyAsync(u => u.Id == userId).ConfigureAwait(false))
+        {
+            dbContext.Users.Add(new User("band-stats", "Band", "1") { Id = userId });
+        }
+
+        var movie = MovieWithRuntime(movieId, "Band Movie", "bandmovie", 2018, "Comedy", runtime);
+        movie.InheritedParentalRatingValue = 6;
+        var series = Series(seriesId, "Band Series", "bandseries", 2020);
+        series.RunTimeTicks = runtime;
+        series.InheritedParentalRatingValue = 4;
+        dbContext.BaseItems.AddRange(movie, series);
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        var comedyValueId = await EnsureGenreAsync(dbContext, comedyGenre, "Comedy", "comedy").ConfigureAwait(false);
+        await LinkGenreAsync(dbContext, movieId, comedyValueId).ConfigureAwait(false);
+        await LinkGenreAsync(dbContext, seriesId, comedyValueId).ConfigureAwait(false);
+
+        dbContext.UserData.AddRange(Favorite(userId, movieId), Favorite(userId, seriesId));
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        var builder = new UserTasteProfileBuilder(NullLogger<UserTasteProfileBuilder>.Instance);
+        var outcome = await builder.RebuildUserAsync(
+                dbContext,
+                userId,
+                MovieType,
+                SeriesType,
+                EpisodeType,
+                DateTime.UtcNow.AddDays(-730),
+                minSamples: 2,
+                default)
+            .ConfigureAwait(false);
+        Assert.True(outcome.Upserted);
+
+        var row = await dbContext.UserTasteProfiles.AsNoTracking()
+            .SingleAsync(p => p.UserId == userId)
+            .ConfigureAwait(false);
+        var payload = UserTasteProfileBuilder.DeserializeFeatures(row.FeaturesJson);
+        Assert.NotNull(payload.YearMean);
+        Assert.NotNull(payload.YearP25);
+        Assert.NotNull(payload.YearP75);
+        Assert.NotNull(payload.RuntimeMeanTicks);
+        Assert.NotNull(payload.ParentalMean);
+        Assert.Equal(0.5f, payload.SeriesShare);
+        Assert.InRange(payload.YearMean!.Value, 2018f, 2020f);
+    }
+
+    [PostgresTestFact]
+    public async Task Rebuild_WritesWriterBoxSetLanguageCountry_AndBoostsOverlap()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+
+        var userId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000wl01");
+        var favoriteId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000wl11");
+        var overlapId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000wl12");
+        var plainId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000wl13");
+        var boxSetId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000wl20");
+        var writerId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000wl30");
+        var comedyGenre = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000wla1");
+        var boxSetType = typeof(MediaBrowser.Controller.Entities.Movies.BoxSet).FullName!;
+
+        Guid[] users = [userId];
+        Guid[] items = [favoriteId, overlapId, plainId, boxSetId];
+        await dbContext.UserData.Where(u => users.Contains(u.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.UserTasteProfiles.Where(p => users.Contains(p.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.PeopleBaseItemMap.Where(m => items.Contains(m.ItemId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.LinkedChildren.Where(lc => lc.ParentId == boxSetId || items.Contains(lc.ChildId))
+            .ExecuteDeleteAsync()
+            .ConfigureAwait(false);
+        await dbContext.ItemValuesMap.Where(m => items.Contains(m.ItemId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.BaseItems.Where(i => items.Contains(i.Id)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.Peoples.Where(p => p.Id == writerId).ExecuteDeleteAsync().ConfigureAwait(false);
+
+        if (!await dbContext.Users.AnyAsync(u => u.Id == userId).ConfigureAwait(false))
+        {
+            dbContext.Users.Add(new User("writer-lang", "Writer", "1") { Id = userId });
+        }
+
+        var favorite = Movie(favoriteId, "Writer Favorite", "writerfavorite", 2018, "Comedy");
+        favorite.OriginalLanguage = "en";
+        favorite.ProductionLocations = "USA";
+        var overlap = Movie(overlapId, "Writer Overlap", "writeroverlap", 2019, "Comedy");
+        overlap.OriginalLanguage = "en";
+        overlap.ProductionLocations = "USA";
+        var plain = Movie(plainId, "Plain Comedy", "plaincomedy", 2019, "Comedy");
+        plain.OriginalLanguage = "fr";
+        plain.ProductionLocations = "France";
+        dbContext.BaseItems.AddRange(
+            favorite,
+            overlap,
+            plain,
+            new BaseItemEntity
+            {
+                Id = boxSetId,
+                Type = boxSetType,
+                Name = "Writer Box",
+                CleanName = "writerbox",
+                SortName = "writerbox",
+                IsFolder = true,
+                IsVirtualItem = false
+            });
+        dbContext.Peoples.Add(new People
+        {
+            Id = writerId,
+            Name = "Ada Screen",
+            PersonType = nameof(PersonKind.Writer)
+        });
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        var comedyValueId = await EnsureGenreAsync(dbContext, comedyGenre, "Comedy", "comedy").ConfigureAwait(false);
+        await LinkGenreAsync(dbContext, favoriteId, comedyValueId).ConfigureAwait(false);
+        await LinkGenreAsync(dbContext, overlapId, comedyValueId).ConfigureAwait(false);
+        await LinkGenreAsync(dbContext, plainId, comedyValueId).ConfigureAwait(false);
+
+        var writer = await dbContext.Peoples.SingleAsync(p => p.Id == writerId).ConfigureAwait(false);
+        foreach (var itemId in new[] { favoriteId, overlapId })
+        {
+            var item = await dbContext.BaseItems.SingleAsync(i => i.Id == itemId).ConfigureAwait(false);
+            dbContext.PeopleBaseItemMap.Add(new PeopleBaseItemMap
+            {
+                ItemId = itemId,
+                PeopleId = writerId,
+                Role = string.Empty,
+                Item = item,
+                People = writer
+            });
+        }
+
+        dbContext.LinkedChildren.AddRange(
+            new LinkedChildEntity
+            {
+                ParentId = boxSetId,
+                ChildId = favoriteId,
+                ChildType = DbLinkedChildType.Manual,
+                SortOrder = 0
+            },
+            new LinkedChildEntity
+            {
+                ParentId = boxSetId,
+                ChildId = overlapId,
+                ChildType = DbLinkedChildType.Manual,
+                SortOrder = 1
+            });
+        dbContext.UserData.Add(Favorite(userId, favoriteId));
+        dbContext.UserData.Add(Favorite(userId, overlapId));
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        var builder = new UserTasteProfileBuilder(NullLogger<UserTasteProfileBuilder>.Instance);
+        var outcome = await builder.RebuildUserAsync(
+                dbContext,
+                userId,
+                MovieType,
+                SeriesType,
+                EpisodeType,
+                DateTime.UtcNow.AddDays(-730),
+                minSamples: 2,
+                default,
+                boxSetType)
+            .ConfigureAwait(false);
+        Assert.True(outcome.Upserted);
+
+        var row = await dbContext.UserTasteProfiles.AsNoTracking()
+            .SingleAsync(p => p.UserId == userId)
+            .ConfigureAwait(false);
+        var payload = UserTasteProfileBuilder.DeserializeFeatures(row.FeaturesJson);
+        Assert.Contains(writerId.ToString("N"), payload.Writers.Keys);
+        Assert.Contains(boxSetId.ToString("N"), payload.BoxSets.Keys);
+        Assert.True(payload.Languages.ContainsKey("en"));
+        Assert.True(payload.Countries.ContainsKey("usa") || payload.Countries.ContainsKey("USA"));
+
+        var features = await TasteCandidateFeatureLoader.LoadAsync(
+                dbContext,
+                [overlapId, plainId],
+                default,
+                boxSetType: boxSetType)
+            .ConfigureAwait(false);
+        var overlapBonus = LinearTasteScorer.ComputeBonus(payload, features[overlapId], 180);
+        var plainBonus = LinearTasteScorer.ComputeBonus(payload, features[plainId], 180);
+        Assert.True(overlapBonus > plainBonus);
+    }
+
+    [PostgresTestFact]
+    public async Task ShadowTrain_ImpressionSkip_AddsNegativePair()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+        await SeedTasteCorpusAsync(dbContext).ConfigureAwait(false);
+
+        var itemTypeLookup = CreateItemTypeLookup();
+        var builder = new UserTasteProfileBuilder(NullLogger<UserTasteProfileBuilder>.Instance);
+        await builder.RebuildAllAsync(dbContext, itemTypeLookup.Object, 730, 3, default).ConfigureAwait(false);
+        await SeedSecondUserHistoryAsync(dbContext).ConfigureAwait(false);
+        await builder.RebuildAllAsync(dbContext, itemTypeLookup.Object, 730, 3, default).ConfigureAwait(false);
+
+        await dbContext.UserTasteRecommendationImpressions
+            .Where(i => i.UserId == TasteUserId)
+            .ExecuteDeleteAsync()
+            .ConfigureAwait(false);
+
+        var trainer = new TasteShadowNeuralTrainer(NullLogger<TasteShadowNeuralTrainer>.Instance);
+        var modelDir = System.IO.Path.Join(System.IO.Path.GetTempPath(), "pgsql-taste-tests", Guid.NewGuid().ToString("N"));
+        var baseline = await trainer.TrainAndEvaluateAsync(dbContext, itemTypeLookup.Object, modelDir, default)
+            .ConfigureAwait(false);
+        Assert.NotNull(baseline);
+
+        dbContext.UserTasteRecommendationImpressions.Add(new UserTasteRecommendationImpression
+        {
+            Id = Guid.NewGuid(),
+            UserId = TasteUserId,
+            ItemId = ActionOnlyId,
+            ItemType = "Movie",
+            Rank = 0,
+            ServedAt = DateTime.UtcNow.AddDays(-20)
+        });
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        var withSkip = await trainer.TrainAndEvaluateAsync(dbContext, itemTypeLookup.Object, modelDir, default)
+            .ConfigureAwait(false);
+        Assert.NotNull(withSkip);
+        Assert.True(withSkip!.NegativeCount > baseline!.NegativeCount);
+    }
+
+    [PostgresTestFact]
     public async Task ShadowTrain_WritesEvalRow_WithoutChangingServeOrder()
     {
         Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
@@ -142,6 +391,11 @@ public sealed class UserTasteProfileIntegrationTests
         Assert.NotNull(run);
         var afterCount = await dbContext.TasteModelEvalRuns.CountAsync().ConfigureAwait(false);
         Assert.True(afterCount > beforeCount);
+        Assert.Equal(TasteEvalMetrics.SplitTypeTimeBased, run!.SplitType);
+        Assert.NotNull(run.HoldoutFraction);
+        Assert.Equal(TasteEvalMetrics.DefaultHoldoutFraction, (float)run.HoldoutFraction.Value);
+        Assert.True(run.TrainCount > 0);
+        Assert.NotNull(run.MeanPrecisionAt10);
 
         var tasteStore = new UserTasteProfileStore(factory, NullLogger<UserTasteProfileStore>.Instance);
         tasteStore.InvalidateAll();
@@ -153,6 +407,87 @@ public sealed class UserTasteProfileIntegrationTests
         Assert.Equal(first[SeedActionId][ActionComedyId], second[SeedActionId][ActionComedyId]);
         Assert.Equal(first[SeedActionId][ActionOnlyId], second[SeedActionId][ActionOnlyId]);
         Assert.True(first[SeedActionId][ActionComedyId] > first[SeedActionId][ActionOnlyId]);
+    }
+
+    [PostgresTestFact]
+    public async Task NeuralServe_ForYouScoresDifferFromLinear_MissingZipFallsBack()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+        await SeedTasteCorpusAsync(dbContext).ConfigureAwait(false);
+
+        var itemTypeLookup = CreateItemTypeLookup();
+        var builder = new UserTasteProfileBuilder(NullLogger<UserTasteProfileBuilder>.Instance);
+        await builder.RebuildAllAsync(dbContext, itemTypeLookup.Object, 730, 3, default).ConfigureAwait(false);
+        await SeedSecondUserHistoryAsync(dbContext).ConfigureAwait(false);
+        await builder.RebuildAllAsync(dbContext, itemTypeLookup.Object, 730, 3, default).ConfigureAwait(false);
+
+        var modelDir = TasteModelPaths.ResolveDirectory();
+        var trainer = new TasteShadowNeuralTrainer(NullLogger<TasteShadowNeuralTrainer>.Instance);
+        var run = await trainer.TrainAndEvaluateAsync(dbContext, itemTypeLookup.Object, modelDir, default)
+            .ConfigureAwait(false);
+        Assert.NotNull(run);
+        Assert.False(string.IsNullOrWhiteSpace(run!.ModelPath));
+        Assert.True(run.Auc is not null || run.Accuracy is not null || run.PrecisionAt10 is not null);
+
+        var cache = new MemoryQueryResultCache();
+        var store = new TasteNeuralModelStore(factory, cache, NullLogger<TasteNeuralModelStore>.Instance);
+        await store.ReloadAsync(default).ConfigureAwait(false);
+        Assert.True(store.IsLoaded);
+
+        var tasteStore = new UserTasteProfileStore(factory, NullLogger<UserTasteProfileStore>.Instance);
+        tasteStore.InvalidateAll();
+        var service = new TasteRecommendationService(
+            factory,
+            tasteStore,
+            itemTypeLookup.Object,
+            cache,
+            store,
+            NullLogger<TasteRecommendationService>.Instance);
+
+        try
+        {
+            TasteOptions.TestOverride = TasteOptions.CreateForTests(useNeuralForServing: false);
+            await service.RebuildUserFeedsAsync(TasteUserId, default).ConfigureAwait(false);
+            var linear = await dbContext.UserTasteRecommendations.AsNoTracking()
+                .Where(r => r.UserId == TasteUserId && r.ItemType == "Movie")
+                .ToDictionaryAsync(r => r.ItemId, r => r.Score)
+                .ConfigureAwait(false);
+            Assert.NotEmpty(linear);
+
+            TasteOptions.TestOverride = TasteOptions.CreateForTests(useNeuralForServing: true);
+            await service.RebuildUserFeedsAsync(TasteUserId, default).ConfigureAwait(false);
+            var blended = await dbContext.UserTasteRecommendations.AsNoTracking()
+                .Where(r => r.UserId == TasteUserId && r.ItemType == "Movie")
+                .ToDictionaryAsync(r => r.ItemId, r => r.Score)
+                .ConfigureAwait(false);
+            Assert.NotEmpty(blended);
+            Assert.Contains(linear.Keys, id => blended.ContainsKey(id) && blended[id] != linear[id]);
+
+            var zipPath = System.IO.Path.Join(modelDir, System.IO.Path.GetFileName(run.ModelPath));
+            System.IO.File.Delete(zipPath);
+            await store.ReloadAsync(default).ConfigureAwait(false);
+            Assert.False(store.IsLoaded);
+
+            await service.RebuildUserFeedsAsync(TasteUserId, default).ConfigureAwait(false);
+            var fallback = await dbContext.UserTasteRecommendations.AsNoTracking()
+                .Where(r => r.UserId == TasteUserId && r.ItemType == "Movie")
+                .ToDictionaryAsync(r => r.ItemId, r => r.Score)
+                .ConfigureAwait(false);
+            foreach (var (itemId, score) in linear)
+            {
+                if (fallback.TryGetValue(itemId, out var fallbackScore))
+                {
+                    Assert.Equal(score, fallbackScore);
+                }
+            }
+        }
+        finally
+        {
+            TasteOptions.TestOverride = null;
+        }
     }
 
     [PostgresTestFact]
@@ -508,7 +843,14 @@ public sealed class UserTasteProfileIntegrationTests
 
         var tasteStore = new UserTasteProfileStore(factory, NullLogger<UserTasteProfileStore>.Instance);
         tasteStore.InvalidateAll();
-        var matchService = new TasteMatchService(factory, tasteStore);
+        var matchService = new TasteMatchService(
+            factory,
+            tasteStore,
+            CreateItemTypeLookup().Object,
+            new TasteNeuralModelStore(
+                factory,
+                new MemoryQueryResultCache(),
+                NullLogger<TasteNeuralModelStore>.Instance));
 
         var matches = await matchService.MatchAsync(
                 TasteUserId,
@@ -653,6 +995,8 @@ public sealed class UserTasteProfileIntegrationTests
             IsFolder = false,
             IsVirtualItem = false,
             CommunityRating = 7.5f,
+            RunTimeTicks = TimeSpan.FromMinutes(110).Ticks,
+            InheritedParentalRatingValue = 6,
         };
 
     private static BaseItemEntity MovieWithRuntime(Guid id, string name, string clean, int year, string genres, long runTimeTicks)
@@ -736,6 +1080,10 @@ public sealed class UserTasteProfileIntegrationTests
             itemTypeLookup.Object,
             config.Object,
             tasteStore,
+            new TasteNeuralModelStore(
+                factory,
+                new MemoryQueryResultCache(),
+                NullLogger<TasteNeuralModelStore>.Instance),
             NullLogger<PostgresMovieSimilarItemsProvider>.Instance);
     }
 }
