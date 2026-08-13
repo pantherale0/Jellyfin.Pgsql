@@ -1,0 +1,93 @@
+diff --git a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
+index c1bc9330e2..be827ef5a4 100644
+--- a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
++++ b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
+@@ -395,8 +395,7 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+ 
+         if (!string.IsNullOrWhiteSpace(filter.NameContains))
+         {
+-            var nameContainsUpper = filter.NameContains.ToUpper();
+-            query = query.Where(e => e.Name.ToUpper().Contains(nameContainsUpper));
++            query = query.Where(e => e.Name.Contains(filter.NameContains));
+         }
+ 
+         if (!string.IsNullOrWhiteSpace(filter.NameStartsWith))
+diff --git a/Jellyfin.Server.Implementations/MediaSegments/MediaSegmentManager.cs b/Jellyfin.Server.Implementations/MediaSegments/MediaSegmentManager.cs
+index 7cc6daa905..f6682770da 100644
+--- a/Jellyfin.Server.Implementations/MediaSegments/MediaSegmentManager.cs
++++ b/Jellyfin.Server.Implementations/MediaSegments/MediaSegmentManager.cs
+@@ -273,6 +273,22 @@ public class MediaSegmentManager : IMediaSegmentManager
+         return db.MediaSegments.Any(e => e.ItemId.Equals(itemId));
+     }
+ 
++    /// <inheritdoc />
++    public IReadOnlySet<Guid> GetItemIdsWithSegments(IReadOnlyCollection<Guid> itemIds)
++    {
++        if (itemIds.Count == 0)
++        {
++            return new HashSet<Guid>();
++        }
++
++        using var db = _dbProvider.CreateDbContext();
++        return db.MediaSegments
++            .Where(e => itemIds.Contains(e.ItemId))
++            .Select(e => e.ItemId)
++            .Distinct()
++            .ToHashSet();
++    }
++
+     /// <inheritdoc/>
+     public bool IsTypeSupported(BaseItem baseItem)
+     {
+diff --git a/MediaBrowser.Controller/Entities/BaseItem.cs b/MediaBrowser.Controller/Entities/BaseItem.cs
+index ecf78c54e2..dbf6546641 100644
+--- a/MediaBrowser.Controller/Entities/BaseItem.cs
++++ b/MediaBrowser.Controller/Entities/BaseItem.cs
+@@ -1127,7 +1127,9 @@ namespace MediaBrowser.Controller.Entities
+ 
+             var list = GetAllItemsForMediaSources().ToList();
+             var commonPrefix = GetCommonNamePrefix(list);
+-            var result = list.Select(i => GetVersionInfo(enablePathSubstitution, i.Item, i.MediaSourceType, commonPrefix)).ToList();
++            var versionIds = list.Select(i => i.Item.Id).Distinct().ToArray();
++            var itemsWithSegments = MediaSegmentManager.GetItemIdsWithSegments(versionIds);
++            var result = list.Select(i => GetVersionInfo(enablePathSubstitution, i.Item, i.MediaSourceType, commonPrefix, itemsWithSegments)).ToList();
+ 
+             if (IsActiveRecording())
+             {
+@@ -1153,7 +1155,7 @@ namespace MediaBrowser.Controller.Entities
+             return Enumerable.Empty<(BaseItem, MediaSourceType)>();
+         }
+ 
+-        private MediaSourceInfo GetVersionInfo(bool enablePathSubstitution, BaseItem item, MediaSourceType type, string commonPrefix = null)
++        private MediaSourceInfo GetVersionInfo(bool enablePathSubstitution, BaseItem item, MediaSourceType type, string commonPrefix = null, IReadOnlySet<Guid> itemsWithSegments = null)
+         {
+             ArgumentNullException.ThrowIfNull(item);
+ 
+@@ -1174,7 +1176,7 @@ namespace MediaBrowser.Controller.Entities
+                 Type = type,
+                 HasSegments = MediaSegmentManager.IsTypeSupported(item)
+                     && (protocol is null or MediaProtocol.File)
+-                    && MediaSegmentManager.HasSegments(item.Id)
++                    && (itemsWithSegments?.Contains(item.Id) ?? MediaSegmentManager.HasSegments(item.Id))
+             };
+ 
+             if (string.IsNullOrEmpty(info.Path))
+diff --git a/MediaBrowser.Controller/MediaSegments/IMediaSegmentManager.cs b/MediaBrowser.Controller/MediaSegments/IMediaSegmentManager.cs
+index 4f13a7eccd..e754e436d4 100644
+--- a/MediaBrowser.Controller/MediaSegments/IMediaSegmentManager.cs
++++ b/MediaBrowser.Controller/MediaSegments/IMediaSegmentManager.cs
+@@ -73,6 +73,13 @@ public interface IMediaSegmentManager
+     /// TODO: this should be async but as the only caller BaseItem.GetVersionInfo isn't async, this is also not. Venson.
+     bool HasSegments(Guid itemId);
+ 
++    /// <summary>
++    /// Returns the subset of <paramref name="itemIds"/> that have at least one stored media segment.
++    /// </summary>
++    /// <param name="itemIds">Item ids to check.</param>
++    /// <returns>Ids that have segments.</returns>
++    IReadOnlySet<Guid> GetItemIdsWithSegments(IReadOnlyCollection<Guid> itemIds);
++
+     /// <summary>
+     /// Gets a list of all registered Segment Providers and their IDs.
+     /// </summary>
+

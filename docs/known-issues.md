@@ -34,6 +34,7 @@ Most product features (taste, playback stats, Emby import, Live TV patches, etc.
 | SQLite migration | Stop Jellyfin first; target PG database should be empty; one-shot completion marker prevents re-runs ([README](../README.md#migrating-from-sqlite-to-postgresql)). |
 | `Update_12_0-rc4` `PK_LinkedChildren` | rc4 changes `LinkedChildren` PK from `(ParentId, ChildId)` to `(ParentId, SortOrder)`. Production libraries often have many children with `SortOrder` NULL/0, so PostgreSQL error `23505` / `could not create unique index "PK_LinkedChildren"` aborts startup and the plugin restores the pre-migration dump. Images after this fix renumber sort order per parent before adding the PK (no children dropped). Re-pull the image and start once; the restore already left the DB on the previous schema. |
 | `Update_12_0-rc5` dropped `IX_MediaSegments_ItemId` | rc5 sync compared the plugin snapshot (which had the QoS `ItemId` index) to the core model (which does not) and emitted a drop. `HasSegments` / `GetSegments` / extraction skip-checks then sequential-scan `MediaSegments` on every media-source build and congest the whole API. Fixed by `RestoreMediaSegmentsItemIdIndex` plus declaring the index in plugin `OnModelCreating` so later `Update_*` syncs keep it. Restart once after pulling an image that includes that migration. |
+| `Update_12_0-rc4` dropped `IX_PlaybackActivity_SeriesId_DatePlayed` | Same class of sync drift: the plugin-only `(SeriesId, DatePlayed)` index is not in the core EF model, so rc4 emitted a drop. Taste episode rollup and series-scoped playback reads then scan `PlaybackActivity`. Fixed by `RestorePlaybackActivitySeriesIdDatePlayedIndex` plus declaring the index in plugin `OnModelCreating`. Restart once after pulling an image that includes that migration. |
 
 ## Inherited Postgres ecosystem issues (upstream tracker)
 
@@ -65,3 +66,4 @@ These are **Jellyfin** project issues/PRs carried as patches in this repo — se
 | [jellyfin#13668](https://github.com/jellyfin/jellyfin/issues/13668) | HLS remux segment restart thrash |
 | [jellyfin#16823](https://github.com/jellyfin/jellyfin/issues/16823) | HDR10+ MPEG-TS SEI |
 | [jellyfin-web#7651](https://github.com/jellyfin/jellyfin-web/issues/7651) | Chrome/Opera MKV DirectPlay false positive |
+| [jellyfin#17602](https://github.com/jellyfin/jellyfin/issues/17602) | Home-page / recursive-query memory blow-up (`DescendantQueryHelper` inlined id sets; [`jellyfin_zzzz_descendant_query_memory`](patches.md#jellyfin_zzzz_descendant_query_memorypatch)) |

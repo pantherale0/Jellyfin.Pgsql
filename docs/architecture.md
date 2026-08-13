@@ -33,7 +33,8 @@ Patches are applied in **lexicographic order** (`ls | sort`). Prefixes encode la
 
 - Unprefixed thematic names apply in alphabetical order among themselves.
 - `jellyfin_z_*` / `jellyfin_web_z_*` run late so they can edit files already touched by earlier patches.
-- `jellyfin_zz_*` / `jellyfin_web_zz_*` run last (for example person identity, Emby import UI).
+- `jellyfin_zz_*` / `jellyfin_web_zz_*` run late (for example person identity, Emby import UI).
+- `jellyfin_zzz_*` / `jellyfin_zzzz_*` run last among server patches (by-name access semi-join, descendant-query memory, people name search / batched `HasSegments`).
 
 Some patches document explicit prerequisites in a `#` preamble when apply order matters beyond lexicographic sort. Those comments are authoritative when refreshing patches.
 

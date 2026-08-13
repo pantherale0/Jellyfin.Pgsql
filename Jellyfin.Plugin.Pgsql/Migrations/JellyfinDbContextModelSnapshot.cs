@@ -1175,6 +1175,9 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasIndex("UserId", "DatePlayed");
 
+                    b.HasIndex("SeriesId", "DatePlayed")
+                        .HasFilter("\"SeriesId\" IS NOT NULL");
+
                     b.ToTable("PlaybackActivity");
                 });
 

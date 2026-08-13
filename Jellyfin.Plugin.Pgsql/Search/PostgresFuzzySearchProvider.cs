@@ -24,8 +24,8 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Pgsql.Search;
 
 /// <summary>
-/// PostgreSQL-backed internal search provider using token Levenshtein + word trigrams for
-/// typo-tolerant titles, and genre/tag lookups on both <see cref="ItemValue"/> rows and
+/// PostgreSQL-backed internal search provider using indexable word trigrams (<c>&lt;%</c>)
+/// for typo-tolerant titles, and genre/tag lookups on both <see cref="ItemValue"/> rows and
 /// the denormalized Genres/Tags columns.
 /// </summary>
 public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
@@ -48,12 +48,6 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
     private const float ContainsMatchScore = 68f;
     private const float GenreContainsScore = 64f;
     private const float TitleFuzzyScore = 55f;
-
-    /// <summary>
-    /// Whole-string trigram floor. Multi-word titles score poorly against a single typed word,
-    /// so this alone is not enough — prefer <see cref="WordTrigramSimilarity"/>.
-    /// </summary>
-    private const float StrongTrigramSimilarity = 0.5f;
 
     /// <summary>
     /// Word-trigram floor (pg_trgm word_similarity). Needle "dispicable" vs haystack
@@ -165,7 +159,6 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
     {
         var cleanPrefix = cleanSearchTerm + " ";
         var likeClean = "%" + EscapeLikeLiteral(cleanSearchTerm) + "%";
-        var maxEditDistance = GetMaxEditDistance(cleanSearchTerm.Length);
         var limit = Math.Clamp(query.Limit ?? DefaultSearchLimit, 1, MaxSearchLimit);
         var startIndex = Math.Max(query.StartIndex ?? 0, 0);
 
@@ -186,23 +179,13 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
             // Split literal vs fuzzy arms so CodeQL complexity stays under the threshold.
             var dbQuery = includeFuzzy
                 ? ApplyLiteralMatchFilter(baseQuery, cleanSearchTerm, likeClean)
-                    .Union(ApplyFuzzyOnlyMatchFilter(baseQuery, cleanSearchTerm, maxEditDistance))
+                    .Union(ApplyFuzzyOnlyMatchFilter(baseQuery, cleanSearchTerm))
                 : ApplyLiteralMatchFilter(baseQuery, cleanSearchTerm, likeClean);
 
             dbQuery = ApplyTypeFilter(dbQuery, query.IncludeItemTypes, query.ExcludeItemTypes);
             dbQuery = ApplyMediaTypeFilter(dbQuery, query.MediaTypes);
             dbQuery = ApplyParentFilter(dbQuery, query.ParentId);
             dbQuery = ApplyUserAccessFilter(dbContext, dbQuery, query.UserId);
-
-            var totalRecordCount = 0;
-            if (query.EnableTotalRecordCount)
-            {
-                totalRecordCount = await dbQuery.CountAsync(cancellationToken).ConfigureAwait(false);
-                if (totalRecordCount == 0)
-                {
-                    return SearchQueryResult.Empty;
-                }
-            }
 
             // Project score flags separately so each predicate stays simple for CodeQL and EF.
             var scored = dbQuery.Select(e => new
@@ -256,9 +239,10 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
                 .ToArrayAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            if (!query.EnableTotalRecordCount)
+            var totalRecordCount = startIndex + rows.Length;
+            if (query.EnableTotalRecordCount && rows.Length == limit)
             {
-                totalRecordCount = startIndex + rows.Length;
+                totalRecordCount = await dbQuery.CountAsync(cancellationToken).ConfigureAwait(false);
             }
 
             var items = rows.Select(x => new SearchResult(x.Id, x.Score)).ToArray();
@@ -414,23 +398,17 @@ public sealed class PostgresFuzzySearchProvider : IInternalSearchProvider
 
     private static IQueryable<BaseItemEntity> ApplyFuzzyOnlyMatchFilter(
         IQueryable<BaseItemEntity> query,
-        string cleanSearchTerm,
-        int maxEditDistance)
+        string cleanSearchTerm)
     {
         var byTitleFuzzy = query.Where(e =>
-            PgSearchDbFunctions.TokenLevenshteinMatch(e.CleanName, cleanSearchTerm, maxEditDistance)
+            PgSearchDbFunctions.IsWordSimilar(cleanSearchTerm, e.CleanName)
             || (e.OriginalTitle != null
-                && PgSearchDbFunctions.TokenLevenshteinMatch(e.OriginalTitle, cleanSearchTerm, maxEditDistance))
-            || PgSearchDbFunctions.IsWordSimilar(cleanSearchTerm, e.CleanName)
-            || (e.OriginalTitle != null
-                && PgSearchDbFunctions.IsWordSimilar(cleanSearchTerm, e.OriginalTitle))
-            || PgSearchDbFunctions.TrigramSimilarity(e.CleanName!, cleanSearchTerm) >= StrongTrigramSimilarity);
+                && PgSearchDbFunctions.IsWordSimilar(cleanSearchTerm, e.OriginalTitle)));
 
         var byValueFuzzy = query.Where(e =>
             e.ItemValues!.Any(ivm =>
                 (ivm.ItemValue.Type == ItemValueType.Genre || ivm.ItemValue.Type == ItemValueType.Tags)
-                && (PgSearchDbFunctions.TokenLevenshteinMatch(ivm.ItemValue.CleanValue, cleanSearchTerm, maxEditDistance)
-                    || PgSearchDbFunctions.IsWordSimilar(cleanSearchTerm, ivm.ItemValue.CleanValue))));
+                && PgSearchDbFunctions.IsWordSimilar(cleanSearchTerm, ivm.ItemValue.CleanValue)));
 
         return byTitleFuzzy.Union(byValueFuzzy);
     }

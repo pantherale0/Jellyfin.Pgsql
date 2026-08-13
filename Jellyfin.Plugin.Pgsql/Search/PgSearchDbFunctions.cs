@@ -58,7 +58,8 @@ public static class PgSearchDbFunctions
         => throw new InvalidOperationException("This method is for EF Core SQL translation only.");
 
     /// <summary>
-    /// Case-insensitive LIKE with backslash escape (<c>jellyfin_ilike</c>).
+    /// Case-insensitive LIKE with backslash escape. Mapped to <c>jellyfin_ilike</c>,
+    /// which inlines to <c>haystack ILIKE pattern</c> so GIN trigram indexes can be used.
     /// </summary>
     /// <param name="haystack">Text to match.</param>
     /// <param name="pattern">LIKE pattern (may include <c>%</c>/<c>_</c>).</param>
