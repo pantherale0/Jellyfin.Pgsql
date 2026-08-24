@@ -1,0 +1,1023 @@
+diff --git a/Emby.Server.Implementations/ApplicationHost.cs b/Emby.Server.Implementations/ApplicationHost.cs
+index 242866ab5c..33823e5ed5 100644
+--- a/Emby.Server.Implementations/ApplicationHost.cs
++++ b/Emby.Server.Implementations/ApplicationHost.cs
+@@ -22,6 +22,7 @@ using Emby.Server.Implementations.Configuration;
+ using Emby.Server.Implementations.Cryptography;
+ using Emby.Server.Implementations.Data;
+ using Emby.Server.Implementations.Devices;
++using Emby.Server.Implementations.Ha;
+ using Emby.Server.Implementations.Dto;
+ using Emby.Server.Implementations.HttpServer.Security;
+ using Emby.Server.Implementations.IO;
+@@ -500,6 +501,9 @@ namespace Emby.Server.Implementations
+         {
+             serviceCollection.AddSingleton(_startupOptions);
+ 
++            serviceCollection.AddSingleton<IInstanceLeadership, AlwaysLeaderInstanceLeadership>();
++            serviceCollection.AddSingleton<IPlaybackProgressCache, NullPlaybackProgressCache>();
++
+             serviceCollection.AddMemoryCache();
+ 
+             serviceCollection.AddSingleton<IServerConfigurationManager>(ConfigurationManager);
+diff --git a/Emby.Server.Implementations/Devices/DeviceId.cs b/Emby.Server.Implementations/Devices/DeviceId.cs
+index 4929568935..7dda2fdeae 100644
+--- a/Emby.Server.Implementations/Devices/DeviceId.cs
++++ b/Emby.Server.Implementations/Devices/DeviceId.cs
+@@ -93,6 +93,14 @@ namespace Emby.Server.Implementations.Devices
+ 
+         private string GetDeviceId()
+         {
++            var envId = Environment.GetEnvironmentVariable("JELLYFIN_SERVER_ID");
++            if (!string.IsNullOrWhiteSpace(envId) && Guid.TryParse(envId, out var parsed))
++            {
++                var normalized = parsed.ToString("N", CultureInfo.InvariantCulture);
++                SaveId(normalized);
++                return normalized;
++            }
++
+             var id = GetCachedId();
+ 
+             if (string.IsNullOrWhiteSpace(id))
+diff --git a/Emby.Server.Implementations/Ha/AlwaysLeaderInstanceLeadership.cs b/Emby.Server.Implementations/Ha/AlwaysLeaderInstanceLeadership.cs
+new file mode 100644
+index 0000000000..462d821fe6
+--- /dev/null
++++ b/Emby.Server.Implementations/Ha/AlwaysLeaderInstanceLeadership.cs
+@@ -0,0 +1,26 @@
++using System;
++using MediaBrowser.Controller;
++
++namespace Emby.Server.Implementations.Ha;
++
++/// <summary>
++/// Default leadership: HA is off and this process is always the writer.
++/// </summary>
++public sealed class AlwaysLeaderInstanceLeadership : IInstanceLeadership
++{
++    /// <inheritdoc />
++    public event EventHandler<LeadershipChangedEventArgs>? LeadershipChanged
++    {
++        add { }
++        remove { }
++    }
++
++    /// <inheritdoc />
++    public bool IsHaEnabled => false;
++
++    /// <inheritdoc />
++    public bool IsLeader => true;
++
++    /// <inheritdoc />
++    public long Epoch => 0;
++}
+diff --git a/Emby.Server.Implementations/Ha/NullPlaybackProgressCache.cs b/Emby.Server.Implementations/Ha/NullPlaybackProgressCache.cs
+new file mode 100644
+index 0000000000..5d8583b4cb
+--- /dev/null
++++ b/Emby.Server.Implementations/Ha/NullPlaybackProgressCache.cs
+@@ -0,0 +1,22 @@
++using System;
++using MediaBrowser.Controller.Library;
++
++namespace Emby.Server.Implementations.Ha;
++
++/// <summary>
++/// No-op playback progress overlay used when HA Redis is not configured.
++/// </summary>
++public sealed class NullPlaybackProgressCache : IPlaybackProgressCache
++{
++    /// <inheritdoc />
++    public void Set(Guid userId, Guid itemId, long positionTicks)
++    {
++    }
++
++    /// <inheritdoc />
++    public bool TryGet(Guid userId, Guid itemId, out long positionTicks)
++    {
++        positionTicks = 0;
++        return false;
++    }
++}
+diff --git a/Emby.Server.Implementations/IO/LibraryMonitor.cs b/Emby.Server.Implementations/IO/LibraryMonitor.cs
+index 8063f9543a..71aaf5bf8d 100644
+--- a/Emby.Server.Implementations/IO/LibraryMonitor.cs
++++ b/Emby.Server.Implementations/IO/LibraryMonitor.cs
+@@ -3,8 +3,10 @@ using System.Collections.Concurrent;
+ using System.Collections.Generic;
+ using System.IO;
+ using System.Linq;
++using System.Threading;
+ using System.Threading.Tasks;
+ using Emby.Server.Implementations.Library;
++using MediaBrowser.Controller;
+ using MediaBrowser.Controller.Configuration;
+ using MediaBrowser.Controller.Entities;
+ using MediaBrowser.Controller.Library;
+@@ -22,10 +24,8 @@ namespace Emby.Server.Implementations.IO
+         private readonly IServerConfigurationManager _configurationManager;
+         private readonly IFileSystem _fileSystem;
+         private readonly DotIgnoreIgnoreRule _dotIgnoreIgnoreRule;
+-
+-        /// <summary>
+-        /// The file system watchers.
+-        /// </summary>
++        private readonly IInstanceLeadership _leadership;
++        private int _started;
+         private readonly ConcurrentDictionary<string, FileSystemWatcher> _fileSystemWatchers = new(StringComparer.OrdinalIgnoreCase);
+ 
+         /// <summary>
+@@ -49,19 +49,22 @@ namespace Emby.Server.Implementations.IO
+         /// <param name="fileSystem">The filesystem.</param>
+         /// <param name="appLifetime">The <see cref="IHostApplicationLifetime"/>.</param>
+         /// <param name="dotIgnoreIgnoreRule">The .ignore rule handler.</param>
++        /// <param name="leadership">Instance leadership.</param>
+         public LibraryMonitor(
+             ILogger<LibraryMonitor> logger,
+             ILibraryManager libraryManager,
+             IServerConfigurationManager configurationManager,
+             IFileSystem fileSystem,
+             IHostApplicationLifetime appLifetime,
+-            DotIgnoreIgnoreRule dotIgnoreIgnoreRule)
++            DotIgnoreIgnoreRule dotIgnoreIgnoreRule,
++            IInstanceLeadership leadership)
+         {
+             _libraryManager = libraryManager;
+             _logger = logger;
+             _configurationManager = configurationManager;
+             _fileSystem = fileSystem;
+             _dotIgnoreIgnoreRule = dotIgnoreIgnoreRule;
++            _leadership = leadership;
+ 
+             appLifetime.ApplicationStarted.Register(Start);
+             appLifetime.ApplicationStopping.Register(Stop);
+@@ -115,6 +118,17 @@ namespace Emby.Server.Implementations.IO
+         /// <inheritdoc />
+         public void Start()
+         {
++            if (!_leadership.IsLeader)
++            {
++                _logger.LogInformation("Skipping library monitor start; this instance is not the HA leader");
++                return;
++            }
++
++            if (Interlocked.Exchange(ref _started, 1) == 1)
++            {
++                return;
++            }
++
+             _libraryManager.ItemAdded += OnLibraryManagerItemAdded;
+             _libraryManager.ItemRemoved += OnLibraryManagerItemRemoved;
+ 
+@@ -452,6 +466,8 @@ namespace Emby.Server.Implementations.IO
+         /// </summary>
+         public void Stop()
+         {
++            Interlocked.Exchange(ref _started, 0);
++
+             _libraryManager.ItemAdded -= OnLibraryManagerItemAdded;
+             _libraryManager.ItemRemoved -= OnLibraryManagerItemRemoved;
+ 
+diff --git a/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs b/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs
+index e229aa42cb..abaee82974 100644
+--- a/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs
++++ b/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs
+@@ -2,6 +2,7 @@ using System;
+ using System.Linq;
+ using System.Threading;
+ using System.Threading.Tasks;
++using MediaBrowser.Controller;
+ using MediaBrowser.Controller.Configuration;
+ using MediaBrowser.Controller.Library;
+ using MediaBrowser.Controller.Session;
+@@ -17,6 +18,7 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
+     private static readonly TimeSpan PlaybackYieldDelay = TimeSpan.FromSeconds(3);
+ 
+     private readonly Lazy<ISessionManager> _sessionManager;
++    private readonly IInstanceLeadership _leadership;
+     private readonly ILogger<BackgroundMediaWorkGate> _logger;
+     private readonly SemaphoreSlim _semaphore;
+     private bool _disposed;
+@@ -27,13 +29,16 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
+     /// <param name="sessionManager">Session manager used to detect active playback (lazy to avoid DI cycles).</param>
+     /// <param name="configurationManager">Server configuration.</param>
+     /// <param name="logger">Logger.</param>
++    /// <param name="leadership">Instance leadership.</param>
+     public BackgroundMediaWorkGate(
+         Lazy<ISessionManager> sessionManager,
+         IServerConfigurationManager configurationManager,
+-        ILogger<BackgroundMediaWorkGate> logger)
++        ILogger<BackgroundMediaWorkGate> logger,
++        IInstanceLeadership leadership)
+     {
+         _sessionManager = sessionManager;
+         _logger = logger;
++        _leadership = leadership;
+ 
+         var configured = configurationManager.Configuration.ParallelImageEncodingLimit;
+         var limit = configured > 0
+@@ -49,6 +54,11 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
+     {
+         ObjectDisposedException.ThrowIf(_disposed, this);
+ 
++        if (!_leadership.IsLeader)
++        {
++            return EmptyLease.Instance;
++        }
++
+         while (HasActivePlayback())
+         {
+             _logger.LogDebug("Deferring background media work while playback is active");
+@@ -92,4 +102,11 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
+             return ValueTask.CompletedTask;
+         }
+     }
++
++    private sealed class EmptyLease : IAsyncDisposable
++    {
++        public static readonly EmptyLease Instance = new();
++
++        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
++    }
+ }
+diff --git a/Emby.Server.Implementations/ScheduledTasks/ScheduledTaskWorker.cs b/Emby.Server.Implementations/ScheduledTasks/ScheduledTaskWorker.cs
+index 24f554981a..accf0d723f 100644
+--- a/Emby.Server.Implementations/ScheduledTasks/ScheduledTaskWorker.cs
++++ b/Emby.Server.Implementations/ScheduledTasks/ScheduledTaskWorker.cs
+@@ -13,6 +13,7 @@ using Jellyfin.Data.Events;
+ using Jellyfin.Extensions.Json;
+ using MediaBrowser.Common.Configuration;
+ using MediaBrowser.Common.Extensions;
++using MediaBrowser.Controller;
+ using MediaBrowser.Model.Tasks;
+ using Microsoft.Extensions.Logging;
+ 
+@@ -27,6 +28,7 @@ public class ScheduledTaskWorker : IScheduledTaskWorker
+     private readonly IApplicationPaths _applicationPaths;
+     private readonly ILogger _logger;
+     private readonly ITaskManager _taskManager;
++    private readonly IInstanceLeadership _leadership;
+     private readonly Lock _lastExecutionResultSyncLock = new();
+     private bool _readFromFile;
+     private TaskResult _lastExecutionResult;
+@@ -41,6 +43,7 @@ public class ScheduledTaskWorker : IScheduledTaskWorker
+     /// <param name="applicationPaths">The application paths.</param>
+     /// <param name="taskManager">The task manager.</param>
+     /// <param name="logger">The logger.</param>
++    /// <param name="leadership">Instance leadership.</param>
+     /// <exception cref="ArgumentNullException">
+     /// scheduledTask
+     /// or
+@@ -52,17 +55,19 @@ public class ScheduledTaskWorker : IScheduledTaskWorker
+     /// or
+     /// logger.
+     /// </exception>
+-    public ScheduledTaskWorker(IScheduledTask scheduledTask, IApplicationPaths applicationPaths, ITaskManager taskManager, ILogger logger)
++    public ScheduledTaskWorker(IScheduledTask scheduledTask, IApplicationPaths applicationPaths, ITaskManager taskManager, ILogger logger, IInstanceLeadership leadership)
+     {
+         ArgumentNullException.ThrowIfNull(scheduledTask);
+         ArgumentNullException.ThrowIfNull(applicationPaths);
+         ArgumentNullException.ThrowIfNull(taskManager);
+         ArgumentNullException.ThrowIfNull(logger);
++        ArgumentNullException.ThrowIfNull(leadership);
+ 
+         ScheduledTask = scheduledTask;
+         _applicationPaths = applicationPaths;
+         _taskManager = taskManager;
+         _logger = logger;
++        _leadership = leadership;
+ 
+         InitTriggerEvents();
+     }
+@@ -259,6 +264,12 @@ public class ScheduledTaskWorker : IScheduledTaskWorker
+     {
+         var trigger = (ITaskTrigger)sender;
+ 
++        if (!_leadership.IsLeader)
++        {
++            _logger.LogDebug("Skipping trigger for task {Name}; this instance is not the HA leader", Name);
++            return;
++        }
++
+         if (ScheduledTask is IConfigurableScheduledTask configurableTask && !configurableTask.IsEnabled)
+         {
+             return;
+diff --git a/Emby.Server.Implementations/ScheduledTasks/TaskManager.cs b/Emby.Server.Implementations/ScheduledTasks/TaskManager.cs
+index 4ec2c9c786..8bda08bc01 100644
+--- a/Emby.Server.Implementations/ScheduledTasks/TaskManager.cs
++++ b/Emby.Server.Implementations/ScheduledTasks/TaskManager.cs
+@@ -5,6 +5,7 @@ using System.Linq;
+ using System.Threading.Tasks;
+ using Jellyfin.Data.Events;
+ using MediaBrowser.Common.Configuration;
++using MediaBrowser.Controller;
+ using MediaBrowser.Model.Tasks;
+ using Microsoft.Extensions.Logging;
+ 
+@@ -23,18 +24,22 @@ public class TaskManager : ITaskManager
+ 
+     private readonly IApplicationPaths _applicationPaths;
+     private readonly ILogger<TaskManager> _logger;
++    private readonly IInstanceLeadership _leadership;
+ 
+     /// <summary>
+     /// Initializes a new instance of the <see cref="TaskManager" /> class.
+     /// </summary>
+     /// <param name="applicationPaths">The application paths.</param>
+     /// <param name="logger">The logger.</param>
++    /// <param name="leadership">Instance leadership.</param>
+     public TaskManager(
+         IApplicationPaths applicationPaths,
+-        ILogger<TaskManager> logger)
++        ILogger<TaskManager> logger,
++        IInstanceLeadership leadership)
+     {
+         _applicationPaths = applicationPaths;
+         _logger = logger;
++        _leadership = leadership;
+ 
+         ScheduledTasks = [];
+     }
+@@ -158,6 +163,12 @@ public class TaskManager : ITaskManager
+     {
+         var type = task.ScheduledTask.GetType();
+ 
++        if (!_leadership.IsLeader)
++        {
++            _logger.LogDebug("Skipping queue of task {Name}; this instance is not the HA leader", type.Name);
++            return;
++        }
++
+         _logger.LogDebug("Queuing task {Name}", type.Name);
+ 
+         lock (_taskQueue)
+@@ -175,7 +186,7 @@ public class TaskManager : ITaskManager
+     /// <inheritdoc />
+     public void AddTasks(IEnumerable<IScheduledTask> tasks)
+     {
+-        var list = tasks.Select(t => new ScheduledTaskWorker(t, _applicationPaths, this, _logger));
++        var list = tasks.Select(t => new ScheduledTaskWorker(t, _applicationPaths, this, _logger, _leadership));
+ 
+         ScheduledTasks = ScheduledTasks.Concat(list).ToArray();
+     }
+diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
+index dd94a1b215..a6b4d89bae 100644
+--- a/Emby.Server.Implementations/Session/SessionManager.cs
++++ b/Emby.Server.Implementations/Session/SessionManager.cs
+@@ -59,6 +59,7 @@ namespace Emby.Server.Implementations.Session
+ 
+         private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
+         private readonly ITranscodingPipelineProbe _pipelineProbe;
++        private readonly IPlaybackProgressCache _progressCache;
+         private readonly IUserDataManager _userDataManager;
+         private readonly IServerConfigurationManager _config;
+         private readonly ILogger<SessionManager> _logger;
+@@ -114,6 +115,7 @@ namespace Emby.Server.Implementations.Session
+         /// <param name="hostApplicationLifetime">Instance of <see cref="IHostApplicationLifetime"/> interface.</param>
+         /// <param name="dbProvider">Instance of <see cref="IDbContextFactory{JellyfinDbContext}"/> interface.</param>
+         /// <param name="pipelineProbe">Instance of <see cref="ITranscodingPipelineProbe"/> interface.</param>
++        /// <param name="progressCache">Optional overlay of coalesced playback position.</param>
+         public SessionManager(
+             ILogger<SessionManager> logger,
+             IEventManager eventManager,
+@@ -129,7 +131,8 @@ namespace Emby.Server.Implementations.Session
+             IMediaSourceManager mediaSourceManager,
+             IHostApplicationLifetime hostApplicationLifetime,
+             IDbContextFactory<JellyfinDbContext> dbProvider,
+-            ITranscodingPipelineProbe pipelineProbe)
++            ITranscodingPipelineProbe pipelineProbe,
++            IPlaybackProgressCache progressCache)
+         {
+             _logger = logger;
+             _eventManager = eventManager;
+@@ -148,6 +151,7 @@ namespace Emby.Server.Implementations.Session
+             _deviceManager.DeviceOptionsUpdated += OnDeviceManagerDeviceOptionsUpdated;
+             _dbProvider = dbProvider;
+             _pipelineProbe = pipelineProbe;
++            _progressCache = progressCache;
+         }
+ 
+         /// <summary>
+@@ -1001,6 +1005,12 @@ namespace Emby.Server.Implementations.Session
+         {
+             var data = _userDataManager.GetUserData(user, item);
+ 
++            if (_progressCache.TryGet(user.Id, item.Id, out var cachedTicks)
++                && cachedTicks > data.PlaybackPositionTicks)
++            {
++                _userDataManager.UpdatePlayState(item, data, cachedTicks);
++            }
++
+             data.PlayCount++;
+             data.LastPlayedDate = DateTime.UtcNow;
+ 
+@@ -1161,7 +1171,7 @@ namespace Emby.Server.Implementations.Session
+                 if (!forcePersist && positionTicks.HasValue
+                     && !ShouldPersistPlaybackProgress(user.Id, item.Id, positionTicks.Value))
+                 {
+-                    // Skip DB write; in-memory user data still reflects the latest position.
++                    _progressCache.Set(user.Id, item.Id, positionTicks.Value);
+                 }
+                 else
+                 {
+@@ -1178,6 +1188,7 @@ namespace Emby.Server.Implementations.Session
+                     if (positionTicks.HasValue)
+                     {
+                         _lastProgressPersist[(user.Id, item.Id)] = (DateTime.UtcNow, positionTicks.Value);
++                        _progressCache.Set(user.Id, item.Id, positionTicks.Value);
+                     }
+                 }
+             }
+@@ -2755,6 +2766,29 @@ namespace Emby.Server.Implementations.Session
+                 _logger.LogError(ex, "Error sending server shutdown notifications");
+             }
+ 
++            foreach (var ((userId, itemId), (_, ticks)) in _lastProgressPersist)
++            {
++                try
++                {
++                    var user = _userManager.GetUserById(userId);
++                    var item = _libraryManager.GetItemById(itemId);
++                    if (user is null || item is null)
++                    {
++                        continue;
++                    }
++
++                    var data = _userDataManager.GetUserData(user, item);
++                    _userDataManager.UpdatePlayState(item, data, ticks);
++                    _userDataManager.SaveUserData(user, item, data, UserDataSaveReason.PlaybackProgress, CancellationToken.None);
++                }
++                catch (Exception ex)
++                {
++                    _logger.LogError(ex, "Error flushing coalesced playback progress for user {UserId} item {ItemId}", userId, itemId);
++                }
++            }
++
++            _lastProgressPersist.Clear();
++
+             // Close open websockets to allow Kestrel to shut down cleanly
+             foreach (var session in _activeConnections.Values)
+             {
+diff --git a/Jellyfin.Api/Controllers/LiveTvController.cs b/Jellyfin.Api/Controllers/LiveTvController.cs
+index be1691d1bd..80e7644a92 100644
+--- a/Jellyfin.Api/Controllers/LiveTvController.cs
++++ b/Jellyfin.Api/Controllers/LiveTvController.cs
+@@ -1148,6 +1148,7 @@ public class LiveTvController : BaseJellyfinApiController
+     [HttpGet("LiveStreamFiles/{streamId}/stream.{container}")]
+     [ProducesResponseType(StatusCodes.Status200OK)]
+     [ProducesResponseType(StatusCodes.Status404NotFound)]
++    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+     [ProducesVideoFile]
+     public ActionResult GetLiveStreamFile(
+         [FromRoute, Required] string streamId,
+@@ -1163,7 +1164,7 @@ public class LiveTvController : BaseJellyfinApiController
+         var liveStreamInfo = _mediaSourceManager.GetLiveStreamInfoByUniqueId(streamId);
+         if (liveStreamInfo is null)
+         {
+-            return NotFound();
++            throw new LiveStreamFencedException();
+         }
+ 
+         var liveStream = new ProgressiveFileStream(liveStreamInfo.GetStream());
+diff --git a/Jellyfin.Api/Controllers/VideosController.cs b/Jellyfin.Api/Controllers/VideosController.cs
+index 1f6569c2ef..f700c45fe6 100644
+--- a/Jellyfin.Api/Controllers/VideosController.cs
++++ b/Jellyfin.Api/Controllers/VideosController.cs
+@@ -457,7 +457,7 @@ public class VideosController : BaseJellyfinApiController
+             var liveStreamInfo = _mediaSourceManager.GetLiveStreamInfo(streamingRequest.LiveStreamId);
+             if (liveStreamInfo is null)
+             {
+-                return NotFound();
++                throw new LiveStreamFencedException();
+             }
+ 
+             var liveStream = new ProgressiveFileStream(liveStreamInfo.GetStream());
+diff --git a/Jellyfin.Api/Helpers/StreamingHelpers.cs b/Jellyfin.Api/Helpers/StreamingHelpers.cs
+index 60c5bb2ef6..4f79c252c9 100644
+--- a/Jellyfin.Api/Helpers/StreamingHelpers.cs
++++ b/Jellyfin.Api/Helpers/StreamingHelpers.cs
+@@ -144,13 +144,11 @@ public static class StreamingHelpers
+             mediaSource = liveStreamInfo.Item1;
+             state.DirectStreamProvider = liveStreamInfo.Item2;
+ 
+-            // The requested live stream is no longer open. This commonly happens when a client keeps
+-            // polling the HLS playlist (e.g. live.m3u8) after the stream was disposed because its
+-            // consumer count dropped to zero. GetLiveStreamWithDirectStreamProvider returns a null
+-            // MediaSource in that case, so return 404 instead of dereferencing it below.
++            // The requested live stream is no longer open on this process (failover, or the consumer
++            // count dropped to zero). Return LiveStreamFenced (503) so the client restarts playback.
+             if (mediaSource is null)
+             {
+-                throw new ResourceNotFoundException($"The live stream with id {streamingRequest.LiveStreamId} could not be found or is no longer available.");
++                throw new LiveStreamFencedException();
+             }
+ 
+             // Cap the max bitrate when it is too high. This is usually due to ffmpeg is unable to probe the source liveTV streams' bitrate.
+diff --git a/Jellyfin.Api/Middleware/ExceptionMiddleware.cs b/Jellyfin.Api/Middleware/ExceptionMiddleware.cs
+index acbb4877d4..3635d9610b 100644
+--- a/Jellyfin.Api/Middleware/ExceptionMiddleware.cs
++++ b/Jellyfin.Api/Middleware/ExceptionMiddleware.cs
+@@ -2,6 +2,7 @@ using System;
+ using System.IO;
+ using System.Net.Mime;
+ using System.Net.Sockets;
++using System.Text.Json;
+ using System.Threading.Tasks;
+ using MediaBrowser.Common.Extensions;
+ using MediaBrowser.Controller.Authentication;
+@@ -64,6 +65,31 @@ public class ExceptionMiddleware
+ 
+             ex = GetActualException(ex);
+ 
++            if (ex is LiveStreamFencedException fenced)
++            {
++                _logger.LogWarning(
++                    "Live stream fenced: {ExceptionMessage}. URL {Method} {Url}.",
++                    fenced.Message.TrimEnd('.'),
++                    context.Request.Method,
++                    context.Request.Path);
++
++                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
++                context.Response.ContentType = MediaTypeNames.Application.Json;
++                var camelCase = context.Request.Headers.Accept.ToString()
++                    .Contains("CamelCase", StringComparison.OrdinalIgnoreCase);
++                var payload = JsonSerializer.Serialize(
++                    new
++                    {
++                        ErrorCode = LiveStreamFencedException.ErrorCode,
++                        Message = fenced.Message
++                    },
++                    camelCase
++                        ? new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }
++                        : new JsonSerializerOptions());
++                await context.Response.WriteAsync(payload).ConfigureAwait(false);
++                return;
++            }
++
+             bool ignoreStackTrace =
+                 ex is SocketException
+                 || ex is IOException
+@@ -129,6 +155,7 @@ public class ExceptionMiddleware
+             SecurityException => StatusCodes.Status403Forbidden,
+             DirectoryNotFoundException => StatusCodes.Status404NotFound,
+             FileNotFoundException => StatusCodes.Status404NotFound,
++            LiveStreamFencedException => StatusCodes.Status503ServiceUnavailable,
+             ResourceNotFoundException => StatusCodes.Status404NotFound,
+             MethodNotAllowedException => StatusCodes.Status405MethodNotAllowed,
+             _ => StatusCodes.Status500InternalServerError
+diff --git a/Jellyfin.Api/Middleware/LeaderEpochMiddleware.cs b/Jellyfin.Api/Middleware/LeaderEpochMiddleware.cs
+new file mode 100644
+index 0000000000..39eeaed162
+--- /dev/null
++++ b/Jellyfin.Api/Middleware/LeaderEpochMiddleware.cs
+@@ -0,0 +1,46 @@
++using System.Globalization;
++using System.Threading.Tasks;
++using MediaBrowser.Controller;
++using Microsoft.AspNetCore.Http;
++
++namespace Jellyfin.Api.Middleware;
++
++/// <summary>
++/// Adds HA leadership headers so clients can detect a failover on the next request.
++/// </summary>
++public class LeaderEpochMiddleware
++{
++    private readonly RequestDelegate _next;
++
++    /// <summary>
++    /// Initializes a new instance of the <see cref="LeaderEpochMiddleware"/> class.
++    /// </summary>
++    /// <param name="next">Next request delegate.</param>
++    public LeaderEpochMiddleware(RequestDelegate next)
++    {
++        _next = next;
++    }
++
++    /// <summary>
++    /// Invoke request.
++    /// </summary>
++    /// <param name="context">Request context.</param>
++    /// <param name="leadership">Instance leadership.</param>
++    /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
++    public Task Invoke(HttpContext context, IInstanceLeadership leadership)
++    {
++        context.Response.OnStarting(() =>
++        {
++            var role = !leadership.IsHaEnabled
++                ? "single"
++                : leadership.IsLeader ? "leader" : "standby";
++
++            context.Response.Headers["X-Jellyfin-Leader-Epoch"] =
++                leadership.Epoch.ToString(CultureInfo.InvariantCulture);
++            context.Response.Headers["X-Jellyfin-Ha-Role"] = role;
++            return Task.CompletedTask;
++        });
++
++        return _next(context);
++    }
++}
+diff --git a/Jellyfin.Server/HealthChecks/LeaderReadinessHealthCheck.cs b/Jellyfin.Server/HealthChecks/LeaderReadinessHealthCheck.cs
+new file mode 100644
+index 0000000000..1456942986
+--- /dev/null
++++ b/Jellyfin.Server/HealthChecks/LeaderReadinessHealthCheck.cs
+@@ -0,0 +1,42 @@
++using System.Threading;
++using System.Threading.Tasks;
++using MediaBrowser.Controller;
++using Microsoft.Extensions.Diagnostics.HealthChecks;
++
++namespace Jellyfin.Server.HealthChecks;
++
++/// <summary>
++/// Readiness: core startup is complete and this process is allowed to receive traffic.
++/// </summary>
++public sealed class LeaderReadinessHealthCheck : IHealthCheck
++{
++    private readonly IServerApplicationHost _appHost;
++    private readonly IInstanceLeadership _leadership;
++
++    /// <summary>
++    /// Initializes a new instance of the <see cref="LeaderReadinessHealthCheck"/> class.
++    /// </summary>
++    /// <param name="appHost">The application host.</param>
++    /// <param name="leadership">Instance leadership.</param>
++    public LeaderReadinessHealthCheck(IServerApplicationHost appHost, IInstanceLeadership leadership)
++    {
++        _appHost = appHost;
++        _leadership = leadership;
++    }
++
++    /// <inheritdoc />
++    public Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
++    {
++        if (!_appHost.CoreStartupHasCompleted)
++        {
++            return Task.FromResult(HealthCheckResult.Unhealthy("Server is still starting up."));
++        }
++
++        if (_leadership.IsHaEnabled && !_leadership.IsLeader)
++        {
++            return Task.FromResult(HealthCheckResult.Unhealthy("Standby instance is not the HA leader."));
++        }
++
++        return Task.FromResult(HealthCheckResult.Healthy());
++    }
++}
+diff --git a/Jellyfin.Server/Migrations/JellyfinMigrationService.cs b/Jellyfin.Server/Migrations/JellyfinMigrationService.cs
+index beafc3916f..4f78b201a3 100644
+--- a/Jellyfin.Server/Migrations/JellyfinMigrationService.cs
++++ b/Jellyfin.Server/Migrations/JellyfinMigrationService.cs
+@@ -191,6 +191,13 @@ internal class JellyfinMigrationService
+         var dbContext = await _dbContextFactory.CreateDbContextAsync().ConfigureAwait(false);
+         await using (dbContext.ConfigureAwait(false))
+         {
++            if (_jellyfinDatabaseProvider is not null)
++            {
++                await _jellyfinDatabaseProvider.AcquireMigrationLockAsync(CancellationToken.None).ConfigureAwait(false);
++            }
++
++            try
++            {
+             var historyRepository = dbContext.GetService<IHistoryRepository>();
+             var migrationsAssembly = dbContext.GetService<IMigrationsAssembly>();
+             var completedMigrations = 0;
+@@ -297,6 +304,14 @@ internal class JellyfinMigrationService
+ 
+                 completedMigrations++;
+             }
++            }
++            finally
++            {
++                if (_jellyfinDatabaseProvider is not null)
++                {
++                    await _jellyfinDatabaseProvider.ReleaseMigrationLockAsync(CancellationToken.None).ConfigureAwait(false);
++                }
++            }
+         }
+     }
+ 
+diff --git a/Jellyfin.Server/Startup.cs b/Jellyfin.Server/Startup.cs
+index 1802440dc4..c300acb38a 100644
+--- a/Jellyfin.Server/Startup.cs
++++ b/Jellyfin.Server/Startup.cs
+@@ -1,6 +1,7 @@
+ using System;
+ using System.Globalization;
+ using System.IO;
++using System.Linq;
+ using System.Net;
+ using System.Net.Http;
+ using System.Net.Http.Headers;
+@@ -23,6 +24,7 @@ using MediaBrowser.Controller.Configuration;
+ using MediaBrowser.Controller.Extensions;
+ using MediaBrowser.XbmcMetadata;
+ using Microsoft.AspNetCore.Builder;
++using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+ using Microsoft.AspNetCore.Hosting;
+ using Microsoft.AspNetCore.Localization;
+ using Microsoft.AspNetCore.StaticFiles;
+@@ -125,7 +127,8 @@ namespace Jellyfin.Server
+                 .ConfigurePrimaryHttpMessageHandler(defaultHttpClientHandlerDelegate);
+ 
+             services.AddHealthChecks()
+-                .AddCheck<DbContextFactoryHealthCheck<JellyfinDbContext>>(nameof(JellyfinDbContext));
++                .AddCheck<DbContextFactoryHealthCheck<JellyfinDbContext>>(nameof(JellyfinDbContext), tags: ["live"])
++                .AddCheck<LeaderReadinessHealthCheck>("LeaderReady", tags: ["ready"]);
+ 
+             services.AddHlsPlaylistGenerator();
+             services.AddLiveTvServices();
+@@ -183,6 +186,7 @@ namespace Jellyfin.Server
+                 mainApp.UseMiddleware<ExceptionMiddleware>();
+ 
+                 mainApp.UseMiddleware<ResponseTimeMiddleware>();
++                mainApp.UseMiddleware<LeaderEpochMiddleware>();
+ 
+                 mainApp.UseWebSockets();
+ 
+@@ -251,7 +255,14 @@ namespace Jellyfin.Server
+                         endpoints.MapMetrics();
+                     }
+ 
+-                    endpoints.MapHealthChecks("/health");
++                    endpoints.MapHealthChecks("/health", new HealthCheckOptions
++                    {
++                        Predicate = check => check.Tags.Contains("live")
++                    });
++                    endpoints.MapHealthChecks("/health/ready", new HealthCheckOptions
++                    {
++                        Predicate = check => check.Tags.Contains("ready")
++                    });
+                 });
+             });
+         }
+diff --git a/MediaBrowser.Common/Extensions/LiveStreamFencedException.cs b/MediaBrowser.Common/Extensions/LiveStreamFencedException.cs
+new file mode 100644
+index 0000000000..f2bd99eff7
+--- /dev/null
++++ b/MediaBrowser.Common/Extensions/LiveStreamFencedException.cs
+@@ -0,0 +1,37 @@
++using System;
++
++namespace MediaBrowser.Common.Extensions;
++
++/// <summary>
++/// Thrown when a Live TV stream id is not open on this process (typical after HA failover).
++/// </summary>
++public class LiveStreamFencedException : Exception
++{
++    /// <summary>
++    /// Stable error code returned to API clients.
++    /// </summary>
++    public const string ErrorCode = "LiveStreamFenced";
++
++    /// <summary>
++    /// Default user-facing message.
++    /// </summary>
++    public const string DefaultMessage =
++        "Pardon the gremlins, looks like we had a hiccup. Restart playback and things should work.";
++
++    /// <summary>
++    /// Initializes a new instance of the <see cref="LiveStreamFencedException"/> class.
++    /// </summary>
++    public LiveStreamFencedException()
++        : base(DefaultMessage)
++    {
++    }
++
++    /// <summary>
++    /// Initializes a new instance of the <see cref="LiveStreamFencedException"/> class.
++    /// </summary>
++    /// <param name="message">The message.</param>
++    public LiveStreamFencedException(string message)
++        : base(message)
++    {
++    }
++}
+diff --git a/MediaBrowser.Controller/IInstanceLeadership.cs b/MediaBrowser.Controller/IInstanceLeadership.cs
+new file mode 100644
+index 0000000000..c9120208e7
+--- /dev/null
++++ b/MediaBrowser.Controller/IInstanceLeadership.cs
+@@ -0,0 +1,57 @@
++using System;
++
++namespace MediaBrowser.Controller;
++
++/// <summary>
++/// Coordinates single-writer active-standby leadership for a Jellyfin process.
++/// </summary>
++public interface IInstanceLeadership
++{
++    /// <summary>
++    /// Raised after this process acquires or loses leadership.
++    /// </summary>
++    event EventHandler<LeadershipChangedEventArgs>? LeadershipChanged;
++
++    /// <summary>
++    /// Gets a value indicating whether active-standby HA is enabled for this process.
++    /// </summary>
++    bool IsHaEnabled { get; }
++
++    /// <summary>
++    /// Gets a value indicating whether this process currently holds the writer lock.
++    /// When HA is disabled this is always <c>true</c>.
++    /// </summary>
++    bool IsLeader { get; }
++
++    /// <summary>
++    /// Gets a monotonic epoch incremented each time this process becomes leader.
++    /// </summary>
++    long Epoch { get; }
++}
++
++/// <summary>
++/// Arguments for <see cref="IInstanceLeadership.LeadershipChanged"/>.
++/// </summary>
++public sealed class LeadershipChangedEventArgs : EventArgs
++{
++    /// <summary>
++    /// Initializes a new instance of the <see cref="LeadershipChangedEventArgs"/> class.
++    /// </summary>
++    /// <param name="isLeader">Whether this process is now the leader.</param>
++    /// <param name="epoch">The current leadership epoch.</param>
++    public LeadershipChangedEventArgs(bool isLeader, long epoch)
++    {
++        IsLeader = isLeader;
++        Epoch = epoch;
++    }
++
++    /// <summary>
++    /// Gets a value indicating whether this process is the leader.
++    /// </summary>
++    public bool IsLeader { get; }
++
++    /// <summary>
++    /// Gets the leadership epoch.
++    /// </summary>
++    public long Epoch { get; }
++}
+diff --git a/MediaBrowser.Controller/Library/IPlaybackProgressCache.cs b/MediaBrowser.Controller/Library/IPlaybackProgressCache.cs
+new file mode 100644
+index 0000000000..9ff5b8ba61
+--- /dev/null
++++ b/MediaBrowser.Controller/Library/IPlaybackProgressCache.cs
+@@ -0,0 +1,27 @@
++using System;
++
++namespace MediaBrowser.Controller.Library;
++
++/// <summary>
++/// Optional overlay of the latest playback position so a new leader can recover
++/// progress that had not yet been flushed to the database.
++/// </summary>
++public interface IPlaybackProgressCache
++{
++    /// <summary>
++    /// Stores the latest known playback position.
++    /// </summary>
++    /// <param name="userId">The user id.</param>
++    /// <param name="itemId">The item id.</param>
++    /// <param name="positionTicks">The playback position.</param>
++    void Set(Guid userId, Guid itemId, long positionTicks);
++
++    /// <summary>
++    /// Tries to read a cached playback position.
++    /// </summary>
++    /// <param name="userId">The user id.</param>
++    /// <param name="itemId">The item id.</param>
++    /// <param name="positionTicks">The cached position when found.</param>
++    /// <returns><c>true</c> when a value was found.</returns>
++    bool TryGet(Guid userId, Guid itemId, out long positionTicks);
++}
+diff --git a/MediaBrowser.Controller/MediaEncoding/ITranscodeManager.cs b/MediaBrowser.Controller/MediaEncoding/ITranscodeManager.cs
+index 162ea408ca..a6507e8602 100644
+--- a/MediaBrowser.Controller/MediaEncoding/ITranscodeManager.cs
++++ b/MediaBrowser.Controller/MediaEncoding/ITranscodeManager.cs
+@@ -42,6 +42,12 @@ public interface ITranscodeManager
+     /// <returns>Task.</returns>
+     public Task KillTranscodingJobs(string deviceId, string? playSessionId, Func<string, bool> deleteFiles);
+ 
++    /// <summary>
++    /// Kills every active transcoding job on this process.
++    /// </summary>
++    /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
++    public Task KillAllTranscodingJobs();
++
+     /// <summary>
+     /// Report the transcoding progress to the session manager.
+     /// </summary>
+diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
+index 5b144b0296..7217677013 100644
+--- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
++++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
+@@ -219,6 +219,18 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+         }
+     }
+ 
++    /// <inheritdoc />
++    public Task KillAllTranscodingJobs()
++    {
++        List<TranscodingJob> jobs;
++        lock (_activeTranscodingJobs)
++        {
++            jobs = _activeTranscodingJobs.ToList();
++        }
++
++        return Task.WhenAll(jobs.Select(job => KillTranscodingJob(job, true, static _ => true)));
++    }
++
+     private async Task KillTranscodingJob(TranscodingJob job, bool closeLiveStream, Func<string, bool> delete)
+     {
+         job.DisposeKillTimer();
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/IJellyfinDatabaseProvider.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/IJellyfinDatabaseProvider.cs
+index 27dbeaba6a..f4eec958b0 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/IJellyfinDatabaseProvider.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/IJellyfinDatabaseProvider.cs
+@@ -80,4 +80,19 @@ public interface IJellyfinDatabaseProvider
+     /// <param name="tableNames">The names of the tables to purge or null for all tables to be purged.</param>
+     /// <returns>A Task.</returns>
+     Task PurgeDatabase(JellyfinDbContext dbContext, IEnumerable<string>? tableNames);
++
++    /// <summary>
++    /// Acquires a provider-specific lock around EF schema migrations.
++    /// Default is a no-op (SQLite / single-instance).
++    /// </summary>
++    /// <param name="cancellationToken">The cancellation token.</param>
++    /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
++    Task AcquireMigrationLockAsync(CancellationToken cancellationToken) => Task.CompletedTask;
++
++    /// <summary>
++    /// Releases the lock acquired by <see cref="AcquireMigrationLockAsync"/>.
++    /// </summary>
++    /// <param name="cancellationToken">The cancellation token.</param>
++    /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
++    Task ReleaseMigrationLockAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+ }
+diff --git a/src/Jellyfin.LiveTv/Recordings/RecordingsHost.cs b/src/Jellyfin.LiveTv/Recordings/RecordingsHost.cs
+index f4daa09756..f0c2e27507 100644
+--- a/src/Jellyfin.LiveTv/Recordings/RecordingsHost.cs
++++ b/src/Jellyfin.LiveTv/Recordings/RecordingsHost.cs
+@@ -1,6 +1,7 @@
+ using System.Threading;
+ using System.Threading.Tasks;
+ using Jellyfin.LiveTv.Timers;
++using MediaBrowser.Controller;
+ using MediaBrowser.Controller.LiveTv;
+ using Microsoft.Extensions.Hosting;
+ 
+@@ -13,25 +14,50 @@ public sealed class RecordingsHost : IHostedService
+ {
+     private readonly IRecordingsManager _recordingsManager;
+     private readonly TimerManager _timerManager;
++    private readonly IInstanceLeadership _leadership;
+ 
+     /// <summary>
+     /// Initializes a new instance of the <see cref="RecordingsHost"/> class.
+     /// </summary>
+     /// <param name="recordingsManager">The <see cref="IRecordingsManager"/>.</param>
+     /// <param name="timerManager">The <see cref="TimerManager"/>.</param>
+-    public RecordingsHost(IRecordingsManager recordingsManager, TimerManager timerManager)
++    /// <param name="leadership">Instance leadership.</param>
++    public RecordingsHost(IRecordingsManager recordingsManager, TimerManager timerManager, IInstanceLeadership leadership)
+     {
+         _recordingsManager = recordingsManager;
+         _timerManager = timerManager;
++        _leadership = leadership;
+     }
+ 
+     /// <inheritdoc />
+     public Task StartAsync(CancellationToken cancellationToken)
+     {
+-        _timerManager.RestartTimers();
++        _leadership.LeadershipChanged += OnLeadershipChanged;
++        if (_leadership.IsLeader)
++        {
++            _timerManager.RestartTimers();
++        }
++
+         return _recordingsManager.CreateRecordingFolders();
+     }
+ 
+     /// <inheritdoc />
+-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
++    public Task StopAsync(CancellationToken cancellationToken)
++    {
++        _leadership.LeadershipChanged -= OnLeadershipChanged;
++        _timerManager.StopTimers();
++        return Task.CompletedTask;
++    }
++
++    private void OnLeadershipChanged(object? sender, LeadershipChangedEventArgs e)
++    {
++        if (e.IsLeader)
++        {
++            _timerManager.RestartTimers();
++        }
++        else
++        {
++            _timerManager.StopTimers();
++        }
++    }
+ }

@@ -39,6 +39,7 @@ public sealed class EmbyImportController : ControllerBase
     [HttpPost("Upload/Init")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public ActionResult<EmbyImportUploadInitResponse> InitUpload([FromBody] EmbyImportUploadInitRequest? request)
     {
         if (!TryGetCallerUserId(out var callerUserId))
@@ -65,7 +66,7 @@ public sealed class EmbyImportController : ControllerBase
         }
         catch (EmbyImportException ex)
         {
-            return BadRequest(ex.Message);
+            return MapImportException(ex);
         }
     }
 
@@ -127,7 +128,7 @@ public sealed class EmbyImportController : ControllerBase
         }
         catch (EmbyImportException ex)
         {
-            return BadRequest(ex.Message);
+            return MapImportException(ex);
         }
     }
 
@@ -168,7 +169,7 @@ public sealed class EmbyImportController : ControllerBase
         }
         catch (EmbyImportException ex)
         {
-            return BadRequest(ex.Message);
+            return MapImportException(ex);
         }
     }
 
@@ -208,7 +209,7 @@ public sealed class EmbyImportController : ControllerBase
         }
         catch (EmbyImportException ex)
         {
-            return BadRequest(ex.Message);
+            return MapImportException(ex);
         }
     }
 
@@ -248,7 +249,7 @@ public sealed class EmbyImportController : ControllerBase
         }
         catch (EmbyImportException ex)
         {
-            return BadRequest(ex.Message);
+            return MapImportException(ex);
         }
     }
 
@@ -274,6 +275,9 @@ public sealed class EmbyImportController : ControllerBase
 
         return NoContent();
     }
+
+    private static ActionResult MapImportException(EmbyImportException ex)
+        => ex.IsConflict ? Conflict(ex.Message) : BadRequest(ex.Message);
 
     private static bool TryParseFileKind(string? file, out EmbyUploadFileKind fileKind)
     {
