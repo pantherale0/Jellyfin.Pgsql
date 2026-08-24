@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Common.Configuration;
+using MediaBrowser.Controller;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.Pgsql.Admin.EmbyImport;
@@ -32,6 +33,7 @@ public sealed partial class EmbyImportSessionStore
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _sessionLocks = new(StringComparer.Ordinal);
     private readonly string _rootPath;
     private readonly ILogger<EmbyImportSessionStore> _logger;
+    private readonly IInstanceLeadership _leadership;
     private readonly object _cleanupLock = new();
 
     /// <summary>
@@ -39,10 +41,12 @@ public sealed partial class EmbyImportSessionStore
     /// </summary>
     /// <param name="appPaths">Application paths.</param>
     /// <param name="logger">Logger.</param>
-    public EmbyImportSessionStore(IApplicationPaths appPaths, ILogger<EmbyImportSessionStore> logger)
+    /// <param name="leadership">Instance leadership.</param>
+    public EmbyImportSessionStore(IApplicationPaths appPaths, ILogger<EmbyImportSessionStore> logger, IInstanceLeadership leadership)
     {
         ArgumentNullException.ThrowIfNull(appPaths);
         _logger = logger;
+        _leadership = leadership;
         _rootPath = Path.Join(appPaths.DataPath, "pgsql-emby-import");
         Directory.CreateDirectory(_rootPath);
     }
@@ -56,6 +60,11 @@ public sealed partial class EmbyImportSessionStore
     /// <returns>The pending session.</returns>
     public EmbyImportSession CreatePending(long libraryDbBytes, long usersDbBytes, Guid createdByUserId)
     {
+        if (!_leadership.IsLeader)
+        {
+            throw new EmbyImportException("This instance is not the HA leader.", true);
+        }
+
         if (createdByUserId == Guid.Empty)
         {
             throw new EmbyImportException("Authenticated user id is required.");

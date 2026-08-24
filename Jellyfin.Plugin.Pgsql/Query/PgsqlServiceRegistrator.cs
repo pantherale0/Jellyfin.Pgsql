@@ -3,10 +3,12 @@ using System.IO;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Plugin.Pgsql.Admin;
 using Jellyfin.Plugin.Pgsql.Admin.EmbyImport;
+using Jellyfin.Plugin.Pgsql.Ha;
 using Jellyfin.Plugin.Pgsql.PlaybackReportingImport;
 using Jellyfin.Plugin.Pgsql.Similar;
 using Jellyfin.Plugin.Pgsql.Taste;
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Controller.Plugins;
 using Microsoft.EntityFrameworkCore;
@@ -37,6 +39,8 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<EmbySqliteReader>();
         serviceCollection.AddSingleton<EmbyUserDataMatcher>();
         serviceCollection.AddSingleton<EmbyUserDataImportService>();
+
+        RegisterHa(serviceCollection);
 
         var coreRepositoryType = CoreItemRepositoryAccessor.FindCoreRepositoryType(serviceCollection);
         if (coreRepositoryType is null)
@@ -168,5 +172,37 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
         }
 
         return new MemoryQueryResultCache();
+    }
+
+    private static void RegisterHa(IServiceCollection serviceCollection)
+    {
+        if (!HaOptions.Current.Enabled)
+        {
+            return;
+        }
+
+        serviceCollection.AddSingleton<PostgresInstanceLeadership>();
+        serviceCollection.AddSingleton<IInstanceLeadership>(sp => sp.GetRequiredService<PostgresInstanceLeadership>());
+        serviceCollection.AddHostedService<LeadershipHostedService>();
+
+        var redisConnectionString = PgsqlQueryOptions.Current.RedisConnectionString;
+        if (string.IsNullOrWhiteSpace(redisConnectionString))
+        {
+            return;
+        }
+
+        serviceCollection.AddSingleton<IPlaybackProgressCache>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<RedisPlaybackProgressCache>();
+            try
+            {
+                return new RedisPlaybackProgressCache(redisConnectionString, logger);
+            }
+            catch (Exception ex) when (ex is RedisException or IOException or TimeoutException or ArgumentException)
+            {
+                logger.LogWarning(ex, "Failed to initialize Redis playback progress cache; continuing without overlay");
+                return new NoOpPlaybackProgressCache();
+            }
+        });
     }
 }

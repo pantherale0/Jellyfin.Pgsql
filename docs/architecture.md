@@ -6,7 +6,7 @@ How this repository builds a PostgreSQL-backed Jellyfin image without committing
 
 | Path | Role |
 |---|---|
-| [`Jellyfin.Plugin.Pgsql/`](../Jellyfin.Plugin.Pgsql/) | PostgreSQL EF provider, migrations, query cache, fuzzy search, taste, Emby import, admin APIs |
+| [`Jellyfin.Plugin.Pgsql/`](../Jellyfin.Plugin.Pgsql/) | PostgreSQL EF provider, migrations, query cache, fuzzy search, taste, Emby import, admin APIs, optional active-standby HA |
 | [`Jellyfin.Plugin.Seerr/`](../Jellyfin.Plugin.Seerr/) | Seerr/Jellyseerr client plugin (search, request, parental filtering) |
 | [`jellyfin/`](../jellyfin/), [`jellyfin-web/`](../jellyfin-web/) | Upstream git submodules — **patch targets only**; keep working trees clean of committed local edits |
 | [`patches/`](../patches/) | All server/web customizations as flat `*.patch` files |
@@ -32,7 +32,7 @@ Agent-oriented rules (never commit submodule dirt, auth checklist, JSON casing) 
 Patches are applied in **lexicographic order** (`ls | sort`). Prefixes encode layering:
 
 - Unprefixed thematic names apply in alphabetical order among themselves.
-- `jellyfin_z_*` / `jellyfin_web_z_*` run late so they can edit files already touched by earlier patches.
+- `jellyfin_z_*` / `jellyfin_web_z_*` run late so they can edit files already touched by earlier patches (HA leadership, Live TV RBAC allowlist, taste impressions).
 - `jellyfin_zz_*` / `jellyfin_web_zz_*` run late (for example person identity, Emby import UI).
 - `jellyfin_zzz_*` / `jellyfin_zzzz_*` run last among server patches (by-name access semi-join, descendant-query memory, people name search / batched `HasSegments`).
 

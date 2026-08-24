@@ -109,6 +109,14 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 **Where:** [`jellyfin_library_image_parental`](patches.md#jellyfin_library_image_parentalpatch).
 
+## Active-standby HA (opt-in)
+
+**What:** One writer at a time: PostgreSQL advisory lock, leader-only library watchers/scheduled tasks/recording timers, `/health/ready`, `X-Jellyfin-Leader-Epoch` / `X-Jellyfin-Ha-Role` headers, Live TV `LiveStreamFenced` 503, flush coalesced progress on shutdown, optional Redis progress overlay.
+
+**Where:** Plugin [`Jellyfin.Plugin.Pgsql/Ha/`](../Jellyfin.Plugin.Pgsql/Ha/); patch [`jellyfin_z_ha_leadership`](patches.md#jellyfin_z_ha_leadershippatch). Env: [README](../README.md#active-standby-ha-optional).
+
+**How:** `Pgsql_HA_ENABLED=true`. Fail-closed until the lock is held. EF migrations take a separate blocking advisory lock so two boots cannot interleave DDL. HLS VOD already restarts ffmpeg from the requested segment; Live TV is not retuned.
+
 ## TV / webOS UX
 
 **What:** Infinite scroll on library views, TV focus/nav helpers, capped home-row / lazy-load pressure, webOS 5 / older Chromium workarounds, Quick Connect-first login on TV.

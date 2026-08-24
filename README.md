@@ -84,6 +84,21 @@ Known trade-offs:
   plugin, so its behaviour must be re-checked when syncing against new Jellyfin releases.
 - Cached Latest rows can lag behind library scans by up to the configured TTL.
 
+### Active-standby HA (optional)
+
+Opt-in single-writer failover. Off by default. When enabled, this process takes a PostgreSQL advisory lock; only the lock holder is Ready (`GET /health/ready`) and runs library watchers, scheduled tasks, and Live TV recording timers. `GET /health` stays a liveness check (database reachable) so a standby is not killed.
+
+Keep `/config` on one writer (or set `JELLYFIN_SERVER_ID` so both pods share the same SystemId). Redis is **not** used for election; extract Redis from the Jellyfin pod if you want progress overlay across failover.
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `Pgsql_HA_ENABLED` | `false` | Enable active-standby leadership |
+| `Pgsql_HA_LOCK_KEY` | `738462901` | PostgreSQL advisory lock key for leadership |
+| `Pgsql_HA_HEARTBEAT_SECONDS` | `5` | Leadership connection heartbeat interval |
+| `JELLYFIN_SERVER_ID` | empty | Optional stable server GUID (`device.txt`); use the same value on every replica |
+
+When HA is enabled, point k8s **readiness** at `/health/ready` (not `/health`). In-flight TCP streams still drop; HLS VOD/remux can resume from the next segment request; Live TV returns `LiveStreamFenced` (503) and the client should restart playback.
+
 To build the image locally instead:
 
 ```bash

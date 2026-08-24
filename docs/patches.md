@@ -175,7 +175,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Why** | Progress spam hammers Postgres during watch sessions. |
 | **Where** | `SessionManager.cs` |
 | **How** | Skip redundant progress persistence until interval or seek threshold. |
-| **Related** | Header comment in patch. No public issue. |
+| **Related** | Header comment in patch. HA flush/overlay: `jellyfin_z_ha_leadership`. No public issue. |
 
 ### `jellyfin_latest_tv_always_series.patch`
 
@@ -327,6 +327,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Where** | `BaseItem` (`IsParentalAllowed` made virtual), `LiveTvChannel`, `LiveTvProgram`, `LiveTvParentalAccess`, `GuideManager`, `PreferenceKind`, `BaseItemRepository` access filters |
 | **How** | Whitelist by channel id and/or category (M3U group or EPG Kids/Sports/News); SQL expands categories to channel ids; in-memory parental checks bypass unrated + AllowedTags for matches (BlockedTags still apply). Applies after `jellyfin_sso` (`z_` layering). |
 | **Related** | `jellyfin_sso`, `jellyfin_web_rbac`. No public issue. |
+
+### `jellyfin_z_ha_leadership.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Active-standby HA contracts and wiring: `IInstanceLeadership`, leader-only library monitor / scheduled tasks / recordings / background media work, `/health/ready`, leadership response headers, Live TV `LiveStreamFenced` 503, migration advisory-lock hook, `JELLYFIN_SERVER_ID`, coalesced progress flush, optional progress cache overlay. |
+| **Why** | Jellyfin is a single-writer process; two Ready replicas split-brain the library. A Postgres lock plus Ready-only-leader lets a warm standby take traffic after failover. |
+| **Where** | `IInstanceLeadership`, `LibraryMonitor`, `TaskManager` / `ScheduledTaskWorker`, `RecordingsHost`, `BackgroundMediaWorkGate`, `Startup`, `ExceptionMiddleware`, `StreamingHelpers`, `SessionManager`, `DeviceId`, `IJellyfinDatabaseProvider` |
+| **How** | Default always-leader (HA off). Plugin supplies Postgres advisory lock when `Pgsql_HA_ENABLED=true`. Fail-closed until the lock is held. Applies after unprefixed playback/Live TV patches (`z_` layer). |
+| **Related** | Plugin `Jellyfin.Plugin.Pgsql/Ha/`. Progress overlay extends `jellyfin_playback_progress_coalesce`. No public issue. |
 
 ### `jellyfin_livetv_stream.patch`
 
@@ -748,5 +759,5 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 
 ## File count
 
-**59** patches: **34** `jellyfin_*.patch` (server), **25** `jellyfin_web*.patch` (web).
+**64** patches: **39** `jellyfin_*.patch` (server), **25** `jellyfin_web*.patch` (web).
 

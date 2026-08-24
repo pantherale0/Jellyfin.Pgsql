@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Database.Implementations.DbConfiguration;
 using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Plugin.Pgsql.Ha;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Configuration;
 using Microsoft.EntityFrameworkCore;
@@ -29,6 +30,8 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
     private const string BackupFolderName = "PgsqlBackups";
     private readonly ILogger<PgSqlDatabaseProvider> _logger;
     private readonly IApplicationPaths _applicationPaths;
+    private string? _connectionString;
+    private NpgsqlConnection? _migrationLockConnection;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PgSqlDatabaseProvider"/> class.
@@ -51,6 +54,7 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
 
         var connectionBuilder = GetConnectionBuilder(customOptions);
         connectionBuilder.ApplicationName = $"jellyfin+{FileVersionInfo.GetVersionInfo(Assembly.GetEntryAssembly()!.Location).FileVersion}";
+        _connectionString = connectionBuilder.ToString();
 
         options
             .UseNpgsql(connectionBuilder.ToString(), pgSqlOptions =>
@@ -70,6 +74,54 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             {
                 _logger.LogInformation("EnableSensitiveDataLogging is enabled on PostgreSQL connection");
             }
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task AcquireMigrationLockAsync(CancellationToken cancellationToken)
+    {
+        var connectionString = _connectionString ?? GetConnectionBuilder(null).ToString();
+        var builder = new NpgsqlConnectionStringBuilder(connectionString)
+        {
+            KeepAlive = 30,
+            CommandTimeout = 0,
+            Pooling = false,
+            ApplicationName = "jellyfin-pgsql-migrate"
+        };
+
+        _migrationLockConnection = new NpgsqlConnection(builder.ToString());
+        await _migrationLockConnection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand("SELECT pg_advisory_lock(@key)", _migrationLockConnection);
+        command.Parameters.AddWithValue("key", HaOptions.MigrationLockKey);
+        await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("Acquired PostgreSQL migration advisory lock");
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task ReleaseMigrationLockAsync(CancellationToken cancellationToken)
+    {
+        if (_migrationLockConnection is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await using var command = new NpgsqlCommand("SELECT pg_advisory_unlock(@key)", _migrationLockConnection);
+            command.Parameters.AddWithValue("key", HaOptions.MigrationLockKey);
+            await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Error unlocking PostgreSQL migration advisory lock");
+        }
+        finally
+        {
+            await _migrationLockConnection.DisposeAsync().ConfigureAwait(false);
+            _migrationLockConnection = null;
         }
     }
 
