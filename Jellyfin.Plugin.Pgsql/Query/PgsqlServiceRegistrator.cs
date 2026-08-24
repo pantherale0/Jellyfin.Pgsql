@@ -4,6 +4,7 @@ using Jellyfin.Database.Implementations;
 using Jellyfin.Plugin.Pgsql.Admin;
 using Jellyfin.Plugin.Pgsql.Admin.EmbyImport;
 using Jellyfin.Plugin.Pgsql.PlaybackReportingImport;
+using Jellyfin.Plugin.Pgsql.Similar;
 using Jellyfin.Plugin.Pgsql.Taste;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Persistence;
@@ -45,6 +46,8 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
             serviceCollection.AddSingleton<IQueryCacheVersionStore>(_ => new MemoryQueryCacheVersionStore());
             serviceCollection.AddSingleton<TasteNeuralModelStore>();
             serviceCollection.AddSingleton<TasteRecommendationService>();
+            serviceCollection.AddSingleton<PostgresMovieSimilarItemsProvider>();
+            serviceCollection.AddSingleton<TasteBecauseYouService>();
             return;
         }
 
@@ -53,6 +56,8 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<IQueryResultCache>(CreateCache);
         serviceCollection.AddSingleton<TasteNeuralModelStore>();
         serviceCollection.AddSingleton<TasteRecommendationService>();
+        serviceCollection.AddSingleton<PostgresMovieSimilarItemsProvider>();
+        serviceCollection.AddSingleton<TasteBecauseYouService>();
 
         serviceCollection.AddSingleton(sp => new CachedItemLoader(
             sp.GetRequiredService<IDbContextFactory<JellyfinDbContext>>(),

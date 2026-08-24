@@ -32,6 +32,12 @@ public sealed class PostgresMovieSimilarItemsProvider :
     ILocalSimilarItemsProvider<Trailer>,
     IBatchLocalSimilarItemsProvider
 {
+    /// <summary>Per-source cap before taste feature load / neural (refresh and live miss).</summary>
+    public const int TasteRerankCap = 250;
+
+    /// <summary>Stored similar items per Because you X baseline.</summary>
+    public const int BecauseYouPerSourceLimit = 16;
+
     private const int MaxBatchSourceItems = 64;
 
     private static readonly (ItemValueType Type, int Weight)[] ItemValueDimensions =
@@ -151,14 +157,38 @@ public sealed class PostgresMovieSimilarItemsProvider :
         await using (context.ConfigureAwait(false))
         {
             var sourceIds = sourceItems.Select(i => i.Id).ToList();
-            var perSourceScores = await ComputeBatchScoresAsync(
-                    sourceIds,
+            var storedBySource = await LoadStoredSimilarAsync(
                     context,
                     query.User?.Id,
+                    sourceIds,
                     cancellationToken)
                 .ConfigureAwait(false);
 
+            var missingIds = sourceIds
+                .Where(id => !storedBySource.TryGetValue(id, out var rows) || rows.Count == 0)
+                .ToList();
+            Dictionary<Guid, Dictionary<Guid, int>> perSourceScores;
+            if (missingIds.Count == 0)
+            {
+                perSourceScores = [];
+            }
+            else
+            {
+                perSourceScores = await ComputeBatchScoresAsync(
+                        missingIds,
+                        context,
+                        query.User?.Id,
+                        useNeural: false,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             var allCandidateIds = new HashSet<Guid>();
+            foreach (var rows in storedBySource.Values)
+            {
+                allCandidateIds.UnionWith(rows.Select(r => r.ItemId));
+            }
+
             foreach (var (_, scores) in perSourceScores)
             {
                 allCandidateIds.UnionWith(
@@ -215,20 +245,34 @@ public sealed class PostgresMovieSimilarItemsProvider :
 
             foreach (var item in sourceItems)
             {
-                if (!perSourceScores.TryGetValue(item.Id, out var scores))
+                List<Guid> orderedIds;
+                if (storedBySource.TryGetValue(item.Id, out var stored) && stored.Count > 0)
+                {
+                    var storedSet = stored.Select(r => r.ItemId).ToHashSet();
+                    var accessibleById = accessibleItems.Where(x => storedSet.Contains(x.Id)).ToDictionary(x => x.Id);
+                    orderedIds = stored
+                        .Where(r => accessibleById.ContainsKey(r.ItemId))
+                        .DistinctBy(r => accessibleById[r.ItemId].PresentationUniqueKey)
+                        .Take(limit)
+                        .Select(r => r.ItemId)
+                        .ToList();
+                }
+                else if (perSourceScores.TryGetValue(item.Id, out var scores))
+                {
+                    orderedIds = accessibleItems
+                        .Where(x => scores.ContainsKey(x.Id))
+                        .OrderByDescending(x => scores.GetValueOrDefault(x.Id))
+                        .ThenBy(x => x.ProductionYear ?? int.MaxValue)
+                        .ThenBy(x => x.SortName ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                        .DistinctBy(x => x.PresentationUniqueKey)
+                        .Take(limit)
+                        .Select(x => x.Id)
+                        .ToList();
+                }
+                else
                 {
                     continue;
                 }
-
-                var orderedIds = accessibleItems
-                    .Where(x => scores.ContainsKey(x.Id))
-                    .OrderByDescending(x => scores.GetValueOrDefault(x.Id))
-                    .ThenBy(x => x.ProductionYear ?? int.MaxValue)
-                    .ThenBy(x => x.SortName ?? string.Empty, StringComparer.OrdinalIgnoreCase)
-                    .DistinctBy(x => x.PresentationUniqueKey)
-                    .Take(limit)
-                    .Select(x => x.Id)
-                    .ToList();
 
                 if (orderedIds.Count > 0)
                 {
@@ -278,16 +322,18 @@ public sealed class PostgresMovieSimilarItemsProvider :
     /// <param name="sourceIds">Source item IDs.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <param name="userId">Optional user for taste re-ranking.</param>
+    /// <param name="useNeural">When true, blend neural scores (refresh path only).</param>
     /// <returns>Per-source map of candidate ID → score.</returns>
     public async Task<Dictionary<Guid, Dictionary<Guid, int>>> ComputeBatchScoresAsync(
         IReadOnlyList<Guid> sourceIds,
         CancellationToken cancellationToken,
-        Guid? userId = null)
+        Guid? userId = null,
+        bool useNeural = false)
     {
         var context = await _dbProvider.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         await using (context.ConfigureAwait(false))
         {
-            return await ComputeBatchScoresAsync(sourceIds.ToList(), context, userId, cancellationToken)
+            return await ComputeBatchScoresAsync(sourceIds.ToList(), context, userId, useNeural, cancellationToken)
                 .ConfigureAwait(false);
         }
     }
@@ -296,6 +342,7 @@ public sealed class PostgresMovieSimilarItemsProvider :
         List<Guid> sourceIds,
         JellyfinDbContext context,
         Guid? userId,
+        bool useNeural,
         CancellationToken cancellationToken)
     {
         var result = new Dictionary<Guid, Dictionary<Guid, int>>();
@@ -320,7 +367,7 @@ public sealed class PostgresMovieSimilarItemsProvider :
             () => ApplyPersonScoresAsync(sourceIds, context, result, cancellationToken)).ConfigureAwait(false);
         await TryApplyScorePhaseAsync(
             "taste",
-            () => ApplyTasteScoresAsync(userId, context, result, cancellationToken)).ConfigureAwait(false);
+            () => ApplyTasteScoresAsync(userId, context, result, useNeural, cancellationToken)).ConfigureAwait(false);
 
         foreach (var sourceId in sourceIds)
         {
@@ -339,6 +386,7 @@ public sealed class PostgresMovieSimilarItemsProvider :
         Guid? userId,
         JellyfinDbContext context,
         Dictionary<Guid, Dictionary<Guid, int>> result,
+        bool useNeural,
         CancellationToken cancellationToken)
     {
         if (userId is null)
@@ -358,8 +406,8 @@ public sealed class PostgresMovieSimilarItemsProvider :
             return;
         }
 
-        var candidateIds = result.Values.SelectMany(m => m.Keys).Distinct().ToList();
-        if (candidateIds.Count == 0)
+        var rerankIds = SelectTasteRerankIds(result, TasteRerankCap);
+        if (rerankIds.Count == 0)
         {
             return;
         }
@@ -367,11 +415,16 @@ public sealed class PostgresMovieSimilarItemsProvider :
         _itemTypeLookup.BaseItemKindNames.TryGetValue(BaseItemKind.BoxSet, out var boxSetTypeName);
         var featuresByItem = await TasteCandidateFeatureLoader.LoadAsync(
                 context,
-                candidateIds,
+                rerankIds,
                 cancellationToken,
                 boxSetType: boxSetTypeName)
             .ConfigureAwait(false);
-        var neural = TasteNeuralScoring.TryPredict(_modelStore, profile.Value.Payload, featuresByItem, candidateIds);
+        var neural = TasteNeuralScoring.TryPredict(
+            _modelStore,
+            profile.Value.Payload,
+            featuresByItem,
+            rerankIds,
+            useNeural && options.UseNeuralForServing);
         foreach (var scoreMap in result.Values)
         {
             foreach (var candidateId in scoreMap.Keys.ToList())
@@ -385,7 +438,7 @@ public sealed class PostgresMovieSimilarItemsProvider :
                 var bonus = TasteScoreCombiner.Blend(
                     linear,
                     TasteNeuralScoring.Probability(neural, candidateId),
-                    options.UseNeuralForServing,
+                    useNeural && options.UseNeuralForServing,
                     options.MaxTasteBonus);
                 if (bonus > 0)
                 {
@@ -394,6 +447,59 @@ public sealed class PostgresMovieSimilarItemsProvider :
             }
         }
     }
+
+    /// <summary>
+    /// Unique top-K candidate ids per source, for taste feature load.
+    /// </summary>
+    /// <param name="result">Per-source score maps.</param>
+    /// <param name="capPerSource">Max candidates per source.</param>
+    /// <returns>Union of shortlisted ids.</returns>
+    public static List<Guid> SelectTasteRerankIds(
+        Dictionary<Guid, Dictionary<Guid, int>> result,
+        int capPerSource)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        capPerSource = Math.Max(1, capPerSource);
+        var ids = new HashSet<Guid>();
+        foreach (var map in result.Values)
+        {
+            foreach (var id in map
+                .OrderByDescending(kvp => kvp.Value)
+                .ThenBy(kvp => kvp.Key)
+                .Take(capPerSource)
+                .Select(kvp => kvp.Key))
+            {
+                ids.Add(id);
+            }
+        }
+
+        return [.. ids];
+    }
+
+    private static async Task<Dictionary<Guid, List<StoredSimilarRow>>> LoadStoredSimilarAsync(
+        JellyfinDbContext context,
+        Guid? userId,
+        List<Guid> sourceIds,
+        CancellationToken cancellationToken)
+    {
+        if (userId is null || sourceIds.Count == 0)
+        {
+            return [];
+        }
+
+        var rows = await context.UserTasteBecauseYouRecommendations.AsNoTracking()
+            .Where(r => r.UserId == userId && sourceIds.Contains(r.SourceItemId))
+            .OrderBy(r => r.Rank)
+            .Select(r => new StoredSimilarRow(r.SourceItemId, r.ItemId, r.Rank))
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return rows
+            .GroupBy(r => r.SourceItemId)
+            .ToDictionary(g => g.Key, g => g.OrderBy(r => r.Rank).ToList());
+    }
+
+    private readonly record struct StoredSimilarRow(Guid SourceItemId, Guid ItemId, int Rank);
 
     private async Task ApplyCollectionScoresAsync(
         List<Guid> sourceIds,

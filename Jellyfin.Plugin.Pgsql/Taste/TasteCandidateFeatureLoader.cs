@@ -111,48 +111,49 @@ public static class TasteCandidateFeatureLoader
         }
 
         var result = new Dictionary<Guid, TasteCandidateFeatures>();
+        var valuesByItem = valueRows.ToLookup(r => r.ItemId);
+        var peopleByItem = peopleRows.ToLookup(r => r.ItemId);
+        var boxSetsByItem = boxSetRows.ToLookup(r => r.ItemId);
+        var baseById = baseRows.ToDictionary(r => r.Id);
         foreach (var id in idList)
         {
-            var genres = valueRows
-                .Where(r => r.ItemId == id && r.Type == ItemValueType.Genre)
+            var itemValues = valuesByItem[id];
+            var itemPeople = peopleByItem[id];
+            var genres = itemValues
+                .Where(r => r.Type == ItemValueType.Genre)
                 .Select(r => r.CleanValue)
                 .Where(v => !string.IsNullOrWhiteSpace(v))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            var tags = valueRows
-                .Where(r => r.ItemId == id && r.Type == ItemValueType.Tags)
+            var tags = itemValues
+                .Where(r => r.Type == ItemValueType.Tags)
                 .Select(r => r.CleanValue)
                 .Where(v => !string.IsNullOrWhiteSpace(v))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            var studios = valueRows
-                .Where(r => r.ItemId == id && r.Type == ItemValueType.Studios)
+            var studios = itemValues
+                .Where(r => r.Type == ItemValueType.Studios)
                 .Select(r => r.CleanValue)
                 .Where(v => !string.IsNullOrWhiteSpace(v))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            var directors = peopleRows
-                .Where(r => r.ItemId == id && r.PersonType == nameof(PersonKind.Director))
+            var directors = itemPeople
+                .Where(r => r.PersonType == nameof(PersonKind.Director))
                 .Select(r => r.PeopleId)
                 .Distinct()
                 .ToList();
-            var actors = peopleRows
-                .Where(r => r.ItemId == id
-                    && (r.PersonType == nameof(PersonKind.Actor) || r.PersonType == nameof(PersonKind.GuestStar)))
+            var actors = itemPeople
+                .Where(r => r.PersonType == nameof(PersonKind.Actor) || r.PersonType == nameof(PersonKind.GuestStar))
                 .Select(r => r.PeopleId)
                 .Distinct()
                 .ToList();
-            var writers = peopleRows
-                .Where(r => r.ItemId == id && r.PersonType == nameof(PersonKind.Writer))
+            var writers = itemPeople
+                .Where(r => r.PersonType == nameof(PersonKind.Writer))
                 .Select(r => r.PeopleId)
                 .Distinct()
                 .ToList();
-            var boxSets = boxSetRows
-                .Where(r => r.ItemId == id)
-                .Select(r => r.BoxSetId)
-                .Distinct()
-                .ToList();
-            var baseRow = baseRows.FirstOrDefault(r => r.Id == id);
+            var boxSets = boxSetsByItem[id].Select(r => r.BoxSetId).Distinct().ToList();
+            baseById.TryGetValue(id, out var baseRow);
             var isSeries = seriesType is not null
                 && baseRow?.Type is string itemType
                 && string.Equals(itemType, seriesType, StringComparison.Ordinal);

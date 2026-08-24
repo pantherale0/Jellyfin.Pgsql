@@ -301,15 +301,25 @@ public sealed class PostgresSeriesSimilarItemsProvider : ILocalSimilarItemsProvi
             return;
         }
 
-        var candidateIds = scores.Keys.ToList();
+        var rerankIds = scores
+            .OrderByDescending(kvp => kvp.Value)
+            .ThenBy(kvp => kvp.Key)
+            .Take(250)
+            .Select(kvp => kvp.Key)
+            .ToList();
         var seriesType = _itemTypeLookup.BaseItemKindNames[BaseItemKind.Series];
         _itemTypeLookup.BaseItemKindNames.TryGetValue(BaseItemKind.BoxSet, out var boxSetType);
         var featuresByItem = await TasteCandidateFeatureLoader
-            .LoadAsync(context, candidateIds, cancellationToken, seriesType, boxSetType)
+            .LoadAsync(context, rerankIds, cancellationToken, seriesType, boxSetType)
             .ConfigureAwait(false);
         var cap = Math.Min(options.MaxTasteBonus, SeriesSimilarityWeights.MaxTasteBonus);
-        var neural = TasteNeuralScoring.TryPredict(_modelStore, profile.Value.Payload, featuresByItem, candidateIds);
-        foreach (var candidateId in candidateIds)
+        var neural = TasteNeuralScoring.TryPredict(
+            _modelStore,
+            profile.Value.Payload,
+            featuresByItem,
+            rerankIds,
+            useNeural: false);
+        foreach (var candidateId in rerankIds)
         {
             if (!featuresByItem.TryGetValue(candidateId, out var features))
             {

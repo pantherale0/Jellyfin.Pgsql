@@ -198,6 +198,14 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
             entity.HasIndex(e => new { e.UserId, e.ServedAt });
         });
 
+        modelBuilder.Entity<UserTasteBecauseYouRecommendation>(entity =>
+        {
+            entity.ToTable("UserTasteBecauseYouRecommendations");
+            entity.HasKey(e => new { e.UserId, e.SourceItemId, e.Rank });
+            entity.Property(e => e.SourceKind).IsRequired();
+            entity.HasIndex(e => new { e.UserId, e.SourceKind });
+        });
+
         var tokenMatch = typeof(Jellyfin.Plugin.Pgsql.Search.PgSearchDbFunctions)
             .GetMethod(
                 nameof(Jellyfin.Plugin.Pgsql.Search.PgSearchDbFunctions.TokenLevenshteinMatch),

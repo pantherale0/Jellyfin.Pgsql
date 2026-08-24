@@ -84,7 +84,8 @@ public sealed class TasteMatchService
                 _modelStore,
                 profile.Value.Payload,
                 features,
-                featureIds);
+                featureIds,
+                useNeural: false);
             var scored = new List<(Guid Id, int Score)>();
             foreach (var requestId in capped)
             {

@@ -511,6 +511,7 @@ public sealed class UserTasteProfileIntegrationTests
         await dbContext.UserData.Where(u => users.Contains(u.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.UserTasteProfiles.Where(p => users.Contains(p.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.UserTasteRecommendationImpressions.Where(i => users.Contains(i.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.UserTasteBecauseYouRecommendations.Where(r => users.Contains(r.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.ItemValuesMap.Where(m => items.Contains(m.ItemId)).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.BaseItems.Where(i => items.Contains(i.Id)).ExecuteDeleteAsync().ConfigureAwait(false);
 
@@ -612,6 +613,7 @@ public sealed class UserTasteProfileIntegrationTests
         await dbContext.UserData.Where(u => users.Contains(u.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.UserTasteProfiles.Where(p => users.Contains(p.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.UserTasteRecommendationImpressions.Where(i => users.Contains(i.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.UserTasteBecauseYouRecommendations.Where(r => users.Contains(r.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.ItemValuesMap.Where(m => items.Contains(m.ItemId)).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.BaseItems.Where(i => items.Contains(i.Id)).ExecuteDeleteAsync().ConfigureAwait(false);
 

@@ -1,0 +1,66 @@
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/UserTasteBecauseYouRecommendation.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/UserTasteBecauseYouRecommendation.cs
+new file mode 100644
+index 0000000000..977f49dc49
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/UserTasteBecauseYouRecommendation.cs
+@@ -0,0 +1,44 @@
++using System;
++
++namespace Jellyfin.Database.Implementations.Entities;
++
++/// <summary>
++/// Precomputed similar-item row for Movies Recommendations (Because you watched / liked).
++/// </summary>
++public class UserTasteBecauseYouRecommendation
++{
++    /// <summary>
++    /// Gets or sets the user identifier.
++    /// </summary>
++    public Guid UserId { get; set; }
++
++    /// <summary>
++    /// Gets or sets the baseline item the category is based on.
++    /// </summary>
++    public Guid SourceItemId { get; set; }
++
++    /// <summary>
++    /// Gets or sets the 0-based rank within that source's similar list.
++    /// </summary>
++    public int Rank { get; set; }
++
++    /// <summary>
++    /// Gets or sets the source kind (<c>RecentlyPlayed</c> or <c>Liked</c>).
++    /// </summary>
++    public string SourceKind { get; set; } = string.Empty;
++
++    /// <summary>
++    /// Gets or sets the recommended item identifier.
++    /// </summary>
++    public Guid ItemId { get; set; }
++
++    /// <summary>
++    /// Gets or sets the similarity/taste score at materialization time.
++    /// </summary>
++    public int Score { get; set; }
++
++    /// <summary>
++    /// Gets or sets when this row was written (UTC).
++    /// </summary>
++    public DateTime UpdatedAt { get; set; }
++}
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
+index 78d54907c3..5c115038ca 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
+@@ -203,6 +203,11 @@ public class JellyfinDbContext(DbContextOptions<JellyfinDbContext> options, ILog
+     /// </summary>
+     public DbSet<UserTasteRecommendationImpression> UserTasteRecommendationImpressions => Set<UserTasteRecommendationImpression>();
+ 
++    /// <summary>
++    /// Gets the <see cref="DbSet{TEntity}"/> containing precomputed Because you watched/liked similar rows.
++    /// </summary>
++    public DbSet<UserTasteBecauseYouRecommendation> UserTasteBecauseYouRecommendations => Set<UserTasteBecauseYouRecommendation>();
++
+     /*public DbSet<Artwork> Artwork => Set<Artwork>();
+ 
+     public DbSet<Book> Books => Set<Book>();
