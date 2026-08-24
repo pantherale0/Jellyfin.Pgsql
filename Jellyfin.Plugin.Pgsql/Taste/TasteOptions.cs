@@ -32,7 +32,7 @@ internal sealed class TasteOptions
     public bool EnableNeuralShadowTraining { get; private init; }
 
     /// <summary>
-    /// Gets a value indicating whether neural scores may affect live ranking (default false).
+    /// Gets a value indicating whether neural scores may affect stored For You / Because you X rankings (default false).
     /// </summary>
     public bool UseNeuralForServing { get; private init; }
 

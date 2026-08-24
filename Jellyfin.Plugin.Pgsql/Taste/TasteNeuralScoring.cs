@@ -4,7 +4,7 @@ using System.Collections.Generic;
 namespace Jellyfin.Plugin.Pgsql.Taste;
 
 /// <summary>
-/// Batch neural inference helpers for live taste scoring.
+/// Batch neural inference helpers for taste scoring (refresh / opt-in only).
 /// </summary>
 internal static class TasteNeuralScoring
 {
@@ -15,13 +15,20 @@ internal static class TasteNeuralScoring
     /// <param name="profile">User taste payload.</param>
     /// <param name="featuresByItem">Candidate features.</param>
     /// <param name="itemIds">Candidate ids.</param>
+    /// <param name="useNeural">When false, skip inference (live request path).</param>
     /// <returns>Probability map, or null when unavailable.</returns>
     public static IReadOnlyDictionary<Guid, float>? TryPredict(
         TasteNeuralModelStore store,
         UserTasteFeaturePayload profile,
         IReadOnlyDictionary<Guid, TasteCandidateFeatures> featuresByItem,
-        IEnumerable<Guid> itemIds)
+        IEnumerable<Guid> itemIds,
+        bool useNeural = false)
     {
+        if (!useNeural)
+        {
+            return null;
+        }
+
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(featuresByItem);

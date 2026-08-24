@@ -523,6 +523,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | Schema only; plugin logs on serve and joins during profile/shadow rebuild. Late `z_` so it applies after `jellyfin_user_taste_recommendations`. |
 | **Related** | `jellyfin_user_taste_recommendations`; plugin `Taste/`. No public issue. |
 
+### `jellyfin_zz_user_taste_because_you.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | DB entity for precomputed Because you watched/liked similar rows (`UserTasteBecauseYouRecommendation`). |
+| **Why** | Movies Recommendations must not run neural inference on each request (Cloudflare 524). |
+| **Where** | `UserTasteBecauseYouRecommendation.cs`, `JellyfinDbContext` |
+| **How** | Schema for the recommendations refresh job; `zz_` so it applies after `jellyfin_z_user_taste_recommendation_impressions`. |
+| **Related** | `jellyfin_user_taste_recommendations`; plugin `Taste/` + `Similar/`. No public issue. |
+
 ### `jellyfin_foryou_home_section.patch`
 
 | | |

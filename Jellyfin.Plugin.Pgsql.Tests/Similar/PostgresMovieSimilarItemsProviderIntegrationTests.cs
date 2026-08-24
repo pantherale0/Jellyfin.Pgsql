@@ -10,6 +10,9 @@ using Jellyfin.Plugin.Pgsql.Similar;
 using Jellyfin.Plugin.Pgsql.Taste;
 using Jellyfin.Plugin.Pgsql.Tests.Infrastructure;
 using MediaBrowser.Controller.Configuration;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.Movies;
+using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Model.Configuration;
 using Microsoft.EntityFrameworkCore;
@@ -32,6 +35,7 @@ public sealed class PostgresMovieSimilarItemsProviderIntegrationTests
     private static readonly Guid UnrelatedId = Guid.Parse("cccccccc-dddd-eeee-ffff-000000000099");
     private static readonly Guid RaimiBoxSetId = Guid.Parse("cccccccc-dddd-eeee-ffff-0000000000a1");
     private static readonly Guid ActionGenreValueId = Guid.Parse("cccccccc-dddd-eeee-ffff-0000000000b1");
+    private static readonly Guid BecauseYouUserId = Guid.Parse("cccccccc-dddd-eeee-ffff-0000000000aa");
 
     private static readonly string MovieType = typeof(MediaBrowser.Controller.Entities.Movies.Movie).FullName!;
     private static readonly string BoxSetType = typeof(MediaBrowser.Controller.Entities.Movies.BoxSet).FullName!;
@@ -81,6 +85,103 @@ public sealed class PostgresMovieSimilarItemsProviderIntegrationTests
     }
 
     [PostgresTestFact]
+    public async Task RebuildBecauseYou_WritesCappedUnplayedSimilarsPerSource()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+        await SeedFranchiseCorpusAsync(dbContext).ConfigureAwait(false);
+        await SeedBecauseYouUserAsync(dbContext).ConfigureAwait(false);
+
+        var previous = TasteOptions.TestOverride;
+        TasteOptions.TestOverride = TasteOptions.CreateForTests(useNeuralForServing: false);
+        try
+        {
+            var service = CreateBecauseYouService(factory);
+            await service.RebuildUserAsync(BecauseYouUserId, default).ConfigureAwait(false);
+        }
+        finally
+        {
+            TasteOptions.TestOverride = previous;
+        }
+
+        var rows = await dbContext.UserTasteBecauseYouRecommendations.AsNoTracking()
+            .Where(r => r.UserId == BecauseYouUserId)
+            .OrderBy(r => r.SourceItemId)
+            .ThenBy(r => r.Rank)
+            .ToListAsync()
+            .ConfigureAwait(false);
+
+        Assert.Contains(rows, r => r.SourceItemId == SpiderMan2002Id && r.SourceKind == BecauseYouSourceKinds.RecentlyPlayed);
+        Assert.Contains(rows, r => r.SourceItemId == AmazingSpiderManId && r.SourceKind == BecauseYouSourceKinds.Liked);
+        Assert.DoesNotContain(rows, r => r.ItemId == SpiderMan2002Id);
+        Assert.All(rows.GroupBy(r => r.SourceItemId), g => Assert.True(g.Count() <= PostgresMovieSimilarItemsProvider.BecauseYouPerSourceLimit));
+        Assert.Contains(rows, r => r.SourceItemId == SpiderMan2002Id && r.ItemId == SpiderMan2004Id);
+    }
+
+    [PostgresTestFact]
+    public async Task GetBatchSimilarItems_ServesStoredRows_WithoutLiveScoring()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+        await SeedFranchiseCorpusAsync(dbContext).ConfigureAwait(false);
+        await SeedBecauseYouUserAsync(dbContext).ConfigureAwait(false);
+
+        await dbContext.UserTasteBecauseYouRecommendations.Where(r => r.UserId == BecauseYouUserId)
+            .ExecuteDeleteAsync()
+            .ConfigureAwait(false);
+        dbContext.UserTasteBecauseYouRecommendations.AddRange(
+            Stored(BecauseYouUserId, SpiderMan2002Id, 0, ActionGenreOnlyId, 10),
+            Stored(BecauseYouUserId, SpiderMan2002Id, 1, UnrelatedId, 5));
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        var provider = CreateProvider(factory, looseQueryHelpers: true);
+        var user = await dbContext.Users.AsNoTracking().SingleAsync(u => u.Id == BecauseYouUserId).ConfigureAwait(false);
+        var source = new Movie { Id = SpiderMan2002Id, Name = "Spider-Man" };
+        var result = await provider.GetBatchSimilarItemsAsync(
+                [source],
+                new SimilarItemsQuery { User = user, Limit = 8 },
+                default)
+            .ConfigureAwait(false);
+
+        Assert.True(result.TryGetValue(SpiderMan2002Id, out var items));
+        Assert.Equal([ActionGenreOnlyId, UnrelatedId], items.Select(i => i.Id).ToArray());
+    }
+
+    [PostgresTestFact]
+    public async Task ComputeBatchScores_CacheMiss_DoesNotRequireNeuralModel()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+        await SeedFranchiseCorpusAsync(dbContext).ConfigureAwait(false);
+
+        var previous = TasteOptions.TestOverride;
+        TasteOptions.TestOverride = TasteOptions.CreateForTests(useNeuralForServing: true);
+        try
+        {
+            var provider = CreateProvider(factory);
+            var scores = await provider.ComputeBatchScoresAsync(
+                    [SpiderMan2002Id],
+                    default,
+                    BecauseYouUserId,
+                    useNeural: false)
+                .ConfigureAwait(false);
+
+            Assert.True(scores.TryGetValue(SpiderMan2002Id, out var map));
+            Assert.True(map.ContainsKey(SpiderMan2004Id));
+        }
+        finally
+        {
+            TasteOptions.TestOverride = previous;
+        }
+    }
+
+    [PostgresTestFact]
     public async Task ComputeBatchScores_CollectionMates_OrderByProductionYearWhenScoresEqual()
     {
         Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
@@ -109,7 +210,7 @@ public sealed class PostgresMovieSimilarItemsProviderIntegrationTests
         Assert.Equal([SpiderMan2004Id, SpiderMan2007Id], ordered);
     }
 
-    private static PostgresMovieSimilarItemsProvider CreateProvider(TestDbContextFactory factory)
+    private static PostgresMovieSimilarItemsProvider CreateProvider(TestDbContextFactory factory, bool looseQueryHelpers = false)
     {
         var itemTypeLookup = new Mock<IItemTypeLookup>();
         itemTypeLookup.SetupGet(l => l.BaseItemKindNames).Returns(new Dictionary<BaseItemKind, string>
@@ -125,7 +226,9 @@ public sealed class PostgresMovieSimilarItemsProviderIntegrationTests
             EnableExternalContentInSuggestions = false
         });
 
-        var queryHelpers = new Mock<IItemQueryHelpers>(MockBehavior.Strict);
+        var queryHelpers = looseQueryHelpers
+            ? CreateLooseQueryHelpers()
+            : new Mock<IItemQueryHelpers>(MockBehavior.Strict);
         var tasteStore = new UserTasteProfileStore(factory, NullLogger<UserTasteProfileStore>.Instance);
 
         return new PostgresMovieSimilarItemsProvider(
@@ -140,6 +243,101 @@ public sealed class PostgresMovieSimilarItemsProviderIntegrationTests
                 NullLogger<TasteNeuralModelStore>.Instance),
             NullLogger<PostgresMovieSimilarItemsProvider>.Instance);
     }
+
+    private static Mock<IItemQueryHelpers> CreateLooseQueryHelpers()
+    {
+        var queryHelpers = new Mock<IItemQueryHelpers>(MockBehavior.Loose);
+        queryHelpers.Setup(h => h.PrepareFilterQuery(It.IsAny<InternalItemsQuery>()));
+        queryHelpers
+            .Setup(h => h.PrepareItemQuery(It.IsAny<JellyfinDbContext>(), It.IsAny<InternalItemsQuery>()))
+            .Returns((JellyfinDbContext ctx, InternalItemsQuery _) => ctx.BaseItems.AsNoTracking());
+        queryHelpers
+            .Setup(h => h.TranslateQuery(
+                It.IsAny<IQueryable<BaseItemEntity>>(),
+                It.IsAny<JellyfinDbContext>(),
+                It.IsAny<InternalItemsQuery>()))
+            .Returns((IQueryable<BaseItemEntity> q, JellyfinDbContext _, InternalItemsQuery _) => q);
+        queryHelpers
+            .Setup(h => h.ApplyNavigations(It.IsAny<IQueryable<BaseItemEntity>>(), It.IsAny<InternalItemsQuery>()))
+            .Returns((IQueryable<BaseItemEntity> q, InternalItemsQuery _) => q);
+        queryHelpers
+            .Setup(h => h.DeserializeBaseItem(It.IsAny<BaseItemEntity>(), It.IsAny<bool>()))
+            .Returns((BaseItemEntity entity, bool _) => new Movie { Id = entity.Id, Name = entity.Name });
+        return queryHelpers;
+    }
+
+    private static TasteBecauseYouService CreateBecauseYouService(TestDbContextFactory factory)
+    {
+        var itemTypeLookup = new Mock<IItemTypeLookup>();
+        itemTypeLookup.SetupGet(l => l.BaseItemKindNames).Returns(new Dictionary<BaseItemKind, string>
+        {
+            [BaseItemKind.Movie] = MovieType,
+            [BaseItemKind.Trailer] = typeof(MediaBrowser.Controller.Entities.Trailer).FullName!,
+            [BaseItemKind.BoxSet] = BoxSetType,
+        });
+
+        return new TasteBecauseYouService(
+            factory,
+            CreateProvider(factory),
+            itemTypeLookup.Object,
+            NullLogger<TasteBecauseYouService>.Instance);
+    }
+
+    private static async Task SeedBecauseYouUserAsync(JellyfinDbContext dbContext)
+    {
+        await dbContext.UserTasteBecauseYouRecommendations.Where(r => r.UserId == BecauseYouUserId)
+            .ExecuteDeleteAsync()
+            .ConfigureAwait(false);
+        await dbContext.UserData.Where(u => u.UserId == BecauseYouUserId).ExecuteDeleteAsync().ConfigureAwait(false);
+
+        if (!await dbContext.Users.AnyAsync(u => u.Id == BecauseYouUserId).ConfigureAwait(false))
+        {
+            dbContext.Users.Add(new User("because-you-user", "default", "default") { Id = BecauseYouUserId });
+            await dbContext.SaveChangesAsync().ConfigureAwait(false);
+        }
+
+        dbContext.UserData.AddRange(
+            new UserData
+            {
+                UserId = BecauseYouUserId,
+                ItemId = SpiderMan2002Id,
+                CustomDataKey = SpiderMan2002Id.ToString("N"),
+                Played = true,
+                PlayCount = 1,
+                LastPlayedDate = DateTime.UtcNow.AddDays(-1),
+                Item = null!,
+                User = null!,
+            },
+            new UserData
+            {
+                UserId = BecauseYouUserId,
+                ItemId = AmazingSpiderManId,
+                CustomDataKey = AmazingSpiderManId.ToString("N"),
+                IsFavorite = true,
+                Played = false,
+                PlayCount = 0,
+                Item = null!,
+                User = null!,
+            });
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+    }
+
+    private static UserTasteBecauseYouRecommendation Stored(
+        Guid userId,
+        Guid sourceId,
+        int rank,
+        Guid itemId,
+        int score)
+        => new()
+        {
+            UserId = userId,
+            SourceItemId = sourceId,
+            Rank = rank,
+            SourceKind = BecauseYouSourceKinds.RecentlyPlayed,
+            ItemId = itemId,
+            Score = score,
+            UpdatedAt = DateTime.UtcNow
+        };
 
     private static async Task SeedFranchiseCorpusAsync(JellyfinDbContext dbContext)
     {

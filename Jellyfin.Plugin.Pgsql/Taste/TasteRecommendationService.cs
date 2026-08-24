@@ -447,7 +447,12 @@ public sealed class TasteRecommendationService
                 cancellationToken)
             .ConfigureAwait(false);
         var options = TasteOptions.Current;
-        var neural = TasteNeuralScoring.TryPredict(_modelStore, profile, features, unplayedIds);
+        var neural = TasteNeuralScoring.TryPredict(
+            _modelStore,
+            profile,
+            features,
+            unplayedIds,
+            options.UseNeuralForServing);
         var scored = new List<(Guid Id, int Score)>(unplayedIds.Count);
         foreach (var itemId in unplayedIds)
         {

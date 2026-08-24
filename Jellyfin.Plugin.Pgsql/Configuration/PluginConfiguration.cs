@@ -74,7 +74,7 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool EnableNeuralShadowTraining { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets a value indicating whether neural model scores may affect live rankings.
+    /// Gets or sets a value indicating whether neural model scores may affect stored For You and Because you X rankings at refresh.
     /// Defaults to false so shadow training collects metrics without changing suggestions.
     /// Overridden by <c>Pgsql_TASTE_NEURAL_SERVE</c>.
     /// </summary>

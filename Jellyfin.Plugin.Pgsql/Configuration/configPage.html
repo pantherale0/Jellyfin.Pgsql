@@ -72,12 +72,12 @@
                             movie More Like This and to materialize For You home feeds (separate
                             <em>Rebuild user taste recommendations</em> task). Feed reads are cached via the plugin
                             Redis/memory query cache. A shadow ML model can train for offline metrics without
-                            affecting live rankings until neural serving is enabled.
+                            changing stored For You or Because you X lists until neural serving is enabled.
                         </p>
                         <ul>
                             <li><strong>Pgsql_TASTE_ENABLED</strong> - Build and apply linear taste profiles (default: true)</li>
                             <li><strong>Pgsql_TASTE_SHADOW_TRAIN</strong> - Train shadow model during the rebuild task (default: true)</li>
-                            <li><strong>Pgsql_TASTE_NEURAL_SERVE</strong> - Use neural scores in live ranking (default: false)</li>
+                            <li><strong>Pgsql_TASTE_NEURAL_SERVE</strong> - Blend neural scores into stored For You and Because you X lists at refresh (default: false)</li>
                             <li><strong>Pgsql_TASTE_LOOKBACK_DAYS</strong> - History window in days (default: 730)</li>
                             <li><strong>Pgsql_TASTE_MIN_SAMPLES</strong> - Minimum positive signals per user (default: 3)</li>
                             <li><strong>Pgsql_TASTE_MAX_BONUS</strong> - Cap for linear taste bonus (default: 180)</li>

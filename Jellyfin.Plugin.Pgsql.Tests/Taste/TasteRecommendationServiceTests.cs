@@ -327,6 +327,7 @@ public sealed class TasteRecommendationServiceTests
         await dbContext.UserData.Where(u => u.UserId == TasteUserId).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.UserTasteProfiles.Where(p => p.UserId == TasteUserId).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.UserTasteRecommendations.Where(r => r.UserId == TasteUserId).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.UserTasteBecauseYouRecommendations.Where(r => r.UserId == TasteUserId).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.UserTasteRecommendationImpressions.Where(i => i.UserId == TasteUserId).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.ItemValuesMap.Where(m => ids.Contains(m.ItemId)).ExecuteDeleteAsync().ConfigureAwait(false);
         await dbContext.BaseItems.Where(i => ids.Contains(i.Id)).ExecuteDeleteAsync().ConfigureAwait(false);

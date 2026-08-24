@@ -11,7 +11,7 @@ public sealed class TasteShadowEvalStatusDto
     /// <summary>Gets or sets a value indicating whether shadow training runs with profile rebuild.</summary>
     public bool ShadowTrainingEnabled { get; set; }
 
-    /// <summary>Gets or sets a value indicating whether neural scores may affect live ranking.</summary>
+    /// <summary>Gets or sets a value indicating whether neural scores may affect stored For You / Because you X rankings.</summary>
     public bool NeuralServingEnabled { get; set; }
 
     /// <summary>Gets or sets a value indicating whether a shadow model is loaded for inference.</summary>
