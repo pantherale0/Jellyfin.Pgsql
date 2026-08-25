@@ -130,8 +130,8 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider, IDisposab
     /// </summary>
     public void Dispose()
     {
-        var connection = Interlocked.Exchange(ref _migrationLockConnection, null);
-        connection?.Dispose();
+        _migrationLockConnection?.Dispose();
+        _migrationLockConnection = null;
     }
 
     /// <inheritdoc/>
