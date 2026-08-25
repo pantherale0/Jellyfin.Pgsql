@@ -69,7 +69,11 @@ internal sealed class PostgresInstanceLeadership : IInstanceLeadership, IAsyncDi
             {
                 var epoch = Interlocked.Increment(ref _epoch);
                 Volatile.Write(ref _isLeader, true);
-                _logger.LogInformation("Acquired HA leadership lock (epoch {Epoch})", epoch);
+                if (_logger.IsEnabled(LogLevel.Information))
+                {
+                    _logger.LogInformation("Acquired HA leadership lock (epoch {Epoch})", epoch);
+                }
+
                 LeadershipChanged?.Invoke(this, new LeadershipChangedEventArgs(true, epoch));
             }
         }
@@ -151,7 +155,11 @@ internal sealed class PostgresInstanceLeadership : IInstanceLeadership, IAsyncDi
         if (wasLeader)
         {
             var epoch = Epoch;
-            _logger.LogWarning("Released HA leadership lock (epoch {Epoch})", epoch);
+            if (_logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning("Released HA leadership lock (epoch {Epoch})", epoch);
+            }
+
             LeadershipChanged?.Invoke(this, new LeadershipChangedEventArgs(false, epoch));
         }
     }

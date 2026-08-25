@@ -116,12 +116,22 @@ internal sealed class LeadershipHostedService : IHostedService, IDisposable
     {
         if (e.IsLeader)
         {
-            _logger.LogInformation("HA promote: starting writer-only work (epoch {Epoch})", e.Epoch);
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                var epoch = e.Epoch;
+                _logger.LogInformation("HA promote: starting writer-only work (epoch {Epoch})", epoch);
+            }
+
             _libraryMonitor.Start();
             return;
         }
 
-        _logger.LogWarning("HA demote: stopping writer-only work (epoch {Epoch})", e.Epoch);
+        if (_logger.IsEnabled(LogLevel.Warning))
+        {
+            var epoch = e.Epoch;
+            _logger.LogWarning("HA demote: stopping writer-only work (epoch {Epoch})", epoch);
+        }
+
         _ = ApplyDemotionAsync();
     }
 

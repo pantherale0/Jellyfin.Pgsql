@@ -454,7 +454,7 @@ public sealed class PostgresMovieSimilarItemsProvider :
     /// <param name="result">Per-source score maps.</param>
     /// <param name="capPerSource">Max candidates per source.</param>
     /// <returns>Union of shortlisted ids.</returns>
-    public static List<Guid> SelectTasteRerankIds(
+    public static IReadOnlyList<Guid> SelectTasteRerankIds(
         Dictionary<Guid, Dictionary<Guid, int>> result,
         int capPerSource)
     {
@@ -498,8 +498,6 @@ public sealed class PostgresMovieSimilarItemsProvider :
             .GroupBy(r => r.SourceItemId)
             .ToDictionary(g => g.Key, g => g.OrderBy(r => r.Rank).ToList());
     }
-
-    private readonly record struct StoredSimilarRow(Guid SourceItemId, Guid ItemId, int Rank);
 
     private async Task ApplyCollectionScoresAsync(
         List<Guid> sourceIds,
@@ -836,6 +834,8 @@ public sealed class PostgresMovieSimilarItemsProvider :
             _logger.LogWarning(ex, "Movie similarity scoring phase '{Phase}' failed; continuing with remaining signals", phaseName);
         }
     }
+
+    private readonly record struct StoredSimilarRow(Guid SourceItemId, Guid ItemId, int Rank);
 
     private sealed class FranchiseSimilarityRow
     {

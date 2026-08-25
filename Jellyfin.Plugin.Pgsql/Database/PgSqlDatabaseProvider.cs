@@ -25,7 +25,7 @@ namespace Jellyfin.Plugin.Pgsql.Database;
 /// Configures jellyfin to use an Postgres database.
 /// </summary>
 [JellyfinDatabaseProviderKey("Jellyfin-PgSql")]
-public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
+public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider, IDisposable
 {
     private const string BackupFolderName = "PgsqlBackups";
     private readonly ILogger<PgSqlDatabaseProvider> _logger;
@@ -103,14 +103,15 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
     /// <inheritdoc/>
     public async Task ReleaseMigrationLockAsync(CancellationToken cancellationToken)
     {
-        if (_migrationLockConnection is null)
+        var connection = Interlocked.Exchange(ref _migrationLockConnection, null);
+        if (connection is null)
         {
             return;
         }
 
         try
         {
-            await using var command = new NpgsqlCommand("SELECT pg_advisory_unlock(@key)", _migrationLockConnection);
+            await using var command = new NpgsqlCommand("SELECT pg_advisory_unlock(@key)", connection);
             command.Parameters.AddWithValue("key", HaOptions.MigrationLockKey);
             await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -120,9 +121,17 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider
         }
         finally
         {
-            await _migrationLockConnection.DisposeAsync().ConfigureAwait(false);
-            _migrationLockConnection = null;
+            await connection.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Releases the migration advisory-lock connection if it is still held.
+    /// </summary>
+    public void Dispose()
+    {
+        var connection = Interlocked.Exchange(ref _migrationLockConnection, null);
+        connection?.Dispose();
     }
 
     /// <inheritdoc/>

@@ -276,7 +276,7 @@ public sealed class EmbyImportController : ControllerBase
         return NoContent();
     }
 
-    private static ActionResult MapImportException(EmbyImportException ex)
+    private ActionResult MapImportException(EmbyImportException ex)
         => ex.IsConflict ? Conflict(ex.Message) : BadRequest(ex.Message);
 
     private static bool TryParseFileKind(string? file, out EmbyUploadFileKind fileKind)
