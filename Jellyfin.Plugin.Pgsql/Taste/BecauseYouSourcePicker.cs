@@ -6,6 +6,16 @@ using System.Linq;
 
 namespace Jellyfin.Plugin.Pgsql.Taste;
 
+/// <summary>A movie eligible to become a Because you X baseline.</summary>
+/// <param name="ItemId">Movie id.</param>
+/// <param name="BoxSetIds">BoxSet parent ids, if any.</param>
+public readonly record struct BecauseYouSourceCandidate(Guid ItemId, IReadOnlyList<Guid> BoxSetIds);
+
+/// <summary>A chosen Because you X baseline.</summary>
+/// <param name="ItemId">Movie id.</param>
+/// <param name="Kind"><see cref="BecauseYouSourceKinds"/> value.</param>
+public readonly record struct BecauseYouSource(Guid ItemId, string Kind);
+
 /// <summary>
 /// Picks a diverse set of Because you watched/liked baseline movies.
 /// </summary>
@@ -124,13 +134,3 @@ public static class BecauseYouSourcePicker
         return false;
     }
 }
-
-/// <summary>A movie eligible to become a Because you X baseline.</summary>
-/// <param name="ItemId">Movie id.</param>
-/// <param name="BoxSetIds">BoxSet parent ids, if any.</param>
-public readonly record struct BecauseYouSourceCandidate(Guid ItemId, IReadOnlyList<Guid> BoxSetIds);
-
-/// <summary>A chosen Because you X baseline.</summary>
-/// <param name="ItemId">Movie id.</param>
-/// <param name="Kind"><see cref="BecauseYouSourceKinds"/> value.</param>
-public readonly record struct BecauseYouSource(Guid ItemId, string Kind);
