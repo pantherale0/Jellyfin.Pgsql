@@ -1,20 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
-
-#pragma warning disable SA1402 // Source candidate/result records live next to the picker.
 
 namespace Jellyfin.Plugin.Pgsql.Taste;
-
-/// <summary>A movie eligible to become a Because you X baseline.</summary>
-/// <param name="ItemId">Movie id.</param>
-/// <param name="BoxSetIds">BoxSet parent ids, if any.</param>
-public readonly record struct BecauseYouSourceCandidate(Guid ItemId, IReadOnlyList<Guid> BoxSetIds);
-
-/// <summary>A chosen Because you X baseline.</summary>
-/// <param name="ItemId">Movie id.</param>
-/// <param name="Kind"><see cref="BecauseYouSourceKinds"/> value.</param>
-public readonly record struct BecauseYouSource(Guid ItemId, string Kind);
 
 /// <summary>
 /// Picks a diverse set of Because you watched/liked baseline movies.
@@ -79,8 +66,7 @@ public static class BecauseYouSourcePicker
                 continue;
             }
 
-            if (SharesFranchise(candidate, usedBoxSets)
-                && selected.Count < MinSourcesBeforeFranchiseRepeat)
+            if (SharesFranchise(candidate, usedBoxSets))
             {
                 selectedIds.Remove(candidate.ItemId);
                 deferred.Add(candidate);
