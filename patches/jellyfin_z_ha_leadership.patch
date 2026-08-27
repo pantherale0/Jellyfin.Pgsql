@@ -505,37 +505,6 @@ index 5da633916a..b5ca6da955 100644
              // Close open websockets to allow Kestrel to shut down cleanly
              foreach (var session in _activeConnections.Values)
              {
-diff --git a/Jellyfin.Api/Controllers/DynamicHlsController.cs b/Jellyfin.Api/Controllers/DynamicHlsController.cs
-index fd54aa797f..9c8b17adef 100644
---- a/Jellyfin.Api/Controllers/DynamicHlsController.cs
-+++ b/Jellyfin.Api/Controllers/DynamicHlsController.cs
-@@ -2153,6 +2153,26 @@ public class DynamicHlsController : BaseJellyfinApiController
-         }
-     }
- 
-+    private static FileSystemMetadata? GetFirstTranscodingFile(string playlist, string segmentExtension, IFileSystem fileSystem)
-+    {
-+        var folder = Path.GetDirectoryName(playlist) ?? throw new ArgumentException("Path can't be a root directory.", nameof(playlist));
-+
-+        var filePrefix = Path.GetFileNameWithoutExtension(playlist);
-+
-+        try
-+        {
-+            // Exclude fMP4 init segments (index -1) so backward-seek detection uses real media segments.
-+            return fileSystem.GetFiles(folder, new[] { segmentExtension }, true, false)
-+                .Where(i => Path.GetFileNameWithoutExtension(i.Name).StartsWith(filePrefix, StringComparison.OrdinalIgnoreCase))
-+                .Where(i => (TryParseSegmentIndex(playlist, i.Name) ?? -1) >= 0)
-+                .MinBy(i => TryParseSegmentIndex(playlist, i.Name) ?? int.MaxValue);
-+        }
-+        catch (IOException)
-+        {
-+            return null;
-+        }
-+    }
-+
-     private async Task DeleteLastFile(string playlistPath, string segmentExtension, int retryCount)
-     {
-         var file = GetLastTranscodingFile(playlistPath, segmentExtension, _fileSystem);
 diff --git a/Jellyfin.Api/Controllers/LiveTvController.cs b/Jellyfin.Api/Controllers/LiveTvController.cs
 index be1691d1bd..80e7644a92 100644
 --- a/Jellyfin.Api/Controllers/LiveTvController.cs
@@ -557,27 +526,6 @@ index be1691d1bd..80e7644a92 100644
          }
  
          var liveStream = new ProgressiveFileStream(liveStreamInfo.GetStream());
-diff --git a/Jellyfin.Api/Controllers/UserLibraryController.cs b/Jellyfin.Api/Controllers/UserLibraryController.cs
-index f4a6d2f1a4..24d0475a02 100644
---- a/Jellyfin.Api/Controllers/UserLibraryController.cs
-+++ b/Jellyfin.Api/Controllers/UserLibraryController.cs
-@@ -190,9 +190,14 @@ public class UserLibraryController : BaseJellyfinApiController
-             return NotFound();
-         }
- 
--        var item = itemId.IsEmpty()
-+        if (!TryResolveItemId(itemId, out var resolvedItemId))
-+        {
-+            return BadRequest($"The value '{itemId}' is not valid.");
-+        }
-+
-+        var item = resolvedItemId.IsEmpty()
-             ? _libraryManager.GetUserRootFolder()
--            : _libraryManager.GetItemById<BaseItem>(itemId, user);
-+            : _libraryManager.GetItemById<BaseItem>(resolvedItemId, user);
-         if (item is null)
-         {
-             return NotFound();
 diff --git a/Jellyfin.Api/Controllers/VideosController.cs b/Jellyfin.Api/Controllers/VideosController.cs
 index 1f6569c2ef..f700c45fe6 100644
 --- a/Jellyfin.Api/Controllers/VideosController.cs
@@ -716,31 +664,6 @@ index 0000000000..39eeaed162
 +        return _next(context);
 +    }
 +}
-diff --git a/Jellyfin.Server.Implementations/Users/UserManager.cs b/Jellyfin.Server.Implementations/Users/UserManager.cs
-index db5bb34c40..85e10367dd 100644
---- a/Jellyfin.Server.Implementations/Users/UserManager.cs
-+++ b/Jellyfin.Server.Implementations/Users/UserManager.cs
-@@ -841,6 +841,20 @@ namespace Jellyfin.Server.Implementations.Users
- 
-                     dbContext.Update(user);
-                     await dbContext.SaveChangesAsync().ConfigureAwait(false);
-+
-+                    var parentalControlsChanged =
-+                        previousMaxParentalRating != user.MaxParentalRatingScore
-+                        || previousMaxParentalSubRating != user.MaxParentalRatingSubScore
-+                        || !previousBlockedTags.SequenceEqual(user.GetPreference(PreferenceKind.BlockedTags))
-+                        || !previousAllowedTags.SequenceEqual(user.GetPreference(PreferenceKind.AllowedTags))
-+                        || !previousBlockUnratedItems.SequenceEqual(user.GetPreference(PreferenceKind.BlockUnratedItems));
-+
-+                    if (parentalControlsChanged)
-+                    {
-+                        var eventArgs = new UserUpdatedEventArgs(user);
-+                        await _eventManager.PublishAsync(eventArgs).ConfigureAwait(false);
-+                        OnUserUpdated?.Invoke(this, eventArgs);
-+                    }
-                 }
-             }
-         }
 diff --git a/Jellyfin.Server/HealthChecks/LeaderReadinessHealthCheck.cs b/Jellyfin.Server/HealthChecks/LeaderReadinessHealthCheck.cs
 new file mode 100644
 index 0000000000..1456942986
