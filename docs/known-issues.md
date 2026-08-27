@@ -68,4 +68,4 @@ These are **Jellyfin** project issues/PRs carried as patches in this repo — se
 | [jellyfin#13668](https://github.com/jellyfin/jellyfin/issues/13668) | HLS remux segment restart thrash |
 | [jellyfin#16823](https://github.com/jellyfin/jellyfin/issues/16823) | HDR10+ MPEG-TS SEI |
 | [jellyfin-web#7651](https://github.com/jellyfin/jellyfin-web/issues/7651) | Chrome/Opera MKV DirectPlay false positive |
-| [jellyfin#17602](https://github.com/jellyfin/jellyfin/issues/17602) | Home-page / recursive-query memory blow-up (`DescendantQueryHelper` inlined id sets; [`jellyfin_zzzz_descendant_query_memory`](patches.md#jellyfin_zzzz_descendant_query_memorypatch)) |
+| [jellyfin#17602](https://github.com/jellyfin/jellyfin/issues/17602) | Home-page / recursive-query memory blow-up in `DescendantQueryHelper` — fixed upstream in v12.0-rc6 |

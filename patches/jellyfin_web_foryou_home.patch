@@ -324,7 +324,7 @@ index 5865fc82dc..0c03c483f2 100644
      HomeSectionType.None
  ];
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index a6b093a5fd..5b103ce040 100755
+index 358b318363..3dc4b5f57c 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
 @@ -463,6 +463,9 @@

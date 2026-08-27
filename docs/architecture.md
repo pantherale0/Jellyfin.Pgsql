@@ -34,14 +34,14 @@ Patches are applied in **lexicographic order** (`ls | sort`). Prefixes encode la
 - Unprefixed thematic names apply in alphabetical order among themselves.
 - `jellyfin_z_*` / `jellyfin_web_z_*` run late so they can edit files already touched by earlier patches (HA leadership, Live TV RBAC allowlist, taste impressions).
 - `jellyfin_zz_*` / `jellyfin_web_zz_*` run late (for example person identity, Emby import UI).
-- `jellyfin_zzz_*` / `jellyfin_zzzz_*` run last among server patches (by-name access semi-join, descendant-query memory, people name search / batched `HasSegments`).
+- `jellyfin_zzz_*` / `jellyfin_zzzz_*` run last among server patches (by-name access semi-join, people name search / batched `HasSegments`).
 
 Some patches document explicit prerequisites in a `#` preamble when apply order matters beyond lexicographic sort. Those comments are authoritative when refreshing patches.
 
 When bumping Jellyfin tags, do **not** hand-edit hunk line numbers. Replay the series:
 
 ```bash
-./scripts/rebase-patches.sh --from v12.0-rc4 --to v12.0-rc5
+./scripts/rebase-patches.sh --from v12.0-rc5 --to v12.0-rc6
 ```
 
 That applies each patch as a commit on `--from`, `git rebase --onto` the new tag, and writes updated `patches/*.patch` files. Hunks that only fail because surrounding lines moved are merged automatically. Remaining **content** conflicts are reported (patch name + files) and must be resolved with `export-patch.sh`. SQLite `*ModelSnapshot.cs` conflicts are skipped by keeping the new upstream snapshot (this fork’s schema lives in plugin migrations). `sync-jellyfin-migrations.sh` runs this automatically when the target tag differs from [`.github/jellyfin-sync-state.json`](../.github/jellyfin-sync-state.json).

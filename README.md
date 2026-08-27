@@ -220,7 +220,7 @@ Options: `--force` to re-run when state appears current, `--dry-run` to check dr
 Standalone patch rebase (same machinery sync uses):
 
 ```bash
-./scripts/rebase-patches.sh --from v12.0-rc4 --to v12.0-rc5
+./scripts/rebase-patches.sh --from v12.0-rc5 --to v12.0-rc6
 ```
 
 Major Jellyfin upgrades (e.g. 12.x) require `net10.0`, Microsoft 10.x, and updated Npgsql packages. These are managed in [`Directory.Build.props`](Directory.Build.props) (`PluginTargetFramework`, `MicrosoftPackageVersion`, etc.) and bumped automatically by the sync script — you do not need to edit the csproj manually.

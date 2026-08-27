@@ -1,7 +1,8 @@
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
+index 5ded3eed9f..ad9270c05c 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-@@ -706,26 +706,33 @@ public sealed partial class BaseItemRepository
+@@ -718,12 +718,18 @@ public sealed partial class BaseItemRepository
              context.BaseItems.AsNoTracking(),
              new InternalItemsQuery(filter.User) { TopParentIds = topParentIds, IncludeOwnedItems = true });
  
@@ -23,10 +24,7 @@ diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuildi
          }
  
          foreach (var (kind, valueTypes) in _itemByNameValueTypes)
-         {
-             var typeName = _itemTypeLookup.BaseItemKindNames[kind];
-             if (!itemByNameTypes.Contains(typeName))
-             {
+@@ -734,9 +740,10 @@ public sealed partial class BaseItemRepository
                  continue;
              }
  
@@ -40,4 +38,3 @@ diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuildi
          }
  
          return baseQuery;
-     }

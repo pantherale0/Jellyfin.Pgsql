@@ -1,5 +1,5 @@
 diff --git a/Emby.Server.Implementations/Library/LibraryManager.cs b/Emby.Server.Implementations/Library/LibraryManager.cs
-index 6a39b2177d..66a1a976ce 100644
+index dd8c883684..e718c245cc 100644
 --- a/Emby.Server.Implementations/Library/LibraryManager.cs
 +++ b/Emby.Server.Implementations/Library/LibraryManager.cs
 @@ -1237,6 +1237,70 @@ namespace Emby.Server.Implementations.Library
@@ -73,7 +73,7 @@ index 6a39b2177d..66a1a976ce 100644
          public Guid GetGenreId(string name)
          {
              return GetItemByNameId<Genre>(Genre.GetPath(name));
-@@ -3693,14 +3757,20 @@ namespace Emby.Server.Implementations.Library
+@@ -3748,14 +3812,20 @@ namespace Emby.Server.Implementations.Library
  
          private async Task SavePeopleMetadataAsync(IEnumerable<PersonInfo> people, CancellationToken cancellationToken)
          {
@@ -97,10 +97,10 @@ index 6a39b2177d..66a1a976ce 100644
                  if (personEntity is null)
                  {
 diff --git a/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs b/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
-index dacef102dd..15d67905f6 100644
+index 078a0b921d..8e50347584 100644
 --- a/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
 +++ b/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
-@@ -54,6 +54,7 @@ public class PeopleValidator
+@@ -62,6 +62,7 @@ public class PeopleValidator
          var numComplete = 0;
  
          var numPeople = people.Count;
@@ -108,7 +108,7 @@ index dacef102dd..15d67905f6 100644
  
          IProgress<double> subProgress = new Progress<double>((val) => progress.Report(val / 2));
  
-@@ -65,7 +66,11 @@ public class PeopleValidator
+@@ -73,7 +74,11 @@ public class PeopleValidator
  
              try
              {
@@ -209,10 +209,10 @@ index 525396b7ee..be435d79e3 100644
  
          // Apply default sorting if none requested
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-index 8cda44b0f4..76b3a95067 100644
+index 6625cb2be4..542f9eab94 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-@@ -340,6 +340,16 @@ public sealed partial class BaseItemRepository
+@@ -341,6 +341,16 @@ public sealed partial class BaseItemRepository
              return ApplyDatePlayedOrder(query, filter, context, orderBy);
          }
  
@@ -229,7 +229,7 @@ index 8cda44b0f4..76b3a95067 100644
          IOrderedQueryable<BaseItemEntity>? orderedQuery = null;
  
          if (hasSearch)
-@@ -465,6 +475,108 @@ public sealed partial class BaseItemRepository
+@@ -477,6 +487,108 @@ public sealed partial class BaseItemRepository
          return ordered.ThenBy(x => x.Item.SortName).Select(x => x.Item);
      }
  
@@ -338,7 +338,7 @@ index 8cda44b0f4..76b3a95067 100644
      /// <summary>
      /// Builds a query for descendants of an ancestor with user access filtering applied.
      /// Uses recursive CTE to traverse both hierarchical (AncestorIds) and linked (LinkedChildren) relationships.
-@@ -739,4 +851,24 @@ public sealed partial class BaseItemRepository
+@@ -754,4 +866,24 @@ public sealed partial class BaseItemRepository
                  && (descendants.Any(d => d.Id == lc.ChildId)
                      || context.AncestorIds.Any(a => a.ParentItemId == lc.ChildId && descendants.Any(d => d.Id == a.ItemId))));
      }
@@ -364,18 +364,10 @@ index 8cda44b0f4..76b3a95067 100644
 +    }
  }
 diff --git a/Jellyfin.Server.Implementations/Item/LinkedChildrenService.cs b/Jellyfin.Server.Implementations/Item/LinkedChildrenService.cs
-index 40300b7fa2..65873187e0 100644
+index de112d7aa4..ff2dbd4fd6 100644
 --- a/Jellyfin.Server.Implementations/Item/LinkedChildrenService.cs
 +++ b/Jellyfin.Server.Implementations/Item/LinkedChildrenService.cs
-@@ -7,6 +7,7 @@ using System.Collections.Generic;
- using System.Linq;
- using Jellyfin.Data.Enums;
- using Jellyfin.Database.Implementations;
-+using Jellyfin.Extensions;
- using MediaBrowser.Controller.Entities.Audio;
- using MediaBrowser.Controller.Persistence;
- using Microsoft.EntityFrameworkCore;
-@@ -109,6 +110,34 @@ public class LinkedChildrenService : ILinkedChildrenService
+@@ -111,6 +111,34 @@ public class LinkedChildrenService : ILinkedChildrenService
          return result;
      }
  
@@ -411,10 +403,10 @@ index 40300b7fa2..65873187e0 100644
      public IReadOnlyList<Guid> GetManualLinkedParentIds(Guid childId, BaseItemKind? parentType = null)
      {
 diff --git a/MediaBrowser.Controller/Library/ILibraryManager.cs b/MediaBrowser.Controller/Library/ILibraryManager.cs
-index ca686fbd9d..7d2d3d34aa 100644
+index 2a6ea214b8..143f49b9f2 100644
 --- a/MediaBrowser.Controller/Library/ILibraryManager.cs
 +++ b/MediaBrowser.Controller/Library/ILibraryManager.cs
-@@ -705,6 +705,12 @@ namespace MediaBrowser.Controller.Library
+@@ -711,6 +711,12 @@ namespace MediaBrowser.Controller.Library
  
          Guid GetStudioId(string name);
  
@@ -513,7 +505,7 @@ index 0000000000..6daa40e267
 +    }
 +}
 diff --git a/src/Jellyfin.LiveTv/LiveTvManager.cs b/src/Jellyfin.LiveTv/LiveTvManager.cs
-index 9826424134..529462548b 100644
+index 80f6985fdb..60f14c6b6b 100644
 --- a/src/Jellyfin.LiveTv/LiveTvManager.cs
 +++ b/src/Jellyfin.LiveTv/LiveTvManager.cs
 @@ -315,12 +315,16 @@ namespace Jellyfin.LiveTv

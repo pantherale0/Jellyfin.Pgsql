@@ -59,10 +59,10 @@ index c2cb644c59..5ffe4afc0a 100644
      /// Gets the type from a type name string.
      /// </summary>
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-index 05ff720ddf..8899ad4db6 100644
+index c0067d8392..f5c62b9923 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-@@ -25,7 +25,15 @@ public sealed partial class BaseItemRepository
+@@ -26,7 +26,15 @@ public sealed partial class BaseItemRepository
      /// <inheritdoc />
      public IQueryable<BaseItemEntity> PrepareItemQuery(JellyfinDbContext context, InternalItemsQuery filter)
      {
@@ -79,7 +79,7 @@ index 05ff720ddf..8899ad4db6 100644
          dbQuery = dbQuery.AsSingleQuery();
  
          return dbQuery;
-@@ -100,18 +108,18 @@ public sealed partial class BaseItemRepository
+@@ -101,18 +109,18 @@ public sealed partial class BaseItemRepository
          {
              var groupedIds = dbQuery.GroupBy(e => new { e.PresentationUniqueKey, e.SeriesPresentationUniqueKey })
                  .Select(g => g.Where(e => e.PrimaryVersionId == null).Min(e => (Guid?)e.Id) ?? g.Min(e => (Guid?)e.Id));
@@ -101,7 +101,7 @@ index 05ff720ddf..8899ad4db6 100644
          }
          else
          {
-@@ -190,7 +198,7 @@ public sealed partial class BaseItemRepository
+@@ -191,7 +199,7 @@ public sealed partial class BaseItemRepository
              .Distinct();
  
          var collapsedIds = nonCollapsibleIds.Union(collapsibleNotInBoxSet).Union(boxSetIds);
@@ -110,7 +110,7 @@ index 05ff720ddf..8899ad4db6 100644
      }
  
      private static IQueryable<BaseItemEntity> ApplyBoxSetCollapsingAll(
-@@ -219,7 +227,7 @@ public sealed partial class BaseItemRepository
+@@ -220,7 +228,7 @@ public sealed partial class BaseItemRepository
              .Where(id => !childrenInBoxSet.Contains(id));
  
          var collapsedIds = notInBoxSet.Union(boxSetIds);
@@ -120,7 +120,7 @@ index 05ff720ddf..8899ad4db6 100644
  
      private static IQueryable<BaseItemEntity> ApplyNameFilters(IQueryable<BaseItemEntity> dbQuery, InternalItemsQuery filter)
 diff --git a/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs b/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs
-index 3585f85c61..4055360aac 100644
+index efff3457a3..d89fc19612 100644
 --- a/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs
 +++ b/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs
 @@ -171,7 +171,12 @@ public class ItemPersistenceService : IItemPersistenceService

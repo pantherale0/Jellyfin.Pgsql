@@ -252,7 +252,7 @@ index af7ba3d52f..093f59760a 100644
      );
  };
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index ddfb4a1cc5..b578f07a87 100755
+index 8943f7baca..6c8fb65f56 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
 @@ -324,7 +324,7 @@

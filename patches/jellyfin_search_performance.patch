@@ -572,10 +572,10 @@ index 385795e9f7..525396b7ee 100644
              }
          }
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-index 4be9b04baa..0304ae2650 100644
+index 1e30f0164e..57833664b0 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-@@ -187,8 +187,14 @@ public sealed partial class BaseItemRepository
+@@ -259,8 +259,14 @@ public sealed partial class BaseItemRepository
              }
              else
              {
@@ -592,7 +592,7 @@ index 4be9b04baa..0304ae2650 100644
              }
          }
  
-@@ -362,13 +368,13 @@ public sealed partial class BaseItemRepository
+@@ -434,13 +440,13 @@ public sealed partial class BaseItemRepository
  
          if (filter.PersonIds.Length > 0)
          {
@@ -612,7 +612,7 @@ index 4be9b04baa..0304ae2650 100644
  
              var personTypes = filter.PersonTypes;
              baseQuery = baseQuery
-@@ -416,10 +422,11 @@ public sealed partial class BaseItemRepository
+@@ -488,10 +494,11 @@ public sealed partial class BaseItemRepository
              }
              else
              {
@@ -627,7 +627,7 @@ index 4be9b04baa..0304ae2650 100644
              }
          }
  
-@@ -1180,4 +1187,12 @@ public sealed partial class BaseItemRepository
+@@ -1277,4 +1284,12 @@ public sealed partial class BaseItemRepository
  
          return baseQuery;
      }

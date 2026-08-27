@@ -1,8 +1,8 @@
 diff --git a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
-index c1bc9330e2..be827ef5a4 100644
+index 2380b39d5d..bab9613a51 100644
 --- a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
 +++ b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
-@@ -395,8 +395,7 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -435,8 +435,7 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
  
          if (!string.IsNullOrWhiteSpace(filter.NameContains))
          {
@@ -40,10 +40,10 @@ index 7cc6daa905..f6682770da 100644
      public bool IsTypeSupported(BaseItem baseItem)
      {
 diff --git a/MediaBrowser.Controller/Entities/BaseItem.cs b/MediaBrowser.Controller/Entities/BaseItem.cs
-index ecf78c54e2..dbf6546641 100644
+index 0d9a8825a7..dd85ab5c11 100644
 --- a/MediaBrowser.Controller/Entities/BaseItem.cs
 +++ b/MediaBrowser.Controller/Entities/BaseItem.cs
-@@ -1127,7 +1127,9 @@ namespace MediaBrowser.Controller.Entities
+@@ -1168,7 +1168,9 @@ namespace MediaBrowser.Controller.Entities
  
              var list = GetAllItemsForMediaSources().ToList();
              var commonPrefix = GetCommonNamePrefix(list);
@@ -54,7 +54,7 @@ index ecf78c54e2..dbf6546641 100644
  
              if (IsActiveRecording())
              {
-@@ -1153,7 +1155,7 @@ namespace MediaBrowser.Controller.Entities
+@@ -1194,7 +1196,7 @@ namespace MediaBrowser.Controller.Entities
              return Enumerable.Empty<(BaseItem, MediaSourceType)>();
          }
  
@@ -63,7 +63,7 @@ index ecf78c54e2..dbf6546641 100644
          {
              ArgumentNullException.ThrowIfNull(item);
  
-@@ -1174,7 +1176,7 @@ namespace MediaBrowser.Controller.Entities
+@@ -1215,7 +1217,7 @@ namespace MediaBrowser.Controller.Entities
                  Type = type,
                  HasSegments = MediaSegmentManager.IsTypeSupported(item)
                      && (protocol is null or MediaProtocol.File)
@@ -90,4 +90,3 @@ index 4f13a7eccd..e754e436d4 100644
      /// <summary>
      /// Gets a list of all registered Segment Providers and their IDs.
      /// </summary>
-

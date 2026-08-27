@@ -11,10 +11,10 @@ index c6468daa2e..10c76da026 100644
          entity.Permissions.Add(new Permission(PermissionKind.EnableSharedDeviceControl, true));
          entity.Permissions.Add(new Permission(PermissionKind.EnableVideoPlaybackTranscoding, true));
 diff --git a/Jellyfin.Server.Implementations/Users/UserManager.cs b/Jellyfin.Server.Implementations/Users/UserManager.cs
-index 8198ebce47..59a1857017 100644
+index 92cfb70a16..db5bb34c40 100644
 --- a/Jellyfin.Server.Implementations/Users/UserManager.cs
 +++ b/Jellyfin.Server.Implementations/Users/UserManager.cs
-@@ -456,6 +456,7 @@ namespace Jellyfin.Server.Implementations.Users
+@@ -501,6 +501,7 @@ namespace Jellyfin.Server.Implementations.Users
                      EnableRemoteAccess = user.HasPermission(PermissionKind.EnableRemoteAccess),
                      EnableLiveTvManagement = user.HasPermission(PermissionKind.EnableLiveTvManagement),
                      EnableLiveTvAccess = user.HasPermission(PermissionKind.EnableLiveTvAccess),
@@ -22,7 +22,7 @@ index 8198ebce47..59a1857017 100644
                      EnableMediaPlayback = user.HasPermission(PermissionKind.EnableMediaPlayback),
                      EnableAudioPlaybackTranscoding = user.HasPermission(PermissionKind.EnableAudioPlaybackTranscoding),
                      EnableVideoPlaybackTranscoding = user.HasPermission(PermissionKind.EnableVideoPlaybackTranscoding),
-@@ -843,6 +844,7 @@ namespace Jellyfin.Server.Implementations.Users
+@@ -888,6 +889,7 @@ namespace Jellyfin.Server.Implementations.Users
                      user.SetPermission(PermissionKind.EnableRemoteAccess, policy.EnableRemoteAccess);
                      user.SetPermission(PermissionKind.EnableLiveTvManagement, policy.EnableLiveTvManagement);
                      user.SetPermission(PermissionKind.EnableLiveTvAccess, policy.EnableLiveTvAccess);

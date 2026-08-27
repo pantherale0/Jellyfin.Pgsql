@@ -18,7 +18,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 #pragma warning disable 612, 618
             modelBuilder
                 .UseCollation("C")
-                .HasAnnotation("ProductVersion", "10.0.10")
+                .HasAnnotation("ProductVersion", "10.0.11")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -1001,6 +1001,8 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasKey("ItemId", "StreamIndex");
 
+                    b.HasIndex("StreamType", "ItemId", "Language", "IsExternal");
+
                     b.ToTable("MediaStreamInfos");
                 });
 
@@ -1068,14 +1070,11 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Property<int>("Kind")
                         .HasColumnType("integer");
 
-                    b.Property<Guid?>("Permission_Permissions_Guid")
-                        .HasColumnType("uuid");
-
                     b.Property<long>("RowVersion")
                         .IsConcurrencyToken()
                         .HasColumnType("bigint");
 
-                    b.Property<Guid?>("UserId")
+                    b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
                     b.Property<bool>("Value")
@@ -1084,8 +1083,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("UserId", "Kind")
-                        .IsUnique()
-                        .HasFilter("[UserId] IS NOT NULL");
+                        .IsUnique();
 
                     b.ToTable("Permissions");
                 });
@@ -1173,10 +1171,10 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
 
                     b.HasIndex("ItemId", "DatePlayed");
 
-                    b.HasIndex("UserId", "DatePlayed");
-
                     b.HasIndex("SeriesId", "DatePlayed")
                         .HasFilter("\"SeriesId\" IS NOT NULL");
+
+                    b.HasIndex("UserId", "DatePlayed");
 
                     b.ToTable("PlaybackActivity");
                 });
@@ -1220,14 +1218,11 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.Property<int>("Kind")
                         .HasColumnType("integer");
 
-                    b.Property<Guid?>("Preference_Preferences_Guid")
-                        .HasColumnType("uuid");
-
                     b.Property<long>("RowVersion")
                         .IsConcurrencyToken()
                         .HasColumnType("bigint");
 
-                    b.Property<Guid?>("UserId")
+                    b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("Value")
@@ -1238,8 +1233,7 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("UserId", "Kind")
-                        .IsUnique()
-                        .HasFilter("[UserId] IS NOT NULL");
+                        .IsUnique();
 
                     b.ToTable("Preferences");
                 });
@@ -1991,7 +1985,8 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.HasOne("Jellyfin.Database.Implementations.Entities.User", null)
                         .WithMany("Permissions")
                         .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade);
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.PlaybackActivity", b =>
@@ -2017,7 +2012,8 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                     b.HasOne("Jellyfin.Database.Implementations.Entities.User", null)
                         .WithMany("Preferences")
                         .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade);
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.Security.Device", b =>

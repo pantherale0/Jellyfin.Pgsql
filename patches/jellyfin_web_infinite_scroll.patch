@@ -1004,7 +1004,7 @@ index ec7eb179dd..d720cf60e9 100644
  export const customCss = currentSettings.customCss.bind(currentSettings);
  export const disableCustomCss = currentSettings.disableCustomCss.bind(currentSettings);
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index baa9b57495..50f7d11d75 100755
+index c2e719cff7..67446efaae 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
 @@ -313,6 +313,8 @@

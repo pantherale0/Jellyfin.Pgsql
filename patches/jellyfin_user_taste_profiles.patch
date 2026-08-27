@@ -1,6 +1,6 @@
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/TasteModelEvalRun.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/TasteModelEvalRun.cs
 new file mode 100644
-index 0000000000..4d14bb3f0a
+index 0000000000..c82e304401
 --- /dev/null
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/TasteModelEvalRun.cs
 @@ -0,0 +1,114 @@

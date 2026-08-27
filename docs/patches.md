@@ -111,17 +111,6 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | One `ItemId IN (...)` lookup, then a set membership check per version. `NameContains` uses `Name.Contains` without `ToUpper()`. Applies in the `zzzz_` band after `zzz_byname`. |
 | **Related** | `jellyfin_zz_person_provider_identity`, `jellyfin_background_media_qos` (`IX_MediaSegments_ItemId`). No public issue. |
 
-### `jellyfin_zzzz_descendant_query_memory.patch`
-
-| | |
-|---|---|
-| **Target** | `jellyfin` |
-| **What** | Stops `DescendantQueryHelper` from materializing whole descendant / subtitle-folder id sets and handing them to EF as `AsQueryable()`. |
-| **Why** | Opening `/web/#/home` (and other recursive item queries) inlined one SQL literal per GUID, recompiled on every distinct set, and grew the compiled-query cache without bound — RSS jumping from hundreds of MB to the process ceiling. |
-| **Where** | `src/Jellyfin.Database/Jellyfin.Database.Implementations/DescendantQueryHelper.cs` |
-| **How** | Hierarchical descendants/ancestors stay as `AncestorIds` subqueries (`EF.Parameter` / `WhereOneOrMany`). BoxSet/Playlist links are walked only as the small set of linked *folders*, cycle-guarded. Call sites keep the same `IQueryable<Guid>` API. |
-| **Related** | Upstream [jellyfin#17602](https://github.com/jellyfin/jellyfin/issues/17602); approach from [PR #17607](https://github.com/jellyfin/jellyfin/pull/17607) without the disputed hop-limit rewrite. Applies in the `zzzz_` band (`zzzz_descendant` before `zzzz_people`). |
-
 ### `jellyfin_home_api_performance.patch`
 
 | | |

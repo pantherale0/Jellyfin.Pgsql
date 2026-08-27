@@ -1,8 +1,8 @@
 diff --git a/MediaBrowser.Providers/Plugins/Omdb/OmdbProvider.cs b/MediaBrowser.Providers/Plugins/Omdb/OmdbProvider.cs
-index f562d64ddd..63aa74455d 100644
+index d51d913caa..a09b8f6429 100644
 --- a/MediaBrowser.Providers/Plugins/Omdb/OmdbProvider.cs
 +++ b/MediaBrowser.Providers/Plugins/Omdb/OmdbProvider.cs
-@@ -231,21 +231,73 @@ namespace MediaBrowser.Providers.Plugins.Omdb
+@@ -234,21 +234,73 @@ namespace MediaBrowser.Providers.Plugins.Omdb
  
          internal async Task<RootObject> GetRootObject(string imdbId, CancellationToken cancellationToken)
          {

@@ -1,8 +1,8 @@
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-index 8899ad4db6..8cda44b0f4 100644
+index f5c62b9923..6625cb2be4 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-@@ -273,7 +273,14 @@ public sealed partial class BaseItemRepository
+@@ -274,7 +274,14 @@ public sealed partial class BaseItemRepository
  
          if (filter.DtoOptions.EnableUserData)
          {
@@ -18,7 +18,7 @@ index 8899ad4db6..8cda44b0f4 100644
          }
  
          if (filter.DtoOptions.EnableImages)
-@@ -323,6 +330,16 @@ public sealed partial class BaseItemRepository
+@@ -324,6 +331,16 @@ public sealed partial class BaseItemRepository
              return ApplySeriesDatePlayedOrder(query, filter, context, orderBy);
          }
  
@@ -35,7 +35,7 @@ index 8899ad4db6..8cda44b0f4 100644
          IOrderedQueryable<BaseItemEntity>? orderedQuery = null;
  
          if (hasSearch)
-@@ -415,6 +432,39 @@ public sealed partial class BaseItemRepository
+@@ -427,6 +444,39 @@ public sealed partial class BaseItemRepository
              : joined.OrderByDescending(x => x.MaxDate).ThenBy(x => x.Item.SortName).Select(x => x.Item);
      }
  
@@ -76,7 +76,7 @@ index 8899ad4db6..8cda44b0f4 100644
      /// Builds a query for descendants of an ancestor with user access filtering applied.
      /// Uses recursive CTE to traverse both hierarchical (AncestorIds) and linked (LinkedChildren) relationships.
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs
-index 2022cbfe9f..a58536d2a4 100644
+index 064935b726..30e1fabcb7 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs
 @@ -59,7 +59,7 @@ public sealed partial class BaseItemRepository
@@ -97,7 +97,7 @@ index 2022cbfe9f..a58536d2a4 100644
      }
  
      /// <inheritdoc/>
-@@ -379,7 +379,7 @@ public sealed partial class BaseItemRepository
+@@ -409,7 +409,7 @@ public sealed partial class BaseItemRepository
              ? ApplyNavigations(
                      context.BaseItems.AsNoTracking().Where(e => entitiesToFetch.Contains(e.Id)),
                      filter)
@@ -106,7 +106,7 @@ index 2022cbfe9f..a58536d2a4 100644
                  .ToDictionary(e => e.Id)
              : [];
  
-@@ -450,7 +450,7 @@ public sealed partial class BaseItemRepository
+@@ -480,7 +480,7 @@ public sealed partial class BaseItemRepository
              .Include(e => e.UserData)
              .Include(e => e.Images)
              .Include(e => e.LinkedChildEntities)
