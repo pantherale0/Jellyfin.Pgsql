@@ -1,15 +1,15 @@
 diff --git a/Emby.Server.Implementations/ApplicationHost.cs b/Emby.Server.Implementations/ApplicationHost.cs
-index 242866ab5c..33823e5ed5 100644
+index 242866ab5c..b31c3e36e8 100644
 --- a/Emby.Server.Implementations/ApplicationHost.cs
 +++ b/Emby.Server.Implementations/ApplicationHost.cs
-@@ -22,6 +22,7 @@ using Emby.Server.Implementations.Configuration;
- using Emby.Server.Implementations.Cryptography;
+@@ -23,6 +23,7 @@ using Emby.Server.Implementations.Cryptography;
  using Emby.Server.Implementations.Data;
  using Emby.Server.Implementations.Devices;
-+using Emby.Server.Implementations.Ha;
  using Emby.Server.Implementations.Dto;
++using Emby.Server.Implementations.Ha;
  using Emby.Server.Implementations.HttpServer.Security;
  using Emby.Server.Implementations.IO;
+ using Emby.Server.Implementations.Library;
 @@ -500,6 +501,9 @@ namespace Emby.Server.Implementations
          {
              serviceCollection.AddSingleton(_startupOptions);
@@ -100,7 +100,7 @@ index 0000000000..5d8583b4cb
 +    }
 +}
 diff --git a/Emby.Server.Implementations/IO/LibraryMonitor.cs b/Emby.Server.Implementations/IO/LibraryMonitor.cs
-index 8063f9543a..71aaf5bf8d 100644
+index 8063f9543a..d64d2b6f82 100644
 --- a/Emby.Server.Implementations/IO/LibraryMonitor.cs
 +++ b/Emby.Server.Implementations/IO/LibraryMonitor.cs
 @@ -3,8 +3,10 @@ using System.Collections.Concurrent;
@@ -114,7 +114,7 @@ index 8063f9543a..71aaf5bf8d 100644
  using MediaBrowser.Controller.Configuration;
  using MediaBrowser.Controller.Entities;
  using MediaBrowser.Controller.Library;
-@@ -22,10 +24,8 @@ namespace Emby.Server.Implementations.IO
+@@ -22,10 +24,7 @@ namespace Emby.Server.Implementations.IO
          private readonly IServerConfigurationManager _configurationManager;
          private readonly IFileSystem _fileSystem;
          private readonly DotIgnoreIgnoreRule _dotIgnoreIgnoreRule;
@@ -123,8 +123,15 @@ index 8063f9543a..71aaf5bf8d 100644
 -        /// The file system watchers.
 -        /// </summary>
 +        private readonly IInstanceLeadership _leadership;
-+        private int _started;
          private readonly ConcurrentDictionary<string, FileSystemWatcher> _fileSystemWatchers = new(StringComparer.OrdinalIgnoreCase);
+ 
+         /// <summary>
+@@ -38,6 +37,7 @@ namespace Emby.Server.Implementations.IO
+         /// </summary>
+         private readonly ConcurrentDictionary<string, string> _tempIgnoredPaths = new(StringComparer.OrdinalIgnoreCase);
+ 
++        private int _started;
+         private bool _disposed;
  
          /// <summary>
 @@ -49,19 +49,22 @@ namespace Emby.Server.Implementations.IO
@@ -179,79 +186,59 @@ index 8063f9543a..71aaf5bf8d 100644
              _libraryManager.ItemRemoved -= OnLibraryManagerItemRemoved;
  
 diff --git a/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs b/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs
-index e229aa42cb..ec1faed2ad 100644
+index e229aa42cb..abaee82974 100644
 --- a/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs
 +++ b/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs
-@@ -2,6 +2,10 @@ using System;
+@@ -2,6 +2,7 @@ using System;
  using System.Linq;
  using System.Threading;
  using System.Threading.Tasks;
-+<<<<<<< ours
-+=======
 +using MediaBrowser.Controller;
-+>>>>>>> theirs
  using MediaBrowser.Controller.Configuration;
  using MediaBrowser.Controller.Library;
  using MediaBrowser.Controller.Session;
-@@ -17,6 +21,10 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
+@@ -17,6 +18,7 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
      private static readonly TimeSpan PlaybackYieldDelay = TimeSpan.FromSeconds(3);
  
      private readonly Lazy<ISessionManager> _sessionManager;
-+<<<<<<< ours
-+=======
 +    private readonly IInstanceLeadership _leadership;
-+>>>>>>> theirs
      private readonly ILogger<BackgroundMediaWorkGate> _logger;
      private readonly SemaphoreSlim _semaphore;
      private bool _disposed;
-@@ -27,6 +35,7 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
+@@ -27,13 +29,16 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
      /// <param name="sessionManager">Session manager used to detect active playback (lazy to avoid DI cycles).</param>
      /// <param name="configurationManager">Server configuration.</param>
      /// <param name="logger">Logger.</param>
-+<<<<<<< ours
++    /// <param name="leadership">Instance leadership.</param>
      public BackgroundMediaWorkGate(
          Lazy<ISessionManager> sessionManager,
          IServerConfigurationManager configurationManager,
-@@ -34,6 +43,18 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
+-        ILogger<BackgroundMediaWorkGate> logger)
++        ILogger<BackgroundMediaWorkGate> logger,
++        IInstanceLeadership leadership)
      {
          _sessionManager = sessionManager;
          _logger = logger;
-+=======
-+    /// <param name="leadership">Instance leadership.</param>
-+    public BackgroundMediaWorkGate(
-+        Lazy<ISessionManager> sessionManager,
-+        IServerConfigurationManager configurationManager,
-+        ILogger<BackgroundMediaWorkGate> logger,
-+        IInstanceLeadership leadership)
-+    {
-+        _sessionManager = sessionManager;
-+        _logger = logger;
 +        _leadership = leadership;
-+>>>>>>> theirs
  
          var configured = configurationManager.Configuration.ParallelImageEncodingLimit;
          var limit = configured > 0
-@@ -49,6 +70,14 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
+@@ -49,6 +54,11 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
      {
          ObjectDisposedException.ThrowIf(_disposed, this);
  
-+<<<<<<< ours
-+=======
 +        if (!_leadership.IsLeader)
 +        {
 +            return EmptyLease.Instance;
 +        }
 +
-+>>>>>>> theirs
          while (HasActivePlayback())
          {
              _logger.LogDebug("Deferring background media work while playback is active");
-@@ -92,4 +121,14 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
+@@ -92,4 +102,11 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
              return ValueTask.CompletedTask;
          }
      }
-+<<<<<<< ours
-+=======
 +
 +    private sealed class EmptyLease : IAsyncDisposable
 +    {
@@ -259,7 +246,6 @@ index e229aa42cb..ec1faed2ad 100644
 +
 +        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 +    }
-+>>>>>>> theirs
  }
 diff --git a/Emby.Server.Implementations/ScheduledTasks/ScheduledTaskWorker.cs b/Emby.Server.Implementations/ScheduledTasks/ScheduledTaskWorker.cs
 index 24f554981a..accf0d723f 100644
@@ -382,56 +368,44 @@ index 4ec2c9c786..8bda08bc01 100644
          ScheduledTasks = ScheduledTasks.Concat(list).ToArray();
      }
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 5da633916a..b5ca6da955 100644
+index 5da633916a..414d4fb459 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
-@@ -59,6 +59,10 @@ namespace Emby.Server.Implementations.Session
+@@ -59,6 +59,7 @@ namespace Emby.Server.Implementations.Session
  
          private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
          private readonly ITranscodingPipelineProbe _pipelineProbe;
-+<<<<<<< ours
-+=======
 +        private readonly IPlaybackProgressCache _progressCache;
-+>>>>>>> theirs
          private readonly IUserDataManager _userDataManager;
          private readonly IServerConfigurationManager _config;
          private readonly ILogger<SessionManager> _logger;
-@@ -114,6 +118,10 @@ namespace Emby.Server.Implementations.Session
+@@ -114,6 +115,7 @@ namespace Emby.Server.Implementations.Session
          /// <param name="hostApplicationLifetime">Instance of <see cref="IHostApplicationLifetime"/> interface.</param>
          /// <param name="dbProvider">Instance of <see cref="IDbContextFactory{JellyfinDbContext}"/> interface.</param>
          /// <param name="pipelineProbe">Instance of <see cref="ITranscodingPipelineProbe"/> interface.</param>
-+<<<<<<< ours
-+=======
 +        /// <param name="progressCache">Optional overlay of coalesced playback position.</param>
-+>>>>>>> theirs
          public SessionManager(
              ILogger<SessionManager> logger,
              IEventManager eventManager,
-@@ -129,7 +137,12 @@ namespace Emby.Server.Implementations.Session
+@@ -129,7 +131,8 @@ namespace Emby.Server.Implementations.Session
              IMediaSourceManager mediaSourceManager,
              IHostApplicationLifetime hostApplicationLifetime,
              IDbContextFactory<JellyfinDbContext> dbProvider,
-+<<<<<<< ours
-             ITranscodingPipelineProbe pipelineProbe)
-+=======
+-            ITranscodingPipelineProbe pipelineProbe)
 +            ITranscodingPipelineProbe pipelineProbe,
 +            IPlaybackProgressCache progressCache)
-+>>>>>>> theirs
          {
              _logger = logger;
              _eventManager = eventManager;
-@@ -148,6 +161,10 @@ namespace Emby.Server.Implementations.Session
+@@ -148,6 +151,7 @@ namespace Emby.Server.Implementations.Session
              _deviceManager.DeviceOptionsUpdated += OnDeviceManagerDeviceOptionsUpdated;
              _dbProvider = dbProvider;
              _pipelineProbe = pipelineProbe;
-+<<<<<<< ours
-+=======
 +            _progressCache = progressCache;
-+>>>>>>> theirs
          }
  
          /// <summary>
-@@ -1001,6 +1018,12 @@ namespace Emby.Server.Implementations.Session
+@@ -1001,6 +1005,12 @@ namespace Emby.Server.Implementations.Session
          {
              var data = _userDataManager.GetUserData(user, item);
  
@@ -444,38 +418,24 @@ index 5da633916a..b5ca6da955 100644
              data.PlayCount++;
              data.LastPlayedDate = DateTime.UtcNow;
  
-@@ -1160,11 +1183,19 @@ namespace Emby.Server.Implementations.Session
-                 var forcePersist = tracksChanged || data.Played == true;
+@@ -1161,7 +1171,7 @@ namespace Emby.Server.Implementations.Session
                  if (!forcePersist && positionTicks.HasValue
                      && !ShouldPersistPlaybackProgress(user.Id, item.Id, positionTicks.Value))
-+<<<<<<< ours
                  {
-                     // Skip DB write; in-memory user data still reflects the latest position.
+-                    // Skip DB write; in-memory user data still reflects the latest position.
++                    _progressCache.Set(user.Id, item.Id, positionTicks.Value);
                  }
                  else
                  {
-+=======
-+                {
-+                    _progressCache.Set(user.Id, item.Id, positionTicks.Value);
-+                }
-+                else
-+                {
-+>>>>>>> theirs
-                     _userDataManager.SaveUserData(user, item, data, UserDataSaveReason.PlaybackProgress, CancellationToken.None);
- 
-                     // A completed version marks every alternate version played and clears their resume points, so the
-@@ -1178,6 +1209,10 @@ namespace Emby.Server.Implementations.Session
+@@ -1178,6 +1188,7 @@ namespace Emby.Server.Implementations.Session
                      if (positionTicks.HasValue)
                      {
                          _lastProgressPersist[(user.Id, item.Id)] = (DateTime.UtcNow, positionTicks.Value);
-+<<<<<<< ours
-+=======
 +                        _progressCache.Set(user.Id, item.Id, positionTicks.Value);
-+>>>>>>> theirs
                      }
                  }
              }
-@@ -2755,6 +2790,29 @@ namespace Emby.Server.Implementations.Session
+@@ -2755,6 +2766,29 @@ namespace Emby.Server.Implementations.Session
                  _logger.LogError(ex, "Error sending server shutdown notifications");
              }
  
@@ -1119,3 +1079,4 @@ index e9ad2ef30e..58f185cb09 100644
      private static EncodingJobInfo BuildState(
          MediaStream? subtitle,
          SubtitleDeliveryMethod? deliveryMethod,
+
