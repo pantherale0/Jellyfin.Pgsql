@@ -1,8 +1,8 @@
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-index 76b3a95067..75be826059 100644
+index 542f9eab94..5ded3eed9f 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-@@ -7,12 +7,14 @@ using System;
+@@ -7,6 +7,7 @@ using System;
  using System.Collections.Generic;
  using System.Linq;
  using System.Linq.Expressions;
@@ -10,14 +10,15 @@ index 76b3a95067..75be826059 100644
  using Jellyfin.Data.Enums;
  using Jellyfin.Database.Implementations;
  using Jellyfin.Database.Implementations.Entities;
- using Jellyfin.Database.Implementations.Enums;
+@@ -14,6 +15,7 @@ using Jellyfin.Database.Implementations.Enums;
  using Jellyfin.Extensions;
+ using Jellyfin.Server.Implementations.Extensions;
  using MediaBrowser.Controller.Entities;
 +using MediaBrowser.Controller.LiveTv;
  using MediaBrowser.Model.Entities;
  using MediaBrowser.Model.Querying;
  using Microsoft.EntityFrameworkCore;
-@@ -746,12 +748,27 @@ public sealed partial class BaseItemRepository
+@@ -758,12 +760,27 @@ public sealed partial class BaseItemRepository
              baseQuery = baseQuery.Where(BuildMaxParentalRatingFilter(context, filter.MaxParentalRating));
          }
  
@@ -47,7 +48,7 @@ index 76b3a95067..75be826059 100644
          }
  
          // Apply excluded tags filtering (blocked tags).
-@@ -779,20 +796,81 @@ public sealed partial class BaseItemRepository
+@@ -791,20 +808,81 @@ public sealed partial class BaseItemRepository
              var allowedTagItemIds = context.ItemValuesMap
                  .Where(f => f.ItemValue.Type == ItemValueType.Tags && includeTags.Contains(f.ItemValue.CleanValue))
                  .Select(f => f.ItemId);
@@ -138,7 +139,7 @@ index 76b3a95067..75be826059 100644
      /// Builds a filter expression for max parental rating that handles both rated items
      /// and unrated BoxSets/Playlists (which check linked children's ratings).
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-index 0304ae2650..e5e7a0911c 100644
+index 57833664b0..791ea127fc 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 @@ -10,13 +10,16 @@ using System.Collections.Generic;
@@ -158,7 +159,7 @@ index 0304ae2650..e5e7a0911c 100644
  using MediaBrowser.Model.Entities;
  using Microsoft.EntityFrameworkCore;
  using BaseItemEntity = Jellyfin.Database.Implementations.Entities.BaseItemEntity;
-@@ -669,7 +672,15 @@ public sealed partial class BaseItemRepository
+@@ -726,7 +729,15 @@ public sealed partial class BaseItemRepository
          else if (filter.BlockUnratedItems.Length > 0)
          {
              var unratedItemTypes = filter.BlockUnratedItems.Select(f => f.ToString()).ToArray();
@@ -175,7 +176,7 @@ index 0304ae2650..e5e7a0911c 100644
  
              if (minParentalRatingFilter != null && maxParentalRatingFilter != null)
              {
-@@ -1045,18 +1056,36 @@ public sealed partial class BaseItemRepository
+@@ -1142,18 +1153,36 @@ public sealed partial class BaseItemRepository
              var allowedTagItemIds = context.ItemValuesMap
                  .Where(f => f.ItemValue.Type == ItemValueType.Tags && includeTags.Contains(f.ItemValue.CleanValue))
                  .Select(f => f.ItemId);
@@ -222,10 +223,10 @@ index 0304ae2650..e5e7a0911c 100644
  
          if (filter.SeriesStatuses.Length > 0)
 diff --git a/MediaBrowser.Controller/Entities/BaseItem.cs b/MediaBrowser.Controller/Entities/BaseItem.cs
-index 28f40cb7fa..ecf78c54e2 100644
+index d030c8f420..0d9a8825a7 100644
 --- a/MediaBrowser.Controller/Entities/BaseItem.cs
 +++ b/MediaBrowser.Controller/Entities/BaseItem.cs
-@@ -1792,7 +1792,7 @@ namespace MediaBrowser.Controller.Entities
+@@ -1833,7 +1833,7 @@ namespace MediaBrowser.Controller.Entities
          /// <param name="skipAllowedTagsCheck">Don't check for allowed tags.</param>
          /// <returns><c>true</c> if [is parental allowed] [the specified user]; otherwise, <c>false</c>.</returns>
          /// <exception cref="ArgumentNullException">If user is null.</exception>

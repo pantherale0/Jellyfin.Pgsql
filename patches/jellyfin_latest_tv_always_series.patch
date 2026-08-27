@@ -1,8 +1,8 @@
 diff --git a/Jellyfin.Api/Controllers/UserLibraryController.cs b/Jellyfin.Api/Controllers/UserLibraryController.cs
-index ea134a4619..bb2ed9f7ea 100644
+index da03032249..e42de8790d 100644
 --- a/Jellyfin.Api/Controllers/UserLibraryController.cs
 +++ b/Jellyfin.Api/Controllers/UserLibraryController.cs
-@@ -575,7 +575,7 @@ public class UserLibraryController : BaseJellyfinApiController
+@@ -577,7 +577,7 @@ public class UserLibraryController : BaseJellyfinApiController
              var item = tuple.Item2[0];
              var childCount = 0;
  
@@ -12,10 +12,10 @@ index ea134a4619..bb2ed9f7ea 100644
                  item = tuple.Item1;
                  childCount = tuple.Item2.Count;
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs
-index c7acf72043..2022cbfe9f 100644
+index c9e08b1b5d..064935b726 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs
-@@ -291,142 +291,61 @@ public sealed partial class BaseItemRepository
+@@ -321,142 +321,61 @@ public sealed partial class BaseItemRepository
          var allEpisodes = episodeQuery
              .OrderByDescending(e => e.DateCreated)
              .ThenByDescending(e => e.Id)
@@ -175,7 +175,7 @@ index c7acf72043..2022cbfe9f 100644
          // may not see visible. Containers that don't pass are replaced by their episode.
          if (RequiresParentalRestrictions(filter) && entitiesToFetch.Count > 0)
          {
-@@ -439,27 +358,23 @@ public sealed partial class BaseItemRepository
+@@ -469,27 +388,23 @@ public sealed partial class BaseItemRepository
  
              for (var i = 0; i < seriesResults.Count; i++)
              {
@@ -207,7 +207,7 @@ index c7acf72043..2022cbfe9f 100644
          var entities = entitiesToFetch.Count > 0
              ? ApplyNavigations(
                      context.BaseItems.AsNoTracking().Where(e => entitiesToFetch.Contains(e.Id)),
-@@ -468,17 +383,11 @@ public sealed partial class BaseItemRepository
+@@ -498,17 +413,11 @@ public sealed partial class BaseItemRepository
                  .ToDictionary(e => e.Id)
              : [];
  

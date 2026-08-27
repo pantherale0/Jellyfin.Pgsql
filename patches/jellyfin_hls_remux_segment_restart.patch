@@ -1,8 +1,8 @@
 diff --git a/Jellyfin.Api/Controllers/DynamicHlsController.cs b/Jellyfin.Api/Controllers/DynamicHlsController.cs
-index a6555a2beb..9245d37514 100644
+index 034a9dea55..4c11fdec1a 100644
 --- a/Jellyfin.Api/Controllers/DynamicHlsController.cs
 +++ b/Jellyfin.Api/Controllers/DynamicHlsController.cs
-@@ -1474,23 +1474,48 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -1473,23 +1473,48 @@ public class DynamicHlsController : BaseJellyfinApiController
  
              if (segmentId == -1)
              {
@@ -56,7 +56,7 @@ index a6555a2beb..9245d37514 100644
                  startTranscoding = true;
              }
  
-@@ -2023,11 +2048,39 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -2022,11 +2047,39 @@ public class DynamicHlsController : BaseJellyfinApiController
              return null;
          }
  
@@ -98,7 +98,7 @@ index a6555a2beb..9245d37514 100644
      }
  
      private static FileSystemMetadata? GetLastTranscodingFile(string playlist, string segmentExtension, IFileSystem fileSystem)
-@@ -2038,8 +2091,10 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -2037,8 +2090,10 @@ public class DynamicHlsController : BaseJellyfinApiController
  
          try
          {
@@ -109,7 +109,7 @@ index a6555a2beb..9245d37514 100644
                  .MaxBy(fileSystem.GetLastWriteTimeUtc);
          }
          catch (IOException)
-@@ -2048,6 +2103,26 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -2047,6 +2102,26 @@ public class DynamicHlsController : BaseJellyfinApiController
          }
      }
  
@@ -137,7 +137,7 @@ index a6555a2beb..9245d37514 100644
      {
          var file = GetLastTranscodingFile(playlistPath, segmentExtension, _fileSystem);
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-index 58b73afa35..7da04943ca 100644
+index 100e84aee6..25e4ffbf34 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 @@ -7390,14 +7390,13 @@ namespace MediaBrowser.Controller.MediaEncoding

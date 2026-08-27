@@ -49,7 +49,7 @@ index 0000000000..977f49dc49
 +    public DateTime UpdatedAt { get; set; }
 +}
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
-index 78d54907c3..5c115038ca 100644
+index 78d54907c3..18059f14e7 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
 @@ -203,6 +203,11 @@ public class JellyfinDbContext(DbContextOptions<JellyfinDbContext> options, ILog

@@ -343,10 +343,10 @@ index 87de4ed79c..26e7250cf6 100644
              // Security consumers
              collection.AddScoped<IEventConsumer<AuthenticationRequestEventArgs>, AuthenticationFailedLogger>();
 diff --git a/Jellyfin.Server.Implementations/Users/UserManager.cs b/Jellyfin.Server.Implementations/Users/UserManager.cs
-index 81408d9aa8..8198ebce47 100644
+index fea6084267..92cfb70a16 100644
 --- a/Jellyfin.Server.Implementations/Users/UserManager.cs
 +++ b/Jellyfin.Server.Implementations/Users/UserManager.cs
-@@ -820,6 +820,12 @@ namespace Jellyfin.Server.Implementations.Users
+@@ -865,6 +865,12 @@ namespace Jellyfin.Server.Implementations.Users
                          _ => policy.LoginAttemptsBeforeLockout
                      };
  
@@ -359,7 +359,7 @@ index 81408d9aa8..8198ebce47 100644
                      user.MaxParentalRatingScore = policy.MaxParentalRating;
                      user.MaxParentalRatingSubScore = policy.MaxParentalSubRating;
                      user.EnableUserPreferenceAccess = policy.EnableUserPreferenceAccess;
-@@ -872,6 +878,20 @@ namespace Jellyfin.Server.Implementations.Users
+@@ -917,6 +923,20 @@ namespace Jellyfin.Server.Implementations.Users
  
                      dbContext.Update(user);
                      await dbContext.SaveChangesAsync().ConfigureAwait(false);

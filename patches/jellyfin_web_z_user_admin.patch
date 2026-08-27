@@ -563,7 +563,7 @@ index 0000000000..48c6a805a7
 +
 +export default UserMergePage;
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 333d4e460e..d8d8cfd076 100755
+index a67ee6d837..eda65645a6 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
 @@ -115,6 +115,7 @@
@@ -582,7 +582,7 @@ index 333d4e460e..d8d8cfd076 100755
      "HeaderUsers": "Users",
      "HeaderVideoAdvanced": "Video Advanced",
      "HeaderVideoQuality": "Video Quality",
-@@ -1466,6 +1468,43 @@
+@@ -1467,6 +1469,43 @@
      "PlaybackErrorPlaceHolder": "This is a placeholder for physical media that Jellyfin cannot play. Please insert the disc to play.",
      "PlaybackRate": "Playback Speed",
      "PlaybackStatsEmpty": "No playback statistics recorded yet.",

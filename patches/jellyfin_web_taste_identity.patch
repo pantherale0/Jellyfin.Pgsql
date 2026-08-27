@@ -1,5 +1,5 @@
 diff --git a/src/apps/legacy/controllers/itemDetails/index.js b/src/apps/legacy/controllers/itemDetails/index.js
-index db54947370..20facbc942 100755
+index e9b21d8416..dfe4db0535 100755
 --- a/src/apps/legacy/controllers/itemDetails/index.js
 +++ b/src/apps/legacy/controllers/itemDetails/index.js
 @@ -37,6 +37,7 @@ import { renderComponent } from 'utils/reactUtils';

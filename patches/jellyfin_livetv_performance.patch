@@ -2174,7 +2174,7 @@ index 0aeb7ad05d..24940d1d4d 100644
      }
  }
 diff --git a/src/Jellyfin.LiveTv/LiveTvManager.cs b/src/Jellyfin.LiveTv/LiveTvManager.cs
-index 173d3c3e8e..9826424134 100644
+index 2edf7681db..80f6985fdb 100644
 --- a/src/Jellyfin.LiveTv/LiveTvManager.cs
 +++ b/src/Jellyfin.LiveTv/LiveTvManager.cs
 @@ -13,6 +13,7 @@ using Jellyfin.Data.Enums;

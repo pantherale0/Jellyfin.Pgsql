@@ -20,7 +20,7 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 **How:** Cache keys are per user and per view (never shared across users). Failures fall back to stock Jellyfin queries. Default Latest TTL is 120s (visible lag after scans).
 
-**Patches that help home/query load:** [`jellyfin_home_api_performance`](patches.md#jellyfin_home_api_performancepatch), [`jellyfin_unoptimized_query_fixes`](patches.md#jellyfin_unoptimized_query_fixespatch), [`jellyfin_query_split_userdata`](patches.md#jellyfin_query_split_userdatapatch), [`jellyfin_latest_tv_always_series`](patches.md#jellyfin_latest_tv_always_seriespatch), [`jellyfin_zzz_byname_access_semijoin`](patches.md#jellyfin_zzz_byname_access_semijoinpatch), [`jellyfin_zzzz_descendant_query_memory`](patches.md#jellyfin_zzzz_descendant_query_memorypatch), [`jellyfin_zzzz_people_query_perf`](patches.md#jellyfin_zzzz_people_query_perfpatch).
+**Patches that help home/query load:** [`jellyfin_home_api_performance`](patches.md#jellyfin_home_api_performancepatch), [`jellyfin_unoptimized_query_fixes`](patches.md#jellyfin_unoptimized_query_fixespatch), [`jellyfin_query_split_userdata`](patches.md#jellyfin_query_split_userdatapatch), [`jellyfin_latest_tv_always_series`](patches.md#jellyfin_latest_tv_always_seriespatch), [`jellyfin_zzz_byname_access_semijoin`](patches.md#jellyfin_zzz_byname_access_semijoinpatch), [`jellyfin_zzzz_people_query_perf`](patches.md#jellyfin_zzzz_people_query_perfpatch). Descendant-query memory fixes are stock Jellyfin as of v12.0-rc6 ([jellyfin#17602](https://github.com/jellyfin/jellyfin/issues/17602)).
 
 ## Fuzzy search (PostgreSQL)
 
@@ -133,6 +133,6 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 ## Library / plugin reliability
 
-**What:** Path-aware media refresh; BaseItem image-info dedupe; person provider-key identity; fix plugin ALC so transitive deps (for example Redis) resolve from `.deps.json`. Disabled-plugin cleanup is stock Jellyfin as of v12.0-rc5 ([jellyfin#15897](https://github.com/jellyfin/jellyfin/issues/15897)).
+**What:** Path-aware media refresh; BaseItem image-info dedupe; person provider-key identity; fix plugin ALC so transitive deps (for example Redis) resolve from `.deps.json`. Disabled-plugin cleanup is stock Jellyfin as of v12.0-rc5 ([jellyfin#15897](https://github.com/jellyfin/jellyfin/issues/15897)). Descendant-query memory fixes are stock as of v12.0-rc6 ([jellyfin#17602](https://github.com/jellyfin/jellyfin/issues/17602)).
 
 **Where:** [Library / metadata group](patches.md#5-library--metadata--plugin-loading); favorites-during-progress fix [jellyfin#14981](https://github.com/jellyfin/jellyfin/issues/14981).

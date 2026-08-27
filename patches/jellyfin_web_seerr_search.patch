@@ -546,10 +546,10 @@ index 0000000000..0e9cd4b795
 +    return ids;
 +}
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 6af0352959..e183680127 100755
+index ac140e55ba..b17d5145fa 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -1585,6 +1585,12 @@
+@@ -1586,6 +1586,12 @@
      "SearchForSubtitles": "Search for Subtitles",
      "SearchResults": "Search Results",
      "SearchResultsEmpty": "Sorry! No results found for \"{0}\"",

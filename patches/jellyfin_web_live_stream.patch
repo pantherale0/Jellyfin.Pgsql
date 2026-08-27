@@ -100,7 +100,7 @@ index e0f72a8c78..4fbce2fcf4 100644
                                  {globalize.translate('Save')}
                              </Button>
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 50f7d11d75..6af0352959 100755
+index 67446efaae..ac140e55ba 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
 @@ -41,6 +41,16 @@

@@ -93,7 +93,7 @@ index 6fa057702c..37dce20e54 100644
  
              dto.People = list.ToArray();
 diff --git a/Emby.Server.Implementations/Library/LibraryManager.cs b/Emby.Server.Implementations/Library/LibraryManager.cs
-index 66a1a976ce..c7e7a4b83e 100644
+index e718c245cc..6296b317b7 100644
 --- a/Emby.Server.Implementations/Library/LibraryManager.cs
 +++ b/Emby.Server.Implementations/Library/LibraryManager.cs
 @@ -1222,6 +1222,53 @@ namespace Emby.Server.Implementations.Library
@@ -150,7 +150,7 @@ index 66a1a976ce..c7e7a4b83e 100644
          /// <summary>
          /// Gets the studio.
          /// </summary>
-@@ -3587,7 +3634,7 @@ namespace Emby.Server.Implementations.Library
+@@ -3617,7 +3664,7 @@ namespace Emby.Server.Implementations.Library
                  {
                      try
                      {
@@ -159,7 +159,7 @@ index 66a1a976ce..c7e7a4b83e 100644
                      }
                      catch (Exception ex)
                      {
-@@ -3598,6 +3645,7 @@ namespace Emby.Server.Implementations.Library
+@@ -3628,6 +3675,7 @@ namespace Emby.Server.Implementations.Library
                  .Where(i => i is not null)
                  .Where(i => query.User is null || i!.IsVisible(query.User))
                  .OfType<BaseItem>()
@@ -167,7 +167,7 @@ index 66a1a976ce..c7e7a4b83e 100644
                  .ToList()
                  .AsReadOnly();
  
-@@ -3758,7 +3806,6 @@ namespace Emby.Server.Implementations.Library
+@@ -3813,7 +3861,6 @@ namespace Emby.Server.Implementations.Library
          private async Task SavePeopleMetadataAsync(IEnumerable<PersonInfo> people, CancellationToken cancellationToken)
          {
              var peopleList = people.ToList();
@@ -175,7 +175,7 @@ index 66a1a976ce..c7e7a4b83e 100644
  
              foreach (var person in peopleList)
              {
-@@ -3767,16 +3814,14 @@ namespace Emby.Server.Implementations.Library
+@@ -3822,16 +3869,14 @@ namespace Emby.Server.Implementations.Library
                  var itemUpdateType = ItemUpdateType.MetadataDownload;
                  var saveEntity = false;
                  var createEntity = false;
@@ -195,7 +195,7 @@ index 66a1a976ce..c7e7a4b83e 100644
                          var info = Directory.CreateDirectory(path);
                          personEntity = new Person()
                          {
-@@ -3800,11 +3845,22 @@ namespace Emby.Server.Implementations.Library
+@@ -3855,11 +3900,22 @@ namespace Emby.Server.Implementations.Library
  
                  foreach (var id in person.ProviderIds)
                  {
@@ -220,13 +220,13 @@ index 66a1a976ce..c7e7a4b83e 100644
  
                  if (!string.IsNullOrWhiteSpace(person.ImageUrl) && !personEntity.HasImage(ImageType.Primary))
 diff --git a/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs b/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
-index 15d67905f6..77d7f1b992 100644
+index 8e50347584..bb159a69b4 100644
 --- a/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
 +++ b/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
-@@ -49,12 +49,11 @@ public class PeopleValidator
-     /// <returns>Task.</returns>
-     public async Task ValidatePeople(CancellationToken cancellationToken, IProgress<double> progress)
-     {
+@@ -57,12 +57,11 @@ public class PeopleValidator
+             _logger.LogDebug("Deleted {Amount} credits no item maps to", numOrphaned);
+         }
+ 
 -        var people = _libraryManager.GetPeopleNames(new InternalPeopleQuery());
 +        var people = _libraryManager.GetPeople(new InternalPeopleQuery());
  
@@ -237,7 +237,7 @@ index 15d67905f6..77d7f1b992 100644
  
          IProgress<double> subProgress = new Progress<double>((val) => progress.Report(val / 2));
  
-@@ -66,14 +65,11 @@ public class PeopleValidator
+@@ -74,14 +73,11 @@ public class PeopleValidator
  
              try
              {
@@ -255,7 +255,7 @@ index 15d67905f6..77d7f1b992 100644
                  }
  
 diff --git a/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs b/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs
-index dff9a473af..a6e91da97c 100644
+index afb27ddf9e..b5491cbc74 100644
 --- a/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs
 +++ b/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs
 @@ -106,51 +106,68 @@ public class PeopleValidationTask : IScheduledTask, IConfigurableScheduledTask
@@ -363,10 +363,10 @@ index dff9a473af..a6e91da97c 100644
                  .Where(p => !context.PeopleBaseItemMap.Any(m => m.PeopleId.Equals(p.Id)))
                  .ExecuteDeleteAsync(cancellationToken)
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-index e5e7a0911c..28db9103ad 100644
+index 791ea127fc..7f55605e45 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-@@ -371,15 +371,33 @@ public sealed partial class BaseItemRepository
+@@ -443,15 +443,33 @@ public sealed partial class BaseItemRepository
  
          if (filter.PersonIds.Length > 0)
          {
@@ -406,7 +406,7 @@ index e5e7a0911c..28db9103ad 100644
                  .Where(e => context.PeopleBaseItemMap
                      .Any(m => m.ItemId == e.Id && peopleEntityIds.Contains(m.PeopleId) && (personTypes.Length == 0 || personTypes.Contains(m.People.PersonType))));
 diff --git a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
-index a592d0e6e2..c1bc9330e2 100644
+index da2ad033ec..2380b39d5d 100644
 --- a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
 +++ b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
 @@ -7,6 +7,7 @@ using Jellyfin.Database.Implementations.Entities;
@@ -624,7 +624,7 @@ index a592d0e6e2..c1bc9330e2 100644
  
              listOrder++;
          }
-@@ -251,7 +250,8 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -283,7 +282,8 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
                  m.SortOrder,
                  m.People.Id,
                  m.People.Name,
@@ -634,7 +634,7 @@ index a592d0e6e2..c1bc9330e2 100644
              })
              .ToList();
  
-@@ -274,6 +274,11 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -306,6 +306,11 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
                      personInfo.Type = kind;
                  }
  
@@ -646,7 +646,7 @@ index a592d0e6e2..c1bc9330e2 100644
                  people.Add(personInfo);
              }
  
-@@ -283,19 +288,30 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -315,19 +320,30 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
          return result;
      }
  
@@ -683,7 +683,7 @@ index a592d0e6e2..c1bc9330e2 100644
          var personInfo = new PersonInfo()
          {
              Id = people.Id,
-@@ -308,16 +324,23 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -340,16 +356,23 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
              personInfo.Type = kind;
          }
  
@@ -707,7 +707,7 @@ index a592d0e6e2..c1bc9330e2 100644
          };
  
          return personInfo;
-@@ -328,25 +351,13 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -360,25 +383,13 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
          if (filter.User is not null && filter.IsFavorite.HasValue)
          {
              var personType = itemTypeLookup.BaseItemKindNames[BaseItemKind.Person];
@@ -897,10 +897,10 @@ index 29f238d8ea..383b3ffd6e 100644
          }
      }
 diff --git a/MediaBrowser.Controller/Entities/Person.cs b/MediaBrowser.Controller/Entities/Person.cs
-index 14325d971a..f0fdacf27c 100644
+index bba5005eed..2b9b358158 100644
 --- a/MediaBrowser.Controller/Entities/Person.cs
 +++ b/MediaBrowser.Controller/Entities/Person.cs
-@@ -97,12 +97,40 @@ namespace MediaBrowser.Controller.Entities
+@@ -97,9 +97,37 @@ namespace MediaBrowser.Controller.Entities
          }
  
          public static string GetPath(string name, bool normalizeName)
@@ -928,10 +928,7 @@ index 14325d971a..f0fdacf27c 100644
 +        /// <returns>Absolute people metadata path.</returns>
 +        public static string GetPath(string name, string providerKey, bool normalizeName)
          {
-             // Trim the period at the end because windows will have a hard time with that
-             var validFilename = normalizeName ?
-                 FileSystem.GetValidFilename(name).Trim().TrimEnd('.') :
-                 name;
+             var validFilename = normalizeName ? GetItemByNameFolderName(name) : name;
  
 +            if (!string.IsNullOrEmpty(providerKey))
 +            {
@@ -941,7 +938,7 @@ index 14325d971a..f0fdacf27c 100644
              string subFolderPrefix = null;
  
              foreach (char c in validFilename)
-@@ -123,7 +151,21 @@ namespace MediaBrowser.Controller.Entities
+@@ -120,7 +148,21 @@ namespace MediaBrowser.Controller.Entities
  
          private string GetRebasedPath()
          {
@@ -1264,7 +1261,7 @@ index b53210b0b1..3d6cee96b5 100644
  
      /// <summary>
 diff --git a/MediaBrowser.Controller/Library/ILibraryManager.cs b/MediaBrowser.Controller/Library/ILibraryManager.cs
-index 7d2d3d34aa..5bcfc6f104 100644
+index 143f49b9f2..abe9bc25f2 100644
 --- a/MediaBrowser.Controller/Library/ILibraryManager.cs
 +++ b/MediaBrowser.Controller/Library/ILibraryManager.cs
 @@ -106,6 +106,13 @@ namespace MediaBrowser.Controller.Library

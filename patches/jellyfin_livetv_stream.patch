@@ -504,7 +504,7 @@ index 97e00177b6..97801ddb6b 100644
          }
      }
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 5d62332552..9c1d061741 100644
+index f4aa0ad03a..a9ce2af779 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -317,10 +317,56 @@ namespace Emby.Server.Implementations.Session
@@ -752,7 +752,7 @@ index 5d62332552..9c1d061741 100644
              var eventArgs = new PlaybackStopEventArgs
              {
 diff --git a/Jellyfin.Api/Controllers/DynamicHlsController.cs b/Jellyfin.Api/Controllers/DynamicHlsController.cs
-index 9245d37514..8db377c147 100644
+index 4c11fdec1a..fd54aa797f 100644
 --- a/Jellyfin.Api/Controllers/DynamicHlsController.cs
 +++ b/Jellyfin.Api/Controllers/DynamicHlsController.cs
 @@ -16,6 +16,7 @@ using Jellyfin.Data.Enums;
@@ -763,7 +763,7 @@ index 9245d37514..8db377c147 100644
  using MediaBrowser.Controller.Configuration;
  using MediaBrowser.Controller.Library;
  using MediaBrowser.Controller.MediaEncoding;
-@@ -25,6 +26,7 @@ using MediaBrowser.Model.Configuration;
+@@ -24,6 +25,7 @@ using MediaBrowser.Model.Configuration;
  using MediaBrowser.Model.Dlna;
  using MediaBrowser.Model.Entities;
  using MediaBrowser.Model.IO;
@@ -771,7 +771,7 @@ index 9245d37514..8db377c147 100644
  using MediaBrowser.Model.Net;
  using Microsoft.AspNetCore.Authorization;
  using Microsoft.AspNetCore.Http;
-@@ -307,6 +309,26 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -306,6 +308,26 @@ public class DynamicHlsController : BaseJellyfinApiController
                      // If the playlist doesn't already exist, startup ffmpeg
                      try
                      {
@@ -798,7 +798,7 @@ index 9245d37514..8db377c147 100644
                          job = await _transcodeManager.StartFfMpeg(
                                  state,
                                  playlistPath,
-@@ -517,6 +539,15 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -516,6 +538,15 @@ public class DynamicHlsController : BaseJellyfinApiController
              AlwaysBurnInSubtitleWhenTranscoding = alwaysBurnInSubtitleWhenTranscoding
          };
  
@@ -921,7 +921,7 @@ index 2b6781a197..9464ee3cdc 100644
          /// Gets the media sources for an active recording.
          /// </summary>
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-index 7da04943ca..a3caa3d545 100644
+index 25e4ffbf34..4c2461e7fc 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 @@ -1303,7 +1303,7 @@ namespace MediaBrowser.Controller.MediaEncoding
