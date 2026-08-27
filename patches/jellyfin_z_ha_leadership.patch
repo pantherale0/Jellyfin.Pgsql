@@ -179,59 +179,79 @@ index 8063f9543a..71aaf5bf8d 100644
              _libraryManager.ItemRemoved -= OnLibraryManagerItemRemoved;
  
 diff --git a/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs b/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs
-index e229aa42cb..abaee82974 100644
+index e229aa42cb..ec1faed2ad 100644
 --- a/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs
 +++ b/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs
-@@ -2,6 +2,7 @@ using System;
+@@ -2,6 +2,10 @@ using System;
  using System.Linq;
  using System.Threading;
  using System.Threading.Tasks;
++<<<<<<< ours
++=======
 +using MediaBrowser.Controller;
++>>>>>>> theirs
  using MediaBrowser.Controller.Configuration;
  using MediaBrowser.Controller.Library;
  using MediaBrowser.Controller.Session;
-@@ -17,6 +18,7 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
+@@ -17,6 +21,10 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
      private static readonly TimeSpan PlaybackYieldDelay = TimeSpan.FromSeconds(3);
  
      private readonly Lazy<ISessionManager> _sessionManager;
++<<<<<<< ours
++=======
 +    private readonly IInstanceLeadership _leadership;
++>>>>>>> theirs
      private readonly ILogger<BackgroundMediaWorkGate> _logger;
      private readonly SemaphoreSlim _semaphore;
      private bool _disposed;
-@@ -27,13 +29,16 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
+@@ -27,6 +35,7 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
      /// <param name="sessionManager">Session manager used to detect active playback (lazy to avoid DI cycles).</param>
      /// <param name="configurationManager">Server configuration.</param>
      /// <param name="logger">Logger.</param>
-+    /// <param name="leadership">Instance leadership.</param>
++<<<<<<< ours
      public BackgroundMediaWorkGate(
          Lazy<ISessionManager> sessionManager,
          IServerConfigurationManager configurationManager,
--        ILogger<BackgroundMediaWorkGate> logger)
-+        ILogger<BackgroundMediaWorkGate> logger,
-+        IInstanceLeadership leadership)
+@@ -34,6 +43,18 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
      {
          _sessionManager = sessionManager;
          _logger = logger;
++=======
++    /// <param name="leadership">Instance leadership.</param>
++    public BackgroundMediaWorkGate(
++        Lazy<ISessionManager> sessionManager,
++        IServerConfigurationManager configurationManager,
++        ILogger<BackgroundMediaWorkGate> logger,
++        IInstanceLeadership leadership)
++    {
++        _sessionManager = sessionManager;
++        _logger = logger;
 +        _leadership = leadership;
++>>>>>>> theirs
  
          var configured = configurationManager.Configuration.ParallelImageEncodingLimit;
          var limit = configured > 0
-@@ -49,6 +54,11 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
+@@ -49,6 +70,14 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
      {
          ObjectDisposedException.ThrowIf(_disposed, this);
  
++<<<<<<< ours
++=======
 +        if (!_leadership.IsLeader)
 +        {
 +            return EmptyLease.Instance;
 +        }
 +
++>>>>>>> theirs
          while (HasActivePlayback())
          {
              _logger.LogDebug("Deferring background media work while playback is active");
-@@ -92,4 +102,11 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
+@@ -92,4 +121,14 @@ public sealed class BackgroundMediaWorkGate : IBackgroundMediaWorkGate, IDisposa
              return ValueTask.CompletedTask;
          }
      }
++<<<<<<< ours
++=======
 +
 +    private sealed class EmptyLease : IAsyncDisposable
 +    {
@@ -239,6 +259,7 @@ index e229aa42cb..abaee82974 100644
 +
 +        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 +    }
++>>>>>>> theirs
  }
 diff --git a/Emby.Server.Implementations/ScheduledTasks/ScheduledTaskWorker.cs b/Emby.Server.Implementations/ScheduledTasks/ScheduledTaskWorker.cs
 index 24f554981a..accf0d723f 100644
@@ -361,44 +382,56 @@ index 4ec2c9c786..8bda08bc01 100644
          ScheduledTasks = ScheduledTasks.Concat(list).ToArray();
      }
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 5da633916a..414d4fb459 100644
+index 5da633916a..b5ca6da955 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
-@@ -59,6 +59,7 @@ namespace Emby.Server.Implementations.Session
+@@ -59,6 +59,10 @@ namespace Emby.Server.Implementations.Session
  
          private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
          private readonly ITranscodingPipelineProbe _pipelineProbe;
++<<<<<<< ours
++=======
 +        private readonly IPlaybackProgressCache _progressCache;
++>>>>>>> theirs
          private readonly IUserDataManager _userDataManager;
          private readonly IServerConfigurationManager _config;
          private readonly ILogger<SessionManager> _logger;
-@@ -114,6 +115,7 @@ namespace Emby.Server.Implementations.Session
+@@ -114,6 +118,10 @@ namespace Emby.Server.Implementations.Session
          /// <param name="hostApplicationLifetime">Instance of <see cref="IHostApplicationLifetime"/> interface.</param>
          /// <param name="dbProvider">Instance of <see cref="IDbContextFactory{JellyfinDbContext}"/> interface.</param>
          /// <param name="pipelineProbe">Instance of <see cref="ITranscodingPipelineProbe"/> interface.</param>
++<<<<<<< ours
++=======
 +        /// <param name="progressCache">Optional overlay of coalesced playback position.</param>
++>>>>>>> theirs
          public SessionManager(
              ILogger<SessionManager> logger,
              IEventManager eventManager,
-@@ -129,7 +131,8 @@ namespace Emby.Server.Implementations.Session
+@@ -129,7 +137,12 @@ namespace Emby.Server.Implementations.Session
              IMediaSourceManager mediaSourceManager,
              IHostApplicationLifetime hostApplicationLifetime,
              IDbContextFactory<JellyfinDbContext> dbProvider,
--            ITranscodingPipelineProbe pipelineProbe)
++<<<<<<< ours
+             ITranscodingPipelineProbe pipelineProbe)
++=======
 +            ITranscodingPipelineProbe pipelineProbe,
 +            IPlaybackProgressCache progressCache)
++>>>>>>> theirs
          {
              _logger = logger;
              _eventManager = eventManager;
-@@ -148,6 +151,7 @@ namespace Emby.Server.Implementations.Session
+@@ -148,6 +161,10 @@ namespace Emby.Server.Implementations.Session
              _deviceManager.DeviceOptionsUpdated += OnDeviceManagerDeviceOptionsUpdated;
              _dbProvider = dbProvider;
              _pipelineProbe = pipelineProbe;
++<<<<<<< ours
++=======
 +            _progressCache = progressCache;
++>>>>>>> theirs
          }
  
          /// <summary>
-@@ -1001,6 +1005,12 @@ namespace Emby.Server.Implementations.Session
+@@ -1001,6 +1018,12 @@ namespace Emby.Server.Implementations.Session
          {
              var data = _userDataManager.GetUserData(user, item);
  
@@ -411,24 +444,38 @@ index 5da633916a..414d4fb459 100644
              data.PlayCount++;
              data.LastPlayedDate = DateTime.UtcNow;
  
-@@ -1161,7 +1171,7 @@ namespace Emby.Server.Implementations.Session
+@@ -1160,11 +1183,19 @@ namespace Emby.Server.Implementations.Session
+                 var forcePersist = tracksChanged || data.Played == true;
                  if (!forcePersist && positionTicks.HasValue
                      && !ShouldPersistPlaybackProgress(user.Id, item.Id, positionTicks.Value))
++<<<<<<< ours
                  {
--                    // Skip DB write; in-memory user data still reflects the latest position.
-+                    _progressCache.Set(user.Id, item.Id, positionTicks.Value);
+                     // Skip DB write; in-memory user data still reflects the latest position.
                  }
                  else
                  {
-@@ -1178,6 +1188,7 @@ namespace Emby.Server.Implementations.Session
++=======
++                {
++                    _progressCache.Set(user.Id, item.Id, positionTicks.Value);
++                }
++                else
++                {
++>>>>>>> theirs
+                     _userDataManager.SaveUserData(user, item, data, UserDataSaveReason.PlaybackProgress, CancellationToken.None);
+ 
+                     // A completed version marks every alternate version played and clears their resume points, so the
+@@ -1178,6 +1209,10 @@ namespace Emby.Server.Implementations.Session
                      if (positionTicks.HasValue)
                      {
                          _lastProgressPersist[(user.Id, item.Id)] = (DateTime.UtcNow, positionTicks.Value);
++<<<<<<< ours
++=======
 +                        _progressCache.Set(user.Id, item.Id, positionTicks.Value);
++>>>>>>> theirs
                      }
                  }
              }
-@@ -2755,6 +2766,29 @@ namespace Emby.Server.Implementations.Session
+@@ -2755,6 +2790,29 @@ namespace Emby.Server.Implementations.Session
                  _logger.LogError(ex, "Error sending server shutdown notifications");
              }
  
@@ -458,6 +505,37 @@ index 5da633916a..414d4fb459 100644
              // Close open websockets to allow Kestrel to shut down cleanly
              foreach (var session in _activeConnections.Values)
              {
+diff --git a/Jellyfin.Api/Controllers/DynamicHlsController.cs b/Jellyfin.Api/Controllers/DynamicHlsController.cs
+index fd54aa797f..9c8b17adef 100644
+--- a/Jellyfin.Api/Controllers/DynamicHlsController.cs
++++ b/Jellyfin.Api/Controllers/DynamicHlsController.cs
+@@ -2153,6 +2153,26 @@ public class DynamicHlsController : BaseJellyfinApiController
+         }
+     }
+ 
++    private static FileSystemMetadata? GetFirstTranscodingFile(string playlist, string segmentExtension, IFileSystem fileSystem)
++    {
++        var folder = Path.GetDirectoryName(playlist) ?? throw new ArgumentException("Path can't be a root directory.", nameof(playlist));
++
++        var filePrefix = Path.GetFileNameWithoutExtension(playlist);
++
++        try
++        {
++            // Exclude fMP4 init segments (index -1) so backward-seek detection uses real media segments.
++            return fileSystem.GetFiles(folder, new[] { segmentExtension }, true, false)
++                .Where(i => Path.GetFileNameWithoutExtension(i.Name).StartsWith(filePrefix, StringComparison.OrdinalIgnoreCase))
++                .Where(i => (TryParseSegmentIndex(playlist, i.Name) ?? -1) >= 0)
++                .MinBy(i => TryParseSegmentIndex(playlist, i.Name) ?? int.MaxValue);
++        }
++        catch (IOException)
++        {
++            return null;
++        }
++    }
++
+     private async Task DeleteLastFile(string playlistPath, string segmentExtension, int retryCount)
+     {
+         var file = GetLastTranscodingFile(playlistPath, segmentExtension, _fileSystem);
 diff --git a/Jellyfin.Api/Controllers/LiveTvController.cs b/Jellyfin.Api/Controllers/LiveTvController.cs
 index be1691d1bd..80e7644a92 100644
 --- a/Jellyfin.Api/Controllers/LiveTvController.cs
@@ -479,6 +557,27 @@ index be1691d1bd..80e7644a92 100644
          }
  
          var liveStream = new ProgressiveFileStream(liveStreamInfo.GetStream());
+diff --git a/Jellyfin.Api/Controllers/UserLibraryController.cs b/Jellyfin.Api/Controllers/UserLibraryController.cs
+index f4a6d2f1a4..24d0475a02 100644
+--- a/Jellyfin.Api/Controllers/UserLibraryController.cs
++++ b/Jellyfin.Api/Controllers/UserLibraryController.cs
+@@ -190,9 +190,14 @@ public class UserLibraryController : BaseJellyfinApiController
+             return NotFound();
+         }
+ 
+-        var item = itemId.IsEmpty()
++        if (!TryResolveItemId(itemId, out var resolvedItemId))
++        {
++            return BadRequest($"The value '{itemId}' is not valid.");
++        }
++
++        var item = resolvedItemId.IsEmpty()
+             ? _libraryManager.GetUserRootFolder()
+-            : _libraryManager.GetItemById<BaseItem>(itemId, user);
++            : _libraryManager.GetItemById<BaseItem>(resolvedItemId, user);
+         if (item is null)
+         {
+             return NotFound();
 diff --git a/Jellyfin.Api/Controllers/VideosController.cs b/Jellyfin.Api/Controllers/VideosController.cs
 index 1f6569c2ef..f700c45fe6 100644
 --- a/Jellyfin.Api/Controllers/VideosController.cs
@@ -514,18 +613,20 @@ index 60c5bb2ef6..4f79c252c9 100644
  
              // Cap the max bitrate when it is too high. This is usually due to ffmpeg is unable to probe the source liveTV streams' bitrate.
 diff --git a/Jellyfin.Api/Middleware/ExceptionMiddleware.cs b/Jellyfin.Api/Middleware/ExceptionMiddleware.cs
-index acbb4877d4..3635d9610b 100644
+index acbb4877d4..a68544c96b 100644
 --- a/Jellyfin.Api/Middleware/ExceptionMiddleware.cs
 +++ b/Jellyfin.Api/Middleware/ExceptionMiddleware.cs
-@@ -2,6 +2,7 @@ using System;
+@@ -2,7 +2,9 @@ using System;
  using System.IO;
  using System.Net.Mime;
  using System.Net.Sockets;
 +using System.Text.Json;
  using System.Threading.Tasks;
++using Jellyfin.Extensions.Json;
  using MediaBrowser.Common.Extensions;
  using MediaBrowser.Controller.Authentication;
-@@ -64,6 +65,31 @@ public class ExceptionMiddleware
+ using MediaBrowser.Controller.Configuration;
+@@ -64,6 +66,29 @@ public class ExceptionMiddleware
  
              ex = GetActualException(ex);
  
@@ -547,9 +648,7 @@ index acbb4877d4..3635d9610b 100644
 +                        ErrorCode = LiveStreamFencedException.ErrorCode,
 +                        Message = fenced.Message
 +                    },
-+                    camelCase
-+                        ? new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }
-+                        : new JsonSerializerOptions());
++                    camelCase ? JsonDefaults.CamelCaseOptions : JsonDefaults.PascalCaseOptions);
 +                await context.Response.WriteAsync(payload).ConfigureAwait(false);
 +                return;
 +            }
@@ -557,7 +656,7 @@ index acbb4877d4..3635d9610b 100644
              bool ignoreStackTrace =
                  ex is SocketException
                  || ex is IOException
-@@ -129,6 +155,7 @@ public class ExceptionMiddleware
+@@ -129,6 +154,7 @@ public class ExceptionMiddleware
              SecurityException => StatusCodes.Status403Forbidden,
              DirectoryNotFoundException => StatusCodes.Status404NotFound,
              FileNotFoundException => StatusCodes.Status404NotFound,
@@ -617,6 +716,31 @@ index 0000000000..39eeaed162
 +        return _next(context);
 +    }
 +}
+diff --git a/Jellyfin.Server.Implementations/Users/UserManager.cs b/Jellyfin.Server.Implementations/Users/UserManager.cs
+index db5bb34c40..85e10367dd 100644
+--- a/Jellyfin.Server.Implementations/Users/UserManager.cs
++++ b/Jellyfin.Server.Implementations/Users/UserManager.cs
+@@ -841,6 +841,20 @@ namespace Jellyfin.Server.Implementations.Users
+ 
+                     dbContext.Update(user);
+                     await dbContext.SaveChangesAsync().ConfigureAwait(false);
++
++                    var parentalControlsChanged =
++                        previousMaxParentalRating != user.MaxParentalRatingScore
++                        || previousMaxParentalSubRating != user.MaxParentalRatingSubScore
++                        || !previousBlockedTags.SequenceEqual(user.GetPreference(PreferenceKind.BlockedTags))
++                        || !previousAllowedTags.SequenceEqual(user.GetPreference(PreferenceKind.AllowedTags))
++                        || !previousBlockUnratedItems.SequenceEqual(user.GetPreference(PreferenceKind.BlockUnratedItems));
++
++                    if (parentalControlsChanged)
++                    {
++                        var eventArgs = new UserUpdatedEventArgs(user);
++                        await _eventManager.PublishAsync(eventArgs).ConfigureAwait(false);
++                        OnUserUpdated?.Invoke(this, eventArgs);
++                    }
+                 }
+             }
+         }
 diff --git a/Jellyfin.Server/HealthChecks/LeaderReadinessHealthCheck.cs b/Jellyfin.Server/HealthChecks/LeaderReadinessHealthCheck.cs
 new file mode 100644
 index 0000000000..1456942986
@@ -1021,3 +1145,54 @@ index f4daa09756..f0c2e27507 100644
 +        }
 +    }
  }
+diff --git a/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs b/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs
+index e9ad2ef30e..58f185cb09 100644
+--- a/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs
++++ b/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs
+@@ -377,6 +377,46 @@ public class EncodingHelperTests
+         };
+     }
+ 
++    private static EncodingJobInfo BuildHdr10PlusHevcState(
++        TranscodingJobType jobType,
++        string? segmentContainer,
++        string outputContainer)
++    {
++        var video = new MediaStream
++        {
++            Index = 0,
++            Type = MediaStreamType.Video,
++            Codec = "hevc",
++            ColorTransfer = "smpte2084",
++            Hdr10PlusPresentFlag = true,
++            NalLengthSize = "4",
++        };
++        var audio = new MediaStream { Index = 1, Type = MediaStreamType.Audio, Codec = "eac3" };
++
++        return new EncodingJobInfo(jobType)
++        {
++            MediaSource = new MediaSourceInfo
++            {
++                Container = "mkv",
++                MediaStreams = new List<MediaStream> { video, audio },
++                Path = "/media/movie.mkv",
++                Protocol = MediaProtocol.File,
++            },
++            VideoStream = video,
++            AudioStream = audio,
++            OutputVideoCodec = "copy",
++            OutputContainer = outputContainer,
++            BaseRequest = new VideoRequestDto
++            {
++                VideoCodec = "hevc",
++                VideoRangeType = VideoRangeType.HDR10.ToString(),
++                SegmentContainer = segmentContainer,
++            },
++            IsVideoRequest = true,
++            IsInputVideo = true,
++        };
++    }
++
+     private static EncodingJobInfo BuildState(
+         MediaStream? subtitle,
+         SubtitleDeliveryMethod? deliveryMethod,
