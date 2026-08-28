@@ -1,0 +1,359 @@
+diff --git a/Jellyfin.Api/Helpers/MediaInfoHelper.cs b/Jellyfin.Api/Helpers/MediaInfoHelper.cs
+index 82caaf43f6..ec59734fd0 100644
+--- a/Jellyfin.Api/Helpers/MediaInfoHelper.cs
++++ b/Jellyfin.Api/Helpers/MediaInfoHelper.cs
+@@ -99,6 +99,13 @@ public class MediaInfoHelper
+     {
+         var result = new PlaybackInfoResponse();
+ 
++        if (user is not null && !user.HasPermission(PermissionKind.EnableMediaPlayback))
++        {
++            result.ErrorCode = PlaybackErrorCode.NotAllowed;
++            result.Message = "Playback of this media is not allowed.";
++            return result;
++        }
++
+         var mediaSources = await ResolvePlaybackMediaSources(item, user, mediaSourceId, liveStreamId).ConfigureAwait(false);
+ 
+         if (mediaSources.Length == 0)
+diff --git a/Jellyfin.Api/Middleware/ExceptionMiddleware.cs b/Jellyfin.Api/Middleware/ExceptionMiddleware.cs
+index a68544c96b..f8fb8337d7 100644
+--- a/Jellyfin.Api/Middleware/ExceptionMiddleware.cs
++++ b/Jellyfin.Api/Middleware/ExceptionMiddleware.cs
+@@ -9,6 +9,8 @@ using MediaBrowser.Common.Extensions;
+ using MediaBrowser.Controller.Authentication;
+ using MediaBrowser.Controller.Configuration;
+ using MediaBrowser.Controller.Net;
++using MediaBrowser.Model.Dlna;
++using MediaBrowser.Model.MediaInfo;
+ using Microsoft.AspNetCore.Hosting;
+ using Microsoft.AspNetCore.Http;
+ using Microsoft.Extensions.Hosting;
+@@ -66,26 +68,9 @@ public class ExceptionMiddleware
+ 
+             ex = GetActualException(ex);
+ 
+-            if (ex is LiveStreamFencedException fenced)
++            if (ex is PlaybackFailedException playbackFailed)
+             {
+-                _logger.LogWarning(
+-                    "Live stream fenced: {ExceptionMessage}. URL {Method} {Url}.",
+-                    fenced.Message.TrimEnd('.'),
+-                    context.Request.Method,
+-                    context.Request.Path);
+-
+-                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+-                context.Response.ContentType = MediaTypeNames.Application.Json;
+-                var camelCase = context.Request.Headers.Accept.ToString()
+-                    .Contains("CamelCase", StringComparison.OrdinalIgnoreCase);
+-                var payload = JsonSerializer.Serialize(
+-                    new
+-                    {
+-                        ErrorCode = LiveStreamFencedException.ErrorCode,
+-                        Message = fenced.Message
+-                    },
+-                    camelCase ? JsonDefaults.CamelCaseOptions : JsonDefaults.PascalCaseOptions);
+-                await context.Response.WriteAsync(payload).ConfigureAwait(false);
++                await WritePlaybackFailedResponseAsync(context, playbackFailed).ConfigureAwait(false);
+                 return;
+             }
+ 
+@@ -125,6 +110,35 @@ public class ExceptionMiddleware
+         }
+     }
+ 
++    private async Task WritePlaybackFailedResponseAsync(HttpContext context, PlaybackFailedException playbackFailed)
++    {
++        _logger.LogWarning(
++            "Playback failed ({ErrorCode}): {ExceptionMessage}. URL {Method} {Url}.",
++            playbackFailed.ErrorCodeString,
++            playbackFailed.Message.TrimEnd('.'),
++            context.Request.Method,
++            context.Request.Path);
++
++        context.Response.StatusCode = GetPlaybackErrorStatusCode(playbackFailed.ErrorCode);
++        context.Response.ContentType = MediaTypeNames.Application.Json;
++        context.Response.Headers[PlaybackFailedException.ErrorCodeHeaderName] = playbackFailed.ErrorCodeString;
++
++        var camelCase = context.Request.Headers.Accept.ToString()
++            .Contains("CamelCase", StringComparison.OrdinalIgnoreCase);
++
++        var payload = new PlaybackErrorResponse
++        {
++            ErrorCode = playbackFailed.ErrorCodeString,
++            Message = _hostEnvironment.IsDevelopment() ? playbackFailed.Message : null
++        };
++
++        await context.Response.WriteAsync(
++            JsonSerializer.Serialize(
++                payload,
++                camelCase ? JsonDefaults.CamelCaseOptions : JsonDefaults.PascalCaseOptions))
++            .ConfigureAwait(false);
++    }
++
+     private static Exception GetActualException(Exception ex)
+     {
+         if (ex is AggregateException agg)
+@@ -154,13 +168,25 @@ public class ExceptionMiddleware
+             SecurityException => StatusCodes.Status403Forbidden,
+             DirectoryNotFoundException => StatusCodes.Status404NotFound,
+             FileNotFoundException => StatusCodes.Status404NotFound,
+-            LiveStreamFencedException => StatusCodes.Status503ServiceUnavailable,
+             ResourceNotFoundException => StatusCodes.Status404NotFound,
+             MethodNotAllowedException => StatusCodes.Status405MethodNotAllowed,
+             _ => StatusCodes.Status500InternalServerError
+         };
+     }
+ 
++    private static int GetPlaybackErrorStatusCode(PlaybackErrorCode errorCode)
++    {
++        return errorCode switch
++        {
++            PlaybackErrorCode.NotAllowed => StatusCodes.Status403Forbidden,
++            PlaybackErrorCode.TranscodeNotAllowed => StatusCodes.Status403Forbidden,
++            PlaybackErrorCode.RateLimitExceeded => StatusCodes.Status429TooManyRequests,
++            PlaybackErrorCode.StreamUnavailable => StatusCodes.Status404NotFound,
++            PlaybackErrorCode.LiveStreamFenced => StatusCodes.Status503ServiceUnavailable,
++            _ => StatusCodes.Status500InternalServerError
++        };
++    }
++
+     private string NormalizeExceptionMessage(string msg)
+     {
+         // Strip any information we don't want to reveal
+diff --git a/MediaBrowser.Common/Extensions/LiveStreamFencedException.cs b/MediaBrowser.Common/Extensions/LiveStreamFencedException.cs
+index f2bd99eff7..bb7269b439 100644
+--- a/MediaBrowser.Common/Extensions/LiveStreamFencedException.cs
++++ b/MediaBrowser.Common/Extensions/LiveStreamFencedException.cs
+@@ -1,28 +1,23 @@
+-using System;
++using MediaBrowser.Model.Dlna;
+ 
+ namespace MediaBrowser.Common.Extensions;
+ 
+ /// <summary>
+ /// Thrown when a Live TV stream id is not open on this process (typical after HA failover).
+ /// </summary>
+-public class LiveStreamFencedException : Exception
++public class LiveStreamFencedException : PlaybackFailedException
+ {
+-    /// <summary>
+-    /// Stable error code returned to API clients.
+-    /// </summary>
+-    public const string ErrorCode = "LiveStreamFenced";
+-
+     /// <summary>
+     /// Default user-facing message.
+     /// </summary>
+     public const string DefaultMessage =
+-        "Pardon the gremlins, looks like we had a hiccup. Restart playback and things should work.";
++        "Live TV was interrupted. Restart playback to reconnect.";
+ 
+     /// <summary>
+     /// Initializes a new instance of the <see cref="LiveStreamFencedException"/> class.
+     /// </summary>
+     public LiveStreamFencedException()
+-        : base(DefaultMessage)
++        : base(PlaybackErrorCode.LiveStreamFenced, DefaultMessage)
+     {
+     }
+ 
+@@ -31,7 +26,7 @@ public class LiveStreamFencedException : Exception
+     /// </summary>
+     /// <param name="message">The message.</param>
+     public LiveStreamFencedException(string message)
+-        : base(message)
++        : base(PlaybackErrorCode.LiveStreamFenced, message)
+     {
+     }
+ }
+diff --git a/MediaBrowser.Common/Extensions/PlaybackFailedException.cs b/MediaBrowser.Common/Extensions/PlaybackFailedException.cs
+new file mode 100644
+index 0000000000..f0a4b267bf
+--- /dev/null
++++ b/MediaBrowser.Common/Extensions/PlaybackFailedException.cs
+@@ -0,0 +1,60 @@
++using System;
++using MediaBrowser.Model.Dlna;
++
++namespace MediaBrowser.Common.Extensions;
++
++/// <summary>
++/// Thrown when playback cannot continue and a structured error should be returned to clients.
++/// </summary>
++public class PlaybackFailedException : Exception
++{
++    /// <summary>
++    /// HTTP response header carrying <see cref="ErrorCode"/> for streaming clients.
++    /// </summary>
++    public const string ErrorCodeHeaderName = "X-Playback-Error-Code";
++
++    /// <summary>
++    /// Initializes a new instance of the <see cref="PlaybackFailedException"/> class.
++    /// </summary>
++    /// <param name="errorCode">The playback error code.</param>
++    public PlaybackFailedException(PlaybackErrorCode errorCode)
++        : this(errorCode, GetDefaultMessage(errorCode))
++    {
++    }
++
++    /// <summary>
++    /// Initializes a new instance of the <see cref="PlaybackFailedException"/> class.
++    /// </summary>
++    /// <param name="errorCode">The playback error code.</param>
++    /// <param name="message">An optional generic message.</param>
++    public PlaybackFailedException(PlaybackErrorCode errorCode, string message)
++        : base(message)
++    {
++        ErrorCode = errorCode;
++    }
++
++    /// <summary>
++    /// Gets the playback error code.
++    /// </summary>
++    public PlaybackErrorCode ErrorCode { get; }
++
++    /// <summary>
++    /// Gets the stable string form of <see cref="ErrorCode"/>.
++    /// </summary>
++    public string ErrorCodeString => ErrorCode.ToString();
++
++    private static string GetDefaultMessage(PlaybackErrorCode errorCode)
++    {
++        return errorCode switch
++        {
++            PlaybackErrorCode.NotAllowed => "Playback of this media is not allowed.",
++            PlaybackErrorCode.NoCompatibleStream => "No compatible stream was found for this client.",
++            PlaybackErrorCode.RateLimitExceeded => "Playback is temporarily rate limited.",
++            PlaybackErrorCode.TranscodeFailed => "The server could not prepare this media for playback.",
++            PlaybackErrorCode.TranscodeNotAllowed => "Your account is not allowed to use transcoding.",
++            PlaybackErrorCode.StreamUnavailable => "The requested stream is not available.",
++            PlaybackErrorCode.LiveStreamFenced => "Live TV was interrupted. Restart playback to reconnect.",
++            _ => "Playback could not continue."
++        };
++    }
++}
+diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs
+index 5af1bd2d60..a8567462f2 100644
+--- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs
++++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs
+@@ -12,6 +12,7 @@ using MediaBrowser.Controller.Configuration;
+ using MediaBrowser.Controller.MediaEncoding;
+ using MediaBrowser.Controller.Streaming;
+ using MediaBrowser.Model.Configuration;
++using MediaBrowser.Model.Dlna;
+ using Microsoft.Extensions.Logging;
+ 
+ namespace MediaBrowser.MediaEncoding.Transcoding;
+@@ -240,7 +241,7 @@ public sealed class TranscodeCodecRaceCoordinator : ITranscodeCodecRaceCoordinat
+         var chain = TranscodeCodecFallbackChain.GetSequentialChain(context.State, encodingOptions);
+         if (chain.Count == 0)
+         {
+-            throw new FfmpegException("No allowed transcode codecs are available for fallback.");
++            throw new PlaybackFailedException(PlaybackErrorCode.TranscodeFailed);
+         }
+ 
+         string? previousCodec = null;
+@@ -340,7 +341,7 @@ public sealed class TranscodeCodecRaceCoordinator : ITranscodeCodecRaceCoordinat
+             context.ItemId,
+             attempted).ConfigureAwait(false);
+ 
+-        throw new FfmpegException("FFmpeg exited before producing output for all codec fallback attempts.");
++        throw new PlaybackFailedException(PlaybackErrorCode.TranscodeFailed);
+     }
+ 
+     private static void ApplyFallbackMetadata(
+diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
+index d3a4a5b206..ba411bc919 100644
+--- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
++++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
+@@ -449,7 +449,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+ 
+         if (!attempt.Succeeded || attempt.Job is null)
+         {
+-            throw new FfmpegException(string.Format(CultureInfo.InvariantCulture, "FFmpeg exited with code {0}", attempt.ExitCode ?? -1));
++            throw new PlaybackFailedException(PlaybackErrorCode.TranscodeFailed);
+         }
+ 
+         return attempt.Job;
+@@ -478,7 +478,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+             {
+                 OnTranscodeFailedToStart(outputPath, transcodingJobType, state);
+ 
+-                throw new ArgumentException("User does not have access to video transcoding.");
++                throw new PlaybackFailedException(PlaybackErrorCode.TranscodeNotAllowed);
+             }
+         }
+ 
+diff --git a/MediaBrowser.Model/Dlna/PlaybackErrorCode.cs b/MediaBrowser.Model/Dlna/PlaybackErrorCode.cs
+index a28f422a2b..ff1f57d2bb 100644
+--- a/MediaBrowser.Model/Dlna/PlaybackErrorCode.cs
++++ b/MediaBrowser.Model/Dlna/PlaybackErrorCode.cs
+@@ -18,6 +18,26 @@ namespace MediaBrowser.Model.Dlna
+         /// <summary>
+         /// The rate limit has been exceeded.
+         /// </summary>
+-        RateLimitExceeded = 2
++        RateLimitExceeded = 2,
++
++        /// <summary>
++        /// The server could not transcode the media for playback.
++        /// </summary>
++        TranscodeFailed = 3,
++
++        /// <summary>
++        /// The user is not allowed to use transcoding.
++        /// </summary>
++        TranscodeNotAllowed = 4,
++
++        /// <summary>
++        /// The requested stream is not available.
++        /// </summary>
++        StreamUnavailable = 5,
++
++        /// <summary>
++        /// A live stream is not open on this server instance (for example after HA failover).
++        /// </summary>
++        LiveStreamFenced = 6,
+     }
+ }
+diff --git a/MediaBrowser.Model/MediaInfo/PlaybackErrorResponse.cs b/MediaBrowser.Model/MediaInfo/PlaybackErrorResponse.cs
+new file mode 100644
+index 0000000000..6178217377
+--- /dev/null
++++ b/MediaBrowser.Model/MediaInfo/PlaybackErrorResponse.cs
+@@ -0,0 +1,18 @@
++namespace MediaBrowser.Model.MediaInfo
++{
++    /// <summary>
++    /// Structured playback error returned to API clients.
++    /// </summary>
++    public class PlaybackErrorResponse
++    {
++        /// <summary>
++        /// Gets or sets the stable playback error code.
++        /// </summary>
++        public string ErrorCode { get; set; } = string.Empty;
++
++        /// <summary>
++        /// Gets or sets an optional generic hint. Clients should prefer localizing <see cref="ErrorCode"/>.
++        /// </summary>
++        public string? Message { get; set; }
++    }
++}
+diff --git a/MediaBrowser.Model/MediaInfo/PlaybackInfoResponse.cs b/MediaBrowser.Model/MediaInfo/PlaybackInfoResponse.cs
+index 32971b108f..b4ea5b01f9 100644
+--- a/MediaBrowser.Model/MediaInfo/PlaybackInfoResponse.cs
++++ b/MediaBrowser.Model/MediaInfo/PlaybackInfoResponse.cs
+@@ -35,5 +35,10 @@ namespace MediaBrowser.Model.MediaInfo
+         /// </summary>
+         /// <value>The error code.</value>
+         public PlaybackErrorCode? ErrorCode { get; set; }
++
++        /// <summary>
++        /// Gets or sets an optional generic hint. Clients should prefer localizing <see cref="ErrorCode"/>.
++        /// </summary>
++        public string? Message { get; set; }
+     }
+ }
+
