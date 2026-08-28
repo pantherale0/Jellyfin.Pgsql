@@ -1,0 +1,1740 @@
+diff --git a/Emby.Server.Implementations/ApplicationHost.cs b/Emby.Server.Implementations/ApplicationHost.cs
+index b31c3e36e8..d1d769b5ac 100644
+--- a/Emby.Server.Implementations/ApplicationHost.cs
++++ b/Emby.Server.Implementations/ApplicationHost.cs
+@@ -632,5 +632,9 @@ namespace Emby.Server.Implementations
+             serviceCollection.AddSingleton<IAttachmentExtractor, MediaBrowser.MediaEncoding.Attachments.AttachmentExtractor>();
+             serviceCollection.AddSingleton<ITranscodingPipelineProbe, MediaBrowser.MediaEncoding.Transcoding.TranscodingPipelineProbe>();
+ 
++            serviceCollection.AddSingleton<TranscodeSessionBinding>();
++            serviceCollection.AddSingleton<TranscodeFallbackNotifier>();
++            serviceCollection.AddSingleton<ITranscodeCodecRaceCoordinator, TranscodeCodecRaceCoordinator>();
++
+             serviceCollection.AddSingleton<ITranscodeManager, TranscodeManager>();
+             serviceCollection.AddScoped<MediaInfoHelper>();
+diff --git a/Jellyfin.Api/Controllers/DynamicHlsController.cs b/Jellyfin.Api/Controllers/DynamicHlsController.cs
+index fd54aa797f..7c5a039d13 100644
+--- a/Jellyfin.Api/Controllers/DynamicHlsController.cs
++++ b/Jellyfin.Api/Controllers/DynamicHlsController.cs
+@@ -15,12 +15,14 @@ using Jellyfin.Api.Models.StreamingDtos;
+ using Jellyfin.Data.Enums;
+ using Jellyfin.Extensions;
+ using Jellyfin.MediaEncoding.Hls.Playlist;
++using MediaBrowser.Common;
+ using MediaBrowser.Common.Configuration;
+ using MediaBrowser.Common.Extensions;
+ using MediaBrowser.Controller.Configuration;
+ using MediaBrowser.Controller.Library;
+ using MediaBrowser.Controller.MediaEncoding;
+ using MediaBrowser.Controller.Streaming;
++using MediaBrowser.MediaEncoding.Transcoding;
+ using MediaBrowser.Model.Configuration;
+ using MediaBrowser.Model.Dlna;
+ using MediaBrowser.Model.Entities;
+@@ -30,7 +32,9 @@ using MediaBrowser.Model.Net;
+ using Microsoft.AspNetCore.Authorization;
+ using Microsoft.AspNetCore.Http;
+ using Microsoft.AspNetCore.Mvc;
++using Microsoft.AspNetCore.WebUtilities;
+ using Microsoft.Extensions.Logging;
++using Microsoft.Extensions.Primitives;
+ 
+ namespace Jellyfin.Api.Controllers;
+ 
+@@ -62,6 +66,8 @@ public class DynamicHlsController : BaseJellyfinApiController
+     private readonly IDynamicHlsPlaylistGenerator _dynamicHlsPlaylistGenerator;
+     private readonly DynamicHlsHelper _dynamicHlsHelper;
+     private readonly EncodingOptions _encodingOptions;
++    private readonly ITranscodeCodecRaceCoordinator _codecRaceCoordinator;
++    private readonly TranscodeSessionBinding _sessionBinding;
+ 
+     /// <summary>
+     /// Initializes a new instance of the <see cref="DynamicHlsController"/> class.
+@@ -77,6 +83,8 @@ public class DynamicHlsController : BaseJellyfinApiController
+     /// <param name="dynamicHlsHelper">Instance of <see cref="DynamicHlsHelper"/>.</param>
+     /// <param name="encodingHelper">Instance of <see cref="EncodingHelper"/>.</param>
+     /// <param name="dynamicHlsPlaylistGenerator">Instance of <see cref="IDynamicHlsPlaylistGenerator"/>.</param>
++    /// <param name="codecRaceCoordinator">Instance of <see cref="ITranscodeCodecRaceCoordinator"/>.</param>
++    /// <param name="sessionBinding">The transcode session binding store.</param>
+     public DynamicHlsController(
+         ILibraryManager libraryManager,
+         IUserManager userManager,
+@@ -88,7 +96,9 @@ public class DynamicHlsController : BaseJellyfinApiController
+         ILogger<DynamicHlsController> logger,
+         DynamicHlsHelper dynamicHlsHelper,
+         EncodingHelper encodingHelper,
+-        IDynamicHlsPlaylistGenerator dynamicHlsPlaylistGenerator)
++        IDynamicHlsPlaylistGenerator dynamicHlsPlaylistGenerator,
++        ITranscodeCodecRaceCoordinator codecRaceCoordinator,
++        TranscodeSessionBinding sessionBinding)
+     {
+         _libraryManager = libraryManager;
+         _userManager = userManager;
+@@ -101,6 +111,8 @@ public class DynamicHlsController : BaseJellyfinApiController
+         _dynamicHlsHelper = dynamicHlsHelper;
+         _encodingHelper = encodingHelper;
+         _dynamicHlsPlaylistGenerator = dynamicHlsPlaylistGenerator;
++        _codecRaceCoordinator = codecRaceCoordinator;
++        _sessionBinding = sessionBinding;
+ 
+         _encodingOptions = serverConfigurationManager.GetEncodingOptions();
+     }
+@@ -1462,6 +1474,12 @@ public class DynamicHlsController : BaseJellyfinApiController
+             throw new ArgumentException("StartTimeTicks is not allowed.");
+         }
+ 
++        var redirectResult = TryRedirectToBoundCodec(streamingRequest);
++        if (redirectResult is not null)
++        {
++            return redirectResult;
++        }
++
+         // CTS lifecycle is managed internally.
+         var cancellationTokenSource = new CancellationTokenSource();
+         var cancellationToken = cancellationTokenSource.Token;
+@@ -1480,8 +1498,8 @@ public class DynamicHlsController : BaseJellyfinApiController
+                 cancellationToken)
+             .ConfigureAwait(false);
+ 
+-        var playlistPath = Path.ChangeExtension(state.OutputFilePath, ".m3u8");
+-
++        var playlistPath = ResolvePlaylistPath(streamingRequest, state);
++        var originalSegmentId = segmentId;
+         var segmentPath = GetSegmentPath(state, playlistPath, segmentId);
+ 
+         var segmentExtension = EncodingHelper.GetSegmentFileExtension(state.Request.SegmentContainer);
+@@ -1489,7 +1507,11 @@ public class DynamicHlsController : BaseJellyfinApiController
+         // Keep segment selection and transcoding replacement under the same playlist lock.
+         // An out-of-order request must not replace a job while another request is using its output.
+         using (await _transcodeManager.LockAsync(playlistPath, cancellationToken).ConfigureAwait(false))
++        using (await _transcodeManager.LockPlaySessionAsync(streamingRequest.PlaySessionId ?? string.Empty, cancellationToken).ConfigureAwait(false))
+         {
++            playlistPath = ResolvePlaylistPath(streamingRequest, state);
++            segmentPath = GetSegmentPath(state, playlistPath, segmentId);
++
+             TranscodingJob? job;
+             var startTranscoding = false;
+             if (System.IO.File.Exists(segmentPath))
+@@ -1501,11 +1523,13 @@ public class DynamicHlsController : BaseJellyfinApiController
+ 
+             var currentTranscodingIndex = GetCurrentTranscodingIndex(playlistPath, segmentExtension);
+             var segmentGapRequiringTranscodingChange = 24 / state.SegmentLength;
++            var isInitSegmentRequest = false;
+ 
+             if (segmentId == -1)
+             {
+                 _logger.LogInformation("Starting HLS transcoding because fmp4 init file is being requested");
+                 startTranscoding = true;
++                isInitSegmentRequest = true;
+                 segmentId = 0;
+             }
+             else if (currentTranscodingIndex is null)
+@@ -1567,14 +1591,54 @@ public class DynamicHlsController : BaseJellyfinApiController
+ 
+                     streamingRequest.StartTimeTicks = streamingRequest.CurrentRuntimeTicks;
+ 
+-                    state.WaitForPath = segmentPath;
+-                    job = await _transcodeManager.StartFfMpeg(
+-                        state,
+-                        playlistPath,
+-                        GetCommandLineArguments(playlistPath, state, false, segmentId),
+-                        Request.HttpContext.User.GetUserId(),
+-                        TranscodingJobType,
+-                        cancellationTokenSource).ConfigureAwait(false);
++                    var useCodecFallback = _encodingOptions.EnableTranscodeCodecFallback
++                        && state.VideoRequest is not null
++                        && !EncodingHelper.IsCopyCodec(state.OutputVideoCodec);
++
++                    if (useCodecFallback && (isInitSegmentRequest || originalSegmentId == -1))
++                    {
++                        state.WaitForPath = segmentPath;
++                        var fallbackContext = BuildCodecFallbackContext(
++                            streamingRequest,
++                            state,
++                            segmentPath,
++                            segmentId,
++                            originalSegmentId,
++                            isInitSegmentRequest);
++
++                        var fallbackResult = await _codecRaceCoordinator.StartWithFallbackAsync(
++                            fallbackContext,
++                            cancellationToken).ConfigureAwait(false);
++
++                        if (fallbackResult.Job is null)
++                        {
++                            throw new FfmpegException("Transcode codec fallback did not produce a valid ffmpeg job.");
++                        }
++
++                        state = fallbackResult.State ?? state;
++                        job = fallbackResult.Job;
++                        playlistPath = fallbackResult.PlaylistPath ?? playlistPath;
++                        segmentPath = GetSegmentPath(state, playlistPath, segmentId);
++
++                        if (fallbackResult.UsedFallback
++                            && !string.IsNullOrWhiteSpace(fallbackResult.WinningCodec)
++                            && streamingRequest is VideoRequestDto videoRequest
++                            && !string.Equals(videoRequest.VideoCodec, fallbackResult.WinningCodec, StringComparison.OrdinalIgnoreCase))
++                        {
++                            return Redirect(BuildSegmentRedirectUrl(videoRequest.VideoCodec, fallbackResult.WinningCodec));
++                        }
++                    }
++                    else
++                    {
++                        state.WaitForPath = segmentPath;
++                        job = await _transcodeManager.StartFfMpeg(
++                            state,
++                            playlistPath,
++                            GetCommandLineArguments(playlistPath, state, false, segmentId),
++                            Request.HttpContext.User.GetUserId(),
++                            TranscodingJobType,
++                            cancellationTokenSource).ConfigureAwait(false);
++                    }
+                 }
+                 catch
+                 {
+@@ -1599,6 +1663,217 @@ public class DynamicHlsController : BaseJellyfinApiController
+         }
+     }
+ 
++    private string ResolvePlaylistPath(StreamingRequestDto streamingRequest, StreamState state)
++    {
++        if (!string.IsNullOrWhiteSpace(streamingRequest.PlaySessionId)
++            && _sessionBinding.TryGet(streamingRequest.PlaySessionId, out var binding))
++        {
++            return binding.PlaylistPath;
++        }
++
++        return Path.ChangeExtension(state.OutputFilePath, ".m3u8");
++    }
++
++    private ActionResult? TryRedirectToBoundCodec(StreamingRequestDto streamingRequest)
++    {
++        if (streamingRequest is not VideoRequestDto videoRequest
++            || string.IsNullOrWhiteSpace(streamingRequest.PlaySessionId)
++            || string.IsNullOrWhiteSpace(videoRequest.VideoCodec)
++            || !_sessionBinding.TryGet(streamingRequest.PlaySessionId, out var binding))
++        {
++            return null;
++        }
++
++        if (string.Equals(videoRequest.VideoCodec, binding.WinningCodec, StringComparison.OrdinalIgnoreCase))
++        {
++            return null;
++        }
++
++        return Redirect(BuildSegmentRedirectUrl(videoRequest.VideoCodec, binding.WinningCodec));
++    }
++
++    private string BuildSegmentRedirectUrl(string? fromCodec, string toCodec)
++    {
++        var query = QueryHelpers.ParseQuery(Request.QueryString.Value ?? string.Empty);
++        var values = new Dictionary<string, StringValues>(StringComparer.OrdinalIgnoreCase);
++        foreach (var pair in query)
++        {
++            values[pair.Key] = pair.Value;
++        }
++
++        values["VideoCodec"] = toCodec;
++        return Request.Path + QueryString.Create(values).ToUriComponent();
++    }
++
++    private TranscodeCodecFallbackContext BuildCodecFallbackContext(
++        StreamingRequestDto streamingRequest,
++        StreamState state,
++        string initSegmentPath,
++        int segmentIndex,
++        int initSegmentIndex,
++        bool isInitSegmentRequest)
++    {
++        return new TranscodeCodecFallbackContext
++        {
++            State = state,
++            UserId = Request.HttpContext.User.GetUserId(),
++            ItemName = state.MediaSource?.Name,
++            InitSegmentPath = initSegmentPath,
++            InitSegmentIndex = initSegmentIndex,
++            SegmentIndex = segmentIndex,
++            IsInitSegmentRequest = isInitSegmentRequest,
++            CreateStateForCodecAsync = (codec, ct) => CreateStreamStateForCodecAsync(streamingRequest, codec, ct),
++            BuildCommandLineArguments = (attemptState, playlistPath, startNumber) =>
++                GetCommandLineArguments(playlistPath, attemptState, false, startNumber)
++        };
++    }
++
++    private async Task<StreamState> CreateStreamStateForCodecAsync(
++        StreamingRequestDto streamingRequest,
++        string codec,
++        CancellationToken cancellationToken)
++    {
++        var clonedRequest = CloneStreamingRequest(streamingRequest);
++        if (clonedRequest is VideoRequestDto videoRequest)
++        {
++            videoRequest.VideoCodec = codec;
++        }
++
++        return await StreamingHelpers.GetStreamingState(
++                clonedRequest,
++                HttpContext,
++                _mediaSourceManager,
++                _userManager,
++                _libraryManager,
++                _serverConfigurationManager,
++                _mediaEncoder,
++                _encodingHelper,
++                _transcodeManager,
++                TranscodingJobType,
++                cancellationToken)
++            .ConfigureAwait(false);
++    }
++
++    private static StreamingRequestDto CloneStreamingRequest(StreamingRequestDto request)
++    {
++        if (request is VideoRequestDto videoRequest)
++        {
++            return new VideoRequestDto
++            {
++                Params = videoRequest.Params,
++                PlaySessionId = videoRequest.PlaySessionId,
++                Tag = videoRequest.Tag,
++                SegmentContainer = videoRequest.SegmentContainer,
++                SegmentLength = videoRequest.SegmentLength,
++                MinSegments = videoRequest.MinSegments,
++                CurrentRuntimeTicks = videoRequest.CurrentRuntimeTicks,
++                ActualSegmentLengthTicks = videoRequest.ActualSegmentLengthTicks,
++                Id = videoRequest.Id,
++                DeviceId = videoRequest.DeviceId,
++                MediaSourceId = videoRequest.MediaSourceId,
++                Static = videoRequest.Static,
++                AudioCodec = videoRequest.AudioCodec,
++                EnableAutoStreamCopy = videoRequest.EnableAutoStreamCopy,
++                AllowVideoStreamCopy = videoRequest.AllowVideoStreamCopy,
++                AllowAudioStreamCopy = videoRequest.AllowAudioStreamCopy,
++                AudioSampleRate = videoRequest.AudioSampleRate,
++                MaxAudioBitDepth = videoRequest.MaxAudioBitDepth,
++                AudioBitRate = videoRequest.AudioBitRate,
++                AudioChannels = videoRequest.AudioChannels,
++                MaxAudioChannels = videoRequest.MaxAudioChannels,
++                Profile = videoRequest.Profile,
++                Level = videoRequest.Level,
++                Framerate = videoRequest.Framerate,
++                MaxFramerate = videoRequest.MaxFramerate,
++                CopyTimestamps = videoRequest.CopyTimestamps,
++                StartTimeTicks = videoRequest.StartTimeTicks,
++                Width = videoRequest.Width,
++                Height = videoRequest.Height,
++                MaxWidth = videoRequest.MaxWidth,
++                MaxHeight = videoRequest.MaxHeight,
++                VideoBitRate = videoRequest.VideoBitRate,
++                SubtitleStreamIndex = videoRequest.SubtitleStreamIndex,
++                SubtitleMethod = videoRequest.SubtitleMethod,
++                MaxRefFrames = videoRequest.MaxRefFrames,
++                MaxVideoBitDepth = videoRequest.MaxVideoBitDepth,
++                RequireAvc = videoRequest.RequireAvc,
++                DeInterlace = videoRequest.DeInterlace,
++                RequireNonAnamorphic = videoRequest.RequireNonAnamorphic,
++                TranscodingMaxAudioChannels = videoRequest.TranscodingMaxAudioChannels,
++                CpuCoreLimit = videoRequest.CpuCoreLimit,
++                LiveStreamId = videoRequest.LiveStreamId,
++                EnableMpegtsM2TsMode = videoRequest.EnableMpegtsM2TsMode,
++                VideoCodec = videoRequest.VideoCodec,
++                SubtitleCodec = videoRequest.SubtitleCodec,
++                TranscodeReasons = videoRequest.TranscodeReasons,
++                AudioStreamIndex = videoRequest.AudioStreamIndex,
++                VideoStreamIndex = videoRequest.VideoStreamIndex,
++                Context = videoRequest.Context,
++                StreamOptions = videoRequest.StreamOptions is null ? null : new Dictionary<string, string?>(videoRequest.StreamOptions),
++                EnableAudioVbrEncoding = videoRequest.EnableAudioVbrEncoding,
++                AlwaysBurnInSubtitleWhenTranscoding = videoRequest.AlwaysBurnInSubtitleWhenTranscoding,
++                EnableSubtitlesInManifest = videoRequest.EnableSubtitlesInManifest,
++                EnableTrickplay = videoRequest.EnableTrickplay
++            };
++        }
++
++        return new StreamingRequestDto
++        {
++            Params = request.Params,
++            PlaySessionId = request.PlaySessionId,
++            Tag = request.Tag,
++            SegmentContainer = request.SegmentContainer,
++            SegmentLength = request.SegmentLength,
++            MinSegments = request.MinSegments,
++            CurrentRuntimeTicks = request.CurrentRuntimeTicks,
++            ActualSegmentLengthTicks = request.ActualSegmentLengthTicks,
++            Id = request.Id,
++            DeviceId = request.DeviceId,
++            MediaSourceId = request.MediaSourceId,
++            Static = request.Static,
++            AudioCodec = request.AudioCodec,
++            EnableAutoStreamCopy = request.EnableAutoStreamCopy,
++            AllowVideoStreamCopy = request.AllowVideoStreamCopy,
++            AllowAudioStreamCopy = request.AllowAudioStreamCopy,
++            AudioSampleRate = request.AudioSampleRate,
++            MaxAudioBitDepth = request.MaxAudioBitDepth,
++            AudioBitRate = request.AudioBitRate,
++            AudioChannels = request.AudioChannels,
++            MaxAudioChannels = request.MaxAudioChannels,
++            Profile = request.Profile,
++            Level = request.Level,
++            Framerate = request.Framerate,
++            MaxFramerate = request.MaxFramerate,
++            CopyTimestamps = request.CopyTimestamps,
++            StartTimeTicks = request.StartTimeTicks,
++            Width = request.Width,
++            Height = request.Height,
++            MaxWidth = request.MaxWidth,
++            MaxHeight = request.MaxHeight,
++            VideoBitRate = request.VideoBitRate,
++            SubtitleStreamIndex = request.SubtitleStreamIndex,
++            SubtitleMethod = request.SubtitleMethod,
++            MaxRefFrames = request.MaxRefFrames,
++            MaxVideoBitDepth = request.MaxVideoBitDepth,
++            RequireAvc = request.RequireAvc,
++            DeInterlace = request.DeInterlace,
++            RequireNonAnamorphic = request.RequireNonAnamorphic,
++            TranscodingMaxAudioChannels = request.TranscodingMaxAudioChannels,
++            CpuCoreLimit = request.CpuCoreLimit,
++            LiveStreamId = request.LiveStreamId,
++            EnableMpegtsM2TsMode = request.EnableMpegtsM2TsMode,
++            VideoCodec = request.VideoCodec,
++            SubtitleCodec = request.SubtitleCodec,
++            TranscodeReasons = request.TranscodeReasons,
++            AudioStreamIndex = request.AudioStreamIndex,
++            VideoStreamIndex = request.VideoStreamIndex,
++            Context = request.Context,
++            StreamOptions = request.StreamOptions is null ? null : new Dictionary<string, string?>(request.StreamOptions),
++            EnableAudioVbrEncoding = request.EnableAudioVbrEncoding,
++            AlwaysBurnInSubtitleWhenTranscoding = request.AlwaysBurnInSubtitleWhenTranscoding
++        };
++    }
++
+     internal static async Task WaitForActiveTranscodingRequests(TranscodingJob? job, CancellationToken cancellationToken)
+     {
+         while (job?.ActiveRequestCount > 0)
+@@ -2153,6 +2428,26 @@ public class DynamicHlsController : BaseJellyfinApiController
+         }
+     }
+ 
++    private static FileSystemMetadata? GetFirstTranscodingFile(string playlist, string segmentExtension, IFileSystem fileSystem)
++    {
++        var folder = Path.GetDirectoryName(playlist) ?? throw new ArgumentException("Path can't be a root directory.", nameof(playlist));
++
++        var filePrefix = Path.GetFileNameWithoutExtension(playlist);
++
++        try
++        {
++            // Exclude fMP4 init segments (index -1) so backward-seek detection uses real media segments.
++            return fileSystem.GetFiles(folder, new[] { segmentExtension }, true, false)
++                .Where(i => Path.GetFileNameWithoutExtension(i.Name).StartsWith(filePrefix, StringComparison.OrdinalIgnoreCase))
++                .Where(i => (TryParseSegmentIndex(playlist, i.Name) ?? -1) >= 0)
++                .MinBy(i => TryParseSegmentIndex(playlist, i.Name) ?? int.MaxValue);
++        }
++        catch (IOException)
++        {
++            return null;
++        }
++    }
++
+     private async Task DeleteLastFile(string playlistPath, string segmentExtension, int retryCount)
+     {
+         var file = GetLastTranscodingFile(playlistPath, segmentExtension, _fileSystem);
+diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingJobInfo.cs b/MediaBrowser.Controller/MediaEncoding/EncodingJobInfo.cs
+index 6964d0476c..d2df8db00d 100644
+--- a/MediaBrowser.Controller/MediaEncoding/EncodingJobInfo.cs
++++ b/MediaBrowser.Controller/MediaEncoding/EncodingJobInfo.cs
+@@ -68,6 +68,12 @@ namespace MediaBrowser.Controller.MediaEncoding
+ 
+         public string OutputVideoCodec { get; set; }
+ 
++        public string RequestedOutputVideoCodec { get; set; }
++
++        public string CodecFallbackFrom { get; set; }
++
++        public bool CodecRaceActive { get; set; }
++
+         public MediaProtocol InputProtocol { get; set; }
+ 
+         public string MediaPath { get; set; }
+diff --git a/MediaBrowser.Controller/MediaEncoding/ITranscodeManager.cs b/MediaBrowser.Controller/MediaEncoding/ITranscodeManager.cs
+index a6507e8602..ba683cdb2c 100644
+--- a/MediaBrowser.Controller/MediaEncoding/ITranscodeManager.cs
++++ b/MediaBrowser.Controller/MediaEncoding/ITranscodeManager.cs
+@@ -89,6 +89,51 @@ public interface ITranscodeManager
+         CancellationTokenSource cancellationTokenSource,
+         string? workingDirectory = null);
+ 
++    /// <summary>
++    /// Starts FFmpeg and waits for the target file without throwing when the process exits early.
++    /// </summary>
++    /// <param name="state">The state.</param>
++    /// <param name="outputPath">The output path.</param>
++    /// <param name="commandLineArguments">The command line arguments for FFmpeg.</param>
++    /// <param name="userId">The user id.</param>
++    /// <param name="transcodingJobType">The <see cref="TranscodingJobType"/>.</param>
++    /// <param name="cancellationTokenSource">The cancellation token source.</param>
++    /// <param name="skipPostStartSetup">When <c>true</c>, throttler and segment cleaner are not started.</param>
++    /// <param name="workingDirectory">The working directory.</param>
++    /// <returns>The attempt result.</returns>
++    Task<TranscodeAttemptResult> StartFfMpegAttempt(
++        StreamState state,
++        string outputPath,
++        string commandLineArguments,
++        Guid userId,
++        TranscodingJobType transcodingJobType,
++        CancellationTokenSource cancellationTokenSource,
++        bool skipPostStartSetup = false,
++        string? workingDirectory = null);
++
++    /// <summary>
++    /// Starts throttler and segment cleaner for a successful race attempt.
++    /// </summary>
++    /// <param name="state">The stream state.</param>
++    /// <param name="job">The transcoding job.</param>
++    void CompleteFfMpegAttempt(StreamState state, TranscodingJob job);
++
++    /// <summary>
++    /// Kills a single transcoding job and optionally deletes its artifacts.
++    /// </summary>
++    /// <param name="job">The job.</param>
++    /// <param name="deleteArtifacts">Whether to delete partial stream files.</param>
++    /// <returns>A task.</returns>
++    Task KillTranscodingJobAndCleanupAsync(TranscodingJob job, bool deleteArtifacts);
++
++    /// <summary>
++    /// Play session transcoding lock.
++    /// </summary>
++    /// <param name="playSessionId">The play session id.</param>
++    /// <param name="cancellationToken">The cancellation token.</param>
++    /// <returns>An <see cref="IDisposable"/>.</returns>
++    ValueTask<IDisposable> LockPlaySessionAsync(string playSessionId, CancellationToken cancellationToken);
++
+     /// <summary>
+     /// Called when [transcode begin request].
+     /// </summary>
+diff --git a/MediaBrowser.Controller/MediaEncoding/TranscodeAttemptResult.cs b/MediaBrowser.Controller/MediaEncoding/TranscodeAttemptResult.cs
+new file mode 100644
+index 0000000000..37bc29ad85
+--- /dev/null
++++ b/MediaBrowser.Controller/MediaEncoding/TranscodeAttemptResult.cs
+@@ -0,0 +1,22 @@
++namespace MediaBrowser.Controller.MediaEncoding;
++
++/// <summary>
++/// Result of launching a single ffmpeg transcode attempt.
++/// </summary>
++public sealed class TranscodeAttemptResult
++{
++    /// <summary>
++    /// Gets the transcoding job.
++    /// </summary>
++    public TranscodingJob? Job { get; init; }
++
++    /// <summary>
++    /// Gets a value indicating whether the wait target was created before exit.
++    /// </summary>
++    public bool Succeeded { get; init; }
++
++    /// <summary>
++    /// Gets the process exit code when the attempt failed early.
++    /// </summary>
++    public int? ExitCode { get; init; }
++}
+diff --git a/MediaBrowser.MediaEncoding/Transcoding/ITranscodeCodecRaceCoordinator.cs b/MediaBrowser.MediaEncoding/Transcoding/ITranscodeCodecRaceCoordinator.cs
+new file mode 100644
+index 0000000000..218d646a0b
+--- /dev/null
++++ b/MediaBrowser.MediaEncoding/Transcoding/ITranscodeCodecRaceCoordinator.cs
+@@ -0,0 +1,79 @@
++using System;
++using System.Threading;
++using System.Threading.Tasks;
++using MediaBrowser.Controller.MediaEncoding;
++using MediaBrowser.Controller.Streaming;
++
++namespace MediaBrowser.MediaEncoding.Transcoding;
++
++/// <summary>
++/// Coordinates parallel codec races and sequential fallback for HLS init transcodes.
++/// </summary>
++public interface ITranscodeCodecRaceCoordinator
++{
++    /// <summary>
++    /// Starts a parallel race or sequential fallback chain for HLS init transcodes.
++    /// </summary>
++    /// <param name="context">The fallback context.</param>
++    /// <param name="cancellationToken">The cancellation token.</param>
++    /// <returns>The fallback result.</returns>
++    Task<TranscodeCodecFallbackResult> StartWithFallbackAsync(
++        TranscodeCodecFallbackContext context,
++        CancellationToken cancellationToken);
++}
++
++/// <summary>
++/// Context required to start codec fallback.
++/// </summary>
++public sealed class TranscodeCodecFallbackContext
++{
++    /// <summary>
++    /// Gets the primary stream state.
++    /// </summary>
++    public required StreamState State { get; init; }
++
++    /// <summary>
++    /// Gets the user id.
++    /// </summary>
++    public required Guid UserId { get; init; }
++
++    /// <summary>
++    /// Gets the item display name.
++    /// </summary>
++    public string? ItemName { get; init; }
++
++    /// <summary>
++    /// Gets the item id.
++    /// </summary>
++    public Guid? ItemId { get; init; }
++
++    /// <summary>
++    /// Gets the init segment path for the primary state.
++    /// </summary>
++    public required string InitSegmentPath { get; init; }
++
++    /// <summary>
++    /// Gets the init segment index (-1 for fMP4 init segments).
++    /// </summary>
++    public required int InitSegmentIndex { get; init; }
++
++    /// <summary>
++    /// Gets the segment index used when building ffmpeg arguments.
++    /// </summary>
++    public required int SegmentIndex { get; init; }
++
++    /// <summary>
++    /// Gets a value indicating whether this is an init segment request.
++    /// </summary>
++    public required bool IsInitSegmentRequest { get; init; }
++
++    /// <summary>
++    /// Gets the factory that rebuilds stream state for a target codec.
++    /// </summary>
++    public required Func<string, CancellationToken, Task<StreamState>> CreateStateForCodecAsync { get; init; }
++
++    /// <summary>
++    /// Gets the factory that builds ffmpeg command line arguments.
++    /// </summary>
++    public required Func<StreamState, string, int, string> BuildCommandLineArguments { get; init; }
++}
+diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecFallbackChain.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecFallbackChain.cs
+new file mode 100644
+index 0000000000..d8dc801973
+--- /dev/null
++++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecFallbackChain.cs
+@@ -0,0 +1,203 @@
++using System;
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
++using MediaBrowser.Controller.MediaEncoding;
++using MediaBrowser.Controller.Streaming;
++using MediaBrowser.Model.Configuration;
++using MediaBrowser.Model.Entities;
++using MediaBrowser.Model.MediaInfo;
++
++namespace MediaBrowser.MediaEncoding.Transcoding;
++
++/// <summary>
++/// Builds ordered codec candidate lists for parallel race and sequential fallback.
++/// </summary>
++public static class TranscodeCodecFallbackChain
++{
++    private static readonly string[] _raceCodecs = ["av1", "h264"];
++    private static readonly string[] _sequentialCodecs = ["av1", "h264", "hevc", "h265"];
++
++    /// <summary>
++    /// Determines whether a parallel init race may be started.
++    /// </summary>
++    /// <param name="state">The stream state.</param>
++    /// <param name="encodingOptions">Encoding options.</param>
++    /// <param name="isInitSegmentRequest">Whether the init segment is being requested.</param>
++    /// <returns><c>true</c> when parallel race is allowed.</returns>
++    public static bool IsRaceEligible(StreamState state, EncodingOptions encodingOptions, bool isInitSegmentRequest)
++    {
++        if (!isInitSegmentRequest
++            || !encodingOptions.EnableTranscodeCodecFallback
++            || !encodingOptions.EnableParallelCodecRace
++            || state.VideoRequest is null
++            || EncodingHelper.IsCopyCodec(state.OutputVideoCodec)
++            || state.InputProtocol != MediaProtocol.File
++            || state.IsSegmentedLiveStream)
++        {
++            return false;
++        }
++
++        var raceCandidates = GetRaceCandidates(state, encodingOptions);
++        return raceCandidates.Count >= 2;
++    }
++
++    /// <summary>
++    /// Gets codecs to run in parallel at init.
++    /// </summary>
++    /// <param name="state">The stream state.</param>
++    /// <param name="encodingOptions">Encoding options.</param>
++    /// <returns>Distinct codec names.</returns>
++    public static IReadOnlyList<string> GetRaceCandidates(StreamState state, EncodingOptions encodingOptions)
++    {
++        if (!encodingOptions.EnableTranscodeCodecFallback)
++        {
++            return [];
++        }
++
++        var supported = GetSupportedCodecs(state);
++        var candidates = new List<string>();
++
++        foreach (var codec in _raceCodecs)
++        {
++            if (!IsCodecAllowed(codec, encodingOptions))
++            {
++                continue;
++            }
++
++            if (supported.Contains(codec, StringComparer.OrdinalIgnoreCase)
++                || string.Equals(state.OutputVideoCodec, codec, StringComparison.OrdinalIgnoreCase))
++            {
++                candidates.Add(NormalizeCodec(codec));
++            }
++        }
++
++        if (candidates.Count < 2 && encodingOptions.AllowAv1Encoding)
++        {
++            if (IsCodecAllowed("h264", encodingOptions) && !candidates.Contains("h264", StringComparer.OrdinalIgnoreCase))
++            {
++                candidates.Add("h264");
++            }
++
++            if (IsCodecAllowed("av1", encodingOptions) && !candidates.Contains("av1", StringComparer.OrdinalIgnoreCase))
++            {
++                candidates.Add("av1");
++            }
++        }
++
++        return candidates
++            .Distinct(StringComparer.OrdinalIgnoreCase)
++            .ToList();
++    }
++
++    /// <summary>
++    /// Gets the sequential fallback chain starting from the requested codec.
++    /// </summary>
++    /// <param name="state">The stream state.</param>
++    /// <param name="encodingOptions">Encoding options.</param>
++    /// <returns>Ordered codec names.</returns>
++    public static IReadOnlyList<string> GetSequentialChain(StreamState state, EncodingOptions encodingOptions)
++    {
++        if (!encodingOptions.EnableTranscodeCodecFallback)
++        {
++            var requested = NormalizeCodec(state.OutputVideoCodec);
++            return string.IsNullOrEmpty(requested) ? [] : [requested];
++        }
++
++        var supported = GetSupportedCodecs(state);
++        var ordered = new List<string>();
++        var requestedCodec = NormalizeCodec(state.Request.VideoCodec ?? state.OutputVideoCodec);
++
++        if (!string.IsNullOrEmpty(requestedCodec)
++            && IsCodecAllowed(requestedCodec, encodingOptions)
++            && (supported.Count == 0 || supported.Contains(requestedCodec, StringComparer.OrdinalIgnoreCase)))
++        {
++            ordered.Add(requestedCodec);
++        }
++
++        foreach (var codec in _sequentialCodecs)
++        {
++            var normalized = NormalizeCodec(codec);
++            if (ordered.Contains(normalized, StringComparer.OrdinalIgnoreCase))
++            {
++                continue;
++            }
++
++            if (!IsCodecAllowed(normalized, encodingOptions))
++            {
++                continue;
++            }
++
++            if (ordered.Count == 0
++                && supported.Count > 0
++                && !supported.Contains(normalized, StringComparer.OrdinalIgnoreCase))
++            {
++                continue;
++            }
++
++            ordered.Add(normalized);
++        }
++
++        return ordered;
++    }
++
++    /// <summary>
++    /// Builds a race-specific output path so parallel attempts do not collide.
++    /// </summary>
++    /// <param name="baseOutputFilePath">The default output file path.</param>
++    /// <param name="codec">The codec attempt name.</param>
++    /// <returns>A unique output path per codec attempt.</returns>
++    public static string GetRaceOutputFilePath(string baseOutputFilePath, string codec)
++    {
++        var directory = Path.GetDirectoryName(baseOutputFilePath)
++                        ?? throw new ArgumentException("Invalid output path.", nameof(baseOutputFilePath));
++        var extension = Path.GetExtension(baseOutputFilePath);
++        var filename = Path.GetFileNameWithoutExtension(baseOutputFilePath);
++        return Path.Combine(directory, filename + "_" + NormalizeCodec(codec) + extension);
++    }
++
++    private static HashSet<string> GetSupportedCodecs(StreamState state)
++    {
++        var supported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
++
++        if (state.SupportedVideoCodecs is { Length: > 0 })
++        {
++            foreach (var codec in state.SupportedVideoCodecs)
++            {
++                if (!string.IsNullOrWhiteSpace(codec))
++                {
++                    supported.Add(NormalizeCodec(codec));
++                }
++            }
++        }
++
++        if (!string.IsNullOrWhiteSpace(state.OutputVideoCodec))
++        {
++            supported.Add(NormalizeCodec(state.OutputVideoCodec));
++        }
++
++        return supported;
++    }
++
++    private static bool IsCodecAllowed(string codec, EncodingOptions encodingOptions)
++    {
++        var normalized = NormalizeCodec(codec);
++        return normalized switch
++        {
++            "av1" => encodingOptions.AllowAv1Encoding,
++            "hevc" or "h265" => encodingOptions.AllowHevcEncoding,
++            "h264" => true,
++            _ => false
++        };
++    }
++
++    private static string NormalizeCodec(string codec)
++    {
++        if (string.Equals(codec, "h265", StringComparison.OrdinalIgnoreCase))
++        {
++            return "hevc";
++        }
++
++        return codec.ToLowerInvariant();
++    }
++}
+diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecFallbackResult.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecFallbackResult.cs
+new file mode 100644
+index 0000000000..de5c0a16dd
+--- /dev/null
++++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecFallbackResult.cs
+@@ -0,0 +1,45 @@
++using MediaBrowser.Controller.MediaEncoding;
++using MediaBrowser.Controller.Streaming;
++
++namespace MediaBrowser.MediaEncoding.Transcoding;
++
++/// <summary>
++/// Result of a codec race or sequential fallback attempt.
++/// </summary>
++public sealed class TranscodeCodecFallbackResult
++{
++    /// <summary>
++    /// Gets the winning transcoding job, if any.
++    /// </summary>
++    public TranscodingJob? Job { get; init; }
++
++    /// <summary>
++    /// Gets the stream state for the winning attempt.
++    /// </summary>
++    public StreamState? State { get; init; }
++
++    /// <summary>
++    /// Gets the winning video codec logical name (av1, h264, hevc).
++    /// </summary>
++    public string? WinningCodec { get; init; }
++
++    /// <summary>
++    /// Gets the codec originally requested by the client.
++    /// </summary>
++    public string? RequestedCodec { get; init; }
++
++    /// <summary>
++    /// Gets the playlist path for the winning transcode.
++    /// </summary>
++    public string? PlaylistPath { get; init; }
++
++    /// <summary>
++    /// Gets a value indicating whether a parallel race was used.
++    /// </summary>
++    public bool UsedParallelRace { get; init; }
++
++    /// <summary>
++    /// Gets a value indicating whether fallback occurred.
++    /// </summary>
++    public bool UsedFallback { get; init; }
++}
+diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs
+new file mode 100644
+index 0000000000..5af1bd2d60
+--- /dev/null
++++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs
+@@ -0,0 +1,423 @@
++using System;
++using System.Collections.Generic;
++using System.Globalization;
++using System.IO;
++using System.Linq;
++using System.Threading;
++using System.Threading.Tasks;
++using MediaBrowser.Common;
++using MediaBrowser.Common.Configuration;
++using MediaBrowser.Common.Extensions;
++using MediaBrowser.Controller.Configuration;
++using MediaBrowser.Controller.MediaEncoding;
++using MediaBrowser.Controller.Streaming;
++using MediaBrowser.Model.Configuration;
++using Microsoft.Extensions.Logging;
++
++namespace MediaBrowser.MediaEncoding.Transcoding;
++
++/// <inheritdoc />
++#pragma warning disable CA1001 // Semaphore is process-lifetime singleton
++public sealed class TranscodeCodecRaceCoordinator : ITranscodeCodecRaceCoordinator
++#pragma warning restore CA1001
++{
++    private const int MaxConcurrentRaces = 2;
++
++    private readonly ITranscodeManager _transcodeManager;
++    private readonly IServerConfigurationManager _serverConfigurationManager;
++    private readonly TranscodeSessionBinding _sessionBinding;
++    private readonly TranscodeFallbackNotifier _notifier;
++    private readonly ILogger<TranscodeCodecRaceCoordinator> _logger;
++    private readonly SemaphoreSlim _raceSemaphore = new(MaxConcurrentRaces, MaxConcurrentRaces);
++
++    /// <summary>
++    /// Initializes a new instance of the <see cref="TranscodeCodecRaceCoordinator"/> class.
++    /// </summary>
++    /// <param name="transcodeManager">The transcode manager.</param>
++    /// <param name="serverConfigurationManager">The server configuration manager.</param>
++    /// <param name="sessionBinding">The session binding store.</param>
++    /// <param name="notifier">The fallback notifier.</param>
++    /// <param name="logger">The logger.</param>
++    public TranscodeCodecRaceCoordinator(
++        ITranscodeManager transcodeManager,
++        IServerConfigurationManager serverConfigurationManager,
++        TranscodeSessionBinding sessionBinding,
++        TranscodeFallbackNotifier notifier,
++        ILogger<TranscodeCodecRaceCoordinator> logger)
++    {
++        _transcodeManager = transcodeManager;
++        _serverConfigurationManager = serverConfigurationManager;
++        _sessionBinding = sessionBinding;
++        _notifier = notifier;
++        _logger = logger;
++    }
++
++    /// <inheritdoc />
++    public async Task<TranscodeCodecFallbackResult> StartWithFallbackAsync(
++        TranscodeCodecFallbackContext context,
++        CancellationToken cancellationToken)
++    {
++        var encodingOptions = _serverConfigurationManager.GetEncodingOptions();
++        var requestedCodec = context.State.OutputVideoCodec ?? context.State.Request.VideoCodec ?? string.Empty;
++
++        if (TranscodeCodecFallbackChain.IsRaceEligible(context.State, encodingOptions, context.IsInitSegmentRequest))
++        {
++            await _raceSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
++            try
++            {
++                var raceResult = await RunParallelRaceAsync(context, encodingOptions, requestedCodec, cancellationToken)
++                    .ConfigureAwait(false);
++                if (raceResult.Job is not null)
++                {
++                    return raceResult;
++                }
++            }
++            finally
++            {
++                _raceSemaphore.Release();
++            }
++        }
++
++        return await RunSequentialFallbackAsync(context, encodingOptions, requestedCodec, cancellationToken)
++            .ConfigureAwait(false);
++    }
++
++    private async Task<TranscodeCodecFallbackResult> RunParallelRaceAsync(
++        TranscodeCodecFallbackContext context,
++        EncodingOptions encodingOptions,
++        string requestedCodec,
++        CancellationToken cancellationToken)
++    {
++        var playSessionId = context.State.Request.PlaySessionId ?? string.Empty;
++        var candidates = TranscodeCodecFallbackChain.GetRaceCandidates(context.State, encodingOptions);
++        if (candidates.Count < 2)
++        {
++            return new TranscodeCodecFallbackResult();
++        }
++
++        _logger.LogInformation(
++            "Starting parallel transcode codec race for play session {PlaySessionId}: {Codecs}",
++            context.State.Request.PlaySessionId,
++            string.Join(", ", candidates));
++
++        var attemptTasks = candidates
++            .Select(codec => RunRaceAttemptAsync(context, codec, cancellationToken))
++            .ToList();
++
++        var pending = new List<Task<RaceAttempt?>>(attemptTasks);
++        RaceAttempt? winningAttempt = null;
++
++        while (pending.Count > 0 && winningAttempt is null)
++        {
++            var completedTask = await Task.WhenAny(pending).ConfigureAwait(false);
++            pending.Remove(completedTask);
++
++            var attempt = await completedTask.ConfigureAwait(false);
++            if (attempt?.Result.Succeeded == true && attempt.Result.Job is not null)
++            {
++                winningAttempt = attempt;
++            }
++        }
++
++        foreach (var task in attemptTasks)
++        {
++            if (!task.IsCompleted)
++            {
++                continue;
++            }
++
++            var attempt = await task.ConfigureAwait(false);
++            if (!ReferenceEquals(attempt, winningAttempt))
++            {
++                await CleanupAttemptAsync(attempt).ConfigureAwait(false);
++            }
++        }
++
++        if (winningAttempt?.Result.Succeeded == true && winningAttempt.Result.Job is not null)
++        {
++            _transcodeManager.CompleteFfMpegAttempt(winningAttempt.State, winningAttempt.Result.Job);
++
++            _sessionBinding.Bind(
++                playSessionId,
++                winningAttempt.Codec,
++                winningAttempt.PlaylistPath);
++
++            ApplyFallbackMetadata(winningAttempt.State, requestedCodec, winningAttempt.Codec, usedParallelRace: true);
++
++            await _notifier.NotifyRaceResultAsync(
++                playSessionId,
++                context.UserId,
++                context.ItemName,
++                context.ItemId,
++                requestedCodec,
++                winningAttempt.Codec).ConfigureAwait(false);
++
++            _logger.LogInformation(
++                "Parallel transcode codec race selected {WinningCodec} for play session {PlaySessionId}",
++                winningAttempt.Codec,
++                context.State.Request.PlaySessionId);
++
++            return BuildResult(
++                winningAttempt.Codec,
++                requestedCodec,
++                winningAttempt.State,
++                winningAttempt.Result.Job,
++                winningAttempt.PlaylistPath,
++                usedParallelRace: true,
++                usedFallback: !string.Equals(winningAttempt.Codec, requestedCodec, StringComparison.OrdinalIgnoreCase));
++        }
++
++        return new TranscodeCodecFallbackResult();
++    }
++
++    private async Task<RaceAttempt?> RunRaceAttemptAsync(
++        TranscodeCodecFallbackContext context,
++        string codec,
++        CancellationToken cancellationToken)
++    {
++        StreamState? attemptState = null;
++        CancellationTokenSource? attemptCts = null;
++
++        try
++        {
++            attemptState = await context.CreateStateForCodecAsync(codec, cancellationToken).ConfigureAwait(false);
++            var raceOutputPath = TranscodeCodecFallbackChain.GetRaceOutputFilePath(attemptState.OutputFilePath, codec);
++            attemptState.OutputFilePath = raceOutputPath;
++            attemptState.CodecRaceActive = true;
++
++            var playlistPath = Path.ChangeExtension(raceOutputPath, ".m3u8");
++            attemptState.WaitForPath = BuildInitSegmentPath(playlistPath, attemptState, context.InitSegmentIndex);
++
++            attemptCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
++            var commandLine = context.BuildCommandLineArguments(attemptState, playlistPath, context.SegmentIndex);
++            var attemptResult = await _transcodeManager.StartFfMpegAttempt(
++                attemptState,
++                playlistPath,
++                commandLine,
++                context.UserId,
++                TranscodingJobType.Hls,
++                attemptCts,
++                skipPostStartSetup: true).ConfigureAwait(false);
++
++            return new RaceAttempt(codec, attemptState, playlistPath, attemptCts, attemptResult);
++        }
++        catch (Exception ex) when (ex is not OperationCanceledException)
++        {
++            _logger.LogDebug(ex, "Parallel transcode attempt failed to start for codec {Codec}", codec);
++            if (attemptState is not null && !ReferenceEquals(attemptState, context.State))
++            {
++                attemptState.Dispose();
++            }
++
++            attemptCts?.Dispose();
++            return null;
++        }
++    }
++
++    private async Task CleanupAttemptAsync(RaceAttempt? attempt)
++    {
++        if (attempt is null)
++        {
++            return;
++        }
++
++        if (attempt.Result.Job is not null)
++        {
++            await _transcodeManager.KillTranscodingJobAndCleanupAsync(attempt.Result.Job, deleteArtifacts: true)
++                .ConfigureAwait(false);
++        }
++
++        attempt.CancellationTokenSource.Dispose();
++        attempt.State.Dispose();
++    }
++
++    private async Task<TranscodeCodecFallbackResult> RunSequentialFallbackAsync(
++        TranscodeCodecFallbackContext context,
++        EncodingOptions encodingOptions,
++        string requestedCodec,
++        CancellationToken cancellationToken)
++    {
++        var chain = TranscodeCodecFallbackChain.GetSequentialChain(context.State, encodingOptions);
++        if (chain.Count == 0)
++        {
++            throw new FfmpegException("No allowed transcode codecs are available for fallback.");
++        }
++
++        string? previousCodec = null;
++        int? previousExitCode = null;
++        var attempted = new List<string>();
++
++        var playSessionId = context.State.Request.PlaySessionId ?? string.Empty;
++
++        foreach (var codec in chain)
++        {
++            attempted.Add(codec);
++            StreamState? attemptState = null;
++            CancellationTokenSource? attemptCts = null;
++
++            try
++            {
++                attemptState = string.Equals(codec, context.State.OutputVideoCodec, StringComparison.OrdinalIgnoreCase)
++                    ? context.State
++                    : await context.CreateStateForCodecAsync(codec, cancellationToken).ConfigureAwait(false);
++
++                var playlistPath = Path.ChangeExtension(attemptState.OutputFilePath, ".m3u8");
++                attemptState.WaitForPath = BuildInitSegmentPath(playlistPath, attemptState, context.InitSegmentIndex);
++
++                attemptCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
++                var commandLine = context.BuildCommandLineArguments(attemptState, playlistPath, context.SegmentIndex);
++
++                var result = await _transcodeManager.StartFfMpegAttempt(
++                    attemptState,
++                    playlistPath,
++                    commandLine,
++                    context.UserId,
++                    TranscodingJobType.Hls,
++                    attemptCts,
++                    skipPostStartSetup: false).ConfigureAwait(false);
++
++                if (result.Succeeded && result.Job is not null)
++                {
++                    if (previousCodec is not null)
++                    {
++                        await _notifier.NotifySequentialFallbackAsync(
++                            playSessionId,
++                            context.UserId,
++                            context.ItemName,
++                            context.ItemId,
++                            previousCodec,
++                            codec,
++                            previousExitCode).ConfigureAwait(false);
++                    }
++
++                    _sessionBinding.Bind(playSessionId, codec, playlistPath);
++                    ApplyFallbackMetadata(
++                        attemptState,
++                        requestedCodec,
++                        codec,
++                        usedParallelRace: false,
++                        fallbackFrom: previousCodec);
++
++                    return BuildResult(
++                        codec,
++                        requestedCodec,
++                        attemptState,
++                        result.Job,
++                        playlistPath,
++                        usedParallelRace: false,
++                        usedFallback: !string.Equals(codec, requestedCodec, StringComparison.OrdinalIgnoreCase));
++                }
++
++                previousCodec = codec;
++                previousExitCode = result.ExitCode;
++
++                if (!ReferenceEquals(attemptState, context.State))
++                {
++                    attemptState.Dispose();
++                    attemptState = null;
++                }
++            }
++            catch (Exception ex) when (ex is not OperationCanceledException)
++            {
++                _logger.LogDebug(ex, "Sequential transcode attempt failed for codec {Codec}", codec);
++                previousCodec = codec;
++                if (attemptState is not null && !ReferenceEquals(attemptState, context.State))
++                {
++                    attemptState.Dispose();
++                    attemptState = null;
++                }
++            }
++            finally
++            {
++                attemptCts?.Dispose();
++            }
++        }
++
++        await _notifier.NotifyAllAttemptsFailedAsync(
++            playSessionId,
++            context.UserId,
++            context.ItemName,
++            context.ItemId,
++            attempted).ConfigureAwait(false);
++
++        throw new FfmpegException("FFmpeg exited before producing output for all codec fallback attempts.");
++    }
++
++    private static void ApplyFallbackMetadata(
++        StreamState state,
++        string requestedCodec,
++        string winningCodec,
++        bool usedParallelRace,
++        string? fallbackFrom = null)
++    {
++        state.RequestedOutputVideoCodec = requestedCodec;
++        state.CodecRaceActive = usedParallelRace && string.Equals(winningCodec, requestedCodec, StringComparison.OrdinalIgnoreCase);
++
++        if (!string.IsNullOrEmpty(fallbackFrom))
++        {
++            state.CodecFallbackFrom = fallbackFrom;
++        }
++        else if (!string.Equals(winningCodec, requestedCodec, StringComparison.OrdinalIgnoreCase))
++        {
++            state.CodecFallbackFrom = requestedCodec;
++        }
++    }
++
++    private static TranscodeCodecFallbackResult BuildResult(
++        string winningCodec,
++        string requestedCodec,
++        StreamState state,
++        TranscodingJob job,
++        string playlistPath,
++        bool usedParallelRace,
++        bool usedFallback)
++    {
++        return new TranscodeCodecFallbackResult
++        {
++            Job = job,
++            State = state,
++            WinningCodec = winningCodec,
++            RequestedCodec = requestedCodec,
++            PlaylistPath = playlistPath,
++            UsedParallelRace = usedParallelRace,
++            UsedFallback = usedFallback
++        };
++    }
++
++    private static string BuildInitSegmentPath(string playlistPath, StreamState state, int initSegmentIndex)
++    {
++        var folder = Path.GetDirectoryName(playlistPath)
++                     ?? throw new ArgumentException("Invalid playlist path.", nameof(playlistPath));
++        var filename = Path.GetFileNameWithoutExtension(playlistPath);
++        return Path.Combine(
++            folder,
++            filename + initSegmentIndex.ToString(CultureInfo.InvariantCulture) + EncodingHelper.GetSegmentFileExtension(state.Request.SegmentContainer));
++    }
++
++    private sealed class RaceAttempt
++    {
++        public RaceAttempt(
++            string codec,
++            StreamState state,
++            string playlistPath,
++            CancellationTokenSource cancellationTokenSource,
++            TranscodeAttemptResult result)
++        {
++            Codec = codec;
++            State = state;
++            PlaylistPath = playlistPath;
++            CancellationTokenSource = cancellationTokenSource;
++            Result = result;
++        }
++
++        public string Codec { get; }
++
++        public StreamState State { get; }
++
++        public string PlaylistPath { get; }
++
++        public CancellationTokenSource CancellationTokenSource { get; }
++
++        public TranscodeAttemptResult Result { get; }
++    }
++}
+diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeFallbackNotifier.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeFallbackNotifier.cs
+new file mode 100644
+index 0000000000..60aa92989b
+--- /dev/null
++++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeFallbackNotifier.cs
+@@ -0,0 +1,185 @@
++using System;
++using System.Collections.Concurrent;
++using System.Collections.Generic;
++using System.Globalization;
++using System.Threading.Tasks;
++using Jellyfin.Database.Implementations.Entities;
++using MediaBrowser.Model.Activity;
++using Microsoft.Extensions.Logging;
++
++namespace MediaBrowser.MediaEncoding.Transcoding;
++
++/// <summary>
++/// Writes deduplicated admin activity log entries for codec fallback events.
++/// </summary>
++public sealed class TranscodeFallbackNotifier
++{
++    private readonly IActivityManager _activityManager;
++    private readonly ILogger<TranscodeFallbackNotifier> _logger;
++    private readonly ConcurrentDictionary<string, byte> _dedupeKeys = new(StringComparer.OrdinalIgnoreCase);
++
++    /// <summary>
++    /// Initializes a new instance of the <see cref="TranscodeFallbackNotifier"/> class.
++    /// </summary>
++    /// <param name="activityManager">The activity manager.</param>
++    /// <param name="logger">The logger.</param>
++    public TranscodeFallbackNotifier(IActivityManager activityManager, ILogger<TranscodeFallbackNotifier> logger)
++    {
++        _activityManager = activityManager;
++        _logger = logger;
++    }
++
++    /// <summary>
++    /// Logs a parallel race result.
++    /// </summary>
++    /// <param name="playSessionId">The play session id.</param>
++    /// <param name="userId">The user id.</param>
++    /// <param name="itemName">The item name.</param>
++    /// <param name="itemId">The item id.</param>
++    /// <param name="requestedCodec">The requested codec.</param>
++    /// <param name="winningCodec">The winning codec.</param>
++    /// <returns>A task.</returns>
++    public Task NotifyRaceResultAsync(
++        string playSessionId,
++        Guid userId,
++        string? itemName,
++        Guid? itemId,
++        string requestedCodec,
++        string winningCodec)
++    {
++        if (string.Equals(requestedCodec, winningCodec, StringComparison.OrdinalIgnoreCase))
++        {
++            return Task.CompletedTask;
++        }
++
++        var dedupeKey = $"{playSessionId}:race:{requestedCodec}:{winningCodec}";
++        if (!_dedupeKeys.TryAdd(dedupeKey, 0))
++        {
++            return Task.CompletedTask;
++        }
++
++        var overview = string.Format(
++            CultureInfo.InvariantCulture,
++            "Item \"{0}\" play session {1}: parallel transcode race selected {2} over {3}.",
++            itemName ?? "Unknown",
++            playSessionId,
++            winningCodec.ToUpperInvariant(),
++            requestedCodec.ToUpperInvariant());
++
++        return CreateEntryAsync(
++            "Transcode codec race selected fallback codec",
++            "TranscodeCodecRace",
++            userId,
++            overview,
++            itemId,
++            LogLevel.Information);
++    }
++
++    /// <summary>
++    /// Logs a sequential fallback.
++    /// </summary>
++    /// <param name="playSessionId">The play session id.</param>
++    /// <param name="userId">The user id.</param>
++    /// <param name="itemName">The item name.</param>
++    /// <param name="itemId">The item id.</param>
++    /// <param name="fromCodec">The failed codec.</param>
++    /// <param name="toCodec">The fallback codec.</param>
++    /// <param name="exitCode">The ffmpeg exit code.</param>
++    /// <returns>A task.</returns>
++    public Task NotifySequentialFallbackAsync(
++        string playSessionId,
++        Guid userId,
++        string? itemName,
++        Guid? itemId,
++        string fromCodec,
++        string toCodec,
++        int? exitCode)
++    {
++        var dedupeKey = $"{playSessionId}:fallback:{fromCodec}:{toCodec}";
++        if (!_dedupeKeys.TryAdd(dedupeKey, 0))
++        {
++            return Task.CompletedTask;
++        }
++
++        var overview = string.Format(
++            CultureInfo.InvariantCulture,
++            "Item \"{0}\" play session {1}: {2} transcode failed (exit {3}); falling back to {4}.",
++            itemName ?? "Unknown",
++            playSessionId,
++            fromCodec.ToUpperInvariant(),
++            exitCode?.ToString(CultureInfo.InvariantCulture) ?? "unknown",
++            toCodec.ToUpperInvariant());
++
++        return CreateEntryAsync(
++            "Transcode codec fallback",
++            "TranscodeCodecFallback",
++            userId,
++            overview,
++            itemId,
++            LogLevel.Warning);
++    }
++
++    /// <summary>
++    /// Logs when all codec attempts failed.
++    /// </summary>
++    /// <param name="playSessionId">The play session id.</param>
++    /// <param name="userId">The user id.</param>
++    /// <param name="itemName">The item name.</param>
++    /// <param name="itemId">The item id.</param>
++    /// <param name="attemptedCodecs">Codecs attempted.</param>
++    /// <returns>A task.</returns>
++    public Task NotifyAllAttemptsFailedAsync(
++        string playSessionId,
++        Guid userId,
++        string? itemName,
++        Guid? itemId,
++        IReadOnlyList<string> attemptedCodecs)
++    {
++        var dedupeKey = $"{playSessionId}:failed:all";
++        if (!_dedupeKeys.TryAdd(dedupeKey, 0))
++        {
++            return Task.CompletedTask;
++        }
++
++        var overview = string.Format(
++            CultureInfo.InvariantCulture,
++            "Item \"{0}\" play session {1}: all transcode codec attempts failed ({2}).",
++            itemName ?? "Unknown",
++            playSessionId,
++            string.Join(", ", attemptedCodecs));
++
++        return CreateEntryAsync(
++            "All transcode codec attempts failed",
++            "TranscodeCodecFailure",
++            userId,
++            overview,
++            itemId,
++            LogLevel.Error);
++    }
++
++    private async Task CreateEntryAsync(
++        string name,
++        string type,
++        Guid userId,
++        string overview,
++        Guid? itemId,
++        LogLevel severity)
++    {
++        try
++        {
++            var entry = new ActivityLog(name, type, userId)
++            {
++                Overview = overview,
++                ShortOverview = overview,
++                LogSeverity = severity,
++                ItemId = itemId?.ToString("N", CultureInfo.InvariantCulture)
++            };
++
++            await _activityManager.CreateAsync(entry).ConfigureAwait(false);
++        }
++        catch (Exception ex)
++        {
++            _logger.LogWarning(ex, "Failed to write transcode fallback activity log entry");
++        }
++    }
++}
+diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
+index 7217677013..0ae00e7468 100644
+--- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
++++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
+@@ -407,7 +407,10 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+                 IsThrottled = job?.TranscodingThrottler?.IsThrottled == true,
+                 SubtitleCodec = state.SubtitleStream?.Codec,
+                 SubtitleDeliveryMethod = state.SubtitleStream is null ? null : state.SubtitleDeliveryMethod,
+-                Pipeline = pipeline
++                Pipeline = pipeline,
++                RequestedVideoCodec = state.RequestedOutputVideoCodec,
++                CodecFallbackFrom = state.CodecFallbackFrom,
++                CodecRaceActive = state.CodecRaceActive
+             });
+         }
+     }
+@@ -433,6 +440,35 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+         TranscodingJobType transcodingJobType,
+         CancellationTokenSource cancellationTokenSource,
+         string? workingDirectory = null)
++    {
++        var attempt = await StartFfMpegAttempt(
++            state,
++            outputPath,
++            commandLineArguments,
++            userId,
++            transcodingJobType,
++            cancellationTokenSource,
++            skipPostStartSetup: false,
++            workingDirectory).ConfigureAwait(false);
++
++        if (!attempt.Succeeded || attempt.Job is null)
++        {
++            throw new FfmpegException(string.Format(CultureInfo.InvariantCulture, "FFmpeg exited with code {0}", attempt.ExitCode ?? -1));
++        }
++
++        return attempt.Job;
++    }
++
++    /// <inheritdoc />
++    public async Task<TranscodeAttemptResult> StartFfMpegAttempt(
++        StreamState state,
++        string outputPath,
++        string commandLineArguments,
++        Guid userId,
++        TranscodingJobType transcodingJobType,
++        CancellationTokenSource cancellationTokenSource,
++        bool skipPostStartSetup = false,
++        string? workingDirectory = null)
+     {
+         var directory = Path.GetDirectoryName(outputPath) ?? throw new ArgumentException($"Provided path ({outputPath}) is not valid.", nameof(outputPath));
+         Directory.CreateDirectory(directory);
+@@ -585,19 +621,52 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+             }
+         }
+ 
+-        if (!transcodingJob.HasExited)
++        var succeeded = File.Exists(ffmpegTargetFile) && !transcodingJob.HasExited;
++        if (succeeded && !transcodingJob.HasExited && !skipPostStartSetup)
+         {
+             StartThrottler(state, transcodingJob);
+             StartSegmentCleaner(state, transcodingJob);
+         }
+-        else if (transcodingJob.ExitCode != 0)
++        else if (!succeeded && transcodingJob.ExitCode != 0)
+         {
+-            throw new FfmpegException(string.Format(CultureInfo.InvariantCulture, "FFmpeg exited with code {0}", transcodingJob.ExitCode));
++            _logger.LogError("FFmpeg exited with code {ExitCode} before producing {TargetFile}", transcodingJob.ExitCode, ffmpegTargetFile);
+         }
+ 
+-        _logger.LogDebug("StartFfMpeg() finished successfully");
++        if (succeeded && !transcodingJob.HasExited)
++        {
++            _logger.LogDebug("StartFfMpeg() finished successfully");
++        }
+ 
+-        return transcodingJob;
++        return new TranscodeAttemptResult
++        {
++            Job = transcodingJob,
++            Succeeded = succeeded && !transcodingJob.HasExited,
++            ExitCode = transcodingJob.HasExited ? transcodingJob.ExitCode : null
++        };
++    }
++
++    /// <inheritdoc />
++    public void CompleteFfMpegAttempt(StreamState state, TranscodingJob job)
++    {
++        if (job.HasExited)
++        {
++            return;
++        }
++
++        StartThrottler(state, job);
++        StartSegmentCleaner(state, job);
++    }
++
++    /// <inheritdoc />
++    public Task KillTranscodingJobAndCleanupAsync(TranscodingJob job, bool deleteArtifacts)
++    {
++        return KillTranscodingJob(job, false, deleteArtifacts ? _ => true : _ => false);
++    }
++
++    /// <inheritdoc />
++    public ValueTask<IDisposable> LockPlaySessionAsync(string playSessionId, CancellationToken cancellationToken)
++    {
++        return _transcodingLocks.LockAsync("session:" + playSessionId, cancellationToken);
+     }
+ 
+     private void StartThrottler(StreamState state, TranscodingJob transcodingJob)
+diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeSessionBinding.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeSessionBinding.cs
+new file mode 100644
+index 0000000000..1dfa06a50b
+--- /dev/null
++++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeSessionBinding.cs
+@@ -0,0 +1,64 @@
++using System;
++using System.Collections.Concurrent;
++
++namespace MediaBrowser.MediaEncoding.Transcoding;
++
++/// <summary>
++/// Tracks the winning codec playlist per play session after a race or fallback.
++/// </summary>
++public sealed class TranscodeSessionBinding
++{
++    private readonly ConcurrentDictionary<string, TranscodeSessionEntry> _entries = new(StringComparer.OrdinalIgnoreCase);
++
++    /// <summary>
++    /// Binds a play session to the winning transcode output.
++    /// </summary>
++    /// <param name="playSessionId">The play session id.</param>
++    /// <param name="winningCodec">The winning logical video codec.</param>
++    /// <param name="playlistPath">The winning playlist path.</param>
++    public void Bind(string playSessionId, string winningCodec, string playlistPath)
++    {
++        if (string.IsNullOrWhiteSpace(playSessionId))
++        {
++            return;
++        }
++
++        _entries[playSessionId] = new TranscodeSessionEntry(winningCodec, playlistPath);
++    }
++
++    /// <summary>
++    /// Tries to get the binding for a play session.
++    /// </summary>
++    /// <param name="playSessionId">The play session id.</param>
++    /// <param name="entry">The binding entry.</param>
++    /// <returns><c>true</c> when a binding exists.</returns>
++    public bool TryGet(string playSessionId, out TranscodeSessionEntry entry)
++    {
++        if (string.IsNullOrWhiteSpace(playSessionId))
++        {
++            entry = default!;
++            return false;
++        }
++
++        return _entries.TryGetValue(playSessionId, out entry!);
++    }
++
++    /// <summary>
++    /// Removes a play session binding.
++    /// </summary>
++    /// <param name="playSessionId">The play session id.</param>
++    public void Remove(string playSessionId)
++    {
++        if (!string.IsNullOrWhiteSpace(playSessionId))
++        {
++            _entries.TryRemove(playSessionId, out _);
++        }
++    }
++
++    /// <summary>
++    /// A bound play session entry.
++    /// </summary>
++    /// <param name="WinningCodec">The winning codec.</param>
++    /// <param name="PlaylistPath">The winning playlist path.</param>
++    public readonly record struct TranscodeSessionEntry(string WinningCodec, string PlaylistPath);
++}
+diff --git a/MediaBrowser.Model/Configuration/EncodingOptions.cs b/MediaBrowser.Model/Configuration/EncodingOptions.cs
+index dfe197c631..790b1ee8df 100644
+--- a/MediaBrowser.Model/Configuration/EncodingOptions.cs
++++ b/MediaBrowser.Model/Configuration/EncodingOptions.cs
+@@ -63,6 +63,8 @@ public class EncodingOptions
+         EnableHardwareEncoding = true;
+         AllowHevcEncoding = false;
+         AllowAv1Encoding = false;
++        EnableTranscodeCodecFallback = true;
++        EnableParallelCodecRace = true;
+         EnableSubtitleExtraction = true;
+         SubtitleExtractionTimeoutMinutes = 30;
+         AllowOnDemandMetadataBasedKeyframeExtractionForExtensions = ["mkv"];
+@@ -325,6 +327,16 @@ public class EncodingOptions
+     /// </summary>
+     public bool AllowAv1Encoding { get; set; }
+ 
++    /// <summary>
++    /// Gets or sets a value indicating whether failed transcodes should fall back to other codecs.
++    /// </summary>
++    public bool EnableTranscodeCodecFallback { get; set; }
++
++    /// <summary>
++    /// Gets or sets a value indicating whether AV1 and H.264 init transcodes may race in parallel.
++    /// </summary>
++    public bool EnableParallelCodecRace { get; set; }
++
+     /// <summary>
+     /// Gets or sets a value indicating whether subtitle extraction is enabled.
+     /// </summary>
+diff --git a/MediaBrowser.Model/Session/TranscodingInfo.cs b/MediaBrowser.Model/Session/TranscodingInfo.cs
+index 1b3a50c637..c4f8e2ab12 100644
+--- a/MediaBrowser.Model/Session/TranscodingInfo.cs
++++ b/MediaBrowser.Model/Session/TranscodingInfo.cs
+@@ -134,4 +134,19 @@ public class TranscodingInfo
+     /// Gets or sets the structured processing pipeline for this transcode.
+     /// </summary>
+     public TranscodingPipelineInfo Pipeline { get; set; }
++
++    /// <summary>
++    /// Gets or sets the codec originally requested by the client before fallback.
++    /// </summary>
++    public string RequestedVideoCodec { get; set; }
++
++    /// <summary>
++    /// Gets or sets the codec that failed before the current transcode was selected.
++    /// </summary>
++    public string CodecFallbackFrom { get; set; }
++
++    /// <summary>
++    /// Gets or sets a value indicating whether a parallel codec race is active.
++    /// </summary>
++    public bool CodecRaceActive { get; set; }
+ }
+

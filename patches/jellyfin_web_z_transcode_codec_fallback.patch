@@ -1,0 +1,110 @@
+diff --git a/src/apps/dashboard/features/sessions/components/TranscodingPipelineGraph.tsx b/src/apps/dashboard/features/sessions/components/TranscodingPipelineGraph.tsx
+index f41f19ab3c..1e544a8a53 100644
+--- a/src/apps/dashboard/features/sessions/components/TranscodingPipelineGraph.tsx
++++ b/src/apps/dashboard/features/sessions/components/TranscodingPipelineGraph.tsx
+@@ -134,6 +134,24 @@ const TranscodingPipelineGraph = ({
+                 {globalize.translate('MediaIsBeingConverted')}
+             </Typography>
+ 
++            {info?.CodecFallbackFrom && (
++                <Chip
++                    size='small'
++                    color='warning'
++                    label={globalize.translate('LabelTranscodeCodecFallbackBadge', info.CodecFallbackFrom, info.VideoCodec || info.RequestedVideoCodec || '')}
++                    sx={{ alignSelf: 'flex-start' }}
++                />
++            )}
++
++            {info?.CodecRaceActive && (
++                <Chip
++                    size='small'
++                    color='info'
++                    label={globalize.translate('LabelTranscodeCodecRaceActive')}
++                    sx={{ alignSelf: 'flex-start' }}
++                />
++            )}
++
+             {streamSummary && (
+                 <Typography variant='body2' sx={{ whiteSpace: 'pre-wrap' }}>
+                     {streamSummary}
+diff --git a/src/apps/dashboard/features/sessions/types/transcodingPipeline.ts b/src/apps/dashboard/features/sessions/types/transcodingPipeline.ts
+index 0bb08cf31f..0e953f7734 100644
+--- a/src/apps/dashboard/features/sessions/types/transcodingPipeline.ts
++++ b/src/apps/dashboard/features/sessions/types/transcodingPipeline.ts
+@@ -51,6 +51,10 @@ export interface TranscodingInfoExtensions {
+     SubtitleCodec?: string | null;
+     SubtitleDeliveryMethod?: string | number | null;
+     Pipeline?: TranscodingPipelineInfo | null;
++    VideoCodec?: string | null;
++    RequestedVideoCodec?: string | null;
++    CodecFallbackFrom?: string | null;
++    CodecRaceActive?: boolean;
+ }
+ 
+ const STAGE_TYPE_NAMES: Record<number, string> = {
+diff --git a/src/apps/dashboard/routes/playback/transcoding.tsx b/src/apps/dashboard/routes/playback/transcoding.tsx
+index 4fbce2fcf4..98acab60b6 100644
+--- a/src/apps/dashboard/routes/playback/transcoding.tsx
++++ b/src/apps/dashboard/routes/playback/transcoding.tsx
+@@ -30,6 +30,8 @@ type EncodingOptions = SdkEncodingOptions & {
+     LiveStreamAnalyzeDurationMs?: number;
+     LiveStreamProbeSize?: string;
+     LiveStreamOpenTimeoutMs?: number;
++    EnableTranscodeCodecFallback?: boolean;
++    EnableParallelCodecRace?: boolean;
+ };
+ import { HardwareAccelerationType } from '@jellyfin/sdk/lib/generated-client/models/hardware-acceleration-type';
+ import { ServerConnections } from 'lib/jellyfin-apiclient';
+@@ -518,6 +520,34 @@ export const Component = () => {
+                                 </FormGroup>
+                             </FormControl>
+ 
++                            <FormControl>
++                                <FormGroup>
++                                    <FormControlLabel
++                                        label={globalize.translate('EnableTranscodeCodecFallback')}
++                                        control={
++                                            <Checkbox
++                                                name='EnableTranscodeCodecFallback'
++                                                checked={config.EnableTranscodeCodecFallback ?? true}
++                                                onChange={onCheckboxChange}
++                                            />
++                                        }
++                                    />
++                                    <FormHelperText>{globalize.translate('EnableTranscodeCodecFallbackHelp')}</FormHelperText>
++                                    <FormControlLabel
++                                        label={globalize.translate('EnableParallelCodecRace')}
++                                        control={
++                                            <Checkbox
++                                                name='EnableParallelCodecRace'
++                                                checked={config.EnableParallelCodecRace ?? true}
++                                                onChange={onCheckboxChange}
++                                                disabled={!(config.EnableTranscodeCodecFallback ?? true)}
++                                            />
++                                        }
++                                    />
++                                    <FormHelperText>{globalize.translate('EnableParallelCodecRaceHelp')}</FormHelperText>
++                                </FormGroup>
++                            </FormControl>
++
+                             {(hardwareAccelType === 'qsv' || hardwareAccelType === 'vaapi') && (
+                                 <>
+                                     <FormControl>
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+index 0f03b3994f..b359ae80c6 100755
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -949,6 +949,12 @@
+     "LabelQuickConnectCode": "Quick Connect code",
+     "LabelReasonForTranscoding": "Reason for transcoding",
+     "LabelTranscodingPipeline": "Transcoding pipeline",
++    "LabelTranscodeCodecFallbackBadge": "{0} → {1} fallback",
++    "LabelTranscodeCodecRaceActive": "Codec race in progress",
++    "EnableTranscodeCodecFallback": "Enable transcode codec fallback",
++    "EnableTranscodeCodecFallbackHelp": "When the requested video codec fails at playback start, automatically try other encoders (H.264, HEVC, software) before reporting an error. Writes an Activity Log entry when fallback occurs.",
++    "EnableParallelCodecRace": "Parallel AV1/H.264 init race",
++    "EnableParallelCodecRaceHelp": "On HLS init requests where both AV1 and H.264 are acceptable, start both transcodes in parallel and use whichever produces an init segment first. Briefly doubles GPU load during startup.",
+     "LabelTranscodingSpeed": "Speed",
+     "LabelTranscodingThrottled": "Throttled",
+     "LabelBytesTranscoded": "Bytes transcoded",
+
