@@ -410,33 +410,6 @@ index fd54aa797f..7c5a039d13 100644
      internal static async Task WaitForActiveTranscodingRequests(TranscodingJob? job, CancellationToken cancellationToken)
      {
          while (job?.ActiveRequestCount > 0)
-@@ -2153,6 +2428,26 @@ public class DynamicHlsController : BaseJellyfinApiController
-         }
-     }
- 
-+    private static FileSystemMetadata? GetFirstTranscodingFile(string playlist, string segmentExtension, IFileSystem fileSystem)
-+    {
-+        var folder = Path.GetDirectoryName(playlist) ?? throw new ArgumentException("Path can't be a root directory.", nameof(playlist));
-+
-+        var filePrefix = Path.GetFileNameWithoutExtension(playlist);
-+
-+        try
-+        {
-+            // Exclude fMP4 init segments (index -1) so backward-seek detection uses real media segments.
-+            return fileSystem.GetFiles(folder, new[] { segmentExtension }, true, false)
-+                .Where(i => Path.GetFileNameWithoutExtension(i.Name).StartsWith(filePrefix, StringComparison.OrdinalIgnoreCase))
-+                .Where(i => (TryParseSegmentIndex(playlist, i.Name) ?? -1) >= 0)
-+                .MinBy(i => TryParseSegmentIndex(playlist, i.Name) ?? int.MaxValue);
-+        }
-+        catch (IOException)
-+        {
-+            return null;
-+        }
-+    }
-+
-     private async Task DeleteLastFile(string playlistPath, string segmentExtension, int retryCount)
-     {
-         var file = GetLastTranscodingFile(playlistPath, segmentExtension, _fileSystem);
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingJobInfo.cs b/MediaBrowser.Controller/MediaEncoding/EncodingJobInfo.cs
 index 6964d0476c..d2df8db00d 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingJobInfo.cs

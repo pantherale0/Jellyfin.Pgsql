@@ -223,7 +223,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Why** | GPUs may list `av1_nvenc` in ffmpeg `-encoders` but fail at runtime (exit 218 / `-38 Function not implemented` on pre-Ada NVIDIA). Without fallback, HLS init fails hard when `AllowAv1Encoding` is enabled. |
 | **Where** | `TranscodeCodecRaceCoordinator`, `TranscodeCodecFallbackChain`, `TranscodeSessionBinding`, `TranscodeFallbackNotifier`, `DynamicHlsController.GetDynamicSegment`, `TranscodeManager.StartFfMpegAttempt`, `EncodingOptions`, `TranscodingInfo` |
 | **How** | On fmp4 init (`segmentId == -1`), optionally race AV1 + H.264; first init segment wins; losers killed and artifacts cleaned. If no winner, walk chain `av1 hw → h264 hw → hevc hw → h264 sw → hevc sw → av1 sw`. Redirect client when winning codec differs from URL. Deduped Activity Log entries. |
-| **Related** | Requires [`jellyfin_transcoding_pipeline`](#jellyfin_transcoding_pipelinepatch) (pipeline fields on `TranscodingInfo`). Companion [`jellyfin_web_z_transcode_codec_fallback`](#jellyfin_web_z_transcode_codec_fallbackpatch). No public issue. |
+| **Related** | Requires [`jellyfin_transcoding_pipeline`](#jellyfin_transcoding_pipelinepatch) (pipeline fields on `TranscodingInfo`) and [`jellyfin_hls_remux_segment_restart`](#jellyfin_hls_remux_segment_restartpatch) (`GetFirstTranscodingFile` / segment-index helpers on `DynamicHlsController`). Companion [`jellyfin_web_z_transcode_codec_fallback`](#jellyfin_web_z_transcode_codec_fallbackpatch). No public issue. |
 
 ### `jellyfin_web_z_transcode_codec_fallback.patch`
 
