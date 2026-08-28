@@ -6,7 +6,7 @@ index bcdc285bbf..0294c27ceb 100644
  import browser from '../scripts/browser';
  import Events from '../utils/events.ts';
  import { MediaError } from 'types/mediaError';
-+import { getPlaybackErrorCodeFromHlsResponse } from './playback/playbackError';
++import { getPlaybackErrorCodeFromHlsResponse } from './playback/playbackErrorCode';
  
  export function getSavedVolume() {
      return appSettings.get('volume') || 1;
@@ -43,7 +43,7 @@ index 60cf54af05..4e7f7c313c 100644
 +import globalize from 'lib/globalize';
  import { ServerConnections } from 'lib/jellyfin-apiclient';
  import { playbackManager } from '../playback/playbackmanager';
-+import { getPlaybackErrorCodeFromHlsResponse } from '../playback/playbackError';
++import { getPlaybackErrorCodeFromHlsResponse } from '../playback/playbackErrorCode';
  import Hls from 'hls.js';
  import showChannelPicker, { escapeHtml } from './channelPickerModal';
  import './multiview.scss';
@@ -77,9 +77,8 @@ new file mode 100644
 index 0000000000..27b595b369
 --- /dev/null
 +++ b/src/components/playback/playbackError.ts
-@@ -0,0 +1,206 @@
+@@ -0,0 +1,192 @@
 +import dialog from 'components/dialog/dialog';
-+import { appRouter } from 'components/router/appRouter';
 +import globalize from 'lib/globalize';
 +import { MediaError } from 'types/mediaError';
 +
@@ -228,6 +227,7 @@ index 0000000000..27b595b369
 +        }
 +    });
 +
++    const { appRouter } = await import('components/router/appRouter');
 +    await appRouter.ready();
 +
 +    const result = await dialog.show({
@@ -269,6 +269,13 @@ index 0000000000..27b595b369
 +    return null;
 +}
 +
++export { getPlaybackErrorCodeFromHlsResponse } from './playbackErrorCode';
+diff --git a/src/components/playback/playbackErrorCode.ts b/src/components/playback/playbackErrorCode.ts
+new file mode 100644
+index 0000000000..c4e8f1a2b1
+--- /dev/null
++++ b/src/components/playback/playbackErrorCode.ts
+@@ -0,0 +1,15 @@
 +export function getPlaybackErrorCodeFromHlsResponse(response: { headers?: Record<string, string> | Headers } | undefined): string | null {
 +    if (!response?.headers) {
 +        return null;
