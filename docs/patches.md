@@ -203,6 +203,28 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | React graph from pipeline DTO fields. |
 | **Related** | `jellyfin_transcoding_pipeline`. No public issue. |
 
+### `jellyfin_z_transcode_codec_fallback.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Parallel AV1/H.264 init transcode race, sequential codec fallback chain, HTTP 302 redirect to winning codec playlist, Activity Log notifications, session binding for subsequent segments. |
+| **Why** | GPUs may list `av1_nvenc` in ffmpeg `-encoders` but fail at runtime (exit 218 / `-38 Function not implemented` on pre-Ada NVIDIA). Without fallback, HLS init fails hard when `AllowAv1Encoding` is enabled. |
+| **Where** | `TranscodeCodecRaceCoordinator`, `TranscodeCodecFallbackChain`, `TranscodeSessionBinding`, `TranscodeFallbackNotifier`, `DynamicHlsController.GetDynamicSegment`, `TranscodeManager.StartFfMpegAttempt`, `EncodingOptions`, `TranscodingInfo` |
+| **How** | On fmp4 init (`segmentId == -1`), optionally race AV1 + H.264; first init segment wins; losers killed and artifacts cleaned. If no winner, walk chain `av1 hw → h264 hw → hevc hw → h264 sw → hevc sw → av1 sw`. Redirect client when winning codec differs from URL. Deduped Activity Log entries. |
+| **Related** | Requires [`jellyfin_transcoding_pipeline`](#jellyfin_transcoding_pipelinepatch) (pipeline fields on `TranscodingInfo`). Companion [`jellyfin_web_z_transcode_codec_fallback`](#jellyfin_web_z_transcode_codec_fallbackpatch). No public issue. |
+
+### `jellyfin_web_z_transcode_codec_fallback.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin-web` |
+| **What** | Dashboard toggles for `EnableTranscodeCodecFallback` / `EnableParallelCodecRace`; codec-fallback badge on transcoding pipeline dialog (Devices page). |
+| **Why** | Operators configure fallback behaviour; admins see live fallback/race state alongside pipeline telemetry. |
+| **Where** | `transcoding.tsx`, `TranscodingPipelineGraph.tsx`, `transcodingPipeline.ts`, `en-us.json` |
+| **How** | Encoding settings checkboxes under format options; warning/info chips when `CodecFallbackFrom` / `CodecRaceActive` set on `TranscodingInfo`. |
+| **Related** | [`jellyfin_z_transcode_codec_fallback`](#jellyfin_z_transcode_codec_fallbackpatch); requires [`jellyfin_web_transcoding_pipeline`](#jellyfin_web_transcoding_pipelinepatch). No public issue. |
+
 ### `jellyfin_hwa_capabilities.patch`
 
 | | |
@@ -739,6 +761,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | `jellyfin_sso` | `jellyfin_web_rbac`, `jellyfin_web_tv_quickconnect_login`, `jellyfin_web_quickconnect_modal` |
 | `jellyfin_z_livetv_rbac_allowlist` | `jellyfin_web_rbac` (Live TV allowlist UI) |
 | `jellyfin_transcoding_pipeline` | `jellyfin_web_transcoding_pipeline` |
+| `jellyfin_z_transcode_codec_fallback` | `jellyfin_web_z_transcode_codec_fallback` |
 | `jellyfin_hwa_capabilities` | `jellyfin_web_hwa_capabilities` |
 | `jellyfin_livetv_stream` | `jellyfin_web_live_stream` |
 | `jellyfin_playback_statistics` | `jellyfin_web_user_playback_stats` |

@@ -99,9 +99,11 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 ## Playback / encoding tooling
 
-**What:** Lazy transcoding pipeline probe exposed to admins; hardware encoder capability API + dashboard; HLS remux restart behaviour; HDR10+ SEI strip on MPEG-TS; Chrome/Opera MKV DirectPlay false-positive fix.
+**What:** Lazy transcoding pipeline probe exposed to admins; hardware encoder capability API + dashboard; HLS remux restart behaviour; HDR10+ SEI strip on MPEG-TS; Chrome/Opera MKV DirectPlay false-positive fix; **transcode codec fallback** (parallel AV1/H.264 init race, sequential encoder chain, Activity Log alerts, dashboard toggles).
 
-**Where:** [Playback / encoding group](patches.md#3-playback--encoding). Upstream: [jellyfin#13668](https://github.com/jellyfin/jellyfin/issues/13668), [jellyfin#16823](https://github.com/jellyfin/jellyfin/issues/16823), [jellyfin-web#7651](https://github.com/jellyfin/jellyfin-web/issues/7651).
+**Where:** [Playback / encoding group](patches.md#3-playback--encoding). Codec fallback: [`jellyfin_z_transcode_codec_fallback`](patches.md#jellyfin_z_transcode_codec_fallbackpatch) + [`jellyfin_web_z_transcode_codec_fallback`](patches.md#jellyfin_web_z_transcode_codec_fallbackpatch). Upstream: [jellyfin#13668](https://github.com/jellyfin/jellyfin/issues/13668), [jellyfin#16823](https://github.com/jellyfin/jellyfin/issues/16823), [jellyfin-web#7651](https://github.com/jellyfin/jellyfin-web/issues/7651).
+
+**How (codec fallback):** Enabled by default (`EnableTranscodeCodecFallback`, `EnableParallelCodecRace` in Dashboard → Playback → Transcoding). When AV1 encode fails at HLS init, the server races or falls back to H.264 (etc.), 302-redirects the client to the winning playlist, and writes deduplicated Activity Log entries. Devices → playback info shows an `AV1 → H.264 fallback` badge when active.
 
 ## Parental library images
 
