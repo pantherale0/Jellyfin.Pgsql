@@ -1,10 +1,13 @@
 name: '🐋 Build & Publish Docker Image'
 
 concurrency:
-  group: docker-publish
-  cancel-in-progress: false
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 on:
+  push:
+    branches:
+      - master
   release:
     types:
       - released
@@ -37,8 +40,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Get the manually specified version or fetch the latest
-          if [[ -n "${{ github.event.inputs.jellyfin_version }}" ]]; then
+          # Push builds use the pinned sync-state version; other events use input or latest release.
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            if [[ ! -f .github/jellyfin-sync-state.json ]]; then
+              echo "Error: .github/jellyfin-sync-state.json not found"
+              exit 1
+            fi
+            JELLYFIN_VERSION=$(jq -r '.jellyfinVersion' .github/jellyfin-sync-state.json)
+            if [[ -z "$JELLYFIN_VERSION" || "$JELLYFIN_VERSION" == "null" ]]; then
+              echo "Error: jellyfinVersion missing from sync state"
+              exit 1
+            fi
+            echo "Using sync state version from push: $JELLYFIN_VERSION"
+          elif [[ -n "${{ github.event.inputs.jellyfin_version }}" ]]; then
             JELLYFIN_VERSION="${{ github.event.inputs.jellyfin_version }}"
             echo "Using manually specified version: $JELLYFIN_VERSION"
           else
@@ -96,14 +110,18 @@ jobs:
           fi
 
           # Build rules:
-          # - Always build on manual dispatch and release (if sync OK)
+          # - Always build on push, manual dispatch, and release (if sync OK)
           # - On schedule, only build if the version tag does not already exist
           if [[ "$SYNC_OK" != "true" ]]; then
             echo "should_build=false" >> "$GITHUB_OUTPUT"
             echo "Migration sync required — waiting for sync PR to merge"
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || [[ "${{ github.event_name }}" == "release" ]] || [[ "$TAG_EXISTS" == "false" ]]; then
+          elif [[ "${{ github.event_name }}" == "push" ]] || [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || [[ "${{ github.event_name }}" == "release" ]] || [[ "$TAG_EXISTS" == "false" ]]; then
             echo "should_build=true" >> "$GITHUB_OUTPUT"
-            echo "Will build image for Jellyfin $JELLYFIN_VERSION"
+            if [[ "${{ github.event_name }}" == "push" ]]; then
+              echo "Push to master — rebuilding image for Jellyfin $JELLYFIN_VERSION"
+            else
+              echo "Will build image for Jellyfin $JELLYFIN_VERSION"
+            fi
           else
             echo "should_build=false" >> "$GITHUB_OUTPUT"
             echo "Image tag $JELLYFIN_VERSION already exists; skipping scheduled build"

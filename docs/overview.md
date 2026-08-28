@@ -26,7 +26,7 @@ Quick start and env-var tables remain in the root [README](../README.md). This `
 - **Large-library oriented patches** — home/NextUp/search/Live TV query work, progress write coalescing, indexes mirrored into the PG provider via migration sync.
 - **Product features beyond stock Jellyfin** — playback statistics dashboard, taste profiles / “For You”, Seerr search + Beyond Your Library, Emby userdata import, user merge, HW capability and transcoding pipeline visibility.
 - **Upstream bugfixes carried as patches** — favorites/progress races, Live TV published URLs, HLS remux thrash, HDR10+ MPEG-TS, Chrome MKV DirectPlay false positives, and related items (see [patches catalog](patches.md)).
-- **Release alignment automation** — scheduled sync of Jellyfin versions and EF migrations; Docker publish gated on sync state.
+- **Release alignment automation** — scheduled sync of Jellyfin versions and EF migrations; Docker publish gated on sync state, then rebuilt on every push to `master`.
 
 ## Drawbacks
 
