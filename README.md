@@ -49,7 +49,7 @@ services:
       # - POSTGRES_TRUSTSERVERCERTIFICATE=true
 ```
 
-Images are built and published automatically when a release is cut or when the scheduled sync workflow completes. See [Release flow](#release-flow) below.
+Images are built and published automatically on every push to `master`, when a release is cut, or on the daily schedule when a new Jellyfin version tag is needed. See [Release flow](#release-flow) below.
 
 ## Query cache and optimisation (optional, experimental)
 
@@ -199,7 +199,7 @@ A scheduled GitHub Actions workflow ([`.github/workflows/sync-migrations.yaml`](
 
 Tag-only bumps (new release tag, same core migration id) skip EF so patch/fork schema is never folded into a stale `Update_*`. Fork schema changes belong in dedicated plugin migrations landed with the patch. Sync still fails the run if the plugin/tests no longer compile against the new Jellyfin APIs.
 
-Docker image builds are blocked until the sync PR is merged and [`.github/jellyfin-sync-state.json`](.github/jellyfin-sync-state.json) matches the target Jellyfin version.
+Docker image builds are blocked until the sync PR is merged and [`.github/jellyfin-sync-state.json`](.github/jellyfin-sync-state.json) matches the target Jellyfin version. After that, every push to `master` rebuilds and republishes the image for the pinned Jellyfin version (overwriting the existing `:tag` and `:latest` on GHCR). The daily schedule still builds when a new Jellyfin version tag does not yet exist in the registry.
 
 When the scheduled sync workflow fails, it automatically opens (or updates) a collaborator-only GitHub issue labeled `migration-sync-failure` with the failure stage, logs, and workflow link.
 
