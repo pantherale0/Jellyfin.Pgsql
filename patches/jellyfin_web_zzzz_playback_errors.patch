@@ -1,0 +1,521 @@
+diff --git a/src/components/htmlMediaHelper.js b/src/components/htmlMediaHelper.js
+index bcdc285bbf..0294c27ceb 100644
+--- a/src/components/htmlMediaHelper.js
++++ b/src/components/htmlMediaHelper.js
+@@ -2,6 +2,7 @@ import appSettings from '../scripts/settings/appSettings' ;
+ import browser from '../scripts/browser';
+ import Events from '../utils/events.ts';
+ import { MediaError } from 'types/mediaError';
++import { getPlaybackErrorCodeFromHlsResponse } from './playback/playbackError';
+ 
+ export function getSavedVolume() {
+     return appSettings.get('volume') || 1;
+@@ -118,6 +119,10 @@ export function onErrorInternal(instance, type) {
+     Events.trigger(instance, 'error', [{ type }]);
+ }
+ 
++function resolveHlsPlaybackError(response) {
++    return getPlaybackErrorCodeFromHlsResponse(response) || MediaError.SERVER_ERROR;
++}
++
+ export function isValidDuration(duration) {
+     return duration
+             && !isNaN(duration)
+@@ -282,10 +287,10 @@ export function bindEventsToHlsPlayer(instance, hls, elem, onErrorFn, resolve, r
+             hls.destroy();
+ 
+             if (reject) {
+-                reject(MediaError.SERVER_ERROR);
++                reject(resolveHlsPlaybackError(data.response));
+                 reject = null;
+             } else {
+-                onErrorInternal(instance, MediaError.SERVER_ERROR);
++                onErrorInternal(instance, resolveHlsPlaybackError(data.response));
+             }
+ 
+             return;
+diff --git a/src/components/multiview/multiviewManager.js b/src/components/multiview/multiviewManager.js
+index 60cf54af05..4e7f7c313c 100644
+--- a/src/components/multiview/multiviewManager.js
++++ b/src/components/multiview/multiviewManager.js
+@@ -1,6 +1,8 @@
+ import toast from '../toast/toast';
++import globalize from 'lib/globalize';
+ import { ServerConnections } from 'lib/jellyfin-apiclient';
+ import { playbackManager } from '../playback/playbackmanager';
++import { getPlaybackErrorCodeFromHlsResponse } from '../playback/playbackError';
+ import Hls from 'hls.js';
+ import showChannelPicker, { escapeHtml } from './channelPickerModal';
+ import './multiview.scss';
+@@ -342,7 +344,7 @@ class MultiviewManager {
+             } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                 video.src = finalStreamUrl;
+             } else {
+-                toast('HLS playback is not supported in this browser.');
++                toast(globalize.translate('PlaybackErrorFriendly.HlsNotSupported.Message'));
+                 this.clearSlot(slotIndex);
+                 return;
+             }
+@@ -481,7 +483,14 @@ class MultiviewManager {
+                     this.setSlotChannel(slotIndex, item, null);
+                 }, 500);
+             } else {
+-                toast('Live TV stream playback error.');
++                const serverCode = getPlaybackErrorCodeFromHlsResponse(data.response);
++                const messageKey = serverCode
++                    ? `PlaybackErrorFriendly.${serverCode}.Message`
++                    : 'PlaybackErrorFriendly.FATAL_HLS_ERROR.Message';
++                const message = globalize.translate(messageKey);
++                toast(message === messageKey
++                    ? globalize.translate('PlaybackErrorFriendly.FATAL_HLS_ERROR.Message')
++                    : message);
+                 this.clearSlot(slotIndex);
+             }
+         });
+diff --git a/src/components/playback/playbackError.ts b/src/components/playback/playbackError.ts
+new file mode 100644
+index 0000000000..27b595b369
+--- /dev/null
++++ b/src/components/playback/playbackError.ts
+@@ -0,0 +1,206 @@
++import dialog from 'components/dialog/dialog';
++import { appRouter } from 'components/router/appRouter';
++import globalize from 'lib/globalize';
++import { MediaError } from 'types/mediaError';
++
++export type PlaybackErrorAction = 'close' | 'retry' | 'retryTranscode';
++
++export interface PlaybackErrorContext {
++    item?: { Id?: string; ServerId?: string; Name?: string };
++    playOptions?: Record<string, unknown>;
++    httpStatus?: number;
++    directPlayEnabled?: boolean;
++}
++
++export interface PlaybackErrorPresentation {
++    titleKey: string;
++    messageKey: string;
++    tipKey?: string;
++    actions: PlaybackErrorAction[];
++}
++
++const SERVER_ERROR_CODES = new Set([
++    'NotAllowed',
++    'NoCompatibleStream',
++    'RateLimitExceeded',
++    'TranscodeFailed',
++    'TranscodeNotAllowed',
++    'StreamUnavailable',
++    'LiveStreamFenced'
++]);
++
++const TRANSCODE_COMPAT_CODES = new Set([
++    'NoCompatibleStream',
++    'MEDIA_DECODE_ERROR',
++    'MEDIA_NOT_SUPPORTED',
++    'FATAL_HLS_ERROR',
++    'PLAYER_ERROR',
++    'TranscodeFailed'
++]);
++
++function stripPlaybackErrorPrefix(code: string): string {
++    return code.startsWith('PlaybackError.') ? code.slice('PlaybackError.'.length) : code;
++}
++
++function normalizeCode(code: string): string {
++    const stripped = stripPlaybackErrorPrefix(code);
++
++    if (stripped === 'PlaybackErrorNoCompatibleStream') {
++        return 'NoCompatibleStream';
++    }
++
++    if (stripped === 'PlaybackErrorPlaceHolder') {
++        return 'PlaceHolder';
++    }
++
++    if (SERVER_ERROR_CODES.has(stripped)) {
++        return stripped;
++    }
++
++    if (Object.values(MediaError).includes(stripped as MediaError)) {
++        return stripped;
++    }
++
++    if (stripped === 'ErrorDefault' || stripped === 'ErrorPlayerNotFound') {
++        return stripped;
++    }
++
++    if (stripped === 'HlsNotSupported') {
++        return stripped;
++    }
++
++    return stripped;
++}
++
++export function resolvePlaybackError(code: string, context: PlaybackErrorContext = {}): PlaybackErrorPresentation {
++    const normalized = normalizeCode(code);
++    const friendlyBase = `PlaybackErrorFriendly.${normalized}`;
++    const legacyMessageKey = normalized === 'NoCompatibleStream'
++        ? 'PlaybackErrorNoCompatibleStream'
++        : normalized === 'PlaceHolder'
++            ? 'PlaybackErrorPlaceHolder'
++            : `PlaybackError.${normalized}`;
++
++    const messageKey = globalize.translate(friendlyBase + '.Message') !== friendlyBase + '.Message'
++        ? friendlyBase + '.Message'
++        : legacyMessageKey;
++
++    const tipTranslation = globalize.translate(friendlyBase + '.Tip');
++    const tipKey = tipTranslation !== friendlyBase + '.Tip' ? friendlyBase + '.Tip' : undefined;
++
++    const actions: PlaybackErrorAction[] = ['close'];
++
++    if (context.item) {
++        actions.unshift('retry');
++    }
++
++    if (context.item && context.directPlayEnabled !== false && TRANSCODE_COMPAT_CODES.has(normalized)) {
++        actions.unshift('retryTranscode');
++    }
++
++    if (normalized === 'LiveStreamFenced' && context.item) {
++        return {
++            titleKey: 'HeaderPlaybackCouldntPlay',
++            messageKey,
++            tipKey,
++            actions: ['retry', 'close']
++        };
++    }
++
++    return {
++        titleKey: 'HeaderPlaybackCouldntPlay',
++        messageKey,
++        tipKey,
++        actions
++    };
++}
++
++export async function showPlaybackError(
++    code: string,
++    context: PlaybackErrorContext = {}
++): Promise<PlaybackErrorAction> {
++    const presentation = resolvePlaybackError(code, context);
++    const title = globalize.translate(presentation.titleKey);
++    const message = globalize.translate(presentation.messageKey);
++    const tip = presentation.tipKey ? globalize.translate(presentation.tipKey) : '';
++    const text = tip ? `${message}\n\n${tip}` : message;
++
++    const buttons = presentation.actions.map((action) => {
++        switch (action) {
++            case 'retry':
++                return {
++                    name: globalize.translate('ButtonTryAgain'),
++                    id: 'retry',
++                    type: 'submit'
++                };
++            case 'retryTranscode':
++                return {
++                    name: globalize.translate('ButtonTryWithTranscoding'),
++                    id: 'retryTranscode',
++                    type: 'submit'
++                };
++            default:
++                return {
++                    name: globalize.translate('ButtonGotIt'),
++                    id: 'close',
++                    type: 'cancel'
++                };
++        }
++    });
++
++    await appRouter.ready();
++
++    const result = await dialog.show({
++        title,
++        text,
++        buttons
++    });
++
++    if (result === 'retry' || result === 'retryTranscode' || result === 'close') {
++        return result;
++    }
++
++    return 'close';
++}
++
++export async function parsePlaybackErrorFromResponse(response: Response): Promise<string | null> {
++    const headerCode = response.headers?.get('X-Playback-Error-Code')
++        || response.headers?.get('x-playback-error-code');
++
++    if (headerCode) {
++        return headerCode;
++    }
++
++    try {
++        const contentType = response.headers?.get('content-type') || '';
++        if (contentType.includes('application/json')) {
++            const body = await response.clone().json();
++            if (body?.ErrorCode) {
++                return body.ErrorCode;
++            }
++            if (body?.errorCode) {
++                return body.errorCode;
++            }
++        }
++    } catch (err) {
++        console.debug('[playbackError] failed to parse playback error response', err);
++    }
++
++    return null;
++}
++
++export function getPlaybackErrorCodeFromHlsResponse(response: { headers?: Record<string, string> | Headers } | undefined): string | null {
++    if (!response?.headers) {
++        return null;
++    }
++
++    const headers = response.headers;
++
++    if (typeof (headers as Headers).get === 'function') {
++        return (headers as Headers).get('x-playback-error-code')
++            || (headers as Headers).get('X-Playback-Error-Code');
++    }
++
++    const record = headers as Record<string, string>;
++    return record['x-playback-error-code'] || record['X-Playback-Error-Code'] || null;
++}
+diff --git a/src/components/playback/playbackmanager.js b/src/components/playback/playbackmanager.js
+index e54994fe08..399dd2ed34 100644
+--- a/src/components/playback/playbackmanager.js
++++ b/src/components/playback/playbackmanager.js
+@@ -34,6 +34,7 @@ import { OutboundWebSocketMessageType } from '@jellyfin/sdk/lib/websocket';
+ import { MediaError } from 'types/mediaError';
+ import { getMediaError } from 'utils/mediaError';
+ import { bindSkipSegment } from './skipsegment.ts';
++import { parsePlaybackErrorFromResponse, showPlaybackError } from './playbackError';
+ import * as bitrateTest from 'utils/bitrateTest';
+ 
+ const UNLIMITED_ITEMS = -1;
+@@ -627,21 +628,54 @@ function supportsDirectPlay(apiClient, item, mediaSource) {
+  */
+ function validatePlaybackInfoResult(instance, result) {
+     if (result.ErrorCode) {
+-        // NOTE: To avoid needing to retranslate the "NoCompatibleStream" message,
+-        // we need to keep the key in the same format.
+-        const errMessage = result.ErrorCode === PlaybackErrorCode.NoCompatibleStream ?
+-            'PlaybackErrorNoCompatibleStream' : `PlaybackError.${result.ErrorCode}`;
+-        showPlaybackInfoErrorMessage(instance, errMessage);
++        showPlaybackInfoErrorMessage(instance, String(result.ErrorCode), {
++            item: instance._lastPlayItem,
++            playOptions: instance._lastPlayOptions
++        });
+         return false;
+     }
+ 
+     return true;
+ }
+ 
+-function showPlaybackInfoErrorMessage(instance, errorCode) {
+-    alert({
+-        text: globalize.translate(errorCode),
+-        title: globalize.translate('HeaderPlaybackError')
++function showPlaybackInfoErrorMessage(instance, errorCode, context = {}) {
++    const playContext = {
++        item: context.item || instance._lastPlayItem,
++        playOptions: context.playOptions || instance._lastPlayOptions,
++        directPlayEnabled: context.directPlayEnabled ?? instance._lastDirectPlayEnabled,
++        httpStatus: context.httpStatus
++    };
++
++    const normalizedCode = String(errorCode).replace(/^PlaybackError\./, '');
++
++    if (normalizedCode === 'LiveStreamFenced' && playContext.item && !instance._liveStreamFencedRetried) {
++        instance._liveStreamFencedRetried = true;
++        instance.play({
++            items: [playContext.item],
++            ...playContext.playOptions
++        });
++        return;
++    }
++
++    showPlaybackError(errorCode, playContext).then((action) => {
++        if (!playContext.item) {
++            return;
++        }
++
++        if (action === 'retry') {
++            instance.play({
++                items: [playContext.item],
++                ...playContext.playOptions
++            });
++        } else if (action === 'retryTranscode') {
++            instance.play({
++                items: [playContext.item],
++                ...playContext.playOptions,
++                enableDirectPlay: false,
++                enableDirectStream: false,
++                enableTranscoding: true
++            });
++        }
+     });
+ }
+ 
+@@ -2362,6 +2396,9 @@ export class PlaybackManager {
+         }
+ 
+         function playInternal(item, playOptions, onPlaybackStartedFn, prevSource) {
++            self._lastPlayItem = item;
++            self._lastPlayOptions = truncatePlayOptions(playOptions);
++            self._lastDirectPlayEnabled = playOptions.enableDirectPlay !== false;
+             if (item.IsPlaceHolder) {
+                 loading.hide();
+                 showPlaybackInfoErrorMessage(self, 'PlaybackErrorPlaceHolder');
+@@ -2415,19 +2452,33 @@ export class PlaybackManager {
+         function onPlaybackRejection(e) {
+             cancelPlayback();
+ 
+-            let displayErrorCode = 'ErrorDefault';
++            const handleError = (displayErrorCode) => {
++                showPlaybackInfoErrorMessage(self, displayErrorCode, {
++                    item: self._lastPlayItem,
++                    playOptions: self._lastPlayOptions
++                });
++                return Promise.reject();
++            };
+ 
+             if (e instanceof Response) {
+-                if (e.status >= 500) {
+-                    displayErrorCode = `PlaybackError.${MediaError.SERVER_ERROR}`;
+-                } else if (e.status >= 400) {
+-                    displayErrorCode = `PlaybackError.${MediaError.NO_MEDIA_ERROR}`;
+-                }
+-            }
++                return parsePlaybackErrorFromResponse(e).then((parsedCode) => {
++                    if (parsedCode) {
++                        return handleError(parsedCode);
++                    }
+ 
+-            showPlaybackInfoErrorMessage(self, displayErrorCode);
++                    if (e.status >= 500) {
++                        return handleError(`PlaybackError.${MediaError.SERVER_ERROR}`);
++                    }
+ 
+-            return Promise.reject();
++                    if (e.status >= 400) {
++                        return handleError(`PlaybackError.${MediaError.NO_MEDIA_ERROR}`);
++                    }
++
++                    return handleError('ErrorDefault');
++                });
++            }
++
++            return handleError('ErrorDefault');
+         }
+ 
+         function destroyPlayer(player) {
+@@ -3506,7 +3557,11 @@ export class PlaybackManager {
+             }
+ 
+             if (errorOccurred) {
+-                showPlaybackInfoErrorMessage(self, 'PlaybackError' + displayErrorCode);
++                showPlaybackInfoErrorMessage(self, 'PlaybackError' + displayErrorCode, {
++                    item: streamInfo?.item,
++                    playOptions: self._lastPlayOptions,
++                    directPlayEnabled: self._lastDirectPlayEnabled
++                });
+             } else if (newPlayer) {
+                 const apiClient = ServerConnections.getApiClient(nextItem.item.ServerId);
+ 
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+index b359ae80c6..5581b92f22 100755
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -131,6 +131,8 @@
+     "ButtonForgotPassword": "Forgot Password",
+     "ButtonFullscreen": "Fullscreen",
+     "ButtonGotIt": "Got It",
++    "ButtonTryAgain": "Try Again",
++    "ButtonTryWithTranscoding": "Try with Transcoding",
+     "ButtonInfo": "Info",
+     "ButtonLearnMore": "Learn More",
+     "ButtonLibraryAccess": "Library access",
+@@ -539,6 +541,7 @@
+     "HeaderPhotoAlbums": "Photo Albums",
+     "HeaderPlayAll": "Play All",
+     "HeaderPlayback": "Media playback",
++    "HeaderPlaybackCouldntPlay": "Couldn't play this",
+     "HeaderPlaybackError": "Playback Error",
+     "HeaderPlaybackStatistics": "Playback statistics",
+     "HeaderTasteModels": "Taste models",
+@@ -1466,17 +1469,59 @@
+     "Play": "Play",
+     "PlayAllFromHere": "Play all from here",
+     "PlaybackData": "Playback Info",
+-    "PlaybackError.ASS_RENDER_ERROR": "An error was encountered in the ASS/SSA subtitle renderer.",
+-    "PlaybackError.FATAL_HLS_ERROR": "A fatal error was encountered in the HLS stream.",
+-    "PlaybackError.MEDIA_DECODE_ERROR": "Playback failed due to an error decoding the media.",
+-    "PlaybackError.MEDIA_NOT_SUPPORTED": "Playback failed because the media is not supported by this client.",
+-    "PlaybackError.NETWORK_ERROR": "Playback failed due to a network error.",
+-    "PlaybackError.NO_MEDIA_ERROR": "Unable to find a valid media source to play.",
+-    "PlaybackError.PLAYER_ERROR": "Playback failed due to a fatal player error.",
+-    "PlaybackError.SERVER_ERROR": "Playback failed due to a server error.",
+-    "PlaybackError.NotAllowed": "Playback of this media is not allowed.",
+-    "PlaybackError.RateLimitExceeded": "This media cannot be played at this time due to rate limits.",
+-    "PlaybackErrorNoCompatibleStream": "This client isn't compatible with the media and the server isn't sending a compatible media format.",
++    "PlaybackError.ASS_RENDER_ERROR": "There was a problem displaying subtitles.",
++    "PlaybackError.FATAL_HLS_ERROR": "The stream was interrupted.",
++    "PlaybackError.MEDIA_DECODE_ERROR": "This device had trouble decoding the video.",
++    "PlaybackError.MEDIA_NOT_SUPPORTED": "This device can't play this file format.",
++    "PlaybackError.NETWORK_ERROR": "Playback was interrupted by a network problem.",
++    "PlaybackError.NO_MEDIA_ERROR": "Jellyfin couldn't find a playable version of this item.",
++    "PlaybackError.PLAYER_ERROR": "The player ran into a problem.",
++    "PlaybackError.SERVER_ERROR": "Jellyfin had trouble preparing this video.",
++    "PlaybackError.NotAllowed": "You aren't allowed to play this item.",
++    "PlaybackError.RateLimitExceeded": "Playback is temporarily limited. Please try again in a few minutes.",
++    "PlaybackError.TranscodeFailed": "Jellyfin couldn't prepare this video for playback.",
++    "PlaybackError.TranscodeNotAllowed": "Your account can't use transcoding.",
++    "PlaybackError.StreamUnavailable": "This stream isn't available right now.",
++    "PlaybackError.LiveStreamFenced": "Live TV was interrupted.",
++    "PlaybackErrorFriendly.ASS_RENDER_ERROR.Message": "There was a problem displaying subtitles.",
++    "PlaybackErrorFriendly.ASS_RENDER_ERROR.Tip": "Try turning subtitles off, or choose a different subtitle track.",
++    "PlaybackErrorFriendly.FATAL_HLS_ERROR.Message": "The stream was interrupted.",
++    "PlaybackErrorFriendly.FATAL_HLS_ERROR.Tip": "Try playing again. Lowering quality or enabling transcoding may help.",
++    "PlaybackErrorFriendly.MEDIA_DECODE_ERROR.Message": "This device had trouble decoding the video.",
++    "PlaybackErrorFriendly.MEDIA_DECODE_ERROR.Tip": "Try again, or use Try with Transcoding if your server allows it.",
++    "PlaybackErrorFriendly.MEDIA_NOT_SUPPORTED.Message": "This device can't play this file format.",
++    "PlaybackErrorFriendly.MEDIA_NOT_SUPPORTED.Tip": "Try another device, or ask your admin to enable transcoding for your account.",
++    "PlaybackErrorFriendly.NETWORK_ERROR.Message": "Playback was interrupted by a network problem.",
++    "PlaybackErrorFriendly.NETWORK_ERROR.Tip": "Check your connection and try again.",
++    "PlaybackErrorFriendly.NO_MEDIA_ERROR.Message": "Jellyfin couldn't find a playable version of this item.",
++    "PlaybackErrorFriendly.NO_MEDIA_ERROR.Tip": "The file may be missing or unavailable on the server.",
++    "PlaybackErrorFriendly.PLAYER_ERROR.Message": "The player ran into a problem.",
++    "PlaybackErrorFriendly.PLAYER_ERROR.Tip": "Try playing again. If it keeps happening, try another browser or device.",
++    "PlaybackErrorFriendly.SERVER_ERROR.Message": "Jellyfin had trouble preparing this video.",
++    "PlaybackErrorFriendly.SERVER_ERROR.Tip": "Wait a moment and try again. If it keeps happening, ask your server admin to check the logs.",
++    "PlaybackErrorFriendly.NotAllowed.Message": "You aren't allowed to play this item.",
++    "PlaybackErrorFriendly.NotAllowed.Tip": "Contact your server administrator if you think this is a mistake.",
++    "PlaybackErrorFriendly.RateLimitExceeded.Message": "Playback is temporarily limited.",
++    "PlaybackErrorFriendly.RateLimitExceeded.Tip": "Please wait a few minutes and try again.",
++    "PlaybackErrorFriendly.TranscodeFailed.Message": "Jellyfin couldn't prepare this video for playback.",
++    "PlaybackErrorFriendly.TranscodeFailed.Tip": "Try again in a moment. Your admin can check server logs for transcoding issues.",
++    "PlaybackErrorFriendly.TranscodeNotAllowed.Message": "Your account can't use transcoding.",
++    "PlaybackErrorFriendly.TranscodeNotAllowed.Tip": "Ask your server administrator to enable transcoding for your account.",
++    "PlaybackErrorFriendly.StreamUnavailable.Message": "This stream isn't available right now.",
++    "PlaybackErrorFriendly.StreamUnavailable.Tip": "Try playing again. For Live TV, go back to the guide and start the channel again.",
++    "PlaybackErrorFriendly.LiveStreamFenced.Message": "Live TV was interrupted.",
++    "PlaybackErrorFriendly.LiveStreamFenced.Tip": "Press Try Again to reconnect.",
++    "PlaybackErrorFriendly.NoCompatibleStream.Message": "This device can't play the file in its current format.",
++    "PlaybackErrorFriendly.NoCompatibleStream.Tip": "Try another device, or ask your admin to enable transcoding for your account.",
++    "PlaybackErrorFriendly.PlaceHolder.Message": "This item needs the physical disc to play.",
++    "PlaybackErrorFriendly.PlaceHolder.Tip": "Insert the disc, then try playing again.",
++    "PlaybackErrorFriendly.ErrorDefault.Message": "Something went wrong while starting playback.",
++    "PlaybackErrorFriendly.ErrorDefault.Tip": "Please try again in a moment.",
++    "PlaybackErrorFriendly.ErrorPlayerNotFound.Message": "No player is available for this media.",
++    "PlaybackErrorFriendly.ErrorPlayerNotFound.Tip": "Try opening the item on another device.",
++    "PlaybackErrorFriendly.HlsNotSupported.Message": "This browser can't play Live TV streams here.",
++    "PlaybackErrorFriendly.HlsNotSupported.Tip": "Try a different browser, or use the main Live TV player.",
++    "PlaybackErrorNoCompatibleStream": "This device can't play the file in its current format.",
+     "PlaybackErrorPlaceHolder": "This is a placeholder for physical media that Jellyfin cannot play. Please insert the disc to play.",
+     "PlaybackRate": "Playback Speed",
+     "PlaybackStatsEmpty": "No playback statistics recorded yet.",
+

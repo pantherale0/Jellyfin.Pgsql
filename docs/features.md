@@ -105,6 +105,26 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 **How (codec fallback):** Enabled by default (`EnableTranscodeCodecFallback`, `EnableParallelCodecRace` in Dashboard → Playback → Transcoding). When AV1 encode fails at HLS init, the server races or falls back to H.264 (etc.), 302-redirects the client to the winning playlist, and writes deduplicated Activity Log entries. Devices → playback info shows an `AV1 → H.264 fallback` badge when active.
 
+## Playback error messaging
+
+**What:** Structured playback failure codes from the server and a friendlier web dialog (summary, tip, Try Again / Try with Transcoding). Mid-stream HLS failures expose intent via the `X-Playback-Error-Code` response header; pre-play failures use `PlaybackInfoResponse.errorCode` (+ optional `message`).
+
+**Where:** [`jellyfin_zzz_playback_errors`](patches.md#jellyfin_zzz_playback_errorspatch) + [`jellyfin_web_zzzz_playback_errors`](patches.md#jellyfin_web_zzzz_playback_errorspatch).
+
+**Web behaviour:** Title “Couldn't play this”; localized `PlaybackErrorFriendly.*` strings; one automatic reconnect attempt on `LiveStreamFenced` before showing the dialog.
+
+**Client contract (mobile / third-party):**
+
+| Phase | Source | Action |
+|---|---|---|
+| Pre-play | `PlaybackInfoResponse.errorCode` (PascalCase default; camelCase with `Accept: application/json; profile="CamelCase"`) | Map code to platform strings; optional `message` is English fallback only |
+| Mid-play | `X-Playback-Error-Code` on failed manifest/segment HTTP responses; optional JSON `{ errorCode }` on API errors | Prefer header; fall back to generic network/server error if missing |
+| `LiveStreamFenced` | 503 + code | Restart playback (web auto-retries once) |
+| `TranscodeFailed` / `TranscodeNotAllowed` | 500 / 403 | Suggest retry or ask admin about transcoding permissions |
+| `NotAllowed` | 403 at PlaybackInfo | Policy denial — contact admin |
+
+Extend `@jellyfin/sdk` `PlaybackErrorCode` when bumping Jellyfin tags (new enum values: `TranscodeFailed`, `TranscodeNotAllowed`, `StreamUnavailable`, `LiveStreamFenced`).
+
 ## Parental library images
 
 **What:** Library/collection/splash images respect parental filters so restricted users do not see collage tiles from blocked titles.

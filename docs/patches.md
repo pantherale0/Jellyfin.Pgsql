@@ -100,6 +100,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | Project accessible item ids once, then `PeopleBaseItemMap` / `ItemValuesMap` `Contains` (hash semi-join) instead of `Any(Any(Any()))`. |
 | **Related** | Applies after other QueryBuilding patches. Companion: `jellyfin_zzzz_people_query_perf`. No public issue. |
 
+### `jellyfin_zzz_playback_errors.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Structured playback error codes: extends `PlaybackErrorCode`, `PlaybackFailedException`, JSON + `X-Playback-Error-Code` header from `ExceptionMiddleware`, `PlaybackInfoResponse.Message`, and transcode/live-stream failure mapping (`TranscodeFailed`, `TranscodeNotAllowed`, `LiveStreamFenced`, etc.). |
+| **Why** | Stock failures return plain text 500s or generic client-side `SERVER_ERROR`; operators and users cannot tell transcode denial from HA failover from decode issues. |
+| **Where** | `PlaybackErrorCode`, `PlaybackFailedException`, `PlaybackErrorResponse`, `ExceptionMiddleware`, `MediaInfoHelper`, `TranscodeManager`, `TranscodeCodecRaceCoordinator`, `LiveStreamFencedException` |
+| **How** | Playback-path exceptions throw `PlaybackFailedException`; middleware returns `{ errorCode }` JSON and sets `X-Playback-Error-Code` for HLS clients. `NotAllowed` when `EnableMediaPlayback` is false at PlaybackInfo time. Applies after `jellyfin_z_ha_leadership` and `jellyfin_z_transcode_codec_fallback` (`zzz_` band). |
+| **Related** | Web companion: `jellyfin_web_zzzz_playback_errors`. Consolidates HA `LiveStreamFenced` handling into unified middleware. No public issue. |
+
 ### `jellyfin_zzzz_people_query_perf.patch`
 
 | | |
@@ -348,7 +359,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Why** | Jellyfin is a single-writer process; two Ready replicas split-brain the library. A Postgres lock plus Ready-only-leader lets a warm standby take traffic after failover. |
 | **Where** | `IInstanceLeadership`, `LibraryMonitor`, `TaskManager` / `ScheduledTaskWorker`, `RecordingsHost`, `BackgroundMediaWorkGate`, `Startup`, `ExceptionMiddleware`, `StreamingHelpers`, `SessionManager`, `DeviceId`, `IJellyfinDatabaseProvider` |
 | **How** | Default always-leader (HA off). Plugin supplies Postgres advisory lock when `Pgsql_HA_ENABLED=true`. Fail-closed until the lock is held. Applies after unprefixed playback/Live TV patches (`z_` layer). |
-| **Related** | Plugin `Jellyfin.Plugin.Pgsql/Ha/`. Progress overlay extends `jellyfin_playback_progress_coalesce`. No public issue. |
+| **Related** | Plugin `Jellyfin.Plugin.Pgsql/Ha/`. Progress overlay extends `jellyfin_playback_progress_coalesce`. `LiveStreamFenced` middleware unified by [`jellyfin_zzz_playback_errors`](patches.md#jellyfin_zzz_playback_errorspatch). No public issue. |
 
 ### `jellyfin_livetv_stream.patch`
 
@@ -740,6 +751,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | Overlay singleton opens Live TV via `playbackManager.getPlaybackInfo` stream info (`url` / `mediaSource` / `liveStreamId`) and plays each tile with raw `hls.js`. Each slot shows a centered buffering spinner from channel select until `playing`/`canplay` (and again on `waiting`). Per-slot generation tokens ignore stale async/HLS retries; Dual mode clears hidden slots 2–3; swap exchanges DOM/state without re-tuning. OSD Multiview button is Live TV–only when `!layoutManager.tv && enableExperimentalMultiview && EnableLiveTvMultiview !== false`; opens the overlay then stops the single player (no `history.back` race). Channel picker uses `currentApiClient()` and HTML-escapes names. |
 | **Related** | `jellyfin_livetv_multiview_rbac.patch`, `jellyfin_web_rbac.patch`. |
 
+### `jellyfin_web_zzzz_playback_errors.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin-web` |
+| **What** | Friendlier playback error UX: `playbackError.ts` mapper, dialog with summary + tip + Try Again / Try with Transcoding actions, HLS `X-Playback-Error-Code` parsing, PlaybackInfo JSON error parsing, rewritten `en-us` copy, Live TV multiview i18n toasts, auto-retry once on `LiveStreamFenced`. |
+| **Why** | Stock web UI shows harsh “Playback Error” modals with technical copy and no recovery actions; HA `LiveStreamFenced` JSON was ignored. |
+| **Where** | `playbackError.ts`, `playbackmanager.js`, `htmlMediaHelper.js`, `multiviewManager.js`, `en-us.json` |
+| **How** | Maps server + client error codes to `PlaybackErrorFriendly.*` strings; preserves silent transcode fallback retries before showing the dialog. Applies after `jellyfin_web_zzz_livetv_multiview` (`zzzz_` band). |
+| **Related** | Server companion: `jellyfin_zzz_playback_errors`. Mobile apps should implement the same code contract (see [features](features.md#playback-error-messaging)). No public issue. |
+
 ### `jellyfin_web_dev_server_proxy.patch`
 
 | | |
@@ -762,6 +784,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | `jellyfin_z_livetv_rbac_allowlist` | `jellyfin_web_rbac` (Live TV allowlist UI) |
 | `jellyfin_transcoding_pipeline` | `jellyfin_web_transcoding_pipeline` |
 | `jellyfin_z_transcode_codec_fallback` | `jellyfin_web_z_transcode_codec_fallback` |
+| `jellyfin_zzz_playback_errors` | `jellyfin_web_zzzz_playback_errors` |
 | `jellyfin_hwa_capabilities` | `jellyfin_web_hwa_capabilities` |
 | `jellyfin_livetv_stream` | `jellyfin_web_live_stream` |
 | `jellyfin_playback_statistics` | `jellyfin_web_user_playback_stats` |
