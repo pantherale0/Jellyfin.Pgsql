@@ -126,6 +126,47 @@ is_empty_migration() {
     [[ -z "${body}" ]]
 }
 
+inject_orphaned_user_permission_cleanup() {
+    local file="$1"
+    if [[ ! -f "${file}" ]] || [[ "${file}" == *".Designer.cs" ]]; then
+        return
+    fi
+
+    if grep -q 'DELETE FROM "Preferences" WHERE "UserId" IS NULL' "${file}"; then
+        return
+    fi
+
+    if ! grep -q 'table: "Preferences"' "${file}" || \
+       ! grep -q 'table: "Permissions"' "${file}" || \
+       ! grep -q 'nullable: false' "${file}"; then
+        return
+    fi
+
+    python3 - "${file}" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+content = open(path, encoding="utf-8").read()
+
+needle = "protected override void Up(MigrationBuilder migrationBuilder)\n        {"
+insert = """protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            // Upstream RemoveOrphanedUserPermissionsAndPreferences: PostgreSQL enforces FKs;
+            // delete NULL UserId rows before making the column NOT NULL.
+            migrationBuilder.Sql("DELETE FROM \\"Permissions\\" WHERE \\"UserId\\" IS NULL;");
+            migrationBuilder.Sql("DELETE FROM \\"Preferences\\" WHERE \\"UserId\\" IS NULL;");"""
+
+if needle not in content:
+    sys.exit(0)
+
+updated = content.replace(needle, insert, 1)
+if updated != content:
+    open(path, "w", encoding="utf-8").write(updated)
+    print(f"[postprocess] Injected orphaned permission/preference cleanup into {path.split('/')[-1]}")
+PY
+}
+
 if [[ ! -d "${MIGRATIONS_DIR}" ]]; then
     echo "[postprocess] Migrations directory not found: ${MIGRATIONS_DIR}" >&2
     exit 1
@@ -155,6 +196,9 @@ done
 if [[ -n "${latest_migration}" ]]; then
     echo "[postprocess] Fixing text-to-uuid column conversions..."
     fix_text_to_uuid_columns "${latest_migration}"
+
+    echo "[postprocess] Checking for orphaned permission/preference cleanup..."
+    inject_orphaned_user_permission_cleanup "${latest_migration}"
 
     scan_sqlite_only_migration "${latest_migration}" || true
 

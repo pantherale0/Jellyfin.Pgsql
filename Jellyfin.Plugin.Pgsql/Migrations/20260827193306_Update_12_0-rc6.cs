@@ -11,6 +11,11 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            // Upstream 20260815063607_RemoveOrphanedUserPermissionsAndPreferences: SQLite
+            // can coerce NULL UserId to Guid.Empty without FK enforcement; PostgreSQL cannot.
+            migrationBuilder.Sql("DELETE FROM \"Permissions\" WHERE \"UserId\" IS NULL;");
+            migrationBuilder.Sql("DELETE FROM \"Preferences\" WHERE \"UserId\" IS NULL;");
+
             migrationBuilder.DropIndex(
                 name: "IX_Preferences_UserId_Kind",
                 table: "Preferences");
