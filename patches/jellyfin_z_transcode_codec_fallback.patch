@@ -1175,6 +1175,15 @@ index 0000000000..5af1bd2d60
 +                previousCodec = codec;
 +                previousExitCode = result.ExitCode;
 +
++                if (result.Job is not null)
++                {
++                    await _transcodeManager.KillTranscodingJobAndCleanupAsync(result.Job, deleteArtifacts: true)
++                        .ConfigureAwait(false);
++                }
++
++                attemptCts.Dispose();
++                attemptCts = null;
++
 +                if (!ReferenceEquals(attemptState, context.State))
 +                {
 +                    attemptState.Dispose();
@@ -1190,10 +1199,9 @@ index 0000000000..5af1bd2d60
 +                    attemptState.Dispose();
 +                    attemptState = null;
 +                }
-+            }
-+            finally
-+            {
++
 +                attemptCts?.Dispose();
++                attemptCts = null;
 +            }
 +        }
 +
@@ -1480,6 +1488,28 @@ diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs b/MediaB
 index 7217677013..0ae00e7468 100644
 --- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
 +++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
+@@ -244,11 +244,19 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+         {
+             _activeTranscodingJobs.Remove(job);
+ 
+-            if (job.CancellationTokenSource?.IsCancellationRequested == false)
++            try
+             {
++                if (job.CancellationTokenSource is { IsCancellationRequested: false })
++                {
+ #pragma warning disable CA1849 // Can't await in lock block
+-                job.CancellationTokenSource.Cancel();
++                    job.CancellationTokenSource.Cancel();
+ #pragma warning restore CA1849
++                }
++            }
++            catch (ObjectDisposedException)
++            {
++                // Codec fallback may have already disposed the linked CTS; Stop() below still ends ffmpeg.
++            }
+         }
+ 
+         job.Stop();
 @@ -407,7 +407,10 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
                  IsThrottled = job?.TranscodingThrottler?.IsThrottled == true,
                  SubtitleCodec = state.SubtitleStream?.Codec,
@@ -1708,6 +1738,5 @@ index 1b3a50c637..c4f8e2ab12 100644
 +    /// <summary>
 +    /// Gets or sets a value indicating whether a parallel codec race is active.
 +    /// </summary>
-+    public bool CodecRaceActive { get; set; }
++         public bool CodecRaceActive { get; set; }
  }
-
