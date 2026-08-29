@@ -303,7 +303,7 @@ index e54994fe08..399dd2ed34 100644
  import * as bitrateTest from 'utils/bitrateTest';
  
  const UNLIMITED_ITEMS = -1;
-@@ -627,21 +628,54 @@ function supportsDirectPlay(apiClient, item, mediaSource) {
+@@ -627,21 +628,59 @@ function supportsDirectPlay(apiClient, item, mediaSource) {
   */
  function validatePlaybackInfoResult(instance, result) {
      if (result.ErrorCode) {
@@ -350,14 +350,19 @@ index e54994fe08..399dd2ed34 100644
 +            return;
 +        }
 +
-+        if (action === 'retry') {
-+            instance.play({
-+                items: [playContext.item],
-+                ...playContext.playOptions
++        const retryPlay = (playOptions) => {
++            Promise.resolve(instance.stop()).then(() => {
++                instance.play({
++                    items: [playContext.item],
++                    ...playOptions
++                });
 +            });
++        };
++
++        if (action === 'retry') {
++            retryPlay(playContext.playOptions);
 +        } else if (action === 'retryTranscode') {
-+            instance.play({
-+                items: [playContext.item],
++            retryPlay({
 +                ...playContext.playOptions,
 +                enableDirectPlay: false,
 +                enableDirectStream: false,
