@@ -1488,7 +1488,7 @@ diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs b/MediaB
 index 7217677013..0ae00e7468 100644
 --- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
 +++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
-@@ -244,11 +244,19 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+@@ -244,12 +244,19 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
          {
              _activeTranscodingJobs.Remove(job);
  
@@ -1506,7 +1506,7 @@ index 7217677013..0ae00e7468 100644
 +            catch (ObjectDisposedException)
 +            {
 +                // Codec fallback may have already disposed the linked CTS; Stop() below still ends ffmpeg.
-+            }
+             }
          }
  
          job.Stop();
