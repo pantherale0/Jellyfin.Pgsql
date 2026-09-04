@@ -1,0 +1,114 @@
+diff --git a/src/components/loading/loading.scss b/src/components/loading/loading.scss
+index e1a6bb1bd2..7af9dcf8f4 100644
+--- a/src/components/loading/loading.scss
++++ b/src/components/loading/loading.scss
+@@ -277,3 +277,23 @@
+     z-index: 9999999;
+     contain: layout style size;
+ }
++
++/* Single-layer spinner for TV / webOS — avoids MDL's multi-keyframe compositor cost. */
++.tvDocspinner {
++    display: none;
++    box-sizing: border-box;
++    border: 0.45vh solid rgba(255, 255, 255, 0.25);
++    border-top-color: #00a4dc;
++    border-radius: 50%;
++}
++
++.tvDocspinner.mdlSpinnerActive {
++    display: block;
++    animation: tv-docspinner-rotate 900ms linear infinite;
++}
++
++@keyframes tv-docspinner-rotate {
++    to {
++        transform: rotate(360deg);
++    }
++}
+diff --git a/src/components/loading/loading.ts b/src/components/loading/loading.ts
+index 60333f5116..fb2d0b8a7e 100644
+--- a/src/components/loading/loading.ts
++++ b/src/components/loading/loading.ts
+@@ -1,8 +1,18 @@
+ import './loading.scss';
++import { isTvClient } from 'scripts/isTvClient';
+ 
+ let loader: HTMLDivElement | undefined;
+ 
+-function createLoader(): HTMLDivElement {
++function createTvLoader(): HTMLDivElement {
++    const elem = document.createElement('div');
++    elem.setAttribute('dir', 'ltr');
++    elem.classList.add('docspinner', 'tvDocspinner');
++    elem.setAttribute('aria-hidden', 'true');
++    document.body.appendChild(elem);
++    return elem;
++}
++
++function createMdlLoader(): HTMLDivElement {
+     const elem = document.createElement('div');
+     elem.setAttribute('dir', 'ltr');
+     elem.classList.add('docspinner');
+@@ -14,6 +24,11 @@ function createLoader(): HTMLDivElement {
+     return elem;
+ }
+ 
++function createLoader(): HTMLDivElement {
++    // Constrained TV / webOS clients choke on the multi-layer MDL keyframe stack.
++    return isTvClient() ? createTvLoader() : createMdlLoader();
++}
++
+ export function show() {
+     if (!loader) {
+         loader = createLoader();
+diff --git a/src/plugins/htmlVideoPlayer/plugin.js b/src/plugins/htmlVideoPlayer/plugin.js
+index 4a5951b47b..efd5f16f1f 100644
+--- a/src/plugins/htmlVideoPlayer/plugin.js
++++ b/src/plugins/htmlVideoPlayer/plugin.js
+@@ -1124,6 +1124,16 @@ export class HtmlVideoPlayer {
+             });
+ 
+             if (this._currentPlayOptions.fullscreen) {
++                // Defer webOS fullscreen until first frame so Screenfull does not
++                // contend with decode + the loading indicator at play-start.
++                if (!this.forcedFullscreen && !window.NativeShell && browser.web0s && Screenfull.isEnabled) {
++                    Screenfull.request().then(() => {
++                        this.forcedFullscreen = true;
++                    }).catch(() => {
++                        /* ignore fullscreen failures */
++                    });
++                }
++
+                 appRouter.showVideoOsd().then(this.onNavigatedToOsd);
+             } else {
+                 setBackdropTransparency(TRANSPARENCY_LEVEL.Backdrop);
+@@ -1860,11 +1870,9 @@ export class HtmlVideoPlayer {
+                     // At this point, we must hide the scrollbar placeholder, so it's not being displayed while the item is being loaded
+                     document.body.classList.add('hide-scroll');
+ 
+-                    // Enter fullscreen in the webOS browser to hide the top bar
+-                    if (!window.NativeShell && browser.web0s && Screenfull.isEnabled) {
+-                        Screenfull.request().then(() => {
+-                            this.forcedFullscreen = true;
+-                        });
++                    // webOS fullscreen is deferred to onPlaying (first frame). Skip
++                    // zoom-in here — same early return as before, without Screenfull.
++                    if (!window.NativeShell && browser.web0s) {
+                         return videoElement;
+                     }
+ 
+@@ -1883,12 +1891,7 @@ export class HtmlVideoPlayer {
+                 // we need to hide scrollbar when starting playback from page with animated background
+                 document.body.classList.add('hide-scroll');
+ 
+-                // Enter fullscreen in the webOS browser to hide the top bar
+-                if (!this.forcedFullscreen && !window.NativeShell && browser.web0s && Screenfull.isEnabled) {
+-                    Screenfull.request().then(() => {
+-                        this.forcedFullscreen = true;
+-                    });
+-                }
++                // webOS fullscreen deferred to onPlaying (see above).
+             }
+ 
+             const videoElement = dlg.querySelector('video');

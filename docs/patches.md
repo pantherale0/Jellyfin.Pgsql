@@ -745,11 +745,11 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | | |
 |---|---|
 | **Target** | `jellyfin-web` |
-| **What** | Multiview player overlay for web-based Live TV streaming, including Sky TV mode (1 main + 3 side), Quad mode (2x2), Dual mode, audio focus switching, channel picker modal, tuner capacity error toasts, User Profile permission UI, and an experimental user setting flag (`chkEnableExperimentalMultiview`). Automatically hidden on TV clients (`!layoutManager.tv`). |
-| **Why** | Enables users with `EnableLiveTvMultiview` permission to stream up to 4 Live TV channels simultaneously on Desktop/Mobile browsers while protecting TV client performance. |
+| **What** | Multiview player overlay for web-based Live TV streaming, including Sky TV mode (1 main + 3 side), Quad mode (2x2), Dual mode, audio focus switching, channel picker modal, tuner capacity error toasts, User Profile permission UI, and an experimental user setting flag (`chkEnableExperimentalMultiview`). Fully disabled on webOS / TV clients (`isTvClient()` / `!layoutManager.tv`). |
+| **Why** | Enables users with `EnableLiveTvMultiview` permission to stream up to 4 Live TV channels simultaneously on Desktop/Mobile browsers while protecting constrained TV / webOS clients from multi-`hls.js` decode and UI load. |
 | **Where** | `src/components/multiview/multiviewManager.js`, `channelPickerModal.js`, `multiview.scss`, `userSettings.js`, `displaySettings`, `Profile.tsx`, `video/index.html`, `video/index.js`, `itemContextMenu.js`, `en-us.json` |
-| **How** | Overlay singleton opens Live TV via `playbackManager.getPlaybackInfo` stream info (`url` / `mediaSource` / `liveStreamId`) and plays each tile with raw `hls.js`. Each slot shows a centered buffering spinner from channel select until `playing`/`canplay` (and again on `waiting`). Per-slot generation tokens ignore stale async/HLS retries; Dual mode clears hidden slots 2–3; swap exchanges DOM/state without re-tuning. OSD Multiview button is Live TV–only when `!layoutManager.tv && enableExperimentalMultiview && EnableLiveTvMultiview !== false`; opens the overlay then stops the single player (no `history.back` race). Channel picker uses `currentApiClient()` and HTML-escapes names. |
-| **Related** | `jellyfin_livetv_multiview_rbac.patch`, `jellyfin_web_rbac.patch`. |
+| **How** | Overlay singleton opens Live TV via `playbackManager.getPlaybackInfo` stream info (`url` / `mediaSource` / `liveStreamId`) and plays each tile with raw `hls.js`. Each slot shows a centered buffering spinner from channel select until `playing`/`canplay` (and again on `waiting`). Per-slot generation tokens ignore stale async/HLS retries; Dual mode clears hidden slots 2–3; swap exchanges DOM/state without re-tuning. `enableExperimentalMultiview()` forces `false` on `isTvClient()`; entry points (Channels header, context menu, OSD) and display-setting UI require `!isTvClient() && !layoutManager.tv`; `multiviewManager.open()` no-ops via `isMultiviewSupported()`. OSD / Channels / context menu **lazy-import** `multiviewManager` so TV clients never pull `hls.js` from those paths. Opens the overlay then stops the single player (no `history.back` race). Channel picker uses `currentApiClient()` and HTML-escapes names. |
+| **Related** | `jellyfin_livetv_multiview_rbac.patch`, `jellyfin_web_rbac.patch`, `jellyfin_web_z_tv_ux_webos5` (`isTvClient`). Companion play-start relief: `jellyfin_web_zzzz_tv_playback_perf`. |
 
 ### `jellyfin_web_zzzz_playback_errors.patch`
 
@@ -761,6 +761,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Where** | `playbackError.ts`, `playbackmanager.js`, `htmlMediaHelper.js`, `multiviewManager.js`, `en-us.json` |
 | **How** | Maps server + client error codes to `PlaybackErrorFriendly.*` strings; preserves silent transcode fallback retries before showing the dialog. Applies after `jellyfin_web_zzz_livetv_multiview` (`zzzz_` band). |
 | **Related** | Server companion: `jellyfin_zzz_playback_errors`. Mobile apps should implement the same code contract (see [features](features.md#playback-error-messaging)). No public issue. |
+
+### `jellyfin_web_zzzz_tv_playback_perf.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin-web` |
+| **What** | webOS / TV play-start relief: single-layer loading spinner, deferred Screenfull until first `playing`. |
+| **Why** | Stock MDL multi-keyframe spinner + early webOS fullscreen contend with decode; video can start while controls feel frozen. |
+| **Where** | `loading.ts` / `loading.scss`, `htmlVideoPlayer/plugin.js` |
+| **How** | `isTvClient()` builds a one-element CSS spinner; webOS `Screenfull.request` moves from `createMediaElement` into first `onPlaying` (fullscreen path). Applies after `jellyfin_web_zzzz_playback_errors`. |
+| **Related** | Multiview lazy-import in `jellyfin_web_zzz_livetv_multiview`. No public issue. |
 
 ### `jellyfin_web_dev_server_proxy.patch`
 
@@ -794,5 +805,5 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 
 ## File count
 
-**64** patches: **39** `jellyfin_*.patch` (server), **25** `jellyfin_web*.patch` (web).
+**68** patches: **40** `jellyfin_*.patch` (server), **28** `jellyfin_web*.patch` (web).
 

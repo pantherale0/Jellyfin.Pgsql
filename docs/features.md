@@ -51,7 +51,7 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 ## Live TV Multiview
 
-**What:** Experimental desktop/mobile web overlay for watching up to 4 Live TV channels at once (Sky TV 1+3, Quad 2×2, Dual side-by-side). Supports audio-focus switching, in-place slot swap, and a channel picker. Each tile opens a normal Live TV session via `getPlaybackInfo` and plays with raw `hls.js` (not the full html video player stack—no per-tile subtitle/bitrate OSD). Access requires the `EnableLiveTvMultiview` user permission (Dashboard user profile or SSO group mappings in `sso_rbac.json`), the experimental display setting (`chkEnableExperimentalMultiview`), and a non-TV layout (`!layoutManager.tv`). Entry points: Live TV → Channels header, item context menu, and the video OSD button (Live TV items only). Tuner exhaustion when adding a channel shows a toast.
+**What:** Experimental desktop/mobile web overlay for watching up to 4 Live TV channels at once (Sky TV 1+3, Quad 2×2, Dual side-by-side). Supports audio-focus switching, in-place slot swap, and a channel picker. Each tile opens a normal Live TV session via `getPlaybackInfo` and plays with raw `hls.js` (not the full html video player stack—no per-tile subtitle/bitrate OSD). Access requires the `EnableLiveTvMultiview` user permission (Dashboard user profile or SSO group mappings in `sso_rbac.json`), the experimental display setting (`chkEnableExperimentalMultiview`), and a non-TV client (`!isTvClient() && !layoutManager.tv` — including LG webOS). Entry points: Live TV → Channels header, item context menu, and the video OSD button (Live TV items only). Tuner exhaustion when adding a channel shows a toast.
 
 **Where:**
 - Server: [`jellyfin_livetv_multiview_rbac.patch`](patches.md#jellyfin_livetv_multiview_rbacpatch) (`PermissionKind.EnableLiveTvMultiview`, `UserPolicy`, `UserManager`)
@@ -141,9 +141,9 @@ Extend `@jellyfin/sdk` `PlaybackErrorCode` when bumping Jellyfin tags (new enum 
 
 ## TV / webOS UX
 
-**What:** Infinite scroll on library views, TV focus/nav helpers, capped home-row / lazy-load pressure, webOS 5 / older Chromium workarounds, Quick Connect-first login on TV.
+**What:** Infinite scroll on library views, TV focus/nav helpers, capped home-row / lazy-load pressure, webOS 5 / older Chromium workarounds, Quick Connect-first login on TV, lighter play-start (simple spinner + deferred webOS fullscreen), and Live TV Multiview fully disabled on webOS / TV clients.
 
-**Where:** [TV UX group](patches.md#8-tv--web-ux).
+**Where:** [TV UX group](patches.md#8-tv--web-ux); play-start: [`jellyfin_web_zzzz_tv_playback_perf`](patches.md#jellyfin_web_zzzz_tv_playback_perfpatch); Multiview off on TV: [`jellyfin_web_zzz_livetv_multiview`](patches.md#jellyfin_web_zzz_livetv_multiviewpatch).
 
 ## Background media QoS (scan / segments / chapters)
 
