@@ -144,6 +144,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | Separate UserData fetch/merge instead of a single heavy join. |
 | **Related** | No public issue. |
 
+### `jellyfin_z_items_browse_perf.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Speeds recursive library `/Items` browse (e.g. Movie + SortName pages): skip redundant `PresentationUniqueKey` GroupBy when alternates are already excluded, stop forcing `AsSingleQuery` on list hydrations, and skip `LinkedChildEntities` Include for movie/episode-only lists. |
+| **Why** | Deep SortName pages were spending ~10s+ on Count+GroupBy over the whole library and cartesian Includes, even with `limit=100`. |
+| **Where** | `BaseItemRepository.QueryBuilding.cs`, grouping tests |
+| **How** | When `!IncludeOwnedItems`, TranslateQuery’s `PrimaryVersionId IS NULL` already drops alternates — GroupBy is skipped. Keep `AsNoTrackingWithIdentityResolution` (dedupe) but allow `AsSplitQuery` from `jellyfin_query_split_userdata`. MediaSourceCount still uses the batched LinkedChildren probe. |
+| **Related** | `jellyfin_dedupe_baseitem_image_infos`, `jellyfin_query_split_userdata`; plugin browse ID-page cache (`Pgsql_CACHE_BROWSE_TTL`). No public issue. |
+
 ### `jellyfin_search_performance.patch`
 
 | | |
@@ -452,6 +463,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Where** | `FileRefresher.cs`, `LibraryMonitor.cs` |
 | **How** | Expand affected paths / refresh targeting for directory updates. |
 | **Related** | No public issue. |
+
+### `jellyfin_subtitle_ro_skip.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Skips automated subtitle downloads when “Save subtitles into media folders” would write to a read-only media path. |
+| **Why** | RO library mounts (common in k8s) cause OpenSubtitles downloads to succeed then fail on save, burning daily quota and flooding logs. |
+| **Where** | `SubtitleDownloader.cs`, `SubtitleMediaFolderWritability.cs` |
+| **How** | Before provider search, when `isAutomated` and `SaveSubtitlesWithMedia`, probe-create a temp file in `ContainingFolderPath` (cached per directory for the process). If not writable, return without downloading and log one warning per folder. Manual downloads and libraries that save under internal metadata are unchanged. |
+| **Related** | No public issue. See [features](features.md#library--plugin-reliability) and [known issues](known-issues.md). |
 
 ### `jellyfin_omdb_json_exception.patch`
 

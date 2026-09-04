@@ -1,0 +1,151 @@
+diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
+index ad9270c05c..33fa71f5e0 100644
+--- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
++++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
+@@ -29,17 +29,17 @@ public sealed partial class BaseItemRepository
+     public IQueryable<BaseItemEntity> PrepareItemQuery(JellyfinDbContext context, InternalItemsQuery filter)
+     {
+         // Identity resolution is required: this query eagerly loads multiple collection
+-        // navigations (Images, Provider, UserData, LinkedChildEntities, ...) as a single query.
++        // navigations (Images, Provider, UserData, LinkedChildEntities, ...).
+         // With plain AsNoTracking() EF Core performs no identity resolution, so the JOIN
+         // cartesian materializes duplicate entries into each collection navigation
+         // (e.g. entity.Images gets |Images| x |otherCollections| copies). When such an item is
+         // later persisted via delete-then-insert, the duplicated images are written back and —
+         // because BaseItemImageInfos uses a random surrogate GUID primary key — they accumulate
+         // and double on every scan that re-saves images.
+-        IQueryable<BaseItemEntity> dbQuery = context.BaseItems.AsNoTrackingWithIdentityResolution();
+-        dbQuery = dbQuery.AsSingleQuery();
+-
+-        return dbQuery;
++        //
++        // Do not force AsSingleQuery here: list hydrations use AsSplitQuery so Images × UserData
++        // × LinkedChildren do not cartesian-product on the wire.
++        return context.BaseItems.AsNoTrackingWithIdentityResolution();
+     }
+ 
+     private IQueryable<BaseItemEntity> ApplyQueryFilter(IQueryable<BaseItemEntity> dbQuery, JellyfinDbContext context, InternalItemsQuery filter)
+@@ -106,6 +106,10 @@ public sealed partial class BaseItemRepository
+         // primary version (PrimaryVersionId is null) so detail pages and actions target it instead
+         // of an arbitrary alternate. Keep the grouped ids as an IQueryable sub-select; materializing
+         // to a List would inline one bound parameter per id and hit SQLite's variable cap.
++        //
++        // Normal library browse already excludes alternates via PrimaryVersionId IS NULL in
++        // TranslateQuery. GroupBy then only re-aggregates the full library and blocks an
++        // index-friendly SortName plan — skip it unless IncludeOwnedItems keeps alternates in-set.
+         var enableGroupByPresentationUniqueKey = EnableGroupByPresentationUniqueKey(filter);
+         if (enableGroupByPresentationUniqueKey && filter.GroupBySeriesPresentationUniqueKey)
+         {
+@@ -113,7 +117,7 @@ public sealed partial class BaseItemRepository
+                 .Select(g => g.Where(e => e.PrimaryVersionId == null).Min(e => (Guid?)e.Id) ?? g.Min(e => (Guid?)e.Id));
+             dbQuery = context.BaseItems.AsNoTrackingWithIdentityResolution().Where(e => groupedIds.Contains(e.Id));
+         }
+-        else if (enableGroupByPresentationUniqueKey)
++        else if (enableGroupByPresentationUniqueKey && filter.IncludeOwnedItems)
+         {
+             var groupedIds = dbQuery.GroupBy(e => e.PresentationUniqueKey)
+                 .Select(g => g.Where(e => e.PrimaryVersionId == null).Min(e => (Guid?)e.Id) ?? g.Min(e => (Guid?)e.Id));
+@@ -124,6 +128,10 @@ public sealed partial class BaseItemRepository
+             var groupedIds = dbQuery.GroupBy(e => e.SeriesPresentationUniqueKey).Select(e => e.Min(x => x.Id));
+             dbQuery = context.BaseItems.AsNoTrackingWithIdentityResolution().Where(e => groupedIds.Contains(e.Id));
+         }
++        else if (enableGroupByPresentationUniqueKey)
++        {
++            // Browse shape: presentation GroupBy skipped; do not Distinct either.
++        }
+         else
+         {
+             dbQuery = dbQuery.Distinct();
+@@ -291,10 +299,19 @@ public sealed partial class BaseItemRepository
+             dbQuery = dbQuery.Include(e => e.Images);
+         }
+ 
+-        // Include LinkedChildEntities for container types and videos that use them (BoxSet, Playlist,
+-        // CollectionFolder for manual linking; every video type for alternate versions).
++        // Include LinkedChildEntities for container types and mixed/unknown type lists.
++        // Movie/Episode/Video-only browse pages skip the Include: MediaSourceCount uses a batched
++        // LinkedChildren probe, and loading links for every row cartesian-products the page query.
+         // When IncludeItemTypes is empty (any type may be returned), always include them to ensure
+         // LinkedChildren are loaded before items are saved back, preventing accidental deletion.
++        var videoListTypes = new[]
++        {
++            BaseItemKind.Video,
++            BaseItemKind.Movie,
++            BaseItemKind.Episode,
++            BaseItemKind.MusicVideo,
++            BaseItemKind.Trailer
++        };
+         var linkedChildTypes = new[]
+         {
+             BaseItemKind.BoxSet,
+@@ -306,7 +323,10 @@ public sealed partial class BaseItemRepository
+             BaseItemKind.MusicVideo,
+             BaseItemKind.Trailer
+         };
+-        if (filter.IncludeItemTypes.Length == 0 || filter.IncludeItemTypes.Any(linkedChildTypes.Contains))
++        var onlyVideoListTypes = filter.IncludeItemTypes.Length > 0
++            && filter.IncludeItemTypes.All(videoListTypes.Contains);
++        if (!onlyVideoListTypes
++            && (filter.IncludeItemTypes.Length == 0 || filter.IncludeItemTypes.Any(linkedChildTypes.Contains)))
+         {
+             dbQuery = dbQuery.Include(e => e.LinkedChildEntities);
+         }
+diff --git a/tests/Jellyfin.Server.Implementations.Tests/Item/BaseItemRepositoryGroupingTests.cs b/tests/Jellyfin.Server.Implementations.Tests/Item/BaseItemRepositoryGroupingTests.cs
+index 535961a66c..2d0974f73f 100644
+--- a/tests/Jellyfin.Server.Implementations.Tests/Item/BaseItemRepositoryGroupingTests.cs
++++ b/tests/Jellyfin.Server.Implementations.Tests/Item/BaseItemRepositoryGroupingTests.cs
+@@ -61,13 +61,35 @@ public sealed class BaseItemRepositoryGroupingTests : SqliteDbTestFixture
+             ctx.SaveChanges();
+         }
+ 
+-        var result = _repository.GetItemList(CreateQuery());
++        var result = _repository.GetItemList(CreateOwnedItemsQuery());
+ 
+         var item = Assert.Single(result);
+         Assert.Equal(firstId, item.Id);
+     }
+ 
+-    private static InternalItemsQuery CreateQuery()
++    [Fact]
++    public void GetItemList_BrowseShape_ExcludesAlternateViaPrimaryVersionFilter()
++    {
++        // Library browse leaves IncludeOwnedItems false so TranslateQuery applies
++        // PrimaryVersionId IS NULL. Presentation-key GroupBy is skipped in that shape.
++        var primaryId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
++        var alternateId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
++        var presentationKey = primaryId.ToString("N");
++
++        using (var ctx = CreateDbContext())
++        {
++            ctx.BaseItems.Add(CreateMovieEntity(primaryId, "Browse Movie", presentationKey, null));
++            ctx.BaseItems.Add(CreateMovieEntity(alternateId, "Browse Movie - 4K", presentationKey, primaryId));
++            ctx.SaveChanges();
++        }
++
++        var result = _repository.GetItemList(CreateBrowseQuery());
++
++        var item = Assert.Single(result);
++        Assert.Equal(primaryId, item.Id);
++    }
++
++    private static InternalItemsQuery CreateOwnedItemsQuery()
+     {
+         // IncludeOwnedItems keeps the alternate version rows in the query so the
+         // grouping collapse is what picks the group representative.
+@@ -78,6 +100,16 @@ public sealed class BaseItemRepositoryGroupingTests : SqliteDbTestFixture
+         };
+     }
+ 
++    private static InternalItemsQuery CreateBrowseQuery()
++    {
++        return new InternalItemsQuery(new Database.Implementations.Entities.User("test", "auth", "reset"))
++        {
++            IncludeItemTypes = [BaseItemKind.Movie]
++        };
++    }
++
++    private static InternalItemsQuery CreateQuery() => CreateOwnedItemsQuery();
++
+     private BaseItemEntity CreateMovieEntity(Guid id, string name, string presentationKey, Guid? primaryVersionId)
+     {
+         return new BaseItemEntity

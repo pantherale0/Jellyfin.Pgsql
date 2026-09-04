@@ -14,13 +14,13 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 ## Query cache and optimised Latest
 
-**What:** Cache home Latest/Resume ID lists; optionally replace Latest queries with PostgreSQL `DISTINCT ON` variants.
+**What:** Cache home Latest/Resume ID lists and stable library browse `/Items` pages; optionally replace Latest queries with PostgreSQL `DISTINCT ON` variants.
 
 **Where:** [`Jellyfin.Plugin.Pgsql/Query/`](../Jellyfin.Plugin.Pgsql/Query/); toggles `Pgsql_CACHE_*`, `Pgsql_PG_OPTIMIZE_*`, `REDIS_CONNECTION_STRING` ([README](../README.md#query-cache-and-optimisation-optional-experimental)).
 
-**How:** Cache keys are per user and per view (never shared across users). Failures fall back to stock Jellyfin queries. Default Latest TTL is 120s (visible lag after scans).
+**How:** Cache keys are per user and per view (never shared across users). Failures fall back to stock Jellyfin queries. Default Latest TTL is 120s; browse pages default to 60s (`Pgsql_CACHE_BROWSE_TTL`). Browse cache stores `(TotalRecordCount, ids[])` for recursive SortName-style library pages.
 
-**Patches that help home/query load:** [`jellyfin_home_api_performance`](patches.md#jellyfin_home_api_performancepatch), [`jellyfin_unoptimized_query_fixes`](patches.md#jellyfin_unoptimized_query_fixespatch), [`jellyfin_query_split_userdata`](patches.md#jellyfin_query_split_userdatapatch), [`jellyfin_latest_tv_always_series`](patches.md#jellyfin_latest_tv_always_seriespatch), [`jellyfin_zzz_byname_access_semijoin`](patches.md#jellyfin_zzz_byname_access_semijoinpatch), [`jellyfin_zzzz_people_query_perf`](patches.md#jellyfin_zzzz_people_query_perfpatch). Descendant-query memory fixes are stock Jellyfin as of v12.0-rc6 ([jellyfin#17602](https://github.com/jellyfin/jellyfin/issues/17602)).
+**Patches that help home/query load:** [`jellyfin_home_api_performance`](patches.md#jellyfin_home_api_performancepatch), [`jellyfin_unoptimized_query_fixes`](patches.md#jellyfin_unoptimized_query_fixespatch), [`jellyfin_query_split_userdata`](patches.md#jellyfin_query_split_userdatapatch), [`jellyfin_z_items_browse_perf`](patches.md#jellyfin_z_items_browse_perfpatch), [`jellyfin_latest_tv_always_series`](patches.md#jellyfin_latest_tv_always_seriespatch), [`jellyfin_zzz_byname_access_semijoin`](patches.md#jellyfin_zzz_byname_access_semijoinpatch), [`jellyfin_zzzz_people_query_perf`](patches.md#jellyfin_zzzz_people_query_perfpatch). Descendant-query memory fixes are stock Jellyfin as of v12.0-rc6 ([jellyfin#17602](https://github.com/jellyfin/jellyfin/issues/17602)).
 
 ## Fuzzy search (PostgreSQL)
 
@@ -155,6 +155,6 @@ Extend `@jellyfin/sdk` `PlaybackErrorCode` when bumping Jellyfin tags (new enum 
 
 ## Library / plugin reliability
 
-**What:** Path-aware media refresh; BaseItem image-info dedupe; person provider-key identity; fix plugin ALC so transitive deps (for example Redis) resolve from `.deps.json`. Disabled-plugin cleanup is stock Jellyfin as of v12.0-rc5 ([jellyfin#15897](https://github.com/jellyfin/jellyfin/issues/15897)). Descendant-query memory fixes are stock as of v12.0-rc6 ([jellyfin#17602](https://github.com/jellyfin/jellyfin/issues/17602)).
+**What:** Path-aware media refresh; BaseItem image-info dedupe; person provider-key identity; fix plugin ALC so transitive deps (for example Redis) resolve from `.deps.json`. Disabled-plugin cleanup is stock Jellyfin as of v12.0-rc5 ([jellyfin#15897](https://github.com/jellyfin/jellyfin/issues/15897)). Descendant-query memory fixes are stock as of v12.0-rc6 ([jellyfin#17602](https://github.com/jellyfin/jellyfin/issues/17602)). Automated subtitle download is skipped when “Save subtitles into media folders” targets a read-only media mount ([`jellyfin_subtitle_ro_skip`](patches.md#jellyfin_subtitle_ro_skippatch)) — uncheck that option (save under Jellyfin metadata) or remount RW if you want downloads.
 
 **Where:** [Library / metadata group](patches.md#5-library--metadata--plugin-loading); favorites-during-progress fix [jellyfin#14981](https://github.com/jellyfin/jellyfin/issues/14981).

@@ -49,6 +49,12 @@ public class PluginConfiguration : BasePluginConfiguration
     public int NextUpCacheTtlSeconds { get; set; } = 45;
 
     /// <summary>
+    /// Gets or sets the time-to-live in seconds for cached library browse <c>GetItems</c> pages. Zero disables browse caching.
+    /// Overridden by <c>Pgsql_CACHE_BROWSE_TTL</c>.
+    /// </summary>
+    public int BrowseCacheTtlSeconds { get; set; } = 60;
+
+    /// <summary>
     /// Gets or sets a value indicating whether PostgreSQL-optimised Latest queries are enabled.
     /// Overridden by <c>Pgsql_PG_OPTIMIZE_LATEST</c> (per-type overrides:
     /// <c>Pgsql_PG_OPTIMIZE_MOVIES_LATEST</c>, <c>Pgsql_PG_OPTIMIZE_TV_LATEST</c>, <c>Pgsql_PG_OPTIMIZE_MUSIC_LATEST</c>).

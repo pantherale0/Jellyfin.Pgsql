@@ -55,6 +55,15 @@ public sealed class PgsqlStatsResponse
     /// <summary>Gets or sets next-up cache misses.</summary>
     public long NextUpCacheMisses { get; set; }
 
+    /// <summary>Gets or sets library browse cache TTL in seconds.</summary>
+    public int BrowseTtlSeconds { get; set; }
+
+    /// <summary>Gets or sets library browse cache hits.</summary>
+    public long BrowseCacheHits { get; set; }
+
+    /// <summary>Gets or sets library browse cache misses.</summary>
+    public long BrowseCacheMisses { get; set; }
+
     /// <summary>Gets or sets redis get errors.</summary>
     public long RedisGetErrors { get; set; }
 

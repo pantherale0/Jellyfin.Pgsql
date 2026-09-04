@@ -69,6 +69,11 @@ internal sealed class PgsqlQueryOptions
     public TimeSpan NextUpTtl { get; private init; }
 
     /// <summary>
+    /// Gets the time-to-live for cached library browse <c>GetItems</c> pages. Zero or negative disables browse caching.
+    /// </summary>
+    public TimeSpan BrowseTtl { get; private init; }
+
+    /// <summary>
     /// Gets a value indicating whether the PostgreSQL-optimised Movies Latest query is enabled.
     /// </summary>
     public bool OptimizeMoviesLatest { get; private init; }
@@ -110,6 +115,7 @@ internal sealed class PgsqlQueryOptions
             LatestTtl = TimeSpan.FromSeconds(GetInt("Pgsql_CACHE_LATEST_TTL", config?.LatestCacheTtlSeconds ?? 120)),
             ResumeTtl = TimeSpan.FromSeconds(GetInt("Pgsql_CACHE_RESUME_TTL", config?.ResumeCacheTtlSeconds ?? 30)),
             NextUpTtl = TimeSpan.FromSeconds(GetInt("Pgsql_CACHE_NEXTUP_TTL", config?.NextUpCacheTtlSeconds ?? 45)),
+            BrowseTtl = TimeSpan.FromSeconds(GetInt("Pgsql_CACHE_BROWSE_TTL", config?.BrowseCacheTtlSeconds ?? 60)),
             OptimizeMoviesLatest = GetBool("Pgsql_PG_OPTIMIZE_MOVIES_LATEST", optimizeLatest),
             OptimizeTvLatest = GetBool("Pgsql_PG_OPTIMIZE_TV_LATEST", optimizeLatest),
             OptimizeMusicLatest = GetBool("Pgsql_PG_OPTIMIZE_MUSIC_LATEST", optimizeLatest),

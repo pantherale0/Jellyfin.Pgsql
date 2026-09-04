@@ -118,6 +118,62 @@ internal static class QueryCacheKeyBuilder
     }
 
     /// <summary>
+    /// Builds a cache key for a stable library browse <c>GetItems</c> page.
+    /// </summary>
+    /// <param name="filter">The query filter.</param>
+    /// <param name="libraryVersion">Library-wide cache generation.</param>
+    /// <param name="userVersion">Per-user cache generation.</param>
+    /// <returns>The cache key, or <c>null</c> when the query cannot be safely keyed.</returns>
+    public static string? BuildBrowseKey(InternalItemsQuery filter, long libraryVersion, long userVersion)
+    {
+        if (!IsBrowsableCacheable(filter))
+        {
+            return null;
+        }
+
+        var canonical = BuildCanonical(filter);
+        if (canonical is null)
+        {
+            return null;
+        }
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"lv{libraryVersion}:uv{userVersion}:browse:{Hash(canonical)}");
+    }
+
+    /// <summary>
+    /// Returns whether a filter is a stable library browse page worth caching.
+    /// </summary>
+    private static bool IsBrowsableCacheable(InternalItemsQuery filter)
+    {
+        if (filter.User is null || !filter.Limit.HasValue)
+        {
+            return false;
+        }
+
+        if (filter.IsResumable == true)
+        {
+            return false;
+        }
+
+        if (filter.OrderBy.Any(o => o.OrderBy == ItemSortBy.Random))
+        {
+            return false;
+        }
+
+        // Need a library/folder scope (set after SetTopParentIdsOrAncestors, or a direct ParentId).
+        if (filter.TopParentIds.Length == 0
+            && filter.AncestorIds.Length == 0
+            && filter.ParentId.Equals(default))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Resolves the user id used for version stamps from a filter, or <see cref="Guid.Empty"/> when anonymous.
     /// </summary>
     /// <param name="filter">The query filter.</param>
