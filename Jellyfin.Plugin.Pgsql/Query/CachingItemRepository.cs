@@ -15,11 +15,16 @@ namespace Jellyfin.Plugin.Pgsql.Query;
 
 /// <summary>
 /// Decorates the core <see cref="IItemRepository"/> with result caching for the hot
-/// home-screen paths (Latest, Resume) and PostgreSQL-optimised Latest queries.
+/// home-screen paths (Latest, Resume), library browse pages, and PostgreSQL-optimised Latest queries.
 /// All other members delegate to the core repository unchanged.
 /// </summary>
 internal sealed class CachingItemRepository : IItemRepository
 {
+    private static readonly System.Text.Json.JsonSerializerOptions BrowseJsonOptions = new()
+    {
+        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+    };
+
     private readonly IItemRepository _inner;
     private readonly IQueryResultCache _cache;
     private readonly IQueryCacheVersionStore _versions;
@@ -147,7 +152,73 @@ internal sealed class CachingItemRepository : IItemRepository
     public BaseItem RetrieveItem(Guid id) => _inner.RetrieveItem(id);
 
     /// <inheritdoc/>
-    public QueryResult<BaseItem> GetItems(InternalItemsQuery filter) => _inner.GetItems(filter);
+    public QueryResult<BaseItem> GetItems(InternalItemsQuery filter)
+    {
+        var options = PgsqlQueryOptions.Current;
+        if (!options.CacheActive || options.BrowseTtl <= TimeSpan.Zero)
+        {
+            return _inner.GetItems(filter);
+        }
+
+        var userId = QueryCacheKeyBuilder.GetVersionUserId(filter);
+        var key = QueryCacheKeyBuilder.BuildBrowseKey(
+            filter,
+            _versions.GetLibraryVersion(),
+            _versions.GetUserVersion(userId));
+        if (key is null)
+        {
+            return _inner.GetItems(filter);
+        }
+
+        if (_cache.TryGetPayload(key, out var cachedPayload)
+            && TryDeserializeBrowsePage(cachedPayload, out var cachedPage))
+        {
+            var cached = _loader.LoadByIds(cachedPage.Ids, filter);
+            if (cached is not null)
+            {
+                _stats.RecordBrowseCacheLookup(hit: true);
+                if (_logger.IsEnabled(LogLevel.Debug))
+                {
+                    _logger.LogDebug(
+                        "Browse page served from cache (start={Start}, count={Count}, total={Total})",
+                        filter.StartIndex ?? 0,
+                        cached.Count,
+                        cachedPage.TotalRecordCount);
+                }
+
+                return new QueryResult<BaseItem>(filter.StartIndex, cachedPage.TotalRecordCount, cached);
+            }
+        }
+
+        _stats.RecordBrowseCacheLookup(hit: false);
+        var result = _inner.GetItems(filter);
+        var payload = new BrowsePageCacheEntry
+        {
+            TotalRecordCount = result.TotalRecordCount,
+            Ids = result.Items.Select(i => i.Id).ToArray()
+        };
+        _cache.SetPayload(key, System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(payload, BrowseJsonOptions), options.BrowseTtl);
+        return result;
+    }
+
+    private static bool TryDeserializeBrowsePage(byte[] payload, out BrowsePageCacheEntry page)
+    {
+        try
+        {
+            var parsed = System.Text.Json.JsonSerializer.Deserialize<BrowsePageCacheEntry>(payload, BrowseJsonOptions);
+            if (parsed?.Ids is not null)
+            {
+                page = parsed;
+                return true;
+            }
+        }
+        catch (System.Text.Json.JsonException)
+        {
+        }
+
+        page = null!;
+        return false;
+    }
 
     /// <inheritdoc/>
     public IReadOnlyList<Guid> GetItemIdsList(InternalItemsQuery filter) => _inner.GetItemIdsList(filter);
@@ -194,4 +265,11 @@ internal sealed class CachingItemRepository : IItemRepository
 
     /// <inheritdoc/>
     public bool GetIsPlayed(User user, Guid id, bool recursive) => _inner.GetIsPlayed(user, id, recursive);
+
+    private sealed class BrowsePageCacheEntry
+    {
+        public int TotalRecordCount { get; set; }
+
+        public Guid[] Ids { get; set; } = Array.Empty<Guid>();
+    }
 }

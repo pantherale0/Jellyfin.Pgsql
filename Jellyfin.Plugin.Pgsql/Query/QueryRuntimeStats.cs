@@ -21,6 +21,8 @@ public sealed class QueryRuntimeStats
     private long _optimizedNextUpFailures;
     private long _nextUpCacheHits;
     private long _nextUpCacheMisses;
+    private long _browseCacheHits;
+    private long _browseCacheMisses;
 
     /// <summary>
     /// Marks a Latest cache lookup outcome.
@@ -99,6 +101,21 @@ public sealed class QueryRuntimeStats
     }
 
     /// <summary>
+    /// Marks a library browse cache lookup outcome.
+    /// </summary>
+    /// <param name="hit">True when served from cache.</param>
+    public void RecordBrowseCacheLookup(bool hit)
+    {
+        if (hit)
+        {
+            Interlocked.Increment(ref _browseCacheHits);
+            return;
+        }
+
+        Interlocked.Increment(ref _browseCacheMisses);
+    }
+
+    /// <summary>
     /// Marks one attempted optimized NextUp batch execution.
     /// </summary>
     public void RecordOptimizedNextUpRun()
@@ -128,6 +145,8 @@ public sealed class QueryRuntimeStats
             Interlocked.Read(ref _resumeCacheMisses),
             Interlocked.Read(ref _nextUpCacheHits),
             Interlocked.Read(ref _nextUpCacheMisses),
+            Interlocked.Read(ref _browseCacheHits),
+            Interlocked.Read(ref _browseCacheMisses),
             Interlocked.Read(ref _redisGetErrors),
             Interlocked.Read(ref _redisSetErrors),
             Interlocked.Read(ref _optimizedLatestRuns),

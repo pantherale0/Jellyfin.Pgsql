@@ -1,0 +1,141 @@
+diff --git a/MediaBrowser.Providers/MediaInfo/SubtitleDownloader.cs b/MediaBrowser.Providers/MediaInfo/SubtitleDownloader.cs
+index 227f310255..b33f18cff5 100644
+--- a/MediaBrowser.Providers/MediaInfo/SubtitleDownloader.cs
++++ b/MediaBrowser.Providers/MediaInfo/SubtitleDownloader.cs
+@@ -14,6 +14,7 @@ using MediaBrowser.Controller.Entities.TV;
+ using MediaBrowser.Controller.Providers;
+ using MediaBrowser.Controller.Subtitles;
+ using MediaBrowser.Model.Entities;
++using MediaBrowser.Providers.Subtitles;
+ using Microsoft.Extensions.Logging;
+ 
+ namespace MediaBrowser.Providers.MediaInfo
+@@ -131,6 +132,25 @@ namespace MediaBrowser.Providers.MediaInfo
+             bool isAutomated,
+             CancellationToken cancellationToken)
+         {
++            // Automated downloads that would write beside media fail hard on read-only
++            // mounts and burn provider quota — skip before searching providers.
++            if (isAutomated)
++            {
++                var libraryOptions = BaseItem.LibraryManager.GetLibraryOptions(video);
++                if (libraryOptions.SaveSubtitlesWithMedia
++                    && !SubtitleMediaFolderWritability.CanWrite(video.ContainingFolderPath))
++                {
++                    if (SubtitleMediaFolderWritability.ShouldLogSkip(video.ContainingFolderPath))
++                    {
++                        _logger.LogWarning(
++                            "Skipping automated subtitle download for {Path}: media folder is not writable. Uncheck \"Save subtitles into media folders\" or remount the library read-write.",
++                            video.ContainingFolderPath);
++                    }
++
++                    return false;
++                }
++            }
++
+             // There's already subtitles for this language
+             if (mediaStreams.Any(i => i.Type == MediaStreamType.Subtitle && i.IsTextSubtitleStream && string.Equals(i.Language, language, StringComparison.OrdinalIgnoreCase)))
+             {
+diff --git a/MediaBrowser.Providers/Subtitles/SubtitleMediaFolderWritability.cs b/MediaBrowser.Providers/Subtitles/SubtitleMediaFolderWritability.cs
+new file mode 100644
+index 0000000000..9f8842a0f2
+--- /dev/null
++++ b/MediaBrowser.Providers/Subtitles/SubtitleMediaFolderWritability.cs
+@@ -0,0 +1,97 @@
++using System;
++using System.Collections.Concurrent;
++using System.IO;
++
++namespace MediaBrowser.Providers.Subtitles;
++
++/// <summary>
++/// Probes whether a media folder can accept subtitle files written beside media.
++/// Results are cached for the process lifetime so library scans do not hammer the filesystem.
++/// </summary>
++internal static class SubtitleMediaFolderWritability
++{
++    private static readonly ConcurrentDictionary<string, bool> WritableCache = new(StringComparer.Ordinal);
++    private static readonly ConcurrentDictionary<string, byte> LoggedFolders = new(StringComparer.Ordinal);
++
++    /// <summary>
++    /// Returns whether <paramref name="directoryPath"/> is writable for creating a new file.
++    /// Missing paths and access errors are treated as not writable.
++    /// </summary>
++    public static bool CanWrite(string? directoryPath)
++    {
++        if (string.IsNullOrWhiteSpace(directoryPath))
++        {
++            return false;
++        }
++
++        string fullPath;
++        try
++        {
++            fullPath = Path.GetFullPath(directoryPath);
++        }
++        catch (Exception)
++        {
++            return false;
++        }
++
++        return WritableCache.GetOrAdd(fullPath, ProbeWritable);
++    }
++
++    /// <summary>
++    /// Returns true the first time a non-writable folder should be logged, then false for subsequent calls.
++    /// </summary>
++    public static bool ShouldLogSkip(string? directoryPath)
++    {
++        if (string.IsNullOrWhiteSpace(directoryPath))
++        {
++            return false;
++        }
++
++        string fullPath;
++        try
++        {
++            fullPath = Path.GetFullPath(directoryPath);
++        }
++        catch (Exception)
++        {
++            return false;
++        }
++
++        return LoggedFolders.TryAdd(fullPath, 0);
++    }
++
++    private static bool ProbeWritable(string directoryPath)
++    {
++        if (!Directory.Exists(directoryPath))
++        {
++            return false;
++        }
++
++        var probePath = Path.Combine(directoryPath, $".jellyfin-write-probe-{Guid.NewGuid():N}");
++        try
++        {
++            using (var stream = new FileStream(probePath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose))
++            {
++                stream.WriteByte(0);
++            }
++
++            return true;
++        }
++        catch (Exception)
++        {
++            try
++            {
++                if (File.Exists(probePath))
++                {
++                    File.Delete(probePath);
++                }
++            }
++            catch
++            {
++                // Best-effort cleanup if DeleteOnClose did not run.
++            }
++
++            return false;
++        }
++    }
++}

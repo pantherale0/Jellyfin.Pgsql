@@ -12,6 +12,8 @@ namespace Jellyfin.Plugin.Pgsql.Query;
 /// <param name="ResumeCacheMisses">Resume cache misses.</param>
 /// <param name="NextUpCacheHits">NextUp cache hits.</param>
 /// <param name="NextUpCacheMisses">NextUp cache misses.</param>
+/// <param name="BrowseCacheHits">Library browse cache hits.</param>
+/// <param name="BrowseCacheMisses">Library browse cache misses.</param>
 /// <param name="RedisGetErrors">Redis get failures.</param>
 /// <param name="RedisSetErrors">Redis set failures.</param>
 /// <param name="OptimizedLatestRuns">Attempted optimized latest query runs.</param>
@@ -26,6 +28,8 @@ public sealed record QueryRuntimeStatsSnapshot(
     long ResumeCacheMisses,
     long NextUpCacheHits,
     long NextUpCacheMisses,
+    long BrowseCacheHits,
+    long BrowseCacheMisses,
     long RedisGetErrors,
     long RedisSetErrors,
     long OptimizedLatestRuns,

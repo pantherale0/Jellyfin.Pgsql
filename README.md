@@ -53,10 +53,11 @@ Images are built and published automatically on every push to `master`, when a r
 
 ## Query cache and optimisation (optional, experimental)
 
-The plugin can cache the home-screen queries (Latest and Resume rows) and replace Jellyfin's
-Latest queries with PostgreSQL-optimised versions (`DISTINCT ON` instead of nested `GROUP BY`
-subqueries). Both features are enabled by default, fail open (any error falls back to the
-standard Jellyfin queries), and are provided strictly as-is.
+The plugin can cache the home-screen queries (Latest and Resume rows), stable library
+browse `/Items` pages, and replace Jellyfin's Latest queries with PostgreSQL-optimised
+versions (`DISTINCT ON` instead of nested `GROUP BY` subqueries). Both features are enabled
+by default, fail open (any error falls back to the standard Jellyfin queries), and are
+provided strictly as-is.
 
 The cache stores only ordered item ID lists, keyed per user and per view, so results are never
 shared across users. With the default TTLs, newly added media can take up to two minutes to
@@ -69,6 +70,7 @@ appear in the Latest row.
 | `REDIS_CONNECTION_STRING` | empty | StackExchange.Redis connection string, e.g. `redis.databases.svc.cluster.local:6379` |
 | `Pgsql_CACHE_LATEST_TTL` | `120` | Latest cache TTL in seconds |
 | `Pgsql_CACHE_RESUME_TTL` | `30` | Resume cache TTL in seconds; `0` disables Resume caching |
+| `Pgsql_CACHE_BROWSE_TTL` | `60` | Library browse `/Items` page cache TTL in seconds; `0` disables browse caching |
 | `Pgsql_PG_OPTIMIZE_LATEST` | `true` | Master switch for PostgreSQL-optimised Latest queries |
 | `Pgsql_PG_OPTIMIZE_MOVIES_LATEST` | inherit | Per-type override for movies |
 | `Pgsql_PG_OPTIMIZE_TV_LATEST` | inherit | Per-type override for TV shows |
