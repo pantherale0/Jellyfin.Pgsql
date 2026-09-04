@@ -862,7 +862,7 @@ new file mode 100644
 index 0000000000..3b6a356bdd
 --- /dev/null
 +++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs
-@@ -0,0 +1,423 @@
+@@ -0,0 +1,431 @@
 +using System;
 +using System.Collections.Generic;
 +using System.Globalization;
@@ -1286,6 +1286,14 @@ index 0000000000..3b6a356bdd
 +        public string Codec { get; }
 +
 +        public StreamState State { get; }
++
++        public string PlaylistPath { get; }
++
++        public CancellationTokenSource CancellationTokenSource { get; }
++
++        public TranscodeAttemptResult Result { get; }
++    }
++}
 diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeFallbackNotifier.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeFallbackNotifier.cs
 new file mode 100644
 index 0000000000..60aa92989b
