@@ -45,9 +45,9 @@ index 60cf54af05..d3578c6876 100644
  import { playbackManager } from '../playback/playbackmanager';
 +import { getPlaybackErrorCodeFromHlsResponse } from '../playback/playbackErrorCode';
  import Hls from 'hls.js';
- import showChannelPicker, { escapeHtml } from './channelPickerModal';
- import './multiview.scss';
-@@ -342,7 +344,7 @@ class MultiviewManager {
+ import layoutManager from '../layoutManager';
+ import { isTvClient } from 'scripts/isTvClient';
+@@ -352,7 +354,7 @@ class MultiviewManager {
              } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
                  video.src = finalStreamUrl;
              } else {
@@ -56,7 +56,7 @@ index 60cf54af05..d3578c6876 100644
                  this.clearSlot(slotIndex);
                  return;
              }
-@@ -481,7 +483,14 @@ class MultiviewManager {
+@@ -491,7 +493,14 @@ class MultiviewManager {
                      this.setSlotChannel(slotIndex, item, null);
                  }, 500);
              } else {

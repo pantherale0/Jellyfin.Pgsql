@@ -1730,5 +1730,5 @@ index 1b3a50c637..444abd2a28 100644
 +    /// <summary>
 +    /// Gets or sets a value indicating whether a parallel codec race is active.
 +    /// </summary>
-+         public bool CodecRaceActive { get; set; }
++    public bool CodecRaceActive { get; set; }
  }
