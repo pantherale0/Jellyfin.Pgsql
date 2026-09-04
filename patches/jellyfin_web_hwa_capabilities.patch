@@ -318,7 +318,7 @@ index 7d03eeadf4..e0f72a8c78 100644
                                          }
                                      />
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 3dc4b5f57c..c2e719cff7 100755
+index 5d9d91dc05..d9d9fa5474 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
 @@ -750,6 +750,10 @@

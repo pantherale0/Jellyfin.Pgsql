@@ -1,5 +1,5 @@
 diff --git a/Emby.Server.Implementations/Library/LibraryManager.cs b/Emby.Server.Implementations/Library/LibraryManager.cs
-index dd8c883684..e718c245cc 100644
+index 3db8265f6e..cb21dc2277 100644
 --- a/Emby.Server.Implementations/Library/LibraryManager.cs
 +++ b/Emby.Server.Implementations/Library/LibraryManager.cs
 @@ -1237,6 +1237,70 @@ namespace Emby.Server.Implementations.Library
@@ -73,7 +73,7 @@ index dd8c883684..e718c245cc 100644
          public Guid GetGenreId(string name)
          {
              return GetItemByNameId<Genre>(Genre.GetPath(name));
-@@ -3748,14 +3812,20 @@ namespace Emby.Server.Implementations.Library
+@@ -3740,14 +3804,20 @@ namespace Emby.Server.Implementations.Library
  
          private async Task SavePeopleMetadataAsync(IEnumerable<PersonInfo> people, CancellationToken cancellationToken)
          {
@@ -403,7 +403,7 @@ index de112d7aa4..ff2dbd4fd6 100644
      public IReadOnlyList<Guid> GetManualLinkedParentIds(Guid childId, BaseItemKind? parentType = null)
      {
 diff --git a/MediaBrowser.Controller/Library/ILibraryManager.cs b/MediaBrowser.Controller/Library/ILibraryManager.cs
-index 2a6ea214b8..143f49b9f2 100644
+index c8cca1fa93..8ae002f462 100644
 --- a/MediaBrowser.Controller/Library/ILibraryManager.cs
 +++ b/MediaBrowser.Controller/Library/ILibraryManager.cs
 @@ -711,6 +711,12 @@ namespace MediaBrowser.Controller.Library

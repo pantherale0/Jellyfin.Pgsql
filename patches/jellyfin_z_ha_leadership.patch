@@ -368,7 +368,7 @@ index 4ec2c9c786..8bda08bc01 100644
          ScheduledTasks = ScheduledTasks.Concat(list).ToArray();
      }
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 5da633916a..414d4fb459 100644
+index 49d16fb615..af72e79874 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -59,6 +59,7 @@ namespace Emby.Server.Implementations.Session
@@ -405,7 +405,7 @@ index 5da633916a..414d4fb459 100644
          }
  
          /// <summary>
-@@ -1001,6 +1005,12 @@ namespace Emby.Server.Implementations.Session
+@@ -1004,6 +1008,12 @@ namespace Emby.Server.Implementations.Session
          {
              var data = _userDataManager.GetUserData(user, item);
  
@@ -418,7 +418,7 @@ index 5da633916a..414d4fb459 100644
              data.PlayCount++;
              data.LastPlayedDate = DateTime.UtcNow;
  
-@@ -1161,7 +1171,7 @@ namespace Emby.Server.Implementations.Session
+@@ -1164,7 +1174,7 @@ namespace Emby.Server.Implementations.Session
                  if (!forcePersist && positionTicks.HasValue
                      && !ShouldPersistPlaybackProgress(user.Id, item.Id, positionTicks.Value))
                  {
@@ -427,7 +427,7 @@ index 5da633916a..414d4fb459 100644
                  }
                  else
                  {
-@@ -1178,6 +1188,7 @@ namespace Emby.Server.Implementations.Session
+@@ -1181,6 +1191,7 @@ namespace Emby.Server.Implementations.Session
                      if (positionTicks.HasValue)
                      {
                          _lastProgressPersist[(user.Id, item.Id)] = (DateTime.UtcNow, positionTicks.Value);
@@ -435,7 +435,7 @@ index 5da633916a..414d4fb459 100644
                      }
                  }
              }
-@@ -2755,6 +2766,29 @@ namespace Emby.Server.Implementations.Session
+@@ -2826,6 +2837,29 @@ namespace Emby.Server.Implementations.Session
                  _logger.LogError(ex, "Error sending server shutdown notifications");
              }
  
@@ -1079,4 +1079,3 @@ index e9ad2ef30e..58f185cb09 100644
      private static EncodingJobInfo BuildState(
          MediaStream? subtitle,
          SubtitleDeliveryMethod? deliveryMethod,
-

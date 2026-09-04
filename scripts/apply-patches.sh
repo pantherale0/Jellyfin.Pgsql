@@ -68,8 +68,10 @@ patch_matches() {
 }
 
 if [ "$LIST_ONLY" = 1 ]; then
+    # LC_ALL=C: locale collation can put jellyfin_web_z_tv_ux_perf before
+    # jellyfin_web_z_tv_ux.patch (underscore before dot), breaking prerequisites.
     # shellcheck disable=SC2012
-    for patch_file in $(ls "$PATCHES_DIR"/*.patch 2>/dev/null | sort); do
+    for patch_file in $(ls "$PATCHES_DIR"/*.patch 2>/dev/null | LC_ALL=C sort); do
         base=$(basename "$patch_file")
         if patch_matches "$base"; then
             echo "$patch_file"
@@ -102,7 +104,7 @@ apply_patch() {
 
 found=0
 # shellcheck disable=SC2012
-for patch_file in $(ls "$PATCHES_DIR"/*.patch 2>/dev/null | sort); do
+for patch_file in $(ls "$PATCHES_DIR"/*.patch 2>/dev/null | LC_ALL=C sort); do
     base=$(basename "$patch_file")
     if patch_matches "$base"; then
         apply_patch "$patch_file"

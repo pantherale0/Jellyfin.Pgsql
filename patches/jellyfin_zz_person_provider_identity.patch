@@ -1,8 +1,8 @@
 diff --git a/Emby.Server.Implementations/Dto/DtoService.cs b/Emby.Server.Implementations/Dto/DtoService.cs
-index 6fa057702c..37dce20e54 100644
+index a2d3e14439..76d418d463 100644
 --- a/Emby.Server.Implementations/Dto/DtoService.cs
 +++ b/Emby.Server.Implementations/Dto/DtoService.cs
-@@ -827,60 +827,55 @@ namespace Emby.Server.Implementations.Dto
+@@ -832,60 +832,55 @@ namespace Emby.Server.Implementations.Dto
  
              var list = new List<BaseItemPerson>();
  
@@ -93,7 +93,7 @@ index 6fa057702c..37dce20e54 100644
  
              dto.People = list.ToArray();
 diff --git a/Emby.Server.Implementations/Library/LibraryManager.cs b/Emby.Server.Implementations/Library/LibraryManager.cs
-index e718c245cc..6296b317b7 100644
+index cb21dc2277..9946a2220a 100644
 --- a/Emby.Server.Implementations/Library/LibraryManager.cs
 +++ b/Emby.Server.Implementations/Library/LibraryManager.cs
 @@ -1222,6 +1222,53 @@ namespace Emby.Server.Implementations.Library
@@ -150,7 +150,7 @@ index e718c245cc..6296b317b7 100644
          /// <summary>
          /// Gets the studio.
          /// </summary>
-@@ -3617,7 +3664,7 @@ namespace Emby.Server.Implementations.Library
+@@ -3609,7 +3656,7 @@ namespace Emby.Server.Implementations.Library
                  {
                      try
                      {
@@ -159,7 +159,7 @@ index e718c245cc..6296b317b7 100644
                      }
                      catch (Exception ex)
                      {
-@@ -3628,6 +3675,7 @@ namespace Emby.Server.Implementations.Library
+@@ -3620,6 +3667,7 @@ namespace Emby.Server.Implementations.Library
                  .Where(i => i is not null)
                  .Where(i => query.User is null || i!.IsVisible(query.User))
                  .OfType<BaseItem>()
@@ -167,7 +167,7 @@ index e718c245cc..6296b317b7 100644
                  .ToList()
                  .AsReadOnly();
  
-@@ -3813,7 +3861,6 @@ namespace Emby.Server.Implementations.Library
+@@ -3805,7 +3853,6 @@ namespace Emby.Server.Implementations.Library
          private async Task SavePeopleMetadataAsync(IEnumerable<PersonInfo> people, CancellationToken cancellationToken)
          {
              var peopleList = people.ToList();
@@ -175,7 +175,7 @@ index e718c245cc..6296b317b7 100644
  
              foreach (var person in peopleList)
              {
-@@ -3822,16 +3869,14 @@ namespace Emby.Server.Implementations.Library
+@@ -3814,16 +3861,14 @@ namespace Emby.Server.Implementations.Library
                  var itemUpdateType = ItemUpdateType.MetadataDownload;
                  var saveEntity = false;
                  var createEntity = false;
@@ -195,7 +195,7 @@ index e718c245cc..6296b317b7 100644
                          var info = Directory.CreateDirectory(path);
                          personEntity = new Person()
                          {
-@@ -3855,11 +3900,22 @@ namespace Emby.Server.Implementations.Library
+@@ -3847,11 +3892,22 @@ namespace Emby.Server.Implementations.Library
  
                  foreach (var id in person.ProviderIds)
                  {
@@ -255,10 +255,10 @@ index 8e50347584..bb159a69b4 100644
                  }
  
 diff --git a/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs b/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs
-index afb27ddf9e..b5491cbc74 100644
+index 42835d7ad0..ac48510809 100644
 --- a/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs
 +++ b/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs
-@@ -106,51 +106,68 @@ public class PeopleValidationTask : IScheduledTask, IConfigurableScheduledTask
+@@ -106,53 +106,70 @@ public class PeopleValidationTask : IScheduledTask, IConfigurableScheduledTask
          await using (context.ConfigureAwait(false))
          {
              IProgress<double> subProgress = new Progress<double>((val) => progress.Report(val / 3));
@@ -275,6 +275,8 @@ index afb27ddf9e..b5491cbc74 100644
 +                    .Where(e => e.ProviderKey == null || e.ProviderKey == string.Empty)
                      .GroupBy(e => new { e.Name, e.PersonType })
                      .Where(e => e.Count() > 1)
+                     .OrderBy(e => e.Key.Name)
+                     .ThenBy(e => e.Key.PersonType)
                      .Select(e => e.Select(f => f.Id).ToArray());
  
 -            var total = dupQuery.Count();
@@ -363,7 +365,7 @@ index afb27ddf9e..b5491cbc74 100644
                  .Where(p => !context.PeopleBaseItemMap.Any(m => m.PeopleId.Equals(p.Id)))
                  .ExecuteDeleteAsync(cancellationToken)
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-index 791ea127fc..7f55605e45 100644
+index ceb295d37a..b498dce4da 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 @@ -443,15 +443,33 @@ public sealed partial class BaseItemRepository
@@ -1261,7 +1263,7 @@ index b53210b0b1..3d6cee96b5 100644
  
      /// <summary>
 diff --git a/MediaBrowser.Controller/Library/ILibraryManager.cs b/MediaBrowser.Controller/Library/ILibraryManager.cs
-index 143f49b9f2..abe9bc25f2 100644
+index 8ae002f462..4a6a5de199 100644
 --- a/MediaBrowser.Controller/Library/ILibraryManager.cs
 +++ b/MediaBrowser.Controller/Library/ILibraryManager.cs
 @@ -106,6 +106,13 @@ namespace MediaBrowser.Controller.Library

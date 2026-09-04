@@ -1,5 +1,5 @@
 diff --git a/src/components/htmlMediaHelper.js b/src/components/htmlMediaHelper.js
-index bcdc285bbf..0294c27ceb 100644
+index bcdc285bbf..1cc9481069 100644
 --- a/src/components/htmlMediaHelper.js
 +++ b/src/components/htmlMediaHelper.js
 @@ -2,6 +2,7 @@ import appSettings from '../scripts/settings/appSettings' ;
@@ -35,7 +35,7 @@ index bcdc285bbf..0294c27ceb 100644
  
              return;
 diff --git a/src/components/multiview/multiviewManager.js b/src/components/multiview/multiviewManager.js
-index 60cf54af05..4e7f7c313c 100644
+index 60cf54af05..d3578c6876 100644
 --- a/src/components/multiview/multiviewManager.js
 +++ b/src/components/multiview/multiviewManager.js
 @@ -1,6 +1,8 @@
@@ -74,7 +74,7 @@ index 60cf54af05..4e7f7c313c 100644
          });
 diff --git a/src/components/playback/playbackError.ts b/src/components/playback/playbackError.ts
 new file mode 100644
-index 0000000000..27b595b369
+index 0000000000..36caae3bad
 --- /dev/null
 +++ b/src/components/playback/playbackError.ts
 @@ -0,0 +1,192 @@
@@ -272,7 +272,7 @@ index 0000000000..27b595b369
 +export { getPlaybackErrorCodeFromHlsResponse } from './playbackErrorCode';
 diff --git a/src/components/playback/playbackErrorCode.ts b/src/components/playback/playbackErrorCode.ts
 new file mode 100644
-index 0000000000..c4e8f1a2b1
+index 0000000000..065a39254d
 --- /dev/null
 +++ b/src/components/playback/playbackErrorCode.ts
 @@ -0,0 +1,15 @@
@@ -292,7 +292,7 @@ index 0000000000..c4e8f1a2b1
 +    return record['x-playback-error-code'] || record['X-Playback-Error-Code'] || null;
 +}
 diff --git a/src/components/playback/playbackmanager.js b/src/components/playback/playbackmanager.js
-index e54994fe08..399dd2ed34 100644
+index e54994fe08..94477a82ca 100644
 --- a/src/components/playback/playbackmanager.js
 +++ b/src/components/playback/playbackmanager.js
 @@ -34,6 +34,7 @@ import { OutboundWebSocketMessageType } from '@jellyfin/sdk/lib/websocket';
@@ -372,7 +372,7 @@ index e54994fe08..399dd2ed34 100644
      });
  }
  
-@@ -2362,6 +2396,9 @@ export class PlaybackManager {
+@@ -2362,6 +2401,9 @@ export class PlaybackManager {
          }
  
          function playInternal(item, playOptions, onPlaybackStartedFn, prevSource) {
@@ -382,7 +382,7 @@ index e54994fe08..399dd2ed34 100644
              if (item.IsPlaceHolder) {
                  loading.hide();
                  showPlaybackInfoErrorMessage(self, 'PlaybackErrorPlaceHolder');
-@@ -2415,19 +2452,33 @@ export class PlaybackManager {
+@@ -2415,19 +2457,33 @@ export class PlaybackManager {
          function onPlaybackRejection(e) {
              cancelPlayback();
  
@@ -425,7 +425,7 @@ index e54994fe08..399dd2ed34 100644
          }
  
          function destroyPlayer(player) {
-@@ -3506,7 +3557,11 @@ export class PlaybackManager {
+@@ -3506,7 +3562,11 @@ export class PlaybackManager {
              }
  
              if (errorOccurred) {
@@ -439,7 +439,7 @@ index e54994fe08..399dd2ed34 100644
                  const apiClient = ServerConnections.getApiClient(nextItem.item.ServerId);
  
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index b359ae80c6..5581b92f22 100755
+index eb4dbe6378..5ded8735ab 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
 @@ -131,6 +131,8 @@
@@ -459,7 +459,7 @@ index b359ae80c6..5581b92f22 100755
      "HeaderPlaybackError": "Playback Error",
      "HeaderPlaybackStatistics": "Playback statistics",
      "HeaderTasteModels": "Taste models",
-@@ -1466,17 +1469,59 @@
+@@ -1467,17 +1470,59 @@
      "Play": "Play",
      "PlayAllFromHere": "Play all from here",
      "PlaybackData": "Playback Info",
@@ -530,4 +530,3 @@ index b359ae80c6..5581b92f22 100755
      "PlaybackErrorPlaceHolder": "This is a placeholder for physical media that Jellyfin cannot play. Please insert the disc to play.",
      "PlaybackRate": "Playback Speed",
      "PlaybackStatsEmpty": "No playback statistics recorded yet.",
-

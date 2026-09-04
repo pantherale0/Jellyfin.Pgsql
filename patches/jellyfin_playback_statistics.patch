@@ -1,5 +1,5 @@
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 732b4f2c34..c8dd52e056 100644
+index 53f711ab14..b740e645bf 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -11,6 +11,7 @@ using Jellyfin.Data;
@@ -70,7 +70,7 @@ index 732b4f2c34..c8dd52e056 100644
          }
  
          /// <summary>
-@@ -924,6 +938,18 @@ namespace Emby.Server.Implementations.Session
+@@ -927,6 +941,18 @@ namespace Emby.Server.Implementations.Session
                  UpdateLiveStreamActiveSessionMappings(info.LiveStreamId, info.SessionId, info.PlaySessionId);
              }
  
@@ -89,7 +89,7 @@ index 732b4f2c34..c8dd52e056 100644
              var eventArgs = new PlaybackStartEventArgs
              {
                  Item = libraryItem,
-@@ -1059,6 +1085,20 @@ namespace Emby.Server.Implementations.Session
+@@ -1062,6 +1088,20 @@ namespace Emby.Server.Implementations.Session
                  UpdateLiveStreamActiveSessionMappings(info.LiveStreamId, info.SessionId, info.PlaySessionId);
              }
  
@@ -110,7 +110,7 @@ index 732b4f2c34..c8dd52e056 100644
              var eventArgs = new PlaybackProgressEventArgs
              {
                  Item = libraryItem,
-@@ -1304,6 +1344,89 @@ namespace Emby.Server.Implementations.Session
+@@ -1307,6 +1347,89 @@ namespace Emby.Server.Implementations.Session
                  {
                      playedToCompletion = OnPlaybackStopped(user, progressItem, info.PositionTicks, info.Failed);
                  }
@@ -200,7 +200,7 @@ index 732b4f2c34..c8dd52e056 100644
              }
  
              if (!string.IsNullOrEmpty(info.LiveStreamId))
-@@ -1335,6 +1458,253 @@ namespace Emby.Server.Implementations.Session
+@@ -1338,6 +1461,253 @@ namespace Emby.Server.Implementations.Session
              EventHelper.QueueEventIfNotNull(PlaybackStopped, this, eventArgs, _logger);
          }
  
@@ -454,7 +454,7 @@ index 732b4f2c34..c8dd52e056 100644
          private bool OnPlaybackStopped(User user, BaseItem item, long? positionTicks, bool playbackFailed)
          {
              if (playbackFailed)
-@@ -2370,5 +2740,94 @@ namespace Emby.Server.Implementations.Session
+@@ -2441,5 +2811,94 @@ namespace Emby.Server.Implementations.Session
              _activeConnections.Clear();
              _activeLiveStreamSessions.Clear();
          }
@@ -1770,17 +1770,18 @@ index b0c12bf592..0388e09077 100644
  
      public DbSet<Book> Books => Set<Book>();
 diff --git a/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs b/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
-index a5a67046d1..3a971a163d 100644
+index f803c69af2..c8982e5dd9 100644
 --- a/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
 +++ b/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
-@@ -1,5 +1,6 @@
- using System;
+@@ -2,6 +2,7 @@ using System;
+ using System.Threading;
  using System.Threading.Tasks;
+ using Jellyfin.Data;
 +using Jellyfin.Database.Implementations;
  using Jellyfin.Database.Implementations.Entities;
+ using Jellyfin.Database.Implementations.Enums;
  using MediaBrowser.Controller;
- using MediaBrowser.Controller.Configuration;
-@@ -36,7 +37,8 @@ public class SessionManagerTests
+@@ -41,7 +42,8 @@ public class SessionManagerTests
              Mock.Of<IServerApplicationHost>(),
              Mock.Of<IDeviceManager>(),
              Mock.Of<IMediaSourceManager>(),
@@ -1790,7 +1791,7 @@ index a5a67046d1..3a971a163d 100644
  
          await Assert.ThrowsAsync(exceptionType, () => sessionManager.GetAuthorizationToken(
              new User("test", "default", "default"),
-@@ -63,7 +65,8 @@ public class SessionManagerTests
+@@ -68,7 +70,8 @@ public class SessionManagerTests
              Mock.Of<IServerApplicationHost>(),
              Mock.Of<IDeviceManager>(),
              Mock.Of<IMediaSourceManager>(),
@@ -1800,3 +1801,13 @@ index a5a67046d1..3a971a163d 100644
  
          await Assert.ThrowsAsync(exceptionType, () => sessionManager.AuthenticateNewSessionInternal(authenticationRequest, false));
      }
+@@ -238,7 +241,8 @@ public class SessionManagerTests
+             Mock.Of<IServerApplicationHost>(),
+             Mock.Of<IDeviceManager>(),
+             Mock.Of<IMediaSourceManager>(),
+-            Mock.Of<IHostApplicationLifetime>());
++            Mock.Of<IHostApplicationLifetime>(),
++            Mock.Of<IDbContextFactory<JellyfinDbContext>>());
+     }
+ 
+     // All sessions are logged with the same client and device id on purpose, those values are taken

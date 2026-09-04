@@ -1,8 +1,8 @@
 diff --git a/src/index.html b/src/index.html
-index 5d5009bdce..4635e4b994 100644
+index cf9c21ce16..937cf3af4d 100644
 --- a/src/index.html
 +++ b/src/index.html
-@@ -89,5 +89,12 @@
+@@ -90,5 +90,12 @@
      <div id="reactRoot">
          <div class="splashLogo"></div>
      </div>

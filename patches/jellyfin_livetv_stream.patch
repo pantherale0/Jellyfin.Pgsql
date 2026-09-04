@@ -504,7 +504,7 @@ index 97e00177b6..97801ddb6b 100644
          }
      }
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index f4aa0ad03a..a9ce2af779 100644
+index 94215bed79..c5d1c5eb2b 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -317,10 +317,56 @@ namespace Emby.Server.Implementations.Session
@@ -564,7 +564,7 @@ index f4aa0ad03a..a9ce2af779 100644
          /// <inheritdoc />
          public async Task CloseLiveStreamIfNeededAsync(string liveStreamId, string sessionIdOrPlaySessionId)
          {
-@@ -605,14 +651,9 @@ namespace Emby.Server.Implementations.Session
+@@ -608,14 +654,9 @@ namespace Emby.Server.Implementations.Session
          {
              _idleTimer ??= new Timer(CheckForIdlePlayback, null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
  
@@ -582,7 +582,7 @@ index f4aa0ad03a..a9ce2af779 100644
          }
  
          private void StopIdleCheckTimer()
-@@ -668,46 +709,123 @@ namespace Emby.Server.Implementations.Session
+@@ -671,46 +712,123 @@ namespace Emby.Server.Implementations.Session
              {
                  StopIdleCheckTimer();
              }
@@ -729,7 +729,7 @@ index f4aa0ad03a..a9ce2af779 100644
          private BaseItem GetNowPlayingItem(SessionInfo session, Guid itemId)
          {
              if (session is null)
-@@ -1065,6 +1183,10 @@ namespace Emby.Server.Implementations.Session
+@@ -1068,6 +1186,10 @@ namespace Emby.Server.Implementations.Session
                  {
                      await CloseLiveStreamIfNeededAsync(info.LiveStreamId, session.Id).ConfigureAwait(false);
                  }
@@ -740,7 +740,7 @@ index f4aa0ad03a..a9ce2af779 100644
  
                  throw new ArgumentOutOfRangeException(nameof(info), "The PlaybackStopInfo's PositionTicks was negative.");
              }
-@@ -1138,6 +1260,10 @@ namespace Emby.Server.Implementations.Session
+@@ -1141,6 +1263,10 @@ namespace Emby.Server.Implementations.Session
              {
                  await CloseLiveStreamIfNeededAsync(info.LiveStreamId, session.Id).ConfigureAwait(false);
              }

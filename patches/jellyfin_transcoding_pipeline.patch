@@ -11,7 +11,7 @@ index e6e3d645fe..242866ab5c 100644
              serviceCollection.AddSingleton<ITranscodeManager, TranscodeManager>();
              serviceCollection.AddScoped<MediaInfoHelper>();
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index c8dd52e056..5da633916a 100644
+index b740e645bf..49d16fb615 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -30,6 +30,7 @@ using MediaBrowser.Controller.Events.Authentication;
@@ -56,7 +56,7 @@ index c8dd52e056..5da633916a 100644
          }
  
          /// <summary>
-@@ -2618,12 +2623,31 @@ namespace Emby.Server.Implementations.Session
+@@ -2689,12 +2694,31 @@ namespace Emby.Server.Implementations.Session
  
              if (!userIsAdmin)
              {
@@ -2028,18 +2028,18 @@ index 0000000000..2a05a1cf44
 +    }
 +}
 diff --git a/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs b/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
-index 3a971a163d..a6ca2fccab 100644
+index c8982e5dd9..ec9f04c37e 100644
 --- a/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
 +++ b/tests/Jellyfin.Server.Implementations.Tests/SessionManager/SessionManagerTests.cs
-@@ -9,6 +9,7 @@ using MediaBrowser.Controller.Drawing;
+@@ -12,6 +12,7 @@ using MediaBrowser.Controller.Drawing;
  using MediaBrowser.Controller.Dto;
  using MediaBrowser.Controller.Events;
  using MediaBrowser.Controller.Library;
 +using MediaBrowser.Controller.MediaEncoding;
+ using MediaBrowser.Controller.Net;
  using MediaBrowser.Controller.Session;
- using Microsoft.Extensions.Hosting;
- using Microsoft.Extensions.Logging.Abstractions;
-@@ -38,7 +39,8 @@ public class SessionManagerTests
+ using MediaBrowser.Model.Session;
+@@ -43,7 +44,8 @@ public class SessionManagerTests
              Mock.Of<IDeviceManager>(),
              Mock.Of<IMediaSourceManager>(),
              Mock.Of<IHostApplicationLifetime>(),
@@ -2049,7 +2049,7 @@ index 3a971a163d..a6ca2fccab 100644
  
          await Assert.ThrowsAsync(exceptionType, () => sessionManager.GetAuthorizationToken(
              new User("test", "default", "default"),
-@@ -66,7 +68,8 @@ public class SessionManagerTests
+@@ -71,7 +73,8 @@ public class SessionManagerTests
              Mock.Of<IDeviceManager>(),
              Mock.Of<IMediaSourceManager>(),
              Mock.Of<IHostApplicationLifetime>(),
@@ -2059,3 +2059,13 @@ index 3a971a163d..a6ca2fccab 100644
  
          await Assert.ThrowsAsync(exceptionType, () => sessionManager.AuthenticateNewSessionInternal(authenticationRequest, false));
      }
+@@ -242,7 +245,8 @@ public class SessionManagerTests
+             Mock.Of<IDeviceManager>(),
+             Mock.Of<IMediaSourceManager>(),
+             Mock.Of<IHostApplicationLifetime>(),
+-            Mock.Of<IDbContextFactory<JellyfinDbContext>>());
++            Mock.Of<IDbContextFactory<JellyfinDbContext>>(),
++            Mock.Of<ITranscodingPipelineProbe>());
+     }
+ 
+     // All sessions are logged with the same client and device id on purpose, those values are taken

@@ -1,4 +1,4 @@
-ARG JELLYFIN_VERSION=12.0-rc6
+ARG JELLYFIN_VERSION=12.0-rc7
 
 # Web build stage
 FROM node:24-alpine AS web-build

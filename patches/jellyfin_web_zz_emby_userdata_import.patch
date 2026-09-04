@@ -855,7 +855,7 @@ index 17708f4cac..226df0303c 100644
                          </div>
  
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index eda65645a6..1444fa5d44 100755
+index 540f41f688..0573866741 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
 @@ -605,6 +605,7 @@
@@ -866,7 +866,7 @@ index eda65645a6..1444fa5d44 100755
      "HeaderUserAdminMerge": "Merge users",
      "HeaderUsers": "Users",
      "HeaderVideoAdvanced": "Video Advanced",
-@@ -1501,6 +1502,35 @@
+@@ -1508,6 +1509,35 @@
      "UserAdminModeMerge": "Full merge (delete source)",
      "UserAdminModeMoveUserData": "Move UserData only",
      "UserAdminPreview": "Preview",
