@@ -91,10 +91,10 @@ index 4fbce2fcf4..98acab60b6 100644
                                  <>
                                      <FormControl>
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 0f03b3994f..b359ae80c6 100755
+index 57b81a287d..fa294d074e 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -949,6 +949,12 @@
+@@ -945,6 +945,12 @@
      "LabelQuickConnectCode": "Quick Connect code",
      "LabelReasonForTranscoding": "Reason for transcoding",
      "LabelTranscodingPipeline": "Transcoding pipeline",
@@ -107,4 +107,3 @@ index 0f03b3994f..b359ae80c6 100755
      "LabelTranscodingSpeed": "Speed",
      "LabelTranscodingThrottled": "Throttled",
      "LabelBytesTranscoded": "Bytes transcoded",
-

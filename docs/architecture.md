@@ -29,7 +29,7 @@ Agent-oriented rules (never commit submodule dirt, auth checklist, JSON casing) 
 
 **Web is matched first.** A name starting with `jellyfin_web` is never applied to core.
 
-Patches are applied in **lexicographic order** (`ls | sort`). Prefixes encode layering:
+Patches are applied in **byte-order lexicographic order** (`LC_ALL=C sort`). Locale collation must not be used: under `en_GB`/`en_US`, underscore can sort before dot, so `jellyfin_web_z_tv_ux_perf.patch` would run before `jellyfin_web_z_tv_ux.patch` and break prerequisites. Prefixes encode layering:
 
 - Unprefixed thematic names apply in alphabetical order among themselves.
 - `jellyfin_z_*` / `jellyfin_web_z_*` run late so they can edit files already touched by earlier patches (HA leadership, Live TV RBAC allowlist, taste impressions).
@@ -41,7 +41,7 @@ Some patches document explicit prerequisites in a `#` preamble when apply order 
 When bumping Jellyfin tags, do **not** hand-edit hunk line numbers. Replay the series:
 
 ```bash
-./scripts/rebase-patches.sh --from v12.0-rc5 --to v12.0-rc6
+./scripts/rebase-patches.sh --from v12.0-rc6 --to v12.0-rc7
 ```
 
 That applies each patch as a commit on `--from`, `git rebase --onto` the new tag, and writes updated `patches/*.patch` files. Hunks that only fail because surrounding lines moved are merged automatically. Remaining **content** conflicts are reported (patch name + files) and must be resolved with `export-patch.sh`. SQLite `*ModelSnapshot.cs` conflicts are skipped by keeping the new upstream snapshot (this fork’s schema lives in plugin migrations). `sync-jellyfin-migrations.sh` runs this automatically when the target tag differs from [`.github/jellyfin-sync-state.json`](../.github/jellyfin-sync-state.json).

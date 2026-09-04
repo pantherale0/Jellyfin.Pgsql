@@ -52,8 +52,8 @@ It performs the following steps automatically:
 When bumping Jellyfin versions, rebase the whole series instead of editing hunks by hand:
 
 ```bash
-./scripts/rebase-patches.sh --from v12.0-rc5 --to v12.0-rc6
-./scripts/sync-jellyfin-migrations.sh --version 12.0-rc6
+./scripts/rebase-patches.sh --from v12.0-rc6 --to v12.0-rc7
+./scripts/sync-jellyfin-migrations.sh --version 12.0-rc7
 ```
 
 ### 3. Do not build Docker automatically

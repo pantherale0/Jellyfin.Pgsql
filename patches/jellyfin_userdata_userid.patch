@@ -21,7 +21,7 @@ index be435d79e3..26995e8489 100644
          if (user is null)
          {
 diff --git a/Jellyfin.Api/Helpers/RequestHelpers.cs b/Jellyfin.Api/Helpers/RequestHelpers.cs
-index d14c3a9343..166bb418c0 100644
+index 4c5ed16015..3484b3cb08 100644
 --- a/Jellyfin.Api/Helpers/RequestHelpers.cs
 +++ b/Jellyfin.Api/Helpers/RequestHelpers.cs
 @@ -1,5 +1,6 @@

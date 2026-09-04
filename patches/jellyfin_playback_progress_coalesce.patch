@@ -1,5 +1,5 @@
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index a9ce2af779..732b4f2c34 100644
+index c5d1c5eb2b..53f711ab14 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -48,6 +48,10 @@ namespace Emby.Server.Implementations.Session
@@ -26,7 +26,7 @@ index a9ce2af779..732b4f2c34 100644
          private Timer _idleTimer;
          private Timer _inactiveTimer;
  
-@@ -1099,14 +1109,31 @@ namespace Emby.Server.Implementations.Session
+@@ -1102,14 +1112,31 @@ namespace Emby.Server.Implementations.Session
  
              if (changed)
              {
@@ -65,7 +65,7 @@ index a9ce2af779..732b4f2c34 100644
                  }
              }
  
-@@ -1117,6 +1144,29 @@ namespace Emby.Server.Implementations.Session
+@@ -1120,6 +1147,29 @@ namespace Emby.Server.Implementations.Session
              }
          }
  
@@ -95,7 +95,7 @@ index a9ce2af779..732b4f2c34 100644
          private static bool UpdatePlaybackSettings(User user, PlaybackProgressInfo info, UserItemData data)
          {
              var changed = false;
-@@ -1317,6 +1367,8 @@ namespace Emby.Server.Implementations.Session
+@@ -1320,6 +1370,8 @@ namespace Emby.Server.Implementations.Session
                  playedVideo.PropagatePlayedState(user, true);
              }
  

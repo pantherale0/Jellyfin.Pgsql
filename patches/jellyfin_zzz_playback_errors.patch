@@ -234,7 +234,7 @@ index 0000000000..f0a4b267bf
 +    }
 +}
 diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs
-index 5af1bd2d60..a8567462f2 100644
+index 3b6a356bdd..e6e6ebb9b9 100644
 --- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs
 +++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs
 @@ -12,6 +12,7 @@ using MediaBrowser.Controller.Configuration;
@@ -254,7 +254,7 @@ index 5af1bd2d60..a8567462f2 100644
          }
  
          string? previousCodec = null;
-@@ -340,7 +341,7 @@ public sealed class TranscodeCodecRaceCoordinator : ITranscodeCodecRaceCoordinat
+@@ -348,7 +349,7 @@ public sealed class TranscodeCodecRaceCoordinator : ITranscodeCodecRaceCoordinat
              context.ItemId,
              attempted).ConfigureAwait(false);
  
@@ -264,10 +264,10 @@ index 5af1bd2d60..a8567462f2 100644
  
      private static void ApplyFallbackMetadata(
 diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
-index d3a4a5b206..ba411bc919 100644
+index 3f187a7417..182891924d 100644
 --- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
 +++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
-@@ -449,7 +449,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+@@ -456,7 +456,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
  
          if (!attempt.Succeeded || attempt.Job is null)
          {
@@ -276,7 +276,7 @@ index d3a4a5b206..ba411bc919 100644
          }
  
          return attempt.Job;
-@@ -478,7 +478,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+@@ -485,7 +485,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
              {
                  OnTranscodeFailedToStart(outputPath, transcodingJobType, state);
  
@@ -356,4 +356,3 @@ index 32971b108f..b4ea5b01f9 100644
 +        public string? Message { get; set; }
      }
  }
-

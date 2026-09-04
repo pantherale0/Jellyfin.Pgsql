@@ -52,7 +52,7 @@ diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbC
 index 0ee2a81c21..ab74048c66 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinDbContext.cs
-@@ -191,6 +191,11 @@ public class JellyfinDbContext(DbContextOptions<JellyfinDbContext> options, ILog
+@@ -193,6 +193,11 @@ public class JellyfinDbContext(DbContextOptions<JellyfinDbContext> options, ILog
      /// </summary>
      public DbSet<TasteModelEvalRun> TasteModelEvalRuns => Set<TasteModelEvalRun>();
  

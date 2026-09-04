@@ -697,7 +697,7 @@ index 0000000000..3fa79b4ea2
 +
 +Component.displayName = 'TasteModelsPage';
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 6c8fb65f56..9198f995a6 100755
+index dbc8fa4a27..57b81a287d 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
 @@ -539,6 +539,7 @@
@@ -708,7 +708,7 @@ index 6c8fb65f56..9198f995a6 100755
      "HeaderPlayOn": "Play On",
      "HeaderPleaseSignIn": "Please sign in",
      "HeaderPortRanges": "Firewall and Proxy Settings",
-@@ -1719,6 +1720,44 @@
+@@ -1720,6 +1721,44 @@
      "TableOfContents": "Table of Contents",
      "Tags": "Tags",
      "TagsValue": "Tags: {0}",

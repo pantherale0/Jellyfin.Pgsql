@@ -1386,10 +1386,10 @@ index b515e76fbc..d8a53a2769 100644
  export const enableNextVideoInfoOverlay = currentSettings.enableNextVideoInfoOverlay.bind(currentSettings);
  export const enableVideoRemainingTime = currentSettings.enableVideoRemainingTime.bind(currentSettings);
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index 1444fa5d44..0f03b3994f 100755
+index 0573866741..eb4dbe6378 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
-@@ -1352,6 +1352,10 @@
+@@ -1359,6 +1359,10 @@
      "Option3D": "3D",
      "OptionAllowAudioPlaybackTranscoding": "Allow audio playback that requires transcoding",
      "OptionAllowBrowsingLiveTv": "Allow Live TV access",

@@ -139,7 +139,7 @@ index 542f9eab94..5ded3eed9f 100644
      /// Builds a filter expression for max parental rating that handles both rated items
      /// and unrated BoxSets/Playlists (which check linked children's ratings).
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-index 57833664b0..791ea127fc 100644
+index c82dd27398..ceb295d37a 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 @@ -10,13 +10,16 @@ using System.Collections.Generic;
@@ -176,7 +176,7 @@ index 57833664b0..791ea127fc 100644
  
              if (minParentalRatingFilter != null && maxParentalRatingFilter != null)
              {
-@@ -1142,18 +1153,36 @@ public sealed partial class BaseItemRepository
+@@ -1148,18 +1159,36 @@ public sealed partial class BaseItemRepository
              var allowedTagItemIds = context.ItemValuesMap
                  .Where(f => f.ItemValue.Type == ItemValueType.Tags && includeTags.Contains(f.ItemValue.CleanValue))
                  .Select(f => f.ItemId);

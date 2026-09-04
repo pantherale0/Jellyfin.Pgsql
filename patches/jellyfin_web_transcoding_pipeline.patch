@@ -425,7 +425,7 @@ index 0000000000..0bb08cf31f
 +    return info as TranscodingInfoExtensions;
 +};
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index c0cb5e4c5e..86c335dbee 100755
+index 08b22bae0b..2ca5766d8e 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
 @@ -939,6 +939,13 @@

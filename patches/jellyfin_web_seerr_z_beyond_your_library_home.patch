@@ -457,7 +457,7 @@ index 0c03c483f2..4f670101e3 100644
  
  // NOTE: This needs to match the server defaults
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
-index b17d5145fa..c0cb5e4c5e 100755
+index 8d713e47dc..08b22bae0b 100755
 --- a/src/strings/en-us.json
 +++ b/src/strings/en-us.json
 @@ -475,6 +475,9 @@

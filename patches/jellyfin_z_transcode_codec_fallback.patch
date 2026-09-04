@@ -1,8 +1,8 @@
 diff --git a/Emby.Server.Implementations/ApplicationHost.cs b/Emby.Server.Implementations/ApplicationHost.cs
-index b31c3e36e8..d1d769b5ac 100644
+index b31c3e36e8..df1a67b769 100644
 --- a/Emby.Server.Implementations/ApplicationHost.cs
 +++ b/Emby.Server.Implementations/ApplicationHost.cs
-@@ -632,5 +632,9 @@ namespace Emby.Server.Implementations
+@@ -636,6 +636,10 @@ namespace Emby.Server.Implementations
              serviceCollection.AddSingleton<IAttachmentExtractor, MediaBrowser.MediaEncoding.Attachments.AttachmentExtractor>();
              serviceCollection.AddSingleton<ITranscodingPipelineProbe, MediaBrowser.MediaEncoding.Transcoding.TranscodingPipelineProbe>();
  
@@ -12,8 +12,9 @@ index b31c3e36e8..d1d769b5ac 100644
 +
              serviceCollection.AddSingleton<ITranscodeManager, TranscodeManager>();
              serviceCollection.AddScoped<MediaInfoHelper>();
+             serviceCollection.AddScoped<AudioHelper>();
 diff --git a/Jellyfin.Api/Controllers/DynamicHlsController.cs b/Jellyfin.Api/Controllers/DynamicHlsController.cs
-index fd54aa797f..7c5a039d13 100644
+index fd54aa797f..56043d553c 100644
 --- a/Jellyfin.Api/Controllers/DynamicHlsController.cs
 +++ b/Jellyfin.Api/Controllers/DynamicHlsController.cs
 @@ -15,12 +15,14 @@ using Jellyfin.Api.Models.StreamingDtos;
@@ -858,7 +859,7 @@ index 0000000000..de5c0a16dd
 +}
 diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs
 new file mode 100644
-index 0000000000..5af1bd2d60
+index 0000000000..3b6a356bdd
 --- /dev/null
 +++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs
 @@ -0,0 +1,423 @@
@@ -1285,14 +1286,6 @@ index 0000000000..5af1bd2d60
 +        public string Codec { get; }
 +
 +        public StreamState State { get; }
-+
-+        public string PlaylistPath { get; }
-+
-+        public CancellationTokenSource CancellationTokenSource { get; }
-+
-+        public TranscodeAttemptResult Result { get; }
-+    }
-+}
 diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeFallbackNotifier.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeFallbackNotifier.cs
 new file mode 100644
 index 0000000000..60aa92989b
@@ -1485,10 +1478,10 @@ index 0000000000..60aa92989b
 +    }
 +}
 diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
-index 7217677013..0ae00e7468 100644
+index 7217677013..3f187a7417 100644
 --- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
 +++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
-@@ -244,12 +244,19 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+@@ -241,11 +241,18 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
          {
              _activeTranscodingJobs.Remove(job);
  
@@ -1509,8 +1502,7 @@ index 7217677013..0ae00e7468 100644
              }
          }
  
-         job.Stop();
-@@ -407,7 +407,10 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+@@ -419,7 +426,10 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
                  IsThrottled = job?.TranscodingThrottler?.IsThrottled == true,
                  SubtitleCodec = state.SubtitleStream?.Codec,
                  SubtitleDeliveryMethod = state.SubtitleStream is null ? null : state.SubtitleDeliveryMethod,
@@ -1522,7 +1514,7 @@ index 7217677013..0ae00e7468 100644
              });
          }
      }
-@@ -433,6 +440,35 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+@@ -433,6 +443,35 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
          TranscodingJobType transcodingJobType,
          CancellationTokenSource cancellationTokenSource,
          string? workingDirectory = null)
@@ -1558,7 +1550,7 @@ index 7217677013..0ae00e7468 100644
      {
          var directory = Path.GetDirectoryName(outputPath) ?? throw new ArgumentException($"Provided path ({outputPath}) is not valid.", nameof(outputPath));
          Directory.CreateDirectory(directory);
-@@ -585,19 +621,52 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+@@ -585,19 +624,52 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
              }
          }
  
@@ -1581,8 +1573,7 @@ index 7217677013..0ae00e7468 100644
 +        {
 +            _logger.LogDebug("StartFfMpeg() finished successfully");
 +        }
- 
--        return transcodingJob;
++
 +        return new TranscodeAttemptResult
 +        {
 +            Job = transcodingJob,
@@ -1590,7 +1581,8 @@ index 7217677013..0ae00e7468 100644
 +            ExitCode = transcodingJob.HasExited ? transcodingJob.ExitCode : null
 +        };
 +    }
-+
+ 
+-        return transcodingJob;
 +    /// <inheritdoc />
 +    public void CompleteFfMpegAttempt(StreamState state, TranscodingJob job)
 +    {
@@ -1717,7 +1709,7 @@ index dfe197c631..790b1ee8df 100644
      /// Gets or sets a value indicating whether subtitle extraction is enabled.
      /// </summary>
 diff --git a/MediaBrowser.Model/Session/TranscodingInfo.cs b/MediaBrowser.Model/Session/TranscodingInfo.cs
-index 1b3a50c637..c4f8e2ab12 100644
+index 1b3a50c637..444abd2a28 100644
 --- a/MediaBrowser.Model/Session/TranscodingInfo.cs
 +++ b/MediaBrowser.Model/Session/TranscodingInfo.cs
 @@ -134,4 +134,19 @@ public class TranscodingInfo
