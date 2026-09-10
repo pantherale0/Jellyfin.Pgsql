@@ -41,7 +41,7 @@ new file mode 100644
 index 0000000000..9f8842a0f2
 --- /dev/null
 +++ b/MediaBrowser.Providers/Subtitles/SubtitleMediaFolderWritability.cs
-@@ -0,0 +1,97 @@
+@@ -0,0 +1,101 @@
 +using System;
 +using System.Collections.Concurrent;
 +using System.IO;
@@ -61,6 +61,8 @@ index 0000000000..9f8842a0f2
 +    /// Returns whether <paramref name="directoryPath"/> is writable for creating a new file.
 +    /// Missing paths and access errors are treated as not writable.
 +    /// </summary>
++    /// <param name="directoryPath">Absolute or relative path to the media folder.</param>
++    /// <returns>True when a new file can be created in the directory; otherwise false.</returns>
 +    public static bool CanWrite(string? directoryPath)
 +    {
 +        if (string.IsNullOrWhiteSpace(directoryPath))
@@ -84,6 +86,8 @@ index 0000000000..9f8842a0f2
 +    /// <summary>
 +    /// Returns true the first time a non-writable folder should be logged, then false for subsequent calls.
 +    /// </summary>
++    /// <param name="directoryPath">Absolute or relative path to the media folder.</param>
++    /// <returns>True the first time this folder should emit a skip warning; otherwise false.</returns>
 +    public static bool ShouldLogSkip(string? directoryPath)
 +    {
 +        if (string.IsNullOrWhiteSpace(directoryPath))
