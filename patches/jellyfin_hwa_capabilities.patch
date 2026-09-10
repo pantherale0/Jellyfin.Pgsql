@@ -297,7 +297,7 @@ index 0000000000..7da04dcc9e
 +    }
 +}
 diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-index 3755277a12..a00ceb8647 100644
+index f8f72a0bce..227ec3b317 100644
 --- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 +++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 @@ -31,6 +31,7 @@ using MediaBrowser.Model.Dto;

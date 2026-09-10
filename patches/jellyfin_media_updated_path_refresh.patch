@@ -212,10 +212,10 @@ index f634084034..dc3d2aa86a 100644
  
              if (item is not null)
 diff --git a/Emby.Server.Implementations/IO/LibraryMonitor.cs b/Emby.Server.Implementations/IO/LibraryMonitor.cs
-index 1bf0f8c76c..8063f9543a 100644
+index 0f92e2f03e..f97eb76b2e 100644
 --- a/Emby.Server.Implementations/IO/LibraryMonitor.cs
 +++ b/Emby.Server.Implementations/IO/LibraryMonitor.cs
-@@ -414,16 +414,23 @@ namespace Emby.Server.Implementations.IO
+@@ -421,16 +421,23 @@ namespace Emby.Server.Implementations.IO
                          return;
                      }
  

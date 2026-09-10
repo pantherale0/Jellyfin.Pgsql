@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Plugin.Pgsql.Admin;
 using Jellyfin.Plugin.Pgsql.Admin.EmbyImport;
@@ -14,7 +13,6 @@ using MediaBrowser.Controller.Plugins;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using StackExchange.Redis;
 
 namespace Jellyfin.Plugin.Pgsql.Query;
 
@@ -40,6 +38,7 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<EmbyUserDataMatcher>();
         serviceCollection.AddSingleton<EmbyUserDataImportService>();
 
+        serviceCollection.AddSingleton<RedisConnectionAccessor>();
         RegisterHa(serviceCollection);
 
         var coreRepositoryType = CoreItemRepositoryAccessor.FindCoreRepositoryType(serviceCollection);
@@ -124,18 +123,12 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
     {
         var options = PgsqlQueryOptions.Current;
         var logger = serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<RedisQueryCacheVersionStore>();
+        var hub = serviceProvider.GetRequiredService<RedisConnectionAccessor>().Hub;
 
-        if (options.CacheBackend == QueryCacheBackend.Redis
-            && !string.IsNullOrWhiteSpace(options.RedisConnectionString))
+        if (options.CacheBackend == QueryCacheBackend.Redis && hub is not null)
         {
-            try
-            {
-                return new RedisQueryCacheVersionStore(options.RedisConnectionString, logger);
-            }
-            catch (Exception ex) when (ex is RedisException or IOException or TimeoutException or ArgumentException)
-            {
-                logger.LogWarning(ex, "Failed to initialize Redis query cache versions; using memory versions");
-            }
+            logger.LogInformation("PostgreSQL plugin query cache versions using shared Redis hub");
+            return new RedisQueryCacheVersionStore(hub, logger);
         }
 
         return new MemoryQueryCacheVersionStore();
@@ -145,30 +138,22 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
     {
         var options = PgsqlQueryOptions.Current;
         var logger = serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<RedisQueryResultCache>();
+        var hub = serviceProvider.GetRequiredService<RedisConnectionAccessor>().Hub;
 
         if (options.CacheBackend == QueryCacheBackend.Redis)
         {
-            if (!string.IsNullOrWhiteSpace(options.RedisConnectionString))
+            if (hub is not null)
             {
-                try
-                {
-                    logger.LogInformation("PostgreSQL plugin query cache using Redis backend with memory fallback");
-                    return new FallbackQueryResultCache(
-                        new RedisQueryResultCache(
-                            options.RedisConnectionString,
-                            logger,
-                            serviceProvider.GetRequiredService<QueryRuntimeStats>()),
-                        new MemoryQueryResultCache());
-                }
-                catch (Exception ex) when (ex is RedisException or IOException or TimeoutException or ArgumentException)
-                {
-                    // Redis must never take down Jellyfin; degrade to in-process cache.
-                    logger.LogWarning(ex, "Failed to initialize Redis query cache; falling back to memory backend");
-                    return new MemoryQueryResultCache();
-                }
+                logger.LogInformation("PostgreSQL plugin query cache using Redis backend with memory fallback");
+                return new FallbackQueryResultCache(
+                    new RedisQueryResultCache(
+                        hub,
+                        logger,
+                        serviceProvider.GetRequiredService<QueryRuntimeStats>()),
+                    new MemoryQueryResultCache());
             }
 
-            logger.LogInformation("Redis cache backend selected but no connection string configured; using memory backend");
+            logger.LogInformation("Redis cache backend selected but Redis hub unavailable; using memory backend");
         }
 
         return new MemoryQueryResultCache();
@@ -185,24 +170,17 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<IInstanceLeadership>(sp => sp.GetRequiredService<PostgresInstanceLeadership>());
         serviceCollection.AddHostedService<LeadershipHostedService>();
 
-        var redisConnectionString = PgsqlQueryOptions.Current.RedisConnectionString;
-        if (string.IsNullOrWhiteSpace(redisConnectionString))
-        {
-            return;
-        }
-
         serviceCollection.AddSingleton<IPlaybackProgressCache>(sp =>
         {
             var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<RedisPlaybackProgressCache>();
-            try
+            var hub = sp.GetRequiredService<RedisConnectionAccessor>().Hub;
+            if (hub is null)
             {
-                return new RedisPlaybackProgressCache(redisConnectionString, logger);
-            }
-            catch (Exception ex) when (ex is RedisException or IOException or TimeoutException or ArgumentException)
-            {
-                logger.LogWarning(ex, "Failed to initialize Redis playback progress cache; continuing without overlay");
+                logger.LogInformation("HA enabled but Redis hub unavailable; continuing without progress overlay");
                 return new NoOpPlaybackProgressCache();
             }
+
+            return new RedisPlaybackProgressCache(hub, logger);
         });
     }
 }

@@ -78,7 +78,9 @@ appear in the Latest row.
 | `Pgsql_COMMAND_TIMEOUT` | `90` | Database command timeout in seconds (Jellyfin's default of 30 is too tight for heavy library queries on large remote databases) |
 
 Use the in-process `Memory` backend for a single Jellyfin instance; use `Redis` when running
-multiple replicas or when the cache should survive container restarts.
+multiple replicas or when the cache should survive container restarts. Redis keeps one shared
+multiplexer with background health probes: home APIs only hit Redis when status is `Ready`,
+otherwise they fail fast to the memory fallback (no per-request timeout wait).
 
 Known trade-offs:
 

@@ -105,6 +105,15 @@ require_cmd dotnet
 require_cmd sed
 require_cmd curl
 
+# GNU sed accepts `sed -i`; BSD/macOS sed requires `sed -i ''`.
+sed_inplace() {
+    if sed --version >/dev/null 2>&1; then
+        sed -i "$@"
+    else
+        sed -i '' "$@"
+    fi
+}
+
 # shellcheck source=lib-ensure-dev-postgres.sh
 source "${SCRIPT_DIR}/lib-ensure-dev-postgres.sh"
 
@@ -163,6 +172,11 @@ resolve_nuget_version() {
     local candidates=()
 
     candidates+=("${tag_version}")
+    # Stable tags are often v12.0 while NuGet publishes 12.0.0.
+    if [[ "${tag_version}" =~ ^([0-9]+\.[0-9]+)$ ]]; then
+        candidates+=("${BASH_REMATCH[1]}.0")
+    fi
+    # RC tags: 12.0-rc7 → 12.0.0-rc7
     if [[ "${tag_version}" =~ ^([0-9]+\.[0-9]+)-(.+)$ ]]; then
         candidates+=("${BASH_REMATCH[1]}.0-${BASH_REMATCH[2]}")
     fi
@@ -188,7 +202,8 @@ resolve_microsoft_package_version() {
     local nuget_version="$1"
     local version
     version="$(curl -sf "https://api.nuget.org/v3-flatcontainer/jellyfin.controller/${nuget_version}/jellyfin.controller.nuspec" \
-        | grep -oP 'Microsoft\.Extensions\.Configuration\.Binder" version="\K[0-9.]+' | head -1 || true)"
+        | sed -n 's/.*Microsoft\.Extensions\.Configuration\.Binder" version="\([0-9.]*\)".*/\1/p' \
+        | head -1 || true)"
     if [[ -z "${version}" ]]; then
         echo "9.0.11"
     else
@@ -219,19 +234,19 @@ compute_plugin_stack() {
 
 update_dotnet_ef_tool() {
     local tools_file="${REPO_ROOT}/.config/dotnet-tools.json"
-    sed -i "s/\"dotnet-ef\": {/\"dotnet-ef\": {/" "${tools_file}"
-    sed -i "/\"dotnet-ef\": {/,/\"commands\"/ s/\"version\": \"[^\"]*\"/\"version\": \"${RESOLVED_DOTNET_EF_VERSION}\"/" "${tools_file}"
+    sed_inplace "s/\"dotnet-ef\": {/\"dotnet-ef\": {/" "${tools_file}"
+    sed_inplace "/\"dotnet-ef\": {/,/\"commands\"/ s/\"version\": \"[^\"]*\"/\"version\": \"${RESOLVED_DOTNET_EF_VERSION}\"/" "${tools_file}"
     echo "[sync] Using dotnet-ef ${RESOLVED_DOTNET_EF_VERSION} for ${RESOLVED_PLUGIN_TFM}"
 }
 
 update_directory_build_props() {
     local props_file="$1"
-    sed -i "s/<JellyfinVersion>[^<]*<\/JellyfinVersion>/<JellyfinVersion>${RESOLVED_NUGET_VERSION}<\/JellyfinVersion>/" "${props_file}"
-    sed -i "s/<MicrosoftPackageVersion>[^<]*<\/MicrosoftPackageVersion>/<MicrosoftPackageVersion>${RESOLVED_MICROSOFT_VERSION}<\/MicrosoftPackageVersion>/" "${props_file}"
-    sed -i "s/<NpgsqlVersion>[^<]*<\/NpgsqlVersion>/<NpgsqlVersion>${RESOLVED_NPGSQL_VERSION}<\/NpgsqlVersion>/" "${props_file}"
-    sed -i "s/<NpgsqlEfVersion>[^<]*<\/NpgsqlEfVersion>/<NpgsqlEfVersion>${RESOLVED_NPGSQL_EF}<\/NpgsqlEfVersion>/" "${props_file}"
-    sed -i "s/<PluginTargetFramework>[^<]*<\/PluginTargetFramework>/<PluginTargetFramework>${RESOLVED_PLUGIN_TFM}<\/PluginTargetFramework>/" "${props_file}"
-    sed -i "s/<DotNetSdkVersion>[^<]*<\/DotNetSdkVersion>/<DotNetSdkVersion>${RESOLVED_DOTNET_SDK}<\/DotNetSdkVersion>/" "${props_file}"
+    sed_inplace "s/<JellyfinVersion>[^<]*<\/JellyfinVersion>/<JellyfinVersion>${RESOLVED_NUGET_VERSION}<\/JellyfinVersion>/" "${props_file}"
+    sed_inplace "s/<MicrosoftPackageVersion>[^<]*<\/MicrosoftPackageVersion>/<MicrosoftPackageVersion>${RESOLVED_MICROSOFT_VERSION}<\/MicrosoftPackageVersion>/" "${props_file}"
+    sed_inplace "s/<NpgsqlVersion>[^<]*<\/NpgsqlVersion>/<NpgsqlVersion>${RESOLVED_NPGSQL_VERSION}<\/NpgsqlVersion>/" "${props_file}"
+    sed_inplace "s/<NpgsqlEfVersion>[^<]*<\/NpgsqlEfVersion>/<NpgsqlEfVersion>${RESOLVED_NPGSQL_EF}<\/NpgsqlEfVersion>/" "${props_file}"
+    sed_inplace "s/<PluginTargetFramework>[^<]*<\/PluginTargetFramework>/<PluginTargetFramework>${RESOLVED_PLUGIN_TFM}<\/PluginTargetFramework>/" "${props_file}"
+    sed_inplace "s/<DotNetSdkVersion>[^<]*<\/DotNetSdkVersion>/<DotNetSdkVersion>${RESOLVED_DOTNET_SDK}<\/DotNetSdkVersion>/" "${props_file}"
 }
 
 report_restore_failure() {
@@ -441,16 +456,16 @@ bump_version_refs() {
     update_directory_build_props "${REPO_ROOT}/Directory.Build.props"
     update_dotnet_ef_tool
 
-    sed -i "s/^ARG JELLYFIN_VERSION=.*/ARG JELLYFIN_VERSION=${tag_version}/" \
+    sed_inplace "s/^ARG JELLYFIN_VERSION=.*/ARG JELLYFIN_VERSION=${tag_version}/" \
         "${REPO_ROOT}/docker/Dockerfile"
 
-    sed -i "s/^FROM mcr.microsoft.com\/dotnet\/sdk:[0-9.]* AS build/FROM mcr.microsoft.com\/dotnet\/sdk:${RESOLVED_DOTNET_SDK} AS build/" \
+    sed_inplace "s/^FROM mcr.microsoft.com\/dotnet\/sdk:[0-9.]* AS build/FROM mcr.microsoft.com\/dotnet\/sdk:${RESOLVED_DOTNET_SDK} AS build/" \
         "${REPO_ROOT}/docker/Dockerfile"
 
-    sed -i "s/^targetAbi: \".*\"/targetAbi: \"${RESOLVED_NUGET_VERSION}.0\"/" \
+    sed_inplace "s/^targetAbi: \".*\"/targetAbi: \"${RESOLVED_NUGET_VERSION}.0\"/" \
         "${REPO_ROOT}/build.yaml"
 
-    sed -i "s/^framework: \".*\"/framework: \"${RESOLVED_PLUGIN_TFM}\"/" \
+    sed_inplace "s/^framework: \".*\"/framework: \"${RESOLVED_PLUGIN_TFM}\"/" \
         "${REPO_ROOT}/build.yaml"
 }
 

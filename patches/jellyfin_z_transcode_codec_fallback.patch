@@ -859,7 +859,7 @@ index 0000000000..de5c0a16dd
 +}
 diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs
 new file mode 100644
-index 0000000000..3b6a356bdd
+index 0000000000..c7fdbd5287
 --- /dev/null
 +++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs
 @@ -0,0 +1,431 @@
@@ -1717,7 +1717,7 @@ index dfe197c631..790b1ee8df 100644
      /// Gets or sets a value indicating whether subtitle extraction is enabled.
      /// </summary>
 diff --git a/MediaBrowser.Model/Session/TranscodingInfo.cs b/MediaBrowser.Model/Session/TranscodingInfo.cs
-index 1b3a50c637..444abd2a28 100644
+index 1b3a50c637..fc1ffef606 100644
 --- a/MediaBrowser.Model/Session/TranscodingInfo.cs
 +++ b/MediaBrowser.Model/Session/TranscodingInfo.cs
 @@ -134,4 +134,19 @@ public class TranscodingInfo

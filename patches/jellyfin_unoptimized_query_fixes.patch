@@ -1,8 +1,8 @@
 diff --git a/Emby.Server.Implementations/Library/LibraryManager.cs b/Emby.Server.Implementations/Library/LibraryManager.cs
-index 3db8265f6e..cb21dc2277 100644
+index 0044fcd4dc..3eea6aa276 100644
 --- a/Emby.Server.Implementations/Library/LibraryManager.cs
 +++ b/Emby.Server.Implementations/Library/LibraryManager.cs
-@@ -1237,6 +1237,70 @@ namespace Emby.Server.Implementations.Library
+@@ -1267,6 +1267,70 @@ namespace Emby.Server.Implementations.Library
              return GetItemByNameId<Studio>(Studio.GetPath(name));
          }
  
@@ -73,7 +73,7 @@ index 3db8265f6e..cb21dc2277 100644
          public Guid GetGenreId(string name)
          {
              return GetItemByNameId<Genre>(Genre.GetPath(name));
-@@ -3740,14 +3804,20 @@ namespace Emby.Server.Implementations.Library
+@@ -3812,13 +3876,19 @@ namespace Emby.Server.Implementations.Library
  
          private async Task SavePeopleMetadataAsync(IEnumerable<PersonInfo> people, CancellationToken cancellationToken)
          {
@@ -87,7 +87,6 @@ index 3db8265f6e..cb21dc2277 100644
  
                  var itemUpdateType = ItemUpdateType.MetadataDownload;
                  var saveEntity = false;
-                 var createEntity = false;
 -                var personEntity = GetPerson(person.Name);
 +                if (!peopleByName.TryGetValue(person.Name, out var personEntity))
 +                {
@@ -97,30 +96,30 @@ index 3db8265f6e..cb21dc2277 100644
                  if (personEntity is null)
                  {
 diff --git a/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs b/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
-index 078a0b921d..8e50347584 100644
+index 7d53f40ce7..47d9950d84 100644
 --- a/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
 +++ b/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
-@@ -62,6 +62,7 @@ public class PeopleValidator
-         var numComplete = 0;
+@@ -65,13 +65,19 @@ public class PeopleValidator
+         var count = names.Count;
+         var refreshed = 0;
  
-         var numPeople = people.Count;
-+        var peopleByName = _libraryManager.GetPersonsByNames(people);
- 
-         IProgress<double> subProgress = new Progress<double>((val) => progress.Report(val / 2));
- 
-@@ -73,7 +74,11 @@ public class PeopleValidator
++        var peopleByName = _libraryManager.GetPersonsByNames(names);
++
+         foreach (var name in names)
+         {
+             cancellationToken.ThrowIfCancellationRequested();
  
              try
              {
--                var item = _libraryManager.GetPerson(person);
-+                if (!peopleByName.TryGetValue(person, out var item))
+-                var item = _libraryManager.GetOrCreatePerson(name);
++                if (!peopleByName.TryGetValue(name, out var item))
 +                {
-+                    item = _libraryManager.GetPerson(person);
++                    item = _libraryManager.GetOrCreatePerson(name);
 +                }
 +
-                 if (item is null)
-                 {
-                     _logger.LogWarning("Failed to get person: {Name}", person);
+                 var isNew = !existingPersonIds.Contains(item.Id);
+                 var neverRefreshed = item.DateLastRefreshed == default;
+ 
 diff --git a/Emby.Server.Implementations/TV/TVSeriesManager.cs b/Emby.Server.Implementations/TV/TVSeriesManager.cs
 index 459ad1a17e..6ddb8216a9 100644
 --- a/Emby.Server.Implementations/TV/TVSeriesManager.cs
@@ -403,10 +402,10 @@ index de112d7aa4..ff2dbd4fd6 100644
      public IReadOnlyList<Guid> GetManualLinkedParentIds(Guid childId, BaseItemKind? parentType = null)
      {
 diff --git a/MediaBrowser.Controller/Library/ILibraryManager.cs b/MediaBrowser.Controller/Library/ILibraryManager.cs
-index c8cca1fa93..8ae002f462 100644
+index ac6df54949..de290d19dc 100644
 --- a/MediaBrowser.Controller/Library/ILibraryManager.cs
 +++ b/MediaBrowser.Controller/Library/ILibraryManager.cs
-@@ -711,6 +711,12 @@ namespace MediaBrowser.Controller.Library
+@@ -717,6 +717,12 @@ namespace MediaBrowser.Controller.Library
  
          Guid GetStudioId(string name);
  

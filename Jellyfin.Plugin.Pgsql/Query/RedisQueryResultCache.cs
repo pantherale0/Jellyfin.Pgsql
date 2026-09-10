@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.StackExchangeRedis;
@@ -14,49 +13,34 @@ namespace Jellyfin.Plugin.Pgsql.Query;
 /// <summary>
 /// Redis-backed <see cref="IQueryResultCache"/>. Recoverable Redis failures are swallowed and treated
 /// as cache misses so that a Redis outage never breaks queries or server startup.
-/// When Redis is disconnected or the circuit is open, operations return immediately instead of
-/// blocking on the default 5s backlog timeout (which previously made home APIs appear 5–10s slow).
+/// Uses <see cref="RedisConnectionHub"/> so Unknown/Unavailable skip immediately instead of waiting
+/// on SyncTimeout (which previously made home APIs appear slow when Redis was half-dead).
 /// </summary>
 internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
 {
     private const string KeyPrefix = "jf:pgsql:v1:";
     private static readonly TimeSpan WarningThrottle = TimeSpan.FromSeconds(60);
-    private static readonly TimeSpan CircuitOpenDuration = TimeSpan.FromSeconds(30);
 
     private readonly RedisCache _cache;
-    private readonly ConnectionMultiplexer _connection;
+    private readonly RedisConnectionHub _hub;
     private readonly ILogger _logger;
     private readonly QueryRuntimeStats _stats;
     private DateTimeOffset _lastWarning = DateTimeOffset.MinValue;
-    private long _circuitOpenUntilTicks; // DateTimeOffset.UtcTicks; 0 = closed
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RedisQueryResultCache"/> class.
     /// </summary>
-    /// <param name="connectionString">The StackExchange.Redis connection string.</param>
+    /// <param name="hub">Shared Redis connection hub.</param>
     /// <param name="logger">The logger.</param>
     /// <param name="stats">The runtime stats collector.</param>
-    public RedisQueryResultCache(string connectionString, ILogger logger, QueryRuntimeStats stats)
+    public RedisQueryResultCache(RedisConnectionHub hub, ILogger logger, QueryRuntimeStats stats)
     {
+        _hub = hub;
         _logger = logger;
         _stats = stats;
-
-        var configuration = ConfigurationOptions.Parse(connectionString);
-        // Never fail server startup because Redis is briefly unreachable; the multiplexer
-        // keeps retrying in the background and cache ops degrade to misses until then.
-        configuration.AbortOnConnectFail = false;
-        // Do not queue commands while disconnected — that backlog wait is a 5s tax on every
-        // Latest/Resume/NextUp request when Redis is unreachable.
-        configuration.BacklogPolicy = BacklogPolicy.FailFast;
-        // Keep residual timeouts short so a race during reconnect cannot stall home APIs.
-        configuration.ConnectTimeout = 1000;
-        configuration.SyncTimeout = 250;
-        configuration.AsyncTimeout = 250;
-
-        _connection = ConnectionMultiplexer.Connect(configuration);
         _cache = new RedisCache(Options.Create(new RedisCacheOptions
         {
-            ConnectionMultiplexerFactory = () => Task.FromResult<IConnectionMultiplexer>(_connection),
+            ConnectionMultiplexerFactory = () => Task.FromResult(_hub.Connection),
             InstanceName = KeyPrefix,
         }));
     }
@@ -65,14 +49,16 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
     public bool TryGet(string key, out Guid[] ids)
     {
         ids = [];
-        if (!CanUseRedis())
+        if (!_hub.CanUse)
         {
             return false;
         }
 
         try
         {
-            return QueryResultPayload.TryDeserialize(_cache.Get(key), out ids);
+            var hit = QueryResultPayload.TryDeserialize(_cache.Get(key), out ids);
+            _hub.ReportSuccess();
+            return hit;
         }
         catch (Exception ex) when (IsTransientRedisFailure(ex))
         {
@@ -83,7 +69,7 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
     /// <inheritdoc/>
     public void Set(string key, Guid[] ids, TimeSpan timeToLive)
     {
-        if (!CanUseRedis())
+        if (!_hub.CanUse)
         {
             return;
         }
@@ -94,6 +80,7 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
             {
                 AbsoluteExpirationRelativeToNow = timeToLive,
             });
+            _hub.ReportSuccess();
         }
         catch (Exception ex) when (IsTransientRedisFailure(ex))
         {
@@ -105,7 +92,7 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
     public bool TryGetPayload(string key, out byte[] payload)
     {
         payload = [];
-        if (!CanUseRedis())
+        if (!_hub.CanUse)
         {
             return false;
         }
@@ -115,10 +102,12 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
             var cached = _cache.Get(key);
             if (cached is null || cached.Length == 0)
             {
+                _hub.ReportSuccess();
                 return false;
             }
 
             payload = cached;
+            _hub.ReportSuccess();
             return true;
         }
         catch (Exception ex) when (IsTransientRedisFailure(ex))
@@ -130,7 +119,7 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
     /// <inheritdoc/>
     public void SetPayload(string key, byte[] payload, TimeSpan timeToLive)
     {
-        if (!CanUseRedis())
+        if (!_hub.CanUse)
         {
             return;
         }
@@ -141,6 +130,7 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
             {
                 AbsoluteExpirationRelativeToNow = timeToLive,
             });
+            _hub.ReportSuccess();
         }
         catch (Exception ex) when (IsTransientRedisFailure(ex))
         {
@@ -151,14 +141,14 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
     /// <inheritdoc/>
     public void InvalidateAll()
     {
-        if (!CanUseRedis())
+        if (!_hub.CanUse)
         {
             return;
         }
 
         try
         {
-            foreach (var server in _connection.GetEndPoints().Select(endpoint => _connection.GetServer(endpoint)))
+            foreach (var server in _hub.Connection.GetEndPoints().Select(endpoint => _hub.Connection.GetServer(endpoint)))
             {
                 if (!server.IsConnected || server.IsReplica)
                 {
@@ -170,6 +160,8 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
                     _cache.Remove(key.ToString()[KeyPrefix.Length..]);
                 }
             }
+
+            _hub.ReportSuccess();
         }
         catch (Exception ex) when (IsTransientRedisFailure(ex))
         {
@@ -180,7 +172,7 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
     /// <inheritdoc/>
     public void Remove(string key)
     {
-        if (!CanUseRedis())
+        if (!_hub.CanUse)
         {
             return;
         }
@@ -188,6 +180,7 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
         try
         {
             _cache.Remove(key);
+            _hub.ReportSuccess();
         }
         catch (Exception ex) when (IsTransientRedisFailure(ex))
         {
@@ -199,29 +192,7 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
     public void Dispose()
     {
         _cache.Dispose();
-        _connection.Dispose();
-    }
-
-    private bool CanUseRedis()
-    {
-        var openUntil = Interlocked.Read(ref _circuitOpenUntilTicks);
-        if (openUntil != 0 && DateTimeOffset.UtcNow.UtcTicks < openUntil)
-        {
-            return false;
-        }
-
-        if (!_connection.IsConnected)
-        {
-            return false;
-        }
-
-        return true;
-    }
-
-    private void OpenCircuit()
-    {
-        var until = DateTimeOffset.UtcNow.Add(CircuitOpenDuration).UtcTicks;
-        Interlocked.Exchange(ref _circuitOpenUntilTicks, until);
+        // Hub lifetime is owned by DI; do not dispose it here.
     }
 
     private static bool IsTransientRedisFailure(Exception ex)
@@ -241,7 +212,7 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
 
     private void ReportCacheFailure(Exception ex, string operation)
     {
-        OpenCircuit();
+        _hub.ReportFailure();
         _stats.RecordRedisError(operation);
         LogThrottled(ex, operation);
     }
@@ -254,9 +225,9 @@ internal sealed class RedisQueryResultCache : IQueryResultCache, IDisposable
             _lastWarning = now;
             _logger.LogWarning(
                 ex,
-                "Redis query cache {Operation} failed; continuing without cache for {CircuitSeconds}s",
+                "Redis query cache {Operation} failed; continuing without cache until health probe recovers (status={Status})",
                 operation,
-                CircuitOpenDuration.TotalSeconds);
+                _hub.Status);
         }
     }
 }

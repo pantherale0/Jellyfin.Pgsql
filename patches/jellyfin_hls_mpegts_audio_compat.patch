@@ -1,8 +1,8 @@
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-index 0080a5cb30..100e84aee6 100644
+index 32f046ff12..4416a71ad4 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-@@ -695,7 +695,9 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -696,7 +696,9 @@ namespace MediaBrowser.Controller.MediaEncoding
              {
                  "ogg" or "oga" or "ogv" or "webm" or "webma" => "opus",
                  "m4a" or "m4b" or "mp4" or "mov" or "mkv" or "mka" => "aac",
@@ -10,10 +10,10 @@ index 0080a5cb30..100e84aee6 100644
 +                // MP3 in MPEG-TS is widely silent on ExoPlayer/Android (jellyfin-web#5419, Wholphin#879).
 +                "ts" or "m2ts" or "mts" => "aac",
 +                "avi" or "flv" or "f4v" or "swf" => "mp3",
-                 _ => inferredCodec
-             };
-         }
-@@ -2709,8 +2711,12 @@ namespace MediaBrowser.Controller.MediaEncoding
+                 // Containers that share their name with the codec they carry.
+                 "aac" or "ac3" or "alac" or "dts" or "eac3" or "flac" or "mp2" or "mp3" or "opus" or "truehd" or "vorbis" => inferredCodec,
+                 // Anything else - manifests such as m3u8/mpd in particular - names a container that
+@@ -2717,8 +2719,12 @@ namespace MediaBrowser.Controller.MediaEncoding
                  reasons |= TranscodeReason.AudioSampleRateNotSupported;
              }
  
@@ -28,7 +28,7 @@ index 0080a5cb30..100e84aee6 100644
                  && audioStream.BitRate.HasValue
                  && audioStream.BitRate.Value > request.AudioBitRate.Value)
              {
-@@ -7585,6 +7591,17 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -7593,6 +7599,17 @@ namespace MediaBrowser.Controller.MediaEncoding
                  // Keep them in the supported codecs list, but shift them to the end of the list so that if transcoding happens, another codec is used
                  shiftAudioCodecs.Add("dts");
                  shiftAudioCodecs.Add("truehd");
@@ -47,7 +47,7 @@ index 0080a5cb30..100e84aee6 100644
              else
              {
 diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-index 71084c650d..3755277a12 100644
+index f066045572..f8f72a0bce 100644
 --- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 +++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 @@ -405,6 +405,13 @@ namespace MediaBrowser.MediaEncoding.Encoder
@@ -65,10 +65,10 @@ index 71084c650d..3755277a12 100644
              return SupportsEncoder(codec);
          }
 diff --git a/MediaBrowser.Model/Dlna/StreamBuilder.cs b/MediaBrowser.Model/Dlna/StreamBuilder.cs
-index ab8d5dd5b2..49481b1727 100644
+index 4799ed5410..299eeeac25 100644
 --- a/MediaBrowser.Model/Dlna/StreamBuilder.cs
 +++ b/MediaBrowser.Model/Dlna/StreamBuilder.cs
-@@ -29,7 +29,9 @@ namespace MediaBrowser.Model.Dlna
+@@ -31,7 +31,9 @@ namespace MediaBrowser.Model.Dlna
          private readonly ILogger _logger;
          private readonly ITranscoderSupport _transcoderSupport;
          private static readonly string[] _supportedHlsVideoCodecs = ["h264", "hevc", "vp9", "av1"];
@@ -79,7 +79,7 @@ index ab8d5dd5b2..49481b1727 100644
          private static readonly string[] _supportedHlsAudioCodecsMp4 = ["aac", "ac3", "eac3", "mp3", "alac", "flac", "opus", "dts", "truehd"];
  
          /// <summary>
-@@ -990,6 +992,7 @@ namespace MediaBrowser.Model.Dlna
+@@ -1000,6 +1002,7 @@ namespace MediaBrowser.Model.Dlna
                  else
                  {
                      audioCodecs = audioCodecs.Where(codec => _supportedHlsAudioCodecsTs.Contains(codec)).ToList();
@@ -87,7 +87,7 @@ index ab8d5dd5b2..49481b1727 100644
                  }
              }
  
-@@ -2479,5 +2482,48 @@ namespace MediaBrowser.Model.Dlna
+@@ -2489,5 +2492,48 @@ namespace MediaBrowser.Model.Dlna
  
              return failures;
          }

@@ -1,5 +1,5 @@
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-index 542f9eab94..5ded3eed9f 100644
+index a6547f3518..055aef3441 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 @@ -7,6 +7,7 @@ using System;
@@ -18,7 +18,7 @@ index 542f9eab94..5ded3eed9f 100644
  using MediaBrowser.Model.Entities;
  using MediaBrowser.Model.Querying;
  using Microsoft.EntityFrameworkCore;
-@@ -758,12 +760,27 @@ public sealed partial class BaseItemRepository
+@@ -778,12 +780,27 @@ public sealed partial class BaseItemRepository
              baseQuery = baseQuery.Where(BuildMaxParentalRatingFilter(context, filter.MaxParentalRating));
          }
  
@@ -48,7 +48,7 @@ index 542f9eab94..5ded3eed9f 100644
          }
  
          // Apply excluded tags filtering (blocked tags).
-@@ -791,20 +808,81 @@ public sealed partial class BaseItemRepository
+@@ -811,20 +828,81 @@ public sealed partial class BaseItemRepository
              var allowedTagItemIds = context.ItemValuesMap
                  .Where(f => f.ItemValue.Type == ItemValueType.Tags && includeTags.Contains(f.ItemValue.CleanValue))
                  .Select(f => f.ItemId);
@@ -139,7 +139,7 @@ index 542f9eab94..5ded3eed9f 100644
      /// Builds a filter expression for max parental rating that handles both rated items
      /// and unrated BoxSets/Playlists (which check linked children's ratings).
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-index c82dd27398..ceb295d37a 100644
+index e5f21d842b..7d40740516 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 @@ -10,13 +10,16 @@ using System.Collections.Generic;
@@ -159,7 +159,7 @@ index c82dd27398..ceb295d37a 100644
  using MediaBrowser.Model.Entities;
  using Microsoft.EntityFrameworkCore;
  using BaseItemEntity = Jellyfin.Database.Implementations.Entities.BaseItemEntity;
-@@ -726,7 +729,15 @@ public sealed partial class BaseItemRepository
+@@ -736,7 +739,15 @@ public sealed partial class BaseItemRepository
          else if (filter.BlockUnratedItems.Length > 0)
          {
              var unratedItemTypes = filter.BlockUnratedItems.Select(f => f.ToString()).ToArray();
@@ -176,7 +176,7 @@ index c82dd27398..ceb295d37a 100644
  
              if (minParentalRatingFilter != null && maxParentalRatingFilter != null)
              {
-@@ -1148,18 +1159,36 @@ public sealed partial class BaseItemRepository
+@@ -1158,18 +1169,36 @@ public sealed partial class BaseItemRepository
              var allowedTagItemIds = context.ItemValuesMap
                  .Where(f => f.ItemValue.Type == ItemValueType.Tags && includeTags.Contains(f.ItemValue.CleanValue))
                  .Select(f => f.ItemId);
