@@ -70,6 +70,12 @@ public sealed class PgsqlStatsResponse
     /// <summary>Gets or sets redis set errors.</summary>
     public long RedisSetErrors { get; set; }
 
+    /// <summary>Gets or sets Redis hub availability (<c>Ready</c>, <c>Unknown</c>, <c>Unavailable</c>, or <c>Disabled</c>).</summary>
+    public string RedisAvailability { get; set; } = "Disabled";
+
+    /// <summary>Gets or sets a value indicating whether the Redis multiplexer reports connected.</summary>
+    public bool RedisConnected { get; set; }
+
     /// <summary>Gets or sets optimized latest attempts.</summary>
     public long OptimizedLatestRuns { get; set; }
 

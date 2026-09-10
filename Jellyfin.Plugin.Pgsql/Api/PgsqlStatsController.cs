@@ -15,14 +15,17 @@ public sealed class PgsqlStatsController : ControllerBase
     private const string AdministratorRole = "Administrator";
 
     private readonly QueryRuntimeStats _stats;
+    private readonly RedisConnectionAccessor _redis;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PgsqlStatsController"/> class.
     /// </summary>
     /// <param name="stats">The runtime stats collector.</param>
-    public PgsqlStatsController(QueryRuntimeStats stats)
+    /// <param name="redis">Optional shared Redis hub accessor.</param>
+    public PgsqlStatsController(QueryRuntimeStats stats, RedisConnectionAccessor redis)
     {
         _stats = stats;
+        _redis = redis;
     }
 
     /// <summary>
@@ -34,6 +37,7 @@ public sealed class PgsqlStatsController : ControllerBase
     {
         var options = PgsqlQueryOptions.Current;
         var snapshot = _stats.Snapshot();
+        var hub = _redis.Hub;
         return Ok(new PgsqlStatsResponse
         {
             StartedAtUtc = snapshot.StartedAtUtc,
@@ -55,6 +59,8 @@ public sealed class PgsqlStatsController : ControllerBase
             NextUpCacheMisses = snapshot.NextUpCacheMisses,
             BrowseCacheHits = snapshot.BrowseCacheHits,
             BrowseCacheMisses = snapshot.BrowseCacheMisses,
+            RedisAvailability = hub?.Status.ToString() ?? "Disabled",
+            RedisConnected = hub?.Connection.IsConnected ?? false,
             RedisGetErrors = snapshot.RedisGetErrors,
             RedisSetErrors = snapshot.RedisSetErrors,
             OptimizedLatestRuns = snapshot.OptimizedLatestRuns,

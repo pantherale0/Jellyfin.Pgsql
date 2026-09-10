@@ -1,5 +1,5 @@
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-index 10c21ee03c..0080a5cb30 100644
+index a0f4087395..32f046ff12 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 @@ -20,6 +20,7 @@ using Jellyfin.Extensions;
@@ -10,7 +10,7 @@ index 10c21ee03c..0080a5cb30 100644
  using MediaBrowser.Model.Configuration;
  using MediaBrowser.Model.Dlna;
  using MediaBrowser.Model.Dto;
-@@ -1408,6 +1409,29 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -1415,6 +1416,29 @@ namespace MediaBrowser.Controller.MediaEncoding
                         or VideoRangeType.DOVIWithELHDR10Plus;
          }
  
@@ -40,7 +40,7 @@ index 10c21ee03c..0080a5cb30 100644
          /// <summary>
          /// Check if dynamic HDR metadata should be removed during stream copy.
          /// Please note this check assumes the range check has already been done
-@@ -1421,10 +1445,17 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -1429,10 +1453,17 @@ namespace MediaBrowser.Controller.MediaEncoding
                  return DynamicHdrMetadataRemovalPlan.None;
              }
  
@@ -59,7 +59,7 @@ index 10c21ee03c..0080a5cb30 100644
              }
  
              var requestHasHDR10 = requestedRangeTypes.Contains(VideoRangeType.HDR10.ToString(), StringComparison.OrdinalIgnoreCase);
-@@ -1456,6 +1487,10 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -1464,6 +1495,10 @@ namespace MediaBrowser.Controller.MediaEncoding
  
              // If the client is a Dolby Vision Player, remove the HDR10+ metadata to avoid playback issues
              shouldRemoveHdr10Plus = shouldRemoveHdr10Plus || (requestHasDOVI && videoStream.VideoRangeType == VideoRangeType.DOVIWithHDR10Plus);

@@ -76,7 +76,7 @@ index f5c62b9923..6625cb2be4 100644
      /// Builds a query for descendants of an ancestor with user access filtering applied.
      /// Uses recursive CTE to traverse both hierarchical (AncestorIds) and linked (LinkedChildren) relationships.
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs
-index 064935b726..30e1fabcb7 100644
+index aeb96edce3..cb33627801 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs
 @@ -59,7 +59,7 @@ public sealed partial class BaseItemRepository

@@ -99,7 +99,7 @@ index 57b11092d7..788b7aedbe 100644
                      <span class="xlargePaperIconButton material-icons airplay" aria-hidden="true"></span>
                  </button>
 diff --git a/src/apps/legacy/controllers/playback/video/index.js b/src/apps/legacy/controllers/playback/video/index.js
-index fdde2c5582..d01af9a5aa 100644
+index add9be8143..1cd3f86afc 100644
 --- a/src/apps/legacy/controllers/playback/video/index.js
 +++ b/src/apps/legacy/controllers/playback/video/index.js
 @@ -20,6 +20,7 @@ import globalize from 'lib/globalize';
@@ -147,7 +147,7 @@ index fdde2c5582..d01af9a5aa 100644
          if (enableProgressByTimeOfDay) {
              setDisplayTime(startTimeText, displayItem.StartDate);
              setDisplayTime(endTimeText, displayItem.EndDate);
-@@ -1770,6 +1801,33 @@ export default function (view) {
+@@ -1772,6 +1803,33 @@ export default function (view) {
          playbackManager.toggleAirPlay(currentPlayer);
      });
      view.querySelector('.btnVideoOsdSettings').addEventListener('click', onSettingsButtonClick);

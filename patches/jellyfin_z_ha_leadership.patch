@@ -100,7 +100,7 @@ index 0000000000..5d8583b4cb
 +    }
 +}
 diff --git a/Emby.Server.Implementations/IO/LibraryMonitor.cs b/Emby.Server.Implementations/IO/LibraryMonitor.cs
-index 8063f9543a..d64d2b6f82 100644
+index f97eb76b2e..2bf3338aa1 100644
 --- a/Emby.Server.Implementations/IO/LibraryMonitor.cs
 +++ b/Emby.Server.Implementations/IO/LibraryMonitor.cs
 @@ -3,8 +3,10 @@ using System.Collections.Concurrent;
@@ -114,9 +114,9 @@ index 8063f9543a..d64d2b6f82 100644
  using MediaBrowser.Controller.Configuration;
  using MediaBrowser.Controller.Entities;
  using MediaBrowser.Controller.Library;
-@@ -22,10 +24,7 @@ namespace Emby.Server.Implementations.IO
-         private readonly IServerConfigurationManager _configurationManager;
+@@ -24,10 +26,7 @@ namespace Emby.Server.Implementations.IO
          private readonly IFileSystem _fileSystem;
+         private readonly IDirectoryService _directoryService;
          private readonly DotIgnoreIgnoreRule _dotIgnoreIgnoreRule;
 -
 -        /// <summary>
@@ -126,7 +126,7 @@ index 8063f9543a..d64d2b6f82 100644
          private readonly ConcurrentDictionary<string, FileSystemWatcher> _fileSystemWatchers = new(StringComparer.OrdinalIgnoreCase);
  
          /// <summary>
-@@ -38,6 +37,7 @@ namespace Emby.Server.Implementations.IO
+@@ -40,6 +39,7 @@ namespace Emby.Server.Implementations.IO
          /// </summary>
          private readonly ConcurrentDictionary<string, string> _tempIgnoredPaths = new(StringComparer.OrdinalIgnoreCase);
  
@@ -134,16 +134,17 @@ index 8063f9543a..d64d2b6f82 100644
          private bool _disposed;
  
          /// <summary>
-@@ -49,19 +49,22 @@ namespace Emby.Server.Implementations.IO
-         /// <param name="fileSystem">The filesystem.</param>
+@@ -52,6 +52,7 @@ namespace Emby.Server.Implementations.IO
+         /// <param name="directoryService">The directory service.</param>
          /// <param name="appLifetime">The <see cref="IHostApplicationLifetime"/>.</param>
          /// <param name="dotIgnoreIgnoreRule">The .ignore rule handler.</param>
 +        /// <param name="leadership">Instance leadership.</param>
          public LibraryMonitor(
              ILogger<LibraryMonitor> logger,
              ILibraryManager libraryManager,
-             IServerConfigurationManager configurationManager,
+@@ -59,7 +60,8 @@ namespace Emby.Server.Implementations.IO
              IFileSystem fileSystem,
+             IDirectoryService directoryService,
              IHostApplicationLifetime appLifetime,
 -            DotIgnoreIgnoreRule dotIgnoreIgnoreRule)
 +            DotIgnoreIgnoreRule dotIgnoreIgnoreRule,
@@ -151,14 +152,15 @@ index 8063f9543a..d64d2b6f82 100644
          {
              _libraryManager = libraryManager;
              _logger = logger;
-             _configurationManager = configurationManager;
+@@ -67,6 +69,7 @@ namespace Emby.Server.Implementations.IO
              _fileSystem = fileSystem;
+             _directoryService = directoryService;
              _dotIgnoreIgnoreRule = dotIgnoreIgnoreRule;
 +            _leadership = leadership;
  
              appLifetime.ApplicationStarted.Register(Start);
              appLifetime.ApplicationStopping.Register(Stop);
-@@ -115,6 +118,17 @@ namespace Emby.Server.Implementations.IO
+@@ -120,6 +123,17 @@ namespace Emby.Server.Implementations.IO
          /// <inheritdoc />
          public void Start()
          {
@@ -176,7 +178,7 @@ index 8063f9543a..d64d2b6f82 100644
              _libraryManager.ItemAdded += OnLibraryManagerItemAdded;
              _libraryManager.ItemRemoved += OnLibraryManagerItemRemoved;
  
-@@ -452,6 +466,8 @@ namespace Emby.Server.Implementations.IO
+@@ -459,6 +473,8 @@ namespace Emby.Server.Implementations.IO
          /// </summary>
          public void Stop()
          {
@@ -673,10 +675,10 @@ index 0000000000..1456942986
 +    }
 +}
 diff --git a/Jellyfin.Server/Migrations/JellyfinMigrationService.cs b/Jellyfin.Server/Migrations/JellyfinMigrationService.cs
-index beafc3916f..4f78b201a3 100644
+index a5b6bc4604..c0d56e0b5c 100644
 --- a/Jellyfin.Server/Migrations/JellyfinMigrationService.cs
 +++ b/Jellyfin.Server/Migrations/JellyfinMigrationService.cs
-@@ -191,6 +191,13 @@ internal class JellyfinMigrationService
+@@ -197,6 +197,13 @@ internal class JellyfinMigrationService
          var dbContext = await _dbContextFactory.CreateDbContextAsync().ConfigureAwait(false);
          await using (dbContext.ConfigureAwait(false))
          {
@@ -690,10 +692,12 @@ index beafc3916f..4f78b201a3 100644
              var historyRepository = dbContext.GetService<IHistoryRepository>();
              var migrationsAssembly = dbContext.GetService<IMigrationsAssembly>();
              var completedMigrations = 0;
-@@ -297,6 +304,14 @@ internal class JellyfinMigrationService
+@@ -303,8 +310,15 @@ internal class JellyfinMigrationService
  
                  completedMigrations++;
              }
+-
+             return completedMigrations > 0;
 +            }
 +            finally
 +            {
@@ -939,10 +943,10 @@ index 5b144b0296..7217677013 100644
      {
          job.DisposeKillTimer();
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/IJellyfinDatabaseProvider.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/IJellyfinDatabaseProvider.cs
-index 27dbeaba6a..f4eec958b0 100644
+index 77abb45f2a..2da63dee44 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/IJellyfinDatabaseProvider.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/IJellyfinDatabaseProvider.cs
-@@ -80,4 +80,19 @@ public interface IJellyfinDatabaseProvider
+@@ -82,4 +82,19 @@ public interface IJellyfinDatabaseProvider
      /// <param name="tableNames">The names of the tables to purge or null for all tables to be purged.</param>
      /// <returns>A Task.</returns>
      Task PurgeDatabase(JellyfinDbContext dbContext, IEnumerable<string>? tableNames);

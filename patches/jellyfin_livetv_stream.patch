@@ -921,10 +921,10 @@ index 2b6781a197..9464ee3cdc 100644
          /// Gets the media sources for an active recording.
          /// </summary>
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-index 25e4ffbf34..4c2461e7fc 100644
+index ebad360225..087ca90dce 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-@@ -1303,7 +1303,7 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -1308,7 +1308,7 @@ namespace MediaBrowser.Controller.MediaEncoding
                  }
  
                  // Apply probesize, too, if configured
@@ -933,7 +933,7 @@ index 25e4ffbf34..4c2461e7fc 100644
                  if (!string.IsNullOrEmpty(ffmpegProbeSizeArgument))
                  {
                      arg.Append(' ').Append(ffmpegProbeSizeArgument);
-@@ -7315,13 +7315,15 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -7323,13 +7323,15 @@ namespace MediaBrowser.Controller.MediaEncoding
              return analyzeDurationArgument;
          }
  
@@ -953,7 +953,7 @@ index 25e4ffbf34..4c2461e7fc 100644
              }
  
              return string.Empty;
-@@ -7340,7 +7342,7 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -7348,7 +7350,7 @@ namespace MediaBrowser.Controller.MediaEncoding
              inputModifier = inputModifier.Trim();
  
              // Apply -probesize if configured
@@ -963,7 +963,7 @@ index 25e4ffbf34..4c2461e7fc 100644
              if (!string.IsNullOrEmpty(ffmpegProbeSizeArgument))
              {
 diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-index a00ceb8647..9394159625 100644
+index 227ec3b317..09f423e6ac 100644
 --- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 +++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 @@ -476,9 +476,12 @@ namespace MediaBrowser.MediaEncoding.Encoder
@@ -1523,10 +1523,10 @@ index 70d8afc5d0..3dd7bfb97d 100644
      }
  }
 diff --git a/src/Jellyfin.LiveTv/TunerHosts/M3UTunerHost.cs b/src/Jellyfin.LiveTv/TunerHosts/M3UTunerHost.cs
-index fb606be0ef..2f8dc6121a 100644
+index 902ca76af8..39e314e902 100644
 --- a/src/Jellyfin.LiveTv/TunerHosts/M3UTunerHost.cs
 +++ b/src/Jellyfin.LiveTv/TunerHosts/M3UTunerHost.cs
-@@ -100,29 +100,32 @@ namespace Jellyfin.LiveTv.TunerHosts
+@@ -101,29 +101,32 @@ namespace Jellyfin.LiveTv.TunerHosts
  
                  if (string.IsNullOrEmpty(extension))
                  {

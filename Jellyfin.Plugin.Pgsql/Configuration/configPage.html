@@ -154,6 +154,8 @@ environment:
                     ["Optimized latest failures", String(data.OptimizedLatestFailures)],
                     ["Optimized NextUp runs", String(data.OptimizedNextUpRuns)],
                     ["Optimized NextUp failures", String(data.OptimizedNextUpFailures)],
+                    ["Redis availability", data.RedisAvailability || "Disabled"],
+                    ["Redis connected", data.RedisConnected ? "Yes" : "No"],
                     ["Redis get errors", String(data.RedisGetErrors)],
                     ["Redis set errors", String(data.RedisSetErrors)]
                 ];

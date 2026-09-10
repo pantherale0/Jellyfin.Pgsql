@@ -616,10 +616,10 @@ index 0000000000..70afc2db7c
 +    Task<IAsyncDisposable> AcquireAsync(CancellationToken cancellationToken);
 +}
 diff --git a/MediaBrowser.Controller/LibraryTaskScheduler/LimitedConcurrencyLibraryScheduler.cs b/MediaBrowser.Controller/LibraryTaskScheduler/LimitedConcurrencyLibraryScheduler.cs
-index 6da398129a..eda972b530 100644
+index be75117b6f..2ec440a8a2 100644
 --- a/MediaBrowser.Controller/LibraryTaskScheduler/LimitedConcurrencyLibraryScheduler.cs
 +++ b/MediaBrowser.Controller/LibraryTaskScheduler/LimitedConcurrencyLibraryScheduler.cs
-@@ -110,8 +110,8 @@ public sealed class LimitedConcurrencyLibraryScheduler : ILimitedConcurrencyLibr
+@@ -171,8 +171,8 @@ public sealed class LimitedConcurrencyLibraryScheduler : ILimitedConcurrencyLibr
          var fanoutConcurrency = _serverConfigurationManager.Configuration.LibraryScanFanoutConcurrency;
          if (fanoutConcurrency <= 0)
          {
@@ -631,7 +631,7 @@ index 6da398129a..eda972b530 100644
  
          return fanoutConcurrency;
 diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-index 0ddd378352..71084c650d 100644
+index f64fd73763..f066045572 100644
 --- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 +++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 @@ -133,7 +133,8 @@ namespace MediaBrowser.MediaEncoding.Encoder

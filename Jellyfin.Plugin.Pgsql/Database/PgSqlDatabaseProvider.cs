@@ -61,7 +61,10 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider, IDisposab
             {
                 pgSqlOptions.MigrationsAssembly(GetType().Assembly.FullName);
             })
-            .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
+            .ConfigureWarnings(w => w
+                .Ignore(RelationalEventId.PendingModelChangesWarning)
+                // Match SQLite provider: Jellyfin queries Include multiple collections; default SingleQuery is intentional.
+                .Ignore(RelationalEventId.MultipleCollectionIncludeWarning));
 
         PostgreSqlCompat.EnsureUuidAggregates(connectionBuilder.ToString(), _logger);
         PostgreSqlCompat.EnsureSearchSqlHelpers(connectionBuilder.ToString(), _logger);

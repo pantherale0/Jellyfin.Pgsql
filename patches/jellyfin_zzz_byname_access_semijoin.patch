@@ -1,8 +1,8 @@
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-index 5ded3eed9f..ad9270c05c 100644
+index 055aef3441..33fa71f5e0 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-@@ -718,12 +718,18 @@ public sealed partial class BaseItemRepository
+@@ -738,12 +738,18 @@ public sealed partial class BaseItemRepository
              context.BaseItems.AsNoTracking(),
              new InternalItemsQuery(filter.User) { TopParentIds = topParentIds, IncludeOwnedItems = true });
  
@@ -24,7 +24,7 @@ index 5ded3eed9f..ad9270c05c 100644
          }
  
          foreach (var (kind, valueTypes) in _itemByNameValueTypes)
-@@ -734,9 +740,10 @@ public sealed partial class BaseItemRepository
+@@ -754,9 +760,10 @@ public sealed partial class BaseItemRepository
                  continue;
              }
  

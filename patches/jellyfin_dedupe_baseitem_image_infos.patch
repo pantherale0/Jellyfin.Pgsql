@@ -120,7 +120,7 @@ index c0067d8392..f5c62b9923 100644
  
      private static IQueryable<BaseItemEntity> ApplyNameFilters(IQueryable<BaseItemEntity> dbQuery, InternalItemsQuery filter)
 diff --git a/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs b/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs
-index efff3457a3..d89fc19612 100644
+index c8672e189b..4d3dd85921 100644
 --- a/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs
 +++ b/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs
 @@ -171,7 +171,12 @@ public class ItemPersistenceService : IItemPersistenceService
@@ -137,7 +137,7 @@ index efff3457a3..d89fc19612 100644
  
          var context = await _dbProvider.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
          await using (context.ConfigureAwait(false))
-@@ -272,7 +277,7 @@ public class ItemPersistenceService : IItemPersistenceService
+@@ -283,7 +288,7 @@ public class ItemPersistenceService : IItemPersistenceService
              {
                  if (entity.Images is { Count: > 0 })
                  {

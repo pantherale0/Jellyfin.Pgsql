@@ -1,8 +1,8 @@
 diff --git a/Emby.Server.Implementations/Dto/DtoService.cs b/Emby.Server.Implementations/Dto/DtoService.cs
-index a2d3e14439..76d418d463 100644
+index 59e75691dc..94cdbd7438 100644
 --- a/Emby.Server.Implementations/Dto/DtoService.cs
 +++ b/Emby.Server.Implementations/Dto/DtoService.cs
-@@ -832,60 +832,55 @@ namespace Emby.Server.Implementations.Dto
+@@ -861,60 +861,55 @@ namespace Emby.Server.Implementations.Dto
  
              var list = new List<BaseItemPerson>();
  
@@ -93,14 +93,15 @@ index a2d3e14439..76d418d463 100644
  
              dto.People = list.ToArray();
 diff --git a/Emby.Server.Implementations/Library/LibraryManager.cs b/Emby.Server.Implementations/Library/LibraryManager.cs
-index cb21dc2277..9946a2220a 100644
+index 3eea6aa276..5d88ae67e2 100644
 --- a/Emby.Server.Implementations/Library/LibraryManager.cs
 +++ b/Emby.Server.Implementations/Library/LibraryManager.cs
-@@ -1222,6 +1222,53 @@ namespace Emby.Server.Implementations.Library
-             return null;
-         }
+@@ -1250,6 +1250,52 @@ namespace Emby.Server.Implementations.Library
+             CreateItem(item, null);
  
-+        /// <inheritdoc />
+             return item;
++
++
 +        public Person? GetPerson(PersonInfo person)
 +        {
 +            ArgumentNullException.ThrowIfNull(person);
@@ -145,12 +146,10 @@ index cb21dc2277..9946a2220a 100644
 +            }
 +
 +            return legacy;
-+        }
-+
+         }
+ 
          /// <summary>
-         /// Gets the studio.
-         /// </summary>
-@@ -3609,7 +3656,7 @@ namespace Emby.Server.Implementations.Library
+@@ -3677,7 +3723,7 @@ namespace Emby.Server.Implementations.Library
                  {
                      try
                      {
@@ -159,7 +158,7 @@ index cb21dc2277..9946a2220a 100644
                      }
                      catch (Exception ex)
                      {
-@@ -3620,6 +3667,7 @@ namespace Emby.Server.Implementations.Library
+@@ -3688,6 +3734,7 @@ namespace Emby.Server.Implementations.Library
                  .Where(i => i is not null)
                  .Where(i => query.User is null || i!.IsVisible(query.User))
                  .OfType<BaseItem>()
@@ -167,7 +166,7 @@ index cb21dc2277..9946a2220a 100644
                  .ToList()
                  .AsReadOnly();
  
-@@ -3805,7 +3853,6 @@ namespace Emby.Server.Implementations.Library
+@@ -3877,7 +3924,6 @@ namespace Emby.Server.Implementations.Library
          private async Task SavePeopleMetadataAsync(IEnumerable<PersonInfo> people, CancellationToken cancellationToken)
          {
              var peopleList = people.ToList();
@@ -175,10 +174,10 @@ index cb21dc2277..9946a2220a 100644
  
              foreach (var person in peopleList)
              {
-@@ -3814,16 +3861,14 @@ namespace Emby.Server.Implementations.Library
+@@ -3885,16 +3931,25 @@ namespace Emby.Server.Implementations.Library
+ 
                  var itemUpdateType = ItemUpdateType.MetadataDownload;
                  var saveEntity = false;
-                 var createEntity = false;
 -                if (!peopleByName.TryGetValue(person.Name, out var personEntity))
 -                {
 -                    personEntity = null;
@@ -190,12 +189,23 @@ index cb21dc2277..9946a2220a 100644
                  {
                      try
                      {
--                        var path = Person.GetPath(person.Name);
+-                        personEntity = GetOrCreatePerson(person.Name);
 +                        var path = Person.GetPath(person.Name, providerKey);
-                         var info = Directory.CreateDirectory(path);
-                         personEntity = new Person()
-                         {
-@@ -3847,11 +3892,22 @@ namespace Emby.Server.Implementations.Library
++                        var info = Directory.CreateDirectory(path);
++                        personEntity = new Person()
++                        {
++                            Name = person.Name,
++                            Id = GetItemByNameId<Person>(path),
++                            DateCreated = info.CreationTimeUtc,
++                            DateModified = info.LastWriteTimeUtc,
++                            Path = path
++                        };
++
++                        personEntity.PresentationUniqueKey = personEntity.CreatePresentationUniqueKey();
+                         saveEntity = true;
+                     }
+                     catch (Exception ex)
+@@ -3906,11 +3961,22 @@ namespace Emby.Server.Implementations.Library
  
                  foreach (var id in person.ProviderIds)
                  {
@@ -220,45 +230,86 @@ index cb21dc2277..9946a2220a 100644
  
                  if (!string.IsNullOrWhiteSpace(person.ImageUrl) && !personEntity.HasImage(ImageType.Primary))
 diff --git a/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs b/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
-index 8e50347584..bb159a69b4 100644
+index 47d9950d84..abe5125818 100644
 --- a/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
 +++ b/Emby.Server.Implementations/Library/Validators/PeopleValidator.cs
-@@ -57,12 +57,11 @@ public class PeopleValidator
-             _logger.LogDebug("Deleted {Amount} credits no item maps to", numOrphaned);
+@@ -53,31 +53,33 @@ public class PeopleValidator
+             _logger.LogInformation("Deleted {Amount} credits no item maps to", numOrphaned);
          }
  
--        var people = _libraryManager.GetPeopleNames(new InternalPeopleQuery());
+-        var names = _libraryManager.GetPeopleNames(new InternalPeopleQuery());
 +        var people = _libraryManager.GetPeople(new InternalPeopleQuery());
+         var existingPersonIds = _libraryManager.GetItemIds(new InternalItemsQuery
+         {
+             IncludeItemTypes = [BaseItemKind.Person]
+         }).ToHashSet();
  
+-        var (newNames, deadIds) = PartitionCreditsByPersonId(names, _libraryManager.GetPersonId, existingPersonIds);
+-
++        var liveIds = new HashSet<Guid>();
          var numComplete = 0;
+-        var count = names.Count;
++        var count = people.Count;
+         var refreshed = 0;
++        var newCount = 0;
  
-         var numPeople = people.Count;
--        var peopleByName = _libraryManager.GetPersonsByNames(people);
- 
-         IProgress<double> subProgress = new Progress<double>((val) => progress.Report(val / 2));
- 
-@@ -74,14 +73,11 @@ public class PeopleValidator
+-        var peopleByName = _libraryManager.GetPersonsByNames(names);
+-
+-        foreach (var name in names)
++        foreach (var personInfo in people)
+         {
+             cancellationToken.ThrowIfCancellationRequested();
  
              try
              {
--                if (!peopleByName.TryGetValue(person, out var item))
--                {
--                    item = _libraryManager.GetPerson(person);
--                }
-+                var item = _libraryManager.GetPerson(person);
- 
-                 if (item is null)
+-                if (!peopleByName.TryGetValue(name, out var item))
++                var item = _libraryManager.GetPerson(personInfo);
++                if (item is null)
                  {
--                    _logger.LogWarning("Failed to get person: {Name}", person);
-+                    _logger.LogWarning("Failed to get person: {Name}", person.Name);
-                     continue;
+-                    item = _libraryManager.GetOrCreatePerson(name);
++                    item = _libraryManager.GetOrCreatePerson(personInfo.Name);
++                    newCount++;
                  }
  
++                liveIds.Add(item.Id);
++
+                 var isNew = !existingPersonIds.Contains(item.Id);
+                 var neverRefreshed = item.DateLastRefreshed == default;
+ 
+@@ -94,12 +96,12 @@ public class PeopleValidator
+             }
+             catch (Exception ex)
+             {
+-                _logger.LogError(ex, "Error refreshing {PersonName}", name);
++                _logger.LogError(ex, "Error refreshing {PersonName}", personInfo.Name);
+             }
+ 
+             numComplete++;
+             double percent = numComplete;
+-            percent /= count;
++            percent /= count > 0 ? count : 1;
+             percent *= 100;
+ 
+             progress.Report(percent);
+@@ -109,10 +111,11 @@ public class PeopleValidator
+             "Refreshed metadata for {RefreshedCount} people out of {TotalCount} total, {NewCount} of which had no item yet",
+             refreshed,
+             count,
+-            newNames.Count);
++            newCount);
+ 
+         // A person somebody locked is theirs, not ours, however little the library still credits them.
+-        var deadEntities = deadIds
++        var deadEntities = existingPersonIds
++            .Where(id => !liveIds.Contains(id))
+             .Select(_libraryManager.GetItemById)
+             .OfType<Person>()
+             .Where(item => !item.IsLocked)
 diff --git a/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs b/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs
-index 42835d7ad0..ac48510809 100644
+index 092a621bfc..a9a2e1b474 100644
 --- a/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs
 +++ b/Emby.Server.Implementations/ScheduledTasks/Tasks/PeopleValidationTask.cs
-@@ -106,53 +106,70 @@ public class PeopleValidationTask : IScheduledTask, IConfigurableScheduledTask
+@@ -111,53 +111,70 @@ public class PeopleValidationTask : IScheduledTask, IConfigurableScheduledTask
          await using (context.ConfigureAwait(false))
          {
              IProgress<double> subProgress = new Progress<double>((val) => progress.Report(val / 3));
@@ -365,10 +416,10 @@ index 42835d7ad0..ac48510809 100644
                  .Where(p => !context.PeopleBaseItemMap.Any(m => m.PeopleId.Equals(p.Id)))
                  .ExecuteDeleteAsync(cancellationToken)
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-index ceb295d37a..b498dce4da 100644
+index 7d40740516..3a61d439b6 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-@@ -443,15 +443,33 @@ public sealed partial class BaseItemRepository
+@@ -453,15 +453,33 @@ public sealed partial class BaseItemRepository
  
          if (filter.PersonIds.Length > 0)
          {
@@ -1263,12 +1314,12 @@ index b53210b0b1..3d6cee96b5 100644
  
      /// <summary>
 diff --git a/MediaBrowser.Controller/Library/ILibraryManager.cs b/MediaBrowser.Controller/Library/ILibraryManager.cs
-index 8ae002f462..4a6a5de199 100644
+index de290d19dc..eaa2f23c24 100644
 --- a/MediaBrowser.Controller/Library/ILibraryManager.cs
 +++ b/MediaBrowser.Controller/Library/ILibraryManager.cs
-@@ -106,6 +106,13 @@ namespace MediaBrowser.Controller.Library
-         /// <returns>Task{Person}.</returns>
-         Person? GetPerson(string name);
+@@ -113,6 +113,13 @@ namespace MediaBrowser.Controller.Library
+         /// <returns>The person.</returns>
+         Person GetOrCreatePerson(string name);
  
 +        /// <summary>
 +        /// Gets a Person using provider ids when available, otherwise name.
