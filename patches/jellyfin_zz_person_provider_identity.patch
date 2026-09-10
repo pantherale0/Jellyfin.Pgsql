@@ -96,10 +96,11 @@ diff --git a/Emby.Server.Implementations/Library/LibraryManager.cs b/Emby.Server
 index 3eea6aa276..5d88ae67e2 100644
 --- a/Emby.Server.Implementations/Library/LibraryManager.cs
 +++ b/Emby.Server.Implementations/Library/LibraryManager.cs
-@@ -1250,6 +1250,52 @@ namespace Emby.Server.Implementations.Library
+@@ -1250,6 +1250,53 @@ namespace Emby.Server.Implementations.Library
              CreateItem(item, null);
  
              return item;
++        }
 +
 +
 +        public Person? GetPerson(PersonInfo person)
