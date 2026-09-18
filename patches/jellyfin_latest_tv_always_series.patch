@@ -12,7 +12,7 @@ index da03032249..e42de8790d 100644
                  item = tuple.Item1;
                  childCount = tuple.Item2.Count;
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs
-index 1ed10cce2b..aeb96edce3 100644
+index 8d573569e9..b1c1c6fced 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs
 @@ -321,142 +321,61 @@ public sealed partial class BaseItemRepository

@@ -254,6 +254,9 @@ internal sealed class CachingItemRepository : IItemRepository
     public IReadOnlyList<string> GetGenreNames() => _inner.GetGenreNames();
 
     /// <inheritdoc/>
+    public IReadOnlyList<string> GetTagNames(InternalItemsQuery filter) => _inner.GetTagNames(filter);
+
+    /// <inheritdoc/>
     public IReadOnlyList<string> GetAllArtistNames() => _inner.GetAllArtistNames();
 
     /// <inheritdoc/>

@@ -1,5 +1,5 @@
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 53f711ab14..b740e645bf 100644
+index 6dd4b7e3c7..c0a4aade3d 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -11,6 +11,7 @@ using Jellyfin.Data;
@@ -454,7 +454,7 @@ index 53f711ab14..b740e645bf 100644
          private bool OnPlaybackStopped(User user, BaseItem item, long? positionTicks, bool playbackFailed)
          {
              if (playbackFailed)
-@@ -2441,5 +2811,94 @@ namespace Emby.Server.Implementations.Session
+@@ -2443,5 +2813,94 @@ namespace Emby.Server.Implementations.Session
              _activeConnections.Clear();
              _activeLiveStreamSessions.Clear();
          }
@@ -1811,3 +1811,49 @@ index f803c69af2..c8982e5dd9 100644
      }
  
      // All sessions are logged with the same client and device id on purpose, those values are taken
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/PlaybackActivityConfiguration.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/PlaybackActivityConfiguration.cs
+new file mode 100644
+index 0000000000..7c6d98b640
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/PlaybackActivityConfiguration.cs
+@@ -0,0 +1,17 @@
++using Jellyfin.Database.Implementations.Entities;
++using Microsoft.EntityFrameworkCore;
++using Microsoft.EntityFrameworkCore.Metadata.Builders;
++
++namespace Jellyfin.Database.Implementations.ModelConfiguration;
++
++/// <summary>
++/// FluentAPI configuration for the <see cref="PlaybackActivity"/> entity.
++/// </summary>
++public class PlaybackActivityConfiguration : IEntityTypeConfiguration<PlaybackActivity>
++{
++    /// <inheritdoc/>
++    public void Configure(EntityTypeBuilder<PlaybackActivity> builder)
++    {
++        builder.HasKey(e => e.Id);
++    }
++}
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/PlaybackActivityDailyConfiguration.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/PlaybackActivityDailyConfiguration.cs
+new file mode 100644
+index 0000000000..d47f9c9de7
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/PlaybackActivityDailyConfiguration.cs
+@@ -0,0 +1,17 @@
++using Jellyfin.Database.Implementations.Entities;
++using Microsoft.EntityFrameworkCore;
++using Microsoft.EntityFrameworkCore.Metadata.Builders;
++
++namespace Jellyfin.Database.Implementations.ModelConfiguration;
++
++/// <summary>
++/// FluentAPI configuration for the <see cref="PlaybackActivityDaily"/> entity.
++/// </summary>
++public class PlaybackActivityDailyConfiguration : IEntityTypeConfiguration<PlaybackActivityDaily>
++{
++    /// <inheritdoc/>
++    public void Configure(EntityTypeBuilder<PlaybackActivityDaily> builder)
++    {
++        builder.HasKey(e => e.Date);
++    }
++}

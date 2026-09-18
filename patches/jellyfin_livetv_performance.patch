@@ -1912,10 +1912,10 @@ index d477bc3713..58d5c83ae8 100644
              return await _listingsManager.GetProgramsAsync(channel, startDateUtc, endDateUtc, cancellationToken)
                  .ConfigureAwait(false);
 diff --git a/src/Jellyfin.LiveTv/Guide/GuideManager.cs b/src/Jellyfin.LiveTv/Guide/GuideManager.cs
-index 41520f8789..2d014fa91e 100644
+index a11f83f2f8..ee208938e1 100644
 --- a/src/Jellyfin.LiveTv/Guide/GuideManager.cs
 +++ b/src/Jellyfin.LiveTv/Guide/GuideManager.cs
-@@ -240,12 +240,22 @@ public class GuideManager : IGuideManager
+@@ -247,12 +247,22 @@ public class GuideManager : IGuideManager
  
                  var channelPrograms = (await service.GetProgramsAsync(currentChannel.ExternalId, start, end, cancellationToken).ConfigureAwait(false)).ToList();
  
@@ -1944,7 +1944,7 @@ index 41520f8789..2d014fa91e 100644
  
                  var newPrograms = new List<LiveTvProgram>();
                  var updatedPrograms = new List<LiveTvProgram>();
-@@ -341,40 +351,47 @@ public class GuideManager : IGuideManager
+@@ -349,40 +359,47 @@ public class GuideManager : IGuideManager
              DtoOptions = new DtoOptions(false)
          });
  
@@ -2013,10 +2013,10 @@ index 41520f8789..2d014fa91e 100644
  
      private async Task<LiveTvChannel> GetChannel(
 diff --git a/src/Jellyfin.LiveTv/Listings/ListingsManager.cs b/src/Jellyfin.LiveTv/Listings/ListingsManager.cs
-index 15e20d6f64..5721cbf6f1 100644
+index 7274a3030c..6eb8631275 100644
 --- a/src/Jellyfin.LiveTv/Listings/ListingsManager.cs
 +++ b/src/Jellyfin.LiveTv/Listings/ListingsManager.cs
-@@ -375,7 +375,7 @@ public class ListingsManager : IListingsManager
+@@ -378,7 +378,7 @@ public class ListingsManager : IListingsManager
          var channels = await provider.GetChannels(info, cancellationToken).ConfigureAwait(false);
          foreach (var channel in channels)
          {
@@ -2026,10 +2026,10 @@ index 15e20d6f64..5721cbf6f1 100644
  
          result = new EpgChannelData(channels);
 diff --git a/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs b/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs
-index 0aeb7ad05d..24940d1d4d 100644
+index f78d464659..d7fdbc0193 100644
 --- a/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs
 +++ b/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs
-@@ -9,6 +9,7 @@ using System.Linq;
+@@ -10,6 +10,7 @@ using System.Linq;
  using System.Net.Http;
  using System.Threading;
  using System.Threading.Tasks;
@@ -2037,16 +2037,16 @@ index 0aeb7ad05d..24940d1d4d 100644
  using Jellyfin.Extensions;
  using Jellyfin.XmlTv;
  using Jellyfin.XmlTv.Entities;
-@@ -31,6 +32,8 @@ namespace Jellyfin.LiveTv.Listings
+@@ -33,6 +34,8 @@ namespace Jellyfin.LiveTv.Listings
          private readonly IServerConfigurationManager _config;
          private readonly IHttpClientFactory _httpClientFactory;
          private readonly ILogger<XmlTvListingsProvider> _logger;
 +        private readonly object _programmeCacheLock = new();
 +        private ProgrammeCacheEntry? _programmeCache;
  
-         public XmlTvListingsProvider(
-             IServerConfigurationManager config,
-@@ -169,11 +172,101 @@ namespace Jellyfin.LiveTv.Listings
+         private readonly ConcurrentDictionary<string, DateTime> _lastDownloadFailures = new(StringComparer.Ordinal);
+ 
+@@ -220,11 +223,101 @@ namespace Jellyfin.LiveTv.Listings
              _logger.LogDebug("Getting xmltv programs for channel {Id}", channelId);
  
              string path = await GetXml(info, cancellationToken).ConfigureAwait(false);
@@ -2152,7 +2152,7 @@ index 0aeb7ad05d..24940d1d4d 100644
          }
  
          private ProgramInfo GetProgramInfoWithEtag(XmlTvProgram program, ListingsProviderInfo info)
-@@ -319,5 +412,20 @@ namespace Jellyfin.LiveTv.Listings
+@@ -377,5 +470,20 @@ namespace Jellyfin.LiveTv.Listings
                  Number = string.IsNullOrWhiteSpace(c.Number) ? c.Id : c.Number
              }).ToList();
          }
@@ -2174,7 +2174,7 @@ index 0aeb7ad05d..24940d1d4d 100644
      }
  }
 diff --git a/src/Jellyfin.LiveTv/LiveTvManager.cs b/src/Jellyfin.LiveTv/LiveTvManager.cs
-index 2edf7681db..80f6985fdb 100644
+index 93f9083178..8d2be23546 100644
 --- a/src/Jellyfin.LiveTv/LiveTvManager.cs
 +++ b/src/Jellyfin.LiveTv/LiveTvManager.cs
 @@ -13,6 +13,7 @@ using Jellyfin.Data.Enums;
