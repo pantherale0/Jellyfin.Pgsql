@@ -631,7 +631,7 @@ index be75117b6f..2ec440a8a2 100644
  
          return fanoutConcurrency;
 diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-index f64fd73763..f066045572 100644
+index fa43d756a4..f7c92d7095 100644
 --- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 +++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 @@ -133,7 +133,8 @@ namespace MediaBrowser.MediaEncoding.Encoder

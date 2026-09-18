@@ -1,5 +1,5 @@
 diff --git a/Emby.Server.Implementations/Library/Search/SearchManager.cs b/Emby.Server.Implementations/Library/Search/SearchManager.cs
-index 306a8673d5..86b45c32eb 100644
+index a8ee416b31..4cb5110f02 100644
 --- a/Emby.Server.Implementations/Library/Search/SearchManager.cs
 +++ b/Emby.Server.Implementations/Library/Search/SearchManager.cs
 @@ -75,7 +75,7 @@ public class SearchManager : ISearchManager
@@ -90,9 +90,9 @@ index 306a8673d5..86b45c32eb 100644
  
          var dbContext = await _dbProvider.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
          await using (dbContext.ConfigureAwait(false))
-@@ -148,21 +158,21 @@ public class SearchManager : ISearchManager
-                 .ToHashSetAsync(cancellationToken)
-                 .ConfigureAwait(false);
+@@ -156,21 +166,21 @@ public class SearchManager : ISearchManager
+                 .Where(e => e.PrimaryVersionId.HasValue && allowedIds.Contains(e.PrimaryVersionId.Value))
+                 .Select(e => e.Id));
  
 -            if (allowedIds.Count == candidates.Count)
 +            if (allowedIds.Count == candidates.Items.Count)
@@ -118,7 +118,7 @@ index 306a8673d5..86b45c32eb 100644
          }
      }
  
-@@ -173,13 +183,13 @@ public class SearchManager : ISearchManager
+@@ -181,13 +191,13 @@ public class SearchManager : ISearchManager
          ArgumentException.ThrowIfNullOrWhiteSpace(query.SearchTerm);
  
          var providerQuery = BuildProviderQuery(query);
@@ -136,7 +136,7 @@ index 306a8673d5..86b45c32eb 100644
          var user = query.UserId.IsEmpty() ? null : _userManager.GetUserById(query.UserId);
  
          var excludeItemTypes = BuildExcludeItemTypes(query);
-@@ -199,6 +209,10 @@ public class SearchManager : ISearchManager
+@@ -207,6 +217,10 @@ public class SearchManager : ISearchManager
              IsNews = query.IsNews,
              IsSeries = query.IsSeries,
              IsSports = query.IsSports,
@@ -147,7 +147,7 @@ index 306a8673d5..86b45c32eb 100644
              DtoOptions = new DtoOptions
              {
                  Fields =
-@@ -235,92 +249,126 @@ public class SearchManager : ISearchManager
+@@ -243,92 +257,126 @@ public class SearchManager : ISearchManager
              items = _libraryManager.GetItemList(internalQuery);
          }
  
@@ -306,7 +306,7 @@ index 306a8673d5..86b45c32eb 100644
          var results = new List<SearchResult>();
          await foreach (var result in provider.SearchAsync(providerQuery, cancellationToken).ConfigureAwait(false))
          {
-@@ -331,7 +379,22 @@ public class SearchManager : ISearchManager
+@@ -339,7 +387,22 @@ public class SearchManager : ISearchManager
              }
          }
  
@@ -330,7 +330,7 @@ index 306a8673d5..86b45c32eb 100644
      }
  
      private static void UpdateBestScore(Dictionary<Guid, float> bestScores, SearchResult result)
-@@ -372,6 +435,8 @@ public class SearchManager : ISearchManager
+@@ -380,6 +443,8 @@ public class SearchManager : ISearchManager
              ExcludeItemTypes = excludeItemTypes.ToArray(),
              MediaTypes = query.MediaTypes.ToArray(),
              Limit = query.Limit,
@@ -340,7 +340,7 @@ index 306a8673d5..86b45c32eb 100644
          };
      }
 diff --git a/Emby.Server.Implementations/Library/Search/SqlSearchProvider.cs b/Emby.Server.Implementations/Library/Search/SqlSearchProvider.cs
-index c4d3b249d5..64259adc6e 100644
+index 2cbfb6a4fa..0dc150c520 100644
 --- a/Emby.Server.Implementations/Library/Search/SqlSearchProvider.cs
 +++ b/Emby.Server.Implementations/Library/Search/SqlSearchProvider.cs
 @@ -28,6 +28,7 @@ public class SqlSearchProvider : IInternalSearchProvider
@@ -360,7 +360,7 @@ index c4d3b249d5..64259adc6e 100644
      {
          ArgumentNullException.ThrowIfNull(query);
          ArgumentException.ThrowIfNullOrWhiteSpace(query.SearchTerm);
-@@ -84,43 +85,55 @@ public class SqlSearchProvider : IInternalSearchProvider
+@@ -84,32 +85,34 @@ public class SqlSearchProvider : IInternalSearchProvider
          var rawSearchTerm = query.SearchTerm.Trim().RemoveDiacritics();
          if (string.IsNullOrEmpty(rawSearchTerm))
          {
@@ -403,8 +403,9 @@ index c4d3b249d5..64259adc6e 100644
  
              dbQuery = ApplyTypeFilter(dbQuery, query.IncludeItemTypes, query.ExcludeItemTypes);
              dbQuery = ApplyMediaTypeFilter(dbQuery, query.MediaTypes);
-             dbQuery = ApplyParentFilter(dbQuery, query.ParentId);
+@@ -117,11 +120,21 @@ public class SqlSearchProvider : IInternalSearchProvider
              dbQuery = ApplyUserAccessFilter(dbContext, dbQuery, query);
+             dbQuery = ExcludeVersionsOfMatchedPrimaries(dbQuery);
  
 +            var totalRecordCount = 0;
 +            if (query.EnableTotalRecordCount)
@@ -425,7 +426,7 @@ index c4d3b249d5..64259adc6e 100644
              // satisfies EF Core's row-limiting-with-OrderBy requirement.
              var scored = dbQuery.Select(e => new
              {
-@@ -132,16 +145,33 @@ public class SqlSearchProvider : IInternalSearchProvider
+@@ -133,16 +146,33 @@ public class SqlSearchProvider : IInternalSearchProvider
                      : ContainsMatchScore
              });
  
@@ -568,7 +569,7 @@ index 385795e9f7..525396b7ee 100644
              }
          }
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-index a745c3309f..e5f21d842b 100644
+index d726f0f143..4c16c2979f 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 @@ -269,8 +269,14 @@ public sealed partial class BaseItemRepository
@@ -623,7 +624,7 @@ index a745c3309f..e5f21d842b 100644
              }
          }
  
-@@ -1293,4 +1300,12 @@ public sealed partial class BaseItemRepository
+@@ -1298,4 +1305,12 @@ public sealed partial class BaseItemRepository
  
          return baseQuery;
      }

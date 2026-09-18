@@ -38,7 +38,7 @@ index 227f310255..b33f18cff5 100644
              {
 diff --git a/MediaBrowser.Providers/Subtitles/SubtitleMediaFolderWritability.cs b/MediaBrowser.Providers/Subtitles/SubtitleMediaFolderWritability.cs
 new file mode 100644
-index 0000000000..9f8842a0f2
+index 0000000000..3e39a542a8
 --- /dev/null
 +++ b/MediaBrowser.Providers/Subtitles/SubtitleMediaFolderWritability.cs
 @@ -0,0 +1,101 @@

@@ -1,5 +1,5 @@
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index c5d1c5eb2b..53f711ab14 100644
+index d3b9617e89..6dd4b7e3c7 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -48,6 +48,10 @@ namespace Emby.Server.Implementations.Session

@@ -1,27 +1,36 @@
 diff --git a/src/apps/legacy/routes/quickConnect/index.tsx b/src/apps/legacy/routes/quickConnect/index.tsx
-index e042cf86ce..77246a5527 100644
+index b9951e3836..77246a5527 100644
 --- a/src/apps/legacy/routes/quickConnect/index.tsx
 +++ b/src/apps/legacy/routes/quickConnect/index.tsx
-@@ -1,119 +1,30 @@
+@@ -1,150 +1,30 @@
+-import escapeHTML from 'escape-html';
 -import { getAuthenticationApi } from '@jellyfin/sdk/lib/utils/api/authentication-api';
 -import React, { FC, FormEvent, useCallback, useState } from 'react';
 -import { Link, useSearchParams } from 'react-router-dom';
 +import React, { FC, useCallback } from 'react';
 +import { useNavigate, useSearchParams } from 'react-router-dom';
  
+-import Loading from 'components/loading/LoadingComponent';
 -import Page from 'components/Page';
--import globalize from 'lib/globalize';
--import Input from 'elements/emby-input/Input';
 -import Button from 'elements/emby-button/Button';
+-import Input from 'elements/emby-input/Input';
+-import SelectElement from 'elements/SelectElement';
 -import { useApi } from 'hooks/useApi';
+-import { useUsers } from 'hooks/useUsers';
+-import globalize from 'lib/globalize';
 -
 -import './quickConnect.scss';
 +import QuickConnectDialog from 'components/QuickConnectDialog';
  
  const QuickConnectPage: FC = () => {
 -    const { api, user } = useApi();
+-    const {
+-        data: users,
+-        isPending
+-    } = useUsers();
 +    const navigate = useNavigate();
      const [ searchParams ] = useSearchParams();
+-    const userIdDefault = searchParams.get('userId') ?? user?.Id;
 -    const [ code, setCode ] = useState(searchParams.get('code') ?? '');
 -    const [ error, setError ] = useState<string>();
 -    const [ success, setSuccess ] = useState(false);
@@ -40,6 +49,8 @@ index e042cf86ce..77246a5527 100644
 -            return;
 -        }
 -
+-        const userId = form.querySelector<HTMLSelectElement>('#userId')?.value;
+-
 -        if (!api) {
 -            console.error('[QuickConnect] cannot authorize, missing api instance');
 -            setError('UnknownError');
@@ -55,7 +66,6 @@ index e042cf86ce..77246a5527 100644
 +            navigate('/home', { replace: true });
          }
 -
--        const userId = searchParams.get('userId') ?? user?.Id;
 -        const normalizedCode = code.replace(/\s/g, '');
 -        console.log('[QuickConnect] authorizing code %s as user %s', normalizedCode, userId);
 -
@@ -70,7 +80,9 @@ index e042cf86ce..77246a5527 100644
 -            .catch(() => {
 -                setError('QuickConnectAuthorizeFail');
 -            });
--    }, [api, code, searchParams, user?.Id]);
+-    }, [ api, code ]);
+-
+-    if (isPending) return <Loading />;
 +    }, [ navigate ]);
  
      return (
@@ -108,6 +120,25 @@ index e042cf86ce..77246a5527 100644
 -                            </div>
 -                        ) : (
 -                            <>
+-                                {user?.Policy?.IsAdministrator && (
+-                                    <div className='selectContainer'>
+-                                        <SelectElement
+-                                            id='userId'
+-                                            label='LabelUser'
+-                                        >
+-                                            {
+-                                                users
+-                                                    ?.filter(u => !u.Policy?.IsDisabled)
+-                                                    .map(u => (
+-                                                        `<option value=${u.Id} ${u.Id === userIdDefault ? 'selected' : ''}>`
+-                                                        + escapeHTML(u.Name)
+-                                                        + '</option>'
+-                                                    ))
+-                                            }
+-                                        </SelectElement>
+-                                    </div>
+-                                )}
+-
 -                                <div className='inputContainer'>
 -                                    <Input
 -                                        value={code}
@@ -206,10 +237,10 @@ index df5071f3c9..5739dca4f8 100644
  };
 diff --git a/src/components/QuickConnectDialog.tsx b/src/components/QuickConnectDialog.tsx
 new file mode 100644
-index 0000000000..4277f72e96
+index 0000000000..461508bc89
 --- /dev/null
 +++ b/src/components/QuickConnectDialog.tsx
-@@ -0,0 +1,158 @@
+@@ -0,0 +1,200 @@
 +import { getAuthenticationApi } from '@jellyfin/sdk/lib/utils/api/authentication-api';
 +import Alert from '@mui/material/Alert';
 +import Button from '@mui/material/Button';
@@ -218,10 +249,16 @@ index 0000000000..4277f72e96
 +import DialogContent from '@mui/material/DialogContent';
 +import DialogContentText from '@mui/material/DialogContentText';
 +import DialogTitle from '@mui/material/DialogTitle';
++import FormControl from '@mui/material/FormControl';
++import InputLabel from '@mui/material/InputLabel';
++import MenuItem from '@mui/material/MenuItem';
++import Select from '@mui/material/Select';
 +import TextField from '@mui/material/TextField';
 +import React, { type FC, FormEvent, useCallback, useEffect, useState } from 'react';
 +
++import Loading from 'components/loading/LoadingComponent';
 +import { useApi } from 'hooks/useApi';
++import { useUsers } from 'hooks/useUsers';
 +import globalize from 'lib/globalize';
 +
 +interface QuickConnectDialogProps {
@@ -238,7 +275,12 @@ index 0000000000..4277f72e96
 +    userId
 +}) => {
 +    const { api, user } = useApi();
++    const {
++        data: users,
++        isPending
++    } = useUsers();
 +    const [ code, setCode ] = useState(initialCode);
++    const [ selectedUserId, setSelectedUserId ] = useState(userId ?? user?.Id ?? '');
 +    const [ error, setError ] = useState<string>();
 +    const [ success, setSuccess ] = useState(false);
 +    const [ isSubmitting, setIsSubmitting ] = useState(false);
@@ -246,15 +288,20 @@ index 0000000000..4277f72e96
 +    useEffect(() => {
 +        if (open) {
 +            setCode(initialCode);
++            setSelectedUserId(userId ?? user?.Id ?? '');
 +            setError(undefined);
 +            setSuccess(false);
 +            setIsSubmitting(false);
 +        }
-+    }, [ open, initialCode ]);
++    }, [ open, initialCode, user?.Id, userId ]);
 +
 +    const onCodeChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
 +        setCode(event.currentTarget.value);
 +        setError(undefined);
++    }, []);
++
++    const onUserChange = useCallback((event: { target: { value: string } }) => {
++        setSelectedUserId(event.target.value);
 +    }, []);
 +
 +    const onSubmit = useCallback((e: FormEvent<HTMLFormElement>) => {
@@ -273,7 +320,7 @@ index 0000000000..4277f72e96
 +            return;
 +        }
 +
-+        const authorizeUserId = userId ?? user?.Id;
++        const authorizeUserId = selectedUserId || userId || user?.Id;
 +        console.log('[QuickConnect] authorizing code %s as user %s', normalizedCode, authorizeUserId);
 +        setIsSubmitting(true);
 +
@@ -291,7 +338,11 @@ index 0000000000..4277f72e96
 +            .finally(() => {
 +                setIsSubmitting(false);
 +            });
-+    }, [ api, code, user?.Id, userId ]);
++    }, [ api, code, selectedUserId, user?.Id, userId ]);
++
++    if (open && isPending) {
++        return <Loading />;
++    }
 +
 +    return (
 +        <Dialog
@@ -326,6 +377,28 @@ index 0000000000..4277f72e96
 +                            <Alert severity='error' sx={{ mb: 2 }}>
 +                                {globalize.translate(error)}
 +                            </Alert>
++                        )}
++                        {user?.Policy?.IsAdministrator && (
++                            <FormControl fullWidth sx={{ mb: 2 }} variant='standard'>
++                                <InputLabel id='quickConnectUserLabel'>
++                                    {globalize.translate('LabelUser')}
++                                </InputLabel>
++                                <Select
++                                    labelId='quickConnectUserLabel'
++                                    id='userId'
++                                    value={selectedUserId}
++                                    onChange={onUserChange}
++                                    label={globalize.translate('LabelUser')}
++                                >
++                                    {users
++                                        ?.filter(u => !u.Policy?.IsDisabled)
++                                        .map(u => (
++                                            <MenuItem key={u.Id} value={u.Id ?? ''}>
++                                                {u.Name}
++                                            </MenuItem>
++                                        ))}
++                                </Select>
++                            </FormControl>
 +                        )}
 +                        <TextField
 +                            autoFocus
