@@ -1,8 +1,8 @@
 diff --git a/Emby.Server.Implementations/Library/LibraryManager.cs b/Emby.Server.Implementations/Library/LibraryManager.cs
-index 0044fcd4dc..3eea6aa276 100644
+index caba304888..e36fd2ca2b 100644
 --- a/Emby.Server.Implementations/Library/LibraryManager.cs
 +++ b/Emby.Server.Implementations/Library/LibraryManager.cs
-@@ -1267,6 +1267,70 @@ namespace Emby.Server.Implementations.Library
+@@ -1278,6 +1278,70 @@ namespace Emby.Server.Implementations.Library
              return GetItemByNameId<Studio>(Studio.GetPath(name));
          }
  
@@ -73,7 +73,7 @@ index 0044fcd4dc..3eea6aa276 100644
          public Guid GetGenreId(string name)
          {
              return GetItemByNameId<Genre>(Genre.GetPath(name));
-@@ -3812,13 +3876,19 @@ namespace Emby.Server.Implementations.Library
+@@ -3823,13 +3887,19 @@ namespace Emby.Server.Implementations.Library
  
          private async Task SavePeopleMetadataAsync(IEnumerable<PersonInfo> people, CancellationToken cancellationToken)
          {
@@ -208,7 +208,7 @@ index 525396b7ee..be435d79e3 100644
  
          // Apply default sorting if none requested
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-index 6625cb2be4..542f9eab94 100644
+index f9a2491f48..cdaea46c42 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 @@ -341,6 +341,16 @@ public sealed partial class BaseItemRepository
@@ -337,7 +337,7 @@ index 6625cb2be4..542f9eab94 100644
      /// <summary>
      /// Builds a query for descendants of an ancestor with user access filtering applied.
      /// Uses recursive CTE to traverse both hierarchical (AncestorIds) and linked (LinkedChildren) relationships.
-@@ -754,4 +866,24 @@ public sealed partial class BaseItemRepository
+@@ -763,4 +875,24 @@ public sealed partial class BaseItemRepository
                  && (descendants.Any(d => d.Id == lc.ChildId)
                      || context.AncestorIds.Any(a => a.ParentItemId == lc.ChildId && descendants.Any(d => d.Id == a.ItemId))));
      }
@@ -402,7 +402,7 @@ index de112d7aa4..ff2dbd4fd6 100644
      public IReadOnlyList<Guid> GetManualLinkedParentIds(Guid childId, BaseItemKind? parentType = null)
      {
 diff --git a/MediaBrowser.Controller/Library/ILibraryManager.cs b/MediaBrowser.Controller/Library/ILibraryManager.cs
-index ac6df54949..de290d19dc 100644
+index 82de3546f0..408a38239e 100644
 --- a/MediaBrowser.Controller/Library/ILibraryManager.cs
 +++ b/MediaBrowser.Controller/Library/ILibraryManager.cs
 @@ -717,6 +717,12 @@ namespace MediaBrowser.Controller.Library
@@ -504,7 +504,7 @@ index 0000000000..6daa40e267
 +    }
 +}
 diff --git a/src/Jellyfin.LiveTv/LiveTvManager.cs b/src/Jellyfin.LiveTv/LiveTvManager.cs
-index 80f6985fdb..60f14c6b6b 100644
+index 8d2be23546..55f6bd6178 100644
 --- a/src/Jellyfin.LiveTv/LiveTvManager.cs
 +++ b/src/Jellyfin.LiveTv/LiveTvManager.cs
 @@ -315,12 +315,16 @@ namespace Jellyfin.LiveTv

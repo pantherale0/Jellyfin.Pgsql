@@ -80,7 +80,7 @@ index 0ebfe3ae71..2b7df3e41e 100644
      }
  }
 diff --git a/Emby.Server.Implementations/Library/MediaSourceManager.cs b/Emby.Server.Implementations/Library/MediaSourceManager.cs
-index 97e00177b6..97801ddb6b 100644
+index e9bba05839..0ca08536f2 100644
 --- a/Emby.Server.Implementations/Library/MediaSourceManager.cs
 +++ b/Emby.Server.Implementations/Library/MediaSourceManager.cs
 @@ -6,6 +6,7 @@ using System;
@@ -126,7 +126,7 @@ index 97e00177b6..97801ddb6b 100644
          }
  
          public void AddParts(IEnumerable<IMediaSourceProvider> providers)
-@@ -633,67 +644,200 @@ namespace Emby.Server.Implementations.Library
+@@ -644,67 +655,200 @@ namespace Emby.Server.Implementations.Library
  
          public async Task<Tuple<LiveStreamResponse, IDirectStreamProvider>> OpenLiveStreamInternal(LiveStreamRequest request, CancellationToken cancellationToken)
          {
@@ -361,7 +361,7 @@ index 97e00177b6..97801ddb6b 100644
          }
  
          private static void AddMediaInfo(MediaSourceInfo mediaSource)
-@@ -781,7 +925,13 @@ namespace Emby.Server.Implementations.Library
+@@ -792,7 +936,13 @@ namespace Emby.Server.Implementations.Library
  
          public async Task AddMediaInfoWithProbe(MediaSourceInfo mediaSource, bool isAudio, string cacheKey, bool addProbeDelay, bool isLiveStream, CancellationToken cancellationToken)
          {
@@ -376,7 +376,7 @@ index 97e00177b6..97801ddb6b 100644
  
              var now = DateTime.UtcNow;
  
-@@ -814,11 +964,6 @@ namespace Emby.Server.Implementations.Library
+@@ -825,11 +975,6 @@ namespace Emby.Server.Implementations.Library
                      await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
                  }
  
@@ -388,7 +388,7 @@ index 97e00177b6..97801ddb6b 100644
                  mediaInfo = await _mediaEncoder.GetMediaInfo(
                      new MediaInfoRequest
                      {
-@@ -843,21 +988,6 @@ namespace Emby.Server.Implementations.Library
+@@ -854,21 +999,6 @@ namespace Emby.Server.Implementations.Library
  
              var mediaStreams = mediaInfo.MediaStreams;
  
@@ -410,7 +410,7 @@ index 97e00177b6..97801ddb6b 100644
              _logger.LogInformation("Live tv media info probe took {0} seconds", (DateTime.UtcNow - now).TotalSeconds.ToString(CultureInfo.InvariantCulture));
  
              mediaSource.Bitrate = mediaInfo.Bitrate;
-@@ -872,15 +1002,6 @@ namespace Emby.Server.Implementations.Library
+@@ -883,15 +1013,6 @@ namespace Emby.Server.Implementations.Library
  
              mediaSource.DefaultSubtitleStreamIndex = null;
  
@@ -426,7 +426,7 @@ index 97e00177b6..97801ddb6b 100644
              var audioStream = mediaStreams.FirstOrDefault(i => i.Type == MediaStreamType.Audio);
  
              if (audioStream is null || audioStream.Index == -1)
-@@ -921,11 +1042,6 @@ namespace Emby.Server.Implementations.Library
+@@ -932,11 +1053,6 @@ namespace Emby.Server.Implementations.Library
                  videoStream.IsAVC = null;
              }
  
@@ -438,7 +438,7 @@ index 97e00177b6..97801ddb6b 100644
              // Try to estimate this
              mediaSource.InferTotalBitrate(true);
          }
-@@ -961,6 +1077,12 @@ namespace Emby.Server.Implementations.Library
+@@ -972,6 +1088,12 @@ namespace Emby.Server.Implementations.Library
              return _openStreams.Values.FirstOrDefault(stream => string.Equals(uniqueId, stream?.UniqueId, StringComparison.OrdinalIgnoreCase));
          }
  
@@ -451,7 +451,7 @@ index 97e00177b6..97801ddb6b 100644
          public async Task<MediaSourceInfo> GetLiveStream(string id, CancellationToken cancellationToken)
          {
              var result = await GetLiveStreamWithDirectStreamProvider(id, cancellationToken).ConfigureAwait(false);
-@@ -987,7 +1109,7 @@ namespace Emby.Server.Implementations.Library
+@@ -998,7 +1120,7 @@ namespace Emby.Server.Implementations.Library
                  IgnoreIndex = true
              };
  
@@ -460,7 +460,7 @@ index 97e00177b6..97801ddb6b 100644
                  .AddMediaInfoWithProbe(stream, false, false, cancellationToken).ConfigureAwait(false);
  
              return [stream];
-@@ -997,11 +1119,13 @@ namespace Emby.Server.Implementations.Library
+@@ -1008,11 +1130,13 @@ namespace Emby.Server.Implementations.Library
          {
              ArgumentException.ThrowIfNullOrEmpty(id);
  
@@ -475,7 +475,7 @@ index 97e00177b6..97801ddb6b 100644
  
                      _logger.LogInformation("Live stream {0} consumer count is now {1}", liveStream.OriginalStreamId, liveStream.ConsumerCount);
  
-@@ -1011,11 +1135,17 @@ namespace Emby.Server.Implementations.Library
+@@ -1022,11 +1146,17 @@ namespace Emby.Server.Implementations.Library
  
                          _logger.LogInformation("Closing live stream {0}", id);
  
@@ -495,7 +495,7 @@ index 97e00177b6..97801ddb6b 100644
          }
  
          private (IMediaSourceProvider MediaSourceProvider, string KeyId) GetProvider(string key)
-@@ -1053,6 +1183,7 @@ namespace Emby.Server.Implementations.Library
+@@ -1064,6 +1194,7 @@ namespace Emby.Server.Implementations.Library
                  }
  
                  _liveStreamLocker.Dispose();
@@ -504,7 +504,7 @@ index 97e00177b6..97801ddb6b 100644
          }
      }
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 94215bed79..c5d1c5eb2b 100644
+index 08e2578867..d3b9617e89 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -317,10 +317,56 @@ namespace Emby.Server.Implementations.Session
@@ -921,7 +921,7 @@ index 2b6781a197..9464ee3cdc 100644
          /// Gets the media sources for an active recording.
          /// </summary>
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-index ebad360225..087ca90dce 100644
+index b2d4f8c35a..60d2dc510f 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 @@ -1308,7 +1308,7 @@ namespace MediaBrowser.Controller.MediaEncoding
@@ -933,7 +933,7 @@ index ebad360225..087ca90dce 100644
                  if (!string.IsNullOrEmpty(ffmpegProbeSizeArgument))
                  {
                      arg.Append(' ').Append(ffmpegProbeSizeArgument);
-@@ -7323,13 +7323,15 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -7346,13 +7346,15 @@ namespace MediaBrowser.Controller.MediaEncoding
              return analyzeDurationArgument;
          }
  
@@ -953,7 +953,7 @@ index ebad360225..087ca90dce 100644
              }
  
              return string.Empty;
-@@ -7348,7 +7350,7 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -7371,7 +7373,7 @@ namespace MediaBrowser.Controller.MediaEncoding
              inputModifier = inputModifier.Trim();
  
              // Apply -probesize if configured
@@ -963,7 +963,7 @@ index ebad360225..087ca90dce 100644
              if (!string.IsNullOrEmpty(ffmpegProbeSizeArgument))
              {
 diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-index 227ec3b317..09f423e6ac 100644
+index f567279880..ee9afbe143 100644
 --- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 +++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 @@ -476,9 +476,12 @@ namespace MediaBrowser.MediaEncoding.Encoder

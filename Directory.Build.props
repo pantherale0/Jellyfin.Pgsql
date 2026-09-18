@@ -1,6 +1,6 @@
 <Project>
   <PropertyGroup>
-    <JellyfinVersion>12.0.0</JellyfinVersion>
+    <JellyfinVersion>12.1.0</JellyfinVersion>
     <MicrosoftPackageVersion>10.0.11</MicrosoftPackageVersion>
     <NpgsqlVersion>10.0.3</NpgsqlVersion>
     <NpgsqlEfVersion>10.0.2</NpgsqlEfVersion>

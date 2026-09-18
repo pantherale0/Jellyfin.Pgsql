@@ -2,7 +2,7 @@
 
 This repository is an **experimental** PostgreSQL adapter for Jellyfin, maintained independently for personal use. It was originally derived from [JPVenson/Jellyfin.Pgsql](https://github.com/JPVenson/Jellyfin.Pgsql) but is no longer tied to that project’s releases, images, or workflow.
 
-Published images live at `ghcr.io/pantherale0/jellyfin.pgsql` (for example `:12.0-rc2`). The image is **not** stock Jellyfin plus a drop-in plugin: it builds Jellyfin server and web from source after applying every patch under [`patches/`](../patches/), then ships [`Jellyfin.Plugin.Pgsql`](../Jellyfin.Plugin.Pgsql/) and [`Jellyfin.Plugin.Seerr`](../Jellyfin.Plugin.Seerr/).
+Published images live at `ghcr.io/pantherale0/jellyfin.pgsql` (for example `:12.1`). The image is **not** stock Jellyfin plus a drop-in plugin: it builds Jellyfin server and web from source after applying every patch under [`patches/`](../patches/), then ships [`Jellyfin.Plugin.Pgsql`](../Jellyfin.Plugin.Pgsql/) and [`Jellyfin.Plugin.Seerr`](../Jellyfin.Plugin.Seerr/).
 
 **Status:** highly experimental — use at your own risk.
 

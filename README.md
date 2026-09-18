@@ -26,14 +26,14 @@ If you want to discuss a bug, idea, or change, please use [GitHub Discussions](h
 
 Use your existing Jellyfin Compose file and point the image at this repository’s container registry:
 
-`ghcr.io/pantherale0/jellyfin.pgsql:12.0-rc2`
+`ghcr.io/pantherale0/jellyfin.pgsql:12.1`
 
 Add the connection parameters as environment variables in your compose file:
 
 ```yaml
 services:
   jellyfin:
-    image: ghcr.io/pantherale0/jellyfin.pgsql:12.0-rc2
+    image: ghcr.io/pantherale0/jellyfin.pgsql:12.1
     volumes:
       - /path/to/config:/config
       - /path/to/cache:/cache
@@ -106,7 +106,7 @@ When HA is enabled, point k8s **readiness** at `/health/ready` (not `/health`). 
 To build the image locally instead:
 
 ```bash
-docker build -f docker/Dockerfile --build-arg JELLYFIN_VERSION=12.0-rc2 -t jellyfin.pgsql .
+docker build -f docker/Dockerfile --build-arg JELLYFIN_VERSION=12.1 -t jellyfin.pgsql .
 ```
 
 ## Single Sign-On (SSO) with RBAC via OAuth2/OIDC
@@ -266,7 +266,7 @@ services:
       - /path/to/redis-data:/data
 
   jellyfin:
-    image: ghcr.io/pantherale0/jellyfin.pgsql:12.0-rc2
+    image: ghcr.io/pantherale0/jellyfin.pgsql:12.1
     depends_on:
       - postgres
       - redis
@@ -298,7 +298,7 @@ docker run --rm \
   -e POSTGRES_HOST=postgres -e POSTGRES_DB=jellyfin \
   -e POSTGRES_USER=jellyfin -e POSTGRES_PASSWORD=secret \
   -v /path/to/config:/config \
-  ghcr.io/pantherale0/jellyfin.pgsql:12.0-rc2 \
+  ghcr.io/pantherale0/jellyfin.pgsql:12.1 \
   /jellyfin-pgsql/migrate-sqlite-to-postgres.sh --dry-run --sqlite-db /config/data/jellyfin.db
 ```
 

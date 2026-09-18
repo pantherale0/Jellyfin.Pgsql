@@ -1,8 +1,8 @@
 diff --git a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
-index 2380b39d5d..bab9613a51 100644
+index 3bd5ca327d..4c75a29f39 100644
 --- a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
 +++ b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
-@@ -435,8 +435,7 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -479,8 +479,7 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
  
          if (!string.IsNullOrWhiteSpace(filter.NameContains))
          {
@@ -40,7 +40,7 @@ index 7cc6daa905..f6682770da 100644
      public bool IsTypeSupported(BaseItem baseItem)
      {
 diff --git a/MediaBrowser.Controller/Entities/BaseItem.cs b/MediaBrowser.Controller/Entities/BaseItem.cs
-index 0d9a8825a7..dd85ab5c11 100644
+index b7390914ee..d9a654fb8d 100644
 --- a/MediaBrowser.Controller/Entities/BaseItem.cs
 +++ b/MediaBrowser.Controller/Entities/BaseItem.cs
 @@ -1168,7 +1168,9 @@ namespace MediaBrowser.Controller.Entities

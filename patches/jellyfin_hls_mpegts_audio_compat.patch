@@ -1,5 +1,5 @@
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-index 32f046ff12..4416a71ad4 100644
+index 681db9d826..ab4d0eb2e0 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 @@ -696,7 +696,9 @@ namespace MediaBrowser.Controller.MediaEncoding
@@ -28,7 +28,7 @@ index 32f046ff12..4416a71ad4 100644
                  && audioStream.BitRate.HasValue
                  && audioStream.BitRate.Value > request.AudioBitRate.Value)
              {
-@@ -7593,6 +7599,17 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -7616,6 +7622,17 @@ namespace MediaBrowser.Controller.MediaEncoding
                  // Keep them in the supported codecs list, but shift them to the end of the list so that if transcoding happens, another codec is used
                  shiftAudioCodecs.Add("dts");
                  shiftAudioCodecs.Add("truehd");
@@ -47,7 +47,7 @@ index 32f046ff12..4416a71ad4 100644
              else
              {
 diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-index f066045572..f8f72a0bce 100644
+index f7c92d7095..43c5097db6 100644
 --- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 +++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 @@ -405,6 +405,13 @@ namespace MediaBrowser.MediaEncoding.Encoder

@@ -1,5 +1,5 @@
 diff --git a/package-lock.json b/package-lock.json
-index c8a45f3591..8ecfd21819 100644
+index 8ae9243ab2..705ce6dbe4 100644
 --- a/package-lock.json
 +++ b/package-lock.json
 @@ -22,6 +22,7 @@
@@ -380,7 +380,7 @@ index c8a45f3591..8ecfd21819 100644
        "version": "4.40.2",
        "resolved": "https://registry.npmjs.org/rollup/-/rollup-4.40.2.tgz",
 diff --git a/package.json b/package.json
-index b5849f5853..478afa919b 100644
+index c8bdff607f..21ebbc7600 100644
 --- a/package.json
 +++ b/package.json
 @@ -90,6 +90,7 @@

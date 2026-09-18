@@ -64,3 +64,28 @@ index 78d54907c3..18059f14e7 100644
      /*public DbSet<Artwork> Artwork => Set<Artwork>();
  
      public DbSet<Book> Books => Set<Book>();
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserTasteBecauseYouRecommendationConfiguration.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserTasteBecauseYouRecommendationConfiguration.cs
+new file mode 100644
+index 0000000000..1b43c3337c
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserTasteBecauseYouRecommendationConfiguration.cs
+@@ -0,0 +1,19 @@
++using Jellyfin.Database.Implementations.Entities;
++using Microsoft.EntityFrameworkCore;
++using Microsoft.EntityFrameworkCore.Metadata.Builders;
++
++namespace Jellyfin.Database.Implementations.ModelConfiguration;
++
++/// <summary>
++/// FluentAPI configuration for the <see cref="UserTasteBecauseYouRecommendation"/> entity.
++/// </summary>
++public class UserTasteBecauseYouRecommendationConfiguration : IEntityTypeConfiguration<UserTasteBecauseYouRecommendation>
++{
++    /// <inheritdoc/>
++    public void Configure(EntityTypeBuilder<UserTasteBecauseYouRecommendation> builder)
++    {
++        builder.HasKey(e => new { e.UserId, e.SourceItemId, e.Rank });
++        builder.Property(e => e.SourceKind).IsRequired();
++        builder.HasIndex(e => new { e.UserId, e.SourceKind });
++    }
++}
