@@ -343,10 +343,10 @@ index 87de4ed79c..26e7250cf6 100644
              // Security consumers
              collection.AddScoped<IEventConsumer<AuthenticationRequestEventArgs>, AuthenticationFailedLogger>();
 diff --git a/Jellyfin.Server.Implementations/Users/UserManager.cs b/Jellyfin.Server.Implementations/Users/UserManager.cs
-index fea6084267..92cfb70a16 100644
+index b15f6b98b2..e27793876d 100644
 --- a/Jellyfin.Server.Implementations/Users/UserManager.cs
 +++ b/Jellyfin.Server.Implementations/Users/UserManager.cs
-@@ -865,6 +865,12 @@ namespace Jellyfin.Server.Implementations.Users
+@@ -867,6 +867,12 @@ namespace Jellyfin.Server.Implementations.Users
                          _ => policy.LoginAttemptsBeforeLockout
                      };
  
@@ -359,7 +359,7 @@ index fea6084267..92cfb70a16 100644
                      user.MaxParentalRatingScore = policy.MaxParentalRating;
                      user.MaxParentalRatingSubScore = policy.MaxParentalSubRating;
                      user.EnableUserPreferenceAccess = policy.EnableUserPreferenceAccess;
-@@ -917,6 +923,20 @@ namespace Jellyfin.Server.Implementations.Users
+@@ -919,6 +925,20 @@ namespace Jellyfin.Server.Implementations.Users
  
                      dbContext.Update(user);
                      await dbContext.SaveChangesAsync().ConfigureAwait(false);
@@ -373,10 +373,10 @@ index fea6084267..92cfb70a16 100644
 +
 +                    if (parentalControlsChanged)
 +                    {
-+                        var eventArgs = new UserUpdatedEventArgs(user);
-+                        await _eventManager.PublishAsync(eventArgs).ConfigureAwait(false);
-+                        OnUserUpdated?.Invoke(this, eventArgs);
++                        var parentalEventArgs = new UserUpdatedEventArgs(user);
++                        await _eventManager.PublishAsync(parentalEventArgs).ConfigureAwait(false);
++                        OnUserUpdated?.Invoke(this, parentalEventArgs);
 +                    }
                  }
              }
-         }
+ 

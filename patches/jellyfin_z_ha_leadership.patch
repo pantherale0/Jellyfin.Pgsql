@@ -100,21 +100,18 @@ index 0000000000..5d8583b4cb
 +    }
 +}
 diff --git a/Emby.Server.Implementations/IO/LibraryMonitor.cs b/Emby.Server.Implementations/IO/LibraryMonitor.cs
-index f97eb76b2e..2bf3338aa1 100644
+index b2ba2dcc44..b2211ad82f 100644
 --- a/Emby.Server.Implementations/IO/LibraryMonitor.cs
 +++ b/Emby.Server.Implementations/IO/LibraryMonitor.cs
-@@ -3,8 +3,10 @@ using System.Collections.Concurrent;
- using System.Collections.Generic;
- using System.IO;
- using System.Linq;
-+using System.Threading;
+@@ -6,6 +6,7 @@ using System.Linq;
+ using System.Threading;
  using System.Threading.Tasks;
  using Emby.Server.Implementations.Library;
 +using MediaBrowser.Controller;
  using MediaBrowser.Controller.Configuration;
  using MediaBrowser.Controller.Entities;
  using MediaBrowser.Controller.Library;
-@@ -24,10 +26,7 @@ namespace Emby.Server.Implementations.IO
+@@ -25,10 +26,7 @@ namespace Emby.Server.Implementations.IO
          private readonly IFileSystem _fileSystem;
          private readonly IDirectoryService _directoryService;
          private readonly DotIgnoreIgnoreRule _dotIgnoreIgnoreRule;
@@ -126,15 +123,15 @@ index f97eb76b2e..2bf3338aa1 100644
          private readonly ConcurrentDictionary<string, FileSystemWatcher> _fileSystemWatchers = new(StringComparer.OrdinalIgnoreCase);
  
          /// <summary>
-@@ -40,6 +39,7 @@ namespace Emby.Server.Implementations.IO
+@@ -47,6 +45,7 @@ namespace Emby.Server.Implementations.IO
          /// </summary>
-         private readonly ConcurrentDictionary<string, string> _tempIgnoredPaths = new(StringComparer.OrdinalIgnoreCase);
+         private int _watcherGeneration;
  
 +        private int _started;
          private bool _disposed;
  
          /// <summary>
-@@ -52,6 +52,7 @@ namespace Emby.Server.Implementations.IO
+@@ -59,6 +58,7 @@ namespace Emby.Server.Implementations.IO
          /// <param name="directoryService">The directory service.</param>
          /// <param name="appLifetime">The <see cref="IHostApplicationLifetime"/>.</param>
          /// <param name="dotIgnoreIgnoreRule">The .ignore rule handler.</param>
@@ -142,7 +139,7 @@ index f97eb76b2e..2bf3338aa1 100644
          public LibraryMonitor(
              ILogger<LibraryMonitor> logger,
              ILibraryManager libraryManager,
-@@ -59,7 +60,8 @@ namespace Emby.Server.Implementations.IO
+@@ -66,7 +66,8 @@ namespace Emby.Server.Implementations.IO
              IFileSystem fileSystem,
              IDirectoryService directoryService,
              IHostApplicationLifetime appLifetime,
@@ -152,18 +149,18 @@ index f97eb76b2e..2bf3338aa1 100644
          {
              _libraryManager = libraryManager;
              _logger = logger;
-@@ -67,6 +69,7 @@ namespace Emby.Server.Implementations.IO
+@@ -74,6 +75,7 @@ namespace Emby.Server.Implementations.IO
              _fileSystem = fileSystem;
              _directoryService = directoryService;
              _dotIgnoreIgnoreRule = dotIgnoreIgnoreRule;
 +            _leadership = leadership;
  
              appLifetime.ApplicationStarted.Register(Start);
-             appLifetime.ApplicationStopping.Register(Stop);
-@@ -120,6 +123,17 @@ namespace Emby.Server.Implementations.IO
-         /// <inheritdoc />
-         public void Start()
-         {
+             appLifetime.ApplicationStopping.Register(Dispose);
+@@ -132,6 +134,17 @@ namespace Emby.Server.Implementations.IO
+                 return;
+             }
+ 
 +            if (!_leadership.IsLeader)
 +            {
 +                _logger.LogInformation("Skipping library monitor start; this instance is not the HA leader");
@@ -178,15 +175,14 @@ index f97eb76b2e..2bf3338aa1 100644
              _libraryManager.ItemAdded += OnLibraryManagerItemAdded;
              _libraryManager.ItemRemoved += OnLibraryManagerItemRemoved;
  
-@@ -459,6 +473,8 @@ namespace Emby.Server.Implementations.IO
-         /// </summary>
+@@ -483,6 +496,7 @@ namespace Emby.Server.Implementations.IO
          public void Stop()
          {
+             Interlocked.Increment(ref _watcherGeneration);
 +            Interlocked.Exchange(ref _started, 0);
-+
+ 
              _libraryManager.ItemAdded -= OnLibraryManagerItemAdded;
              _libraryManager.ItemRemoved -= OnLibraryManagerItemRemoved;
- 
 diff --git a/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs b/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs
 index e229aa42cb..abaee82974 100644
 --- a/Emby.Server.Implementations/Library/BackgroundMediaWorkGate.cs
@@ -370,7 +366,7 @@ index 4ec2c9c786..8bda08bc01 100644
          ScheduledTasks = ScheduledTasks.Concat(list).ToArray();
      }
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 49d16fb615..af72e79874 100644
+index 3fcda061eb..509ab5756f 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -59,6 +59,7 @@ namespace Emby.Server.Implementations.Session
@@ -437,7 +433,7 @@ index 49d16fb615..af72e79874 100644
                      }
                  }
              }
-@@ -2826,6 +2837,29 @@ namespace Emby.Server.Implementations.Session
+@@ -2828,6 +2839,29 @@ namespace Emby.Server.Implementations.Session
                  _logger.LogError(ex, "Error sending server shutdown notifications");
              }
  
@@ -710,7 +706,7 @@ index a5b6bc4604..c0d56e0b5c 100644
      }
  
 diff --git a/Jellyfin.Server/Startup.cs b/Jellyfin.Server/Startup.cs
-index 1802440dc4..c300acb38a 100644
+index 560a419945..61097bb026 100644
 --- a/Jellyfin.Server/Startup.cs
 +++ b/Jellyfin.Server/Startup.cs
 @@ -1,6 +1,7 @@
@@ -721,7 +717,7 @@ index 1802440dc4..c300acb38a 100644
  using System.Net;
  using System.Net.Http;
  using System.Net.Http.Headers;
-@@ -23,6 +24,7 @@ using MediaBrowser.Controller.Configuration;
+@@ -24,6 +25,7 @@ using MediaBrowser.Controller.Configuration;
  using MediaBrowser.Controller.Extensions;
  using MediaBrowser.XbmcMetadata;
  using Microsoft.AspNetCore.Builder;
@@ -729,7 +725,7 @@ index 1802440dc4..c300acb38a 100644
  using Microsoft.AspNetCore.Hosting;
  using Microsoft.AspNetCore.Localization;
  using Microsoft.AspNetCore.StaticFiles;
-@@ -125,7 +127,8 @@ namespace Jellyfin.Server
+@@ -126,7 +128,8 @@ namespace Jellyfin.Server
                  .ConfigurePrimaryHttpMessageHandler(defaultHttpClientHandlerDelegate);
  
              services.AddHealthChecks()
@@ -739,7 +735,7 @@ index 1802440dc4..c300acb38a 100644
  
              services.AddHlsPlaylistGenerator();
              services.AddLiveTvServices();
-@@ -183,6 +186,7 @@ namespace Jellyfin.Server
+@@ -185,6 +188,7 @@ namespace Jellyfin.Server
                  mainApp.UseMiddleware<ExceptionMiddleware>();
  
                  mainApp.UseMiddleware<ResponseTimeMiddleware>();
@@ -747,7 +743,7 @@ index 1802440dc4..c300acb38a 100644
  
                  mainApp.UseWebSockets();
  
-@@ -251,7 +255,14 @@ namespace Jellyfin.Server
+@@ -253,7 +257,14 @@ namespace Jellyfin.Server
                          endpoints.MapMetrics();
                      }
  
@@ -943,10 +939,10 @@ index 5b144b0296..7217677013 100644
      {
          job.DisposeKillTimer();
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/IJellyfinDatabaseProvider.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/IJellyfinDatabaseProvider.cs
-index 77abb45f2a..2da63dee44 100644
+index 0a72287ba9..e30ac4880b 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/IJellyfinDatabaseProvider.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/IJellyfinDatabaseProvider.cs
-@@ -82,4 +82,19 @@ public interface IJellyfinDatabaseProvider
+@@ -84,4 +84,19 @@ public interface IJellyfinDatabaseProvider
      /// <param name="tableNames">The names of the tables to purge or null for all tables to be purged.</param>
      /// <returns>A Task.</returns>
      Task PurgeDatabase(JellyfinDbContext dbContext, IEnumerable<string>? tableNames);

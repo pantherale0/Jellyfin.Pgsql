@@ -1,5 +1,5 @@
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-index a6547f3518..055aef3441 100644
+index cb1571092a..cf90763238 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 @@ -7,6 +7,7 @@ using System;
@@ -18,7 +18,7 @@ index a6547f3518..055aef3441 100644
  using MediaBrowser.Model.Entities;
  using MediaBrowser.Model.Querying;
  using Microsoft.EntityFrameworkCore;
-@@ -778,12 +780,27 @@ public sealed partial class BaseItemRepository
+@@ -785,12 +787,27 @@ public sealed partial class BaseItemRepository
              baseQuery = baseQuery.Where(BuildMaxParentalRatingFilter(context, filter.MaxParentalRating));
          }
  
@@ -48,7 +48,7 @@ index a6547f3518..055aef3441 100644
          }
  
          // Apply excluded tags filtering (blocked tags).
-@@ -811,20 +828,81 @@ public sealed partial class BaseItemRepository
+@@ -818,20 +835,81 @@ public sealed partial class BaseItemRepository
              var allowedTagItemIds = context.ItemValuesMap
                  .Where(f => f.ItemValue.Type == ItemValueType.Tags && includeTags.Contains(f.ItemValue.CleanValue))
                  .Select(f => f.ItemId);
@@ -139,7 +139,7 @@ index a6547f3518..055aef3441 100644
      /// Builds a filter expression for max parental rating that handles both rated items
      /// and unrated BoxSets/Playlists (which check linked children's ratings).
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-index e5f21d842b..7d40740516 100644
+index 4c16c2979f..c592295fa4 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 @@ -10,13 +10,16 @@ using System.Collections.Generic;
@@ -176,7 +176,7 @@ index e5f21d842b..7d40740516 100644
  
              if (minParentalRatingFilter != null && maxParentalRatingFilter != null)
              {
-@@ -1158,18 +1169,36 @@ public sealed partial class BaseItemRepository
+@@ -1163,18 +1174,36 @@ public sealed partial class BaseItemRepository
              var allowedTagItemIds = context.ItemValuesMap
                  .Where(f => f.ItemValue.Type == ItemValueType.Tags && includeTags.Contains(f.ItemValue.CleanValue))
                  .Select(f => f.ItemId);
@@ -223,10 +223,10 @@ index e5f21d842b..7d40740516 100644
  
          if (filter.SeriesStatuses.Length > 0)
 diff --git a/MediaBrowser.Controller/Entities/BaseItem.cs b/MediaBrowser.Controller/Entities/BaseItem.cs
-index d030c8f420..0d9a8825a7 100644
+index 70e7da8932..b7390914ee 100644
 --- a/MediaBrowser.Controller/Entities/BaseItem.cs
 +++ b/MediaBrowser.Controller/Entities/BaseItem.cs
-@@ -1833,7 +1833,7 @@ namespace MediaBrowser.Controller.Entities
+@@ -1862,7 +1862,7 @@ namespace MediaBrowser.Controller.Entities
          /// <param name="skipAllowedTagsCheck">Don't check for allowed tags.</param>
          /// <returns><c>true</c> if [is parental allowed] [the specified user]; otherwise, <c>false</c>.</returns>
          /// <exception cref="ArgumentNullException">If user is null.</exception>
@@ -529,10 +529,10 @@ index f70e3e2c23..cbfc387d38 100644
 +    AllowedLiveTvCategories = 14
  }
 diff --git a/src/Jellyfin.LiveTv/Guide/GuideManager.cs b/src/Jellyfin.LiveTv/Guide/GuideManager.cs
-index 2d014fa91e..474cab86f1 100644
+index ee208938e1..8d8098958d 100644
 --- a/src/Jellyfin.LiveTv/Guide/GuideManager.cs
 +++ b/src/Jellyfin.LiveTv/Guide/GuideManager.cs
-@@ -438,6 +438,19 @@ public class GuideManager : IGuideManager
+@@ -446,6 +446,19 @@ public class GuideManager : IGuideManager
          item.ChannelType = channelInfo.ChannelType;
          item.ServiceName = serviceName;
  

@@ -1,8 +1,8 @@
 diff --git a/Jellyfin.Server.Implementations/Item/NextUpService.cs b/Jellyfin.Server.Implementations/Item/NextUpService.cs
-index f478daef23..5ba161bed2 100644
+index 897fb98cbb..8de3169600 100644
 --- a/Jellyfin.Server.Implementations/Item/NextUpService.cs
 +++ b/Jellyfin.Server.Implementations/Item/NextUpService.cs
-@@ -165,7 +165,7 @@ public class NextUpService : INextUpService
+@@ -174,7 +174,7 @@ public class NextUpService : INextUpService
                  .Where(e => e.ParentIndexNumber == 0)
                  .Where(e => !e.IsVirtualItem);
              specialsQuery = _queryHelpers.ApplyAccessFiltering(context, specialsQuery, filter);
@@ -11,7 +11,7 @@ index f478daef23..5ba161bed2 100644
  
              foreach (var special in specialsQuery)
              {
-@@ -300,7 +300,7 @@ public class NextUpService : INextUpService
+@@ -309,7 +309,7 @@ public class NextUpService : INextUpService
          if (nextEpisodeIds.Count > 0)
          {
              var nextQuery = context.BaseItems.AsNoTracking().Where(e => nextEpisodeIds.Contains(e.Id));

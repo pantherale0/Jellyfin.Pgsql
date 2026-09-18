@@ -11,7 +11,7 @@ index e6e3d645fe..242866ab5c 100644
              serviceCollection.AddSingleton<ITranscodeManager, TranscodeManager>();
              serviceCollection.AddScoped<MediaInfoHelper>();
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index b740e645bf..49d16fb615 100644
+index c0a4aade3d..3fcda061eb 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -30,6 +30,7 @@ using MediaBrowser.Controller.Events.Authentication;
@@ -56,7 +56,7 @@ index b740e645bf..49d16fb615 100644
          }
  
          /// <summary>
-@@ -2689,12 +2694,31 @@ namespace Emby.Server.Implementations.Session
+@@ -2691,12 +2696,31 @@ namespace Emby.Server.Implementations.Session
  
              if (!userIsAdmin)
              {

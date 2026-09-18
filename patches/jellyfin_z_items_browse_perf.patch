@@ -1,5 +1,5 @@
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-index 542f9eab94..a6547f3518 100644
+index cdaea46c42..cb1571092a 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 @@ -27,17 +27,17 @@ public sealed partial class BaseItemRepository
@@ -57,7 +57,7 @@ index 542f9eab94..a6547f3518 100644
          {
              dbQuery = dbQuery.Distinct();
 @@ -289,10 +297,19 @@ public sealed partial class BaseItemRepository
-             dbQuery = dbQuery.Include(e => e.Images);
+             dbQuery = dbQuery.Include(e => e.Images!.OrderBy(i => i.Id));
          }
  
 -        // Include LinkedChildEntities for container types and videos that use them (BoxSet, Playlist,
@@ -88,13 +88,13 @@ index 542f9eab94..a6547f3518 100644
 +        if (!onlyVideoListTypes
 +            && (filter.IncludeItemTypes.Length == 0 || filter.IncludeItemTypes.Any(linkedChildTypes.Contains)))
          {
-             dbQuery = dbQuery.Include(e => e.LinkedChildEntities);
+             dbQuery = dbQuery.Include(e => e.LinkedChildEntities!.OrderBy(l => l.SortOrder));
          }
 diff --git a/tests/Jellyfin.Server.Implementations.Tests/Item/BaseItemRepositoryGroupingTests.cs b/tests/Jellyfin.Server.Implementations.Tests/Item/BaseItemRepositoryGroupingTests.cs
-index 535961a66c..2d0974f73f 100644
+index 9238ec9fd1..78213c6bff 100644
 --- a/tests/Jellyfin.Server.Implementations.Tests/Item/BaseItemRepositoryGroupingTests.cs
 +++ b/tests/Jellyfin.Server.Implementations.Tests/Item/BaseItemRepositoryGroupingTests.cs
-@@ -61,13 +61,35 @@ public sealed class BaseItemRepositoryGroupingTests : SqliteDbTestFixture
+@@ -66,7 +66,7 @@ public sealed class BaseItemRepositoryGroupingTests : SqliteDbTestFixture
              ctx.SaveChanges();
          }
  
@@ -103,6 +103,8 @@ index 535961a66c..2d0974f73f 100644
  
          var item = Assert.Single(result);
          Assert.Equal(firstId, item.Id);
+@@ -184,7 +184,29 @@ public sealed class BaseItemRepositoryGroupingTests : SqliteDbTestFixture
+         };
      }
  
 -    private static InternalItemsQuery CreateQuery()
@@ -111,8 +113,8 @@ index 535961a66c..2d0974f73f 100644
 +    {
 +        // Library browse leaves IncludeOwnedItems false so TranslateQuery applies
 +        // PrimaryVersionId IS NULL. Presentation-key GroupBy is skipped in that shape.
-+        var primaryId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
-+        var alternateId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
++        var primaryId = Guid.Parse("77777777-7777-7777-7777-777777777777");
++        var alternateId = Guid.Parse("88888888-8888-8888-8888-888888888888");
 +        var presentationKey = primaryId.ToString("N");
 +
 +        using (var ctx = CreateDbContext())
@@ -132,7 +134,7 @@ index 535961a66c..2d0974f73f 100644
      {
          // IncludeOwnedItems keeps the alternate version rows in the query so the
          // grouping collapse is what picks the group representative.
-@@ -78,6 +100,16 @@ public sealed class BaseItemRepositoryGroupingTests : SqliteDbTestFixture
+@@ -195,6 +217,16 @@ public sealed class BaseItemRepositoryGroupingTests : SqliteDbTestFixture
          };
      }
  
@@ -146,6 +148,6 @@ index 535961a66c..2d0974f73f 100644
 +
 +    private static InternalItemsQuery CreateQuery() => CreateOwnedItemsQuery();
 +
-     private BaseItemEntity CreateMovieEntity(Guid id, string name, string presentationKey, Guid? primaryVersionId)
+     private BaseItemEntity CreateMovieEntity(Guid id, string name, string presentationKey, Guid? primaryVersionId, Guid? libraryId = null)
      {
          return new BaseItemEntity

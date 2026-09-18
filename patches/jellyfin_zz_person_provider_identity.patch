@@ -1,8 +1,8 @@
 diff --git a/Emby.Server.Implementations/Dto/DtoService.cs b/Emby.Server.Implementations/Dto/DtoService.cs
-index 59e75691dc..94cdbd7438 100644
+index e539508644..c8ca3bd49f 100644
 --- a/Emby.Server.Implementations/Dto/DtoService.cs
 +++ b/Emby.Server.Implementations/Dto/DtoService.cs
-@@ -861,60 +861,55 @@ namespace Emby.Server.Implementations.Dto
+@@ -936,60 +936,55 @@ namespace Emby.Server.Implementations.Dto
  
              var list = new List<BaseItemPerson>();
  
@@ -93,15 +93,13 @@ index 59e75691dc..94cdbd7438 100644
  
              dto.People = list.ToArray();
 diff --git a/Emby.Server.Implementations/Library/LibraryManager.cs b/Emby.Server.Implementations/Library/LibraryManager.cs
-index 3eea6aa276..5d88ae67e2 100644
+index e36fd2ca2b..d5d3300bb8 100644
 --- a/Emby.Server.Implementations/Library/LibraryManager.cs
 +++ b/Emby.Server.Implementations/Library/LibraryManager.cs
-@@ -1250,6 +1250,53 @@ namespace Emby.Server.Implementations.Library
-             CreateItem(item, null);
- 
+@@ -1263,6 +1263,53 @@ namespace Emby.Server.Implementations.Library
              return item;
-+        }
-+
+         }
+ 
 +
 +        public Person? GetPerson(PersonInfo person)
 +        {
@@ -147,10 +145,12 @@ index 3eea6aa276..5d88ae67e2 100644
 +            }
 +
 +            return legacy;
-         }
- 
++        }
++
          /// <summary>
-@@ -3677,7 +3723,7 @@ namespace Emby.Server.Implementations.Library
+         /// Gets the studio.
+         /// </summary>
+@@ -3688,7 +3735,7 @@ namespace Emby.Server.Implementations.Library
                  {
                      try
                      {
@@ -159,7 +159,7 @@ index 3eea6aa276..5d88ae67e2 100644
                      }
                      catch (Exception ex)
                      {
-@@ -3688,6 +3734,7 @@ namespace Emby.Server.Implementations.Library
+@@ -3699,6 +3746,7 @@ namespace Emby.Server.Implementations.Library
                  .Where(i => i is not null)
                  .Where(i => query.User is null || i!.IsVisible(query.User))
                  .OfType<BaseItem>()
@@ -167,7 +167,7 @@ index 3eea6aa276..5d88ae67e2 100644
                  .ToList()
                  .AsReadOnly();
  
-@@ -3877,7 +3924,6 @@ namespace Emby.Server.Implementations.Library
+@@ -3888,7 +3936,6 @@ namespace Emby.Server.Implementations.Library
          private async Task SavePeopleMetadataAsync(IEnumerable<PersonInfo> people, CancellationToken cancellationToken)
          {
              var peopleList = people.ToList();
@@ -175,7 +175,7 @@ index 3eea6aa276..5d88ae67e2 100644
  
              foreach (var person in peopleList)
              {
-@@ -3885,16 +3931,25 @@ namespace Emby.Server.Implementations.Library
+@@ -3896,16 +3943,25 @@ namespace Emby.Server.Implementations.Library
  
                  var itemUpdateType = ItemUpdateType.MetadataDownload;
                  var saveEntity = false;
@@ -206,7 +206,7 @@ index 3eea6aa276..5d88ae67e2 100644
                          saveEntity = true;
                      }
                      catch (Exception ex)
-@@ -3906,11 +3961,22 @@ namespace Emby.Server.Implementations.Library
+@@ -3917,11 +3973,22 @@ namespace Emby.Server.Implementations.Library
  
                  foreach (var id in person.ProviderIds)
                  {
@@ -417,7 +417,7 @@ index 092a621bfc..a9a2e1b474 100644
                  .Where(p => !context.PeopleBaseItemMap.Any(m => m.PeopleId.Equals(p.Id)))
                  .ExecuteDeleteAsync(cancellationToken)
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-index 7d40740516..3a61d439b6 100644
+index c592295fa4..8d856e766b 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 @@ -453,15 +453,33 @@ public sealed partial class BaseItemRepository
@@ -460,7 +460,7 @@ index 7d40740516..3a61d439b6 100644
                  .Where(e => context.PeopleBaseItemMap
                      .Any(m => m.ItemId == e.Id && peopleEntityIds.Contains(m.PeopleId) && (personTypes.Length == 0 || personTypes.Contains(m.People.PersonType))));
 diff --git a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
-index da2ad033ec..2380b39d5d 100644
+index fcddc09ad9..3bd5ca327d 100644
 --- a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
 +++ b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
 @@ -7,6 +7,7 @@ using Jellyfin.Database.Implementations.Entities;
@@ -545,7 +545,7 @@ index da2ad033ec..2380b39d5d 100644
          };
      }
  
-@@ -117,67 +108,67 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -117,16 +108,21 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
              person.Role = person.Role?.Trim() ?? string.Empty;
          }
  
@@ -571,27 +571,75 @@ index da2ad033ec..2380b39d5d 100644
 +            .ToArray();
  
 -        var distinctPersons = distinctCredits.DistinctBy(e => (e.LoweredName, e.PersonType)).ToArray();
--        var personKeys = distinctPersons.Select(e => e.LoweredName + "-" + e.PersonType).ToArray();
-+        var nameOnlyKeys = people
-+            .Where(e => !PersonIdentity.TryGetProviderKey(e, out _))
-+            .Select(e => e.Name.ToLowerInvariant() + "-" + e.Type)
-+            .Distinct()
-+            .ToArray();
++        var nameOnlyPeople = people.Where(e => !PersonIdentity.TryGetProviderKey(e, out _)).ToArray();
  
          using var context = _dbProvider.CreateDbContext();
-         using var transaction = context.Database.BeginTransaction();
--        var existingPersons = context.Peoples.Select(e => new
--        {
--            item = e,
--            SelectionKey = e.Name.ToLower() + "-" + e.PersonType
--        })
--            .Where(p => personKeys.Contains(p.SelectionKey))
--            .Select(f => f.item)
-+        var existingPersons = context.Peoples
-+            .Where(p =>
-+                (p.ProviderKey != null && providerKeys.Contains(p.ProviderKey))
-+                || (p.ProviderKey == null && nameOnlyKeys.Contains(p.Name.ToLower() + "-" + p.PersonType)))
-             .ToArray();
+         var existingMaps = context.PeopleBaseItemMap
+@@ -137,23 +133,20 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+ 
+         // Most library scans refresh unchanged local metadata. Avoid opening a write
+         // transaction when the item's people mappings, order and roles are unchanged.
+-        var incomingCredits = distinctCredits
+-            .Select((credit, index) => new
++        var incomingCredits = people
++            .Select((person, index) => new
+             {
+-                Key = (credit.LoweredName, credit.PersonType, credit.LoweredRole),
+-                Role = credit.Person.Role,
++                Person = person,
+                 ListOrder = index,
+-                SortOrder = credit.Person.SortOrder
+             })
+-            .ToDictionary(e => e.Key);
+-        var mappingsAreUnchanged = existingMaps.Count == incomingCredits.Count
+-            && existingMaps.All(map =>
+-                incomingCredits.TryGetValue(
+-                    (map.People.Name.ToLowerInvariant(), map.People.PersonType ?? string.Empty, map.Role?.ToLowerInvariant() ?? string.Empty),
+-                    out var incoming)
+-                && map.ListOrder == incoming.ListOrder
+-                && map.SortOrder == incoming.SortOrder
+-                && string.Equals(map.Role ?? string.Empty, incoming.Role, StringComparison.OrdinalIgnoreCase));
++            .ToArray();
++        var mappingsAreUnchanged = existingMaps.Count == incomingCredits.Length
++            && incomingCredits.All(incoming =>
++                existingMaps.Any(map =>
++                    MatchesPerson(map.People, incoming.Person)
++                    && string.Equals(map.Role ?? string.Empty, incoming.Person.Role ?? string.Empty, StringComparison.OrdinalIgnoreCase)
++                    && map.ListOrder == incoming.ListOrder
++                    && map.SortOrder == incoming.Person.SortOrder));
+ 
+         if (mappingsAreUnchanged)
+         {
+@@ -168,58 +161,58 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+             .Where(e => e.ItemId == itemId)
+             .ToList();
+ 
+-        // Query each person type separately so SQLite can use IX_Peoples_NameLower.
+-        // Combining the two fields into `lower(Name) || '-' || PersonType` forces a full
+-        // scan of Peoples for every media item, which is prohibitive during a large import.
+         var existingPersons = new List<People>();
+-        foreach (var personTypeGroup in distinctPersons.GroupBy(e => e.PersonType, StringComparer.Ordinal))
++        if (providerKeys.Length > 0)
++        {
++            existingPersons.AddRange(context.Peoples
++                .Where(p => p.ProviderKey != null && providerKeys.Contains(p.ProviderKey))
++                .ToArray());
++        }
++
++        // Query each person type separately so SQLite can use IX_Peoples_NameLower.
++        foreach (var personTypeGroup in nameOnlyPeople.GroupBy(e => e.Type.ToString(), StringComparer.Ordinal))
+         {
+             var names = personTypeGroup
+-                .Select(e => e.LoweredName)
++                .Select(e => e.Name.ToLowerInvariant())
++                .Distinct()
+                 .ToArray();
+ 
+             existingPersons.AddRange(context.Peoples
+-                .Where(e => e.PersonType == personTypeGroup.Key && names.Contains(e.Name.ToLower()))
++                .Where(e => e.ProviderKey == null && e.PersonType == personTypeGroup.Key && names.Contains(e.Name.ToLower()))
+                 .ToArray());
+         }
  
 -        var existingPersonKeys = existingPersons.Select(e => (e.Name.ToLowerInvariant(), e.PersonType ?? string.Empty)).ToHashSet();
 +        var toAdd = new List<People>();
@@ -625,14 +673,13 @@ index da2ad033ec..2380b39d5d 100644
 -        {
 -            personsEntities.TryAdd((entity.Name.ToLowerInvariant(), entity.PersonType ?? string.Empty), entity);
 -        }
-+        var personsEntities = toAdd.Concat(existingPersons).ToArray();
- 
-         var existingMaps = context.PeopleBaseItemMap.Include(e => e.People).Where(e => e.ItemId == itemId).ToList();
+-
 -        var existingMapsByCredit = new Dictionary<(string LoweredName, string PersonType, string LoweredRole), PeopleBaseItemMap>();
 -        foreach (var map in existingMaps)
 -        {
 -            existingMapsByCredit.TryAdd((map.People.Name.ToLowerInvariant(), map.People.PersonType ?? string.Empty, map.Role?.ToLowerInvariant() ?? string.Empty), map);
 -        }
++        var personsEntities = toAdd.Concat(existingPersons).ToArray();
  
          var listOrder = 0;
  
@@ -657,7 +704,7 @@ index da2ad033ec..2380b39d5d 100644
              {
                  context.PeopleBaseItemMap.Add(new PeopleBaseItemMap()
                  {
-@@ -186,10 +177,18 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -228,10 +221,18 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
                      People = null!,
                      PeopleId = entityPerson.Id,
                      ListOrder = listOrder,
@@ -678,7 +725,7 @@ index da2ad033ec..2380b39d5d 100644
  
              listOrder++;
          }
-@@ -283,7 +282,8 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -325,7 +326,8 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
                  m.SortOrder,
                  m.People.Id,
                  m.People.Name,
@@ -688,7 +735,7 @@ index da2ad033ec..2380b39d5d 100644
              })
              .ToList();
  
-@@ -306,6 +306,11 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -348,6 +350,11 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
                      personInfo.Type = kind;
                  }
  
@@ -700,7 +747,7 @@ index da2ad033ec..2380b39d5d 100644
                  people.Add(personInfo);
              }
  
-@@ -315,19 +320,30 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -357,19 +364,30 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
          return result;
      }
  
@@ -714,18 +761,18 @@ index da2ad033ec..2380b39d5d 100644
 -        if (mappings is null || mappings.Count == 0)
 +        var type = person.Type.ToString();
 +        if (!string.Equals(entity.PersonType, type, StringComparison.Ordinal))
++        {
++            return false;
++        }
++
++        PersonIdentity.TryGetProviderKey(person, out var key);
++        if (!string.IsNullOrEmpty(key))
          {
 -            return [Map(people, null)];
-+            return false;
++            return string.Equals(entity.ProviderKey, key, StringComparison.OrdinalIgnoreCase);
          }
  
 -        return mappings.OrderBy(m => m.ListOrder).Select(m => Map(people, m));
-+        PersonIdentity.TryGetProviderKey(person, out var key);
-+        if (!string.IsNullOrEmpty(key))
-+        {
-+            return string.Equals(entity.ProviderKey, key, StringComparison.OrdinalIgnoreCase);
-+        }
-+
 +        return string.IsNullOrEmpty(entity.ProviderKey)
 +            && string.Equals(entity.Name, person.Name, StringComparison.OrdinalIgnoreCase);
      }
@@ -737,7 +784,7 @@ index da2ad033ec..2380b39d5d 100644
          var personInfo = new PersonInfo()
          {
              Id = people.Id,
-@@ -340,16 +356,23 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -382,16 +400,23 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
              personInfo.Type = kind;
          }
  
@@ -761,7 +808,7 @@ index da2ad033ec..2380b39d5d 100644
          };
  
          return personInfo;
-@@ -360,25 +383,13 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -402,25 +427,13 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
          if (filter.User is not null && filter.IsFavorite.HasValue)
          {
              var personType = itemTypeLookup.BaseItemKindNames[BaseItemKind.Person];
@@ -1315,7 +1362,7 @@ index b53210b0b1..3d6cee96b5 100644
  
      /// <summary>
 diff --git a/MediaBrowser.Controller/Library/ILibraryManager.cs b/MediaBrowser.Controller/Library/ILibraryManager.cs
-index de290d19dc..eaa2f23c24 100644
+index 408a38239e..b73924e78b 100644
 --- a/MediaBrowser.Controller/Library/ILibraryManager.cs
 +++ b/MediaBrowser.Controller/Library/ILibraryManager.cs
 @@ -113,6 +113,13 @@ namespace MediaBrowser.Controller.Library

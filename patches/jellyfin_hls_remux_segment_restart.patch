@@ -137,10 +137,10 @@ index 034a9dea55..4c11fdec1a 100644
      {
          var file = GetLastTranscodingFile(playlistPath, segmentExtension, _fileSystem);
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-index 4416a71ad4..ebad360225 100644
+index ab4d0eb2e0..b2d4f8c35a 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-@@ -7398,14 +7398,13 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -7421,14 +7421,13 @@ namespace MediaBrowser.Controller.MediaEncoding
                  readrate = 1;
                  inputModifier += " -re";
              }

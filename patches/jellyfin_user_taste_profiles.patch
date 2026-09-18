@@ -174,3 +174,103 @@ index 0388e09077..0ee2a81c21 100644
      /*public DbSet<Artwork> Artwork => Set<Artwork>();
  
      public DbSet<Book> Books => Set<Book>();
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserTasteProfileConfiguration.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserTasteProfileConfiguration.cs
+new file mode 100644
+index 0000000000..58a9a7d767
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserTasteProfileConfiguration.cs
+@@ -0,0 +1,18 @@
++using Jellyfin.Database.Implementations.Entities;
++using Microsoft.EntityFrameworkCore;
++using Microsoft.EntityFrameworkCore.Metadata.Builders;
++
++namespace Jellyfin.Database.Implementations.ModelConfiguration;
++
++/// <summary>
++/// FluentAPI configuration for the <see cref="UserTasteProfile"/> entity.
++/// </summary>
++public class UserTasteProfileConfiguration : IEntityTypeConfiguration<UserTasteProfile>
++{
++    /// <inheritdoc/>
++    public void Configure(EntityTypeBuilder<UserTasteProfile> builder)
++    {
++        builder.HasKey(e => e.UserId);
++        builder.Property(e => e.FeaturesJson).IsRequired();
++    }
++}
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/TasteModelEvalRunConfiguration.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/TasteModelEvalRunConfiguration.cs
+new file mode 100644
+index 0000000000..2f5676762c
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/TasteModelEvalRunConfiguration.cs
+@@ -0,0 +1,18 @@
++using Jellyfin.Database.Implementations.Entities;
++using Microsoft.EntityFrameworkCore;
++using Microsoft.EntityFrameworkCore.Metadata.Builders;
++
++namespace Jellyfin.Database.Implementations.ModelConfiguration;
++
++/// <summary>
++/// FluentAPI configuration for the <see cref="TasteModelEvalRun"/> entity.
++/// </summary>
++public class TasteModelEvalRunConfiguration : IEntityTypeConfiguration<TasteModelEvalRun>
++{
++    /// <inheritdoc/>
++    public void Configure(EntityTypeBuilder<TasteModelEvalRun> builder)
++    {
++        builder.HasKey(e => e.Id);
++        builder.HasIndex(e => e.CreatedAt);
++    }
++}
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserTasteRecommendationConfiguration.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserTasteRecommendationConfiguration.cs
+new file mode 100644
+index 0000000000..79d14b1c2e
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserTasteRecommendationConfiguration.cs
+@@ -0,0 +1,20 @@
++using Jellyfin.Database.Implementations.Entities;
++using Microsoft.EntityFrameworkCore;
++using Microsoft.EntityFrameworkCore.Metadata.Builders;
++
++namespace Jellyfin.Database.Implementations.ModelConfiguration;
++
++/// <summary>
++/// FluentAPI configuration for the <see cref="UserTasteRecommendation"/> entity.
++/// </summary>
++public class UserTasteRecommendationConfiguration : IEntityTypeConfiguration<UserTasteRecommendation>
++{
++    /// <inheritdoc/>
++    public void Configure(EntityTypeBuilder<UserTasteRecommendation> builder)
++    {
++        builder.HasKey(e => new { e.UserId, e.ItemType, e.Rank });
++        builder.Property(e => e.ItemType).IsRequired();
++        builder.Property(e => e.Tier).IsRequired();
++        builder.HasIndex(e => new { e.UserId, e.ItemType });
++    }
++}
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserTasteRecommendationImpressionConfiguration.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserTasteRecommendationImpressionConfiguration.cs
+new file mode 100644
+index 0000000000..2afdb1e268
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/UserTasteRecommendationImpressionConfiguration.cs
+@@ -0,0 +1,20 @@
++using Jellyfin.Database.Implementations.Entities;
++using Microsoft.EntityFrameworkCore;
++using Microsoft.EntityFrameworkCore.Metadata.Builders;
++
++namespace Jellyfin.Database.Implementations.ModelConfiguration;
++
++/// <summary>
++/// FluentAPI configuration for the <see cref="UserTasteRecommendationImpression"/> entity.
++/// </summary>
++public class UserTasteRecommendationImpressionConfiguration : IEntityTypeConfiguration<UserTasteRecommendationImpression>
++{
++    /// <inheritdoc/>
++    public void Configure(EntityTypeBuilder<UserTasteRecommendationImpression> builder)
++    {
++        builder.HasKey(e => e.Id);
++        builder.Property(e => e.ItemType).IsRequired();
++        builder.HasIndex(e => new { e.UserId, e.ItemId, e.ServedAt });
++        builder.HasIndex(e => new { e.UserId, e.ServedAt });
++    }
++}
