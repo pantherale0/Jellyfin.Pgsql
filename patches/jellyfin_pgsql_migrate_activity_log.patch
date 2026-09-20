@@ -1,0 +1,20 @@
+diff --git a/Jellyfin.Server/Migrations/Routines/20250420070000_MigrateActivityLogDb.cs b/Jellyfin.Server/Migrations/Routines/20250420070000_MigrateActivityLogDb.cs
+index 8c8563190d..7b8908ad6a 100644
+--- a/Jellyfin.Server/Migrations/Routines/20250420070000_MigrateActivityLogDb.cs
++++ b/Jellyfin.Server/Migrations/Routines/20250420070000_MigrateActivityLogDb.cs
+@@ -83,9 +83,12 @@ internal class MigrateActivityLogDb : IDatabaseMigrationRoutine
+                 // Make sure that the database is empty in case of failed migration due to power outages, etc.
+                 dbContext.ActivityLogs.RemoveRange(dbContext.ActivityLogs);
+                 dbContext.SaveChanges();
+-                // Reset the autoincrement counter
+-                dbContext.Database.ExecuteSqlRaw("UPDATE sqlite_sequence SET seq = 0 WHERE name = 'ActivityLog';");
+-                dbContext.SaveChanges();
++                if (dbContext.Database.ProviderName != "Npgsql.EntityFrameworkCore.PostgreSQL")
++                {
++                    // Reset the SQLite autoincrement counter. PostgreSQL generates fresh IDs without this.
++                    dbContext.Database.ExecuteSqlRaw("UPDATE sqlite_sequence SET seq = 0 WHERE name = 'ActivityLog';");
++                    dbContext.SaveChanges();
++                }
+ 
+                 var newEntries = new List<ActivityLog>();
+ 

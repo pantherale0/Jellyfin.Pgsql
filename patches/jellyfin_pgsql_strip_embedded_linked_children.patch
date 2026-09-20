@@ -1,0 +1,44 @@
+diff --git a/Jellyfin.Server/Migrations/Routines/20260911120000_StripEmbeddedLinkedChildren.cs b/Jellyfin.Server/Migrations/Routines/20260911120000_StripEmbeddedLinkedChildren.cs
+index f61e42337a..0e8ae094d1 100644
+--- a/Jellyfin.Server/Migrations/Routines/20260911120000_StripEmbeddedLinkedChildren.cs
++++ b/Jellyfin.Server/Migrations/Routines/20260911120000_StripEmbeddedLinkedChildren.cs
+@@ -26,18 +26,29 @@ internal class StripEmbeddedLinkedChildren : IDatabaseMigrationRoutine
+     {
+         using var context = _dbProvider.CreateDbContext();
+ 
++        var command = context.Database.ProviderName == "Npgsql.EntityFrameworkCore.PostgreSQL"
++            ? """
++                UPDATE "BaseItems"
++                SET "Data" = ("Data"::jsonb - ARRAY['LinkedChildren', 'ExtraIds', 'SupportsExternalTransfer'])::text
++                WHERE "Data" IS NOT NULL
++                  AND pg_input_is_valid("Data", 'jsonb')
++                  AND ("Data" LIKE '%"LinkedChildren"%'
++                    OR "Data" LIKE '%"ExtraIds"%'
++                    OR "Data" LIKE '%"SupportsExternalTransfer"%')
++                """
++            : """
++                UPDATE "BaseItems"
++                SET "Data" = json_remove("Data", '$.LinkedChildren', '$.ExtraIds', '$.SupportsExternalTransfer')
++                WHERE "Data" IS NOT NULL
++                  AND json_valid("Data") = 1
++                  AND ("Data" LIKE '%"LinkedChildren"%'
++                    OR "Data" LIKE '%"ExtraIds"%'
++                    OR "Data" LIKE '%"SupportsExternalTransfer"%')
++                """;
++
+         // json_valid guards the rare malformed blob: json_remove would abort the statement on it,
+         // and one bad row must not cost every other row the fix.
+-        var updated = context.Database.ExecuteSqlRaw(
+-            """
+-            UPDATE "BaseItems"
+-            SET "Data" = json_remove("Data", '$.LinkedChildren', '$.ExtraIds', '$.SupportsExternalTransfer')
+-            WHERE "Data" IS NOT NULL
+-              AND json_valid("Data") = 1
+-              AND ("Data" LIKE '%"LinkedChildren"%'
+-                OR "Data" LIKE '%"ExtraIds"%'
+-                OR "Data" LIKE '%"SupportsExternalTransfer"%')
+-            """);
++        var updated = context.Database.ExecuteSqlRaw(command);
+ 
+         _logger.LogInformation("Dropped dead keys from the serialized data of {Count} items", updated);
+     }

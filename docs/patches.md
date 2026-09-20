@@ -78,6 +78,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 
 ## 2. Postgres / query performance
 
+### `jellyfin_pgsql_migrate_activity_log.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Makes legacy activity-log import avoid SQLite sequence SQL when Jellyfin's active database is PostgreSQL. |
+| **Why** | New PostgreSQL installations importing an old `activitylog.db` otherwise execute `UPDATE sqlite_sequence` through Npgsql and fail startup. |
+| **Where** | `Jellyfin.Server/Migrations/Routines/20250420070000_MigrateActivityLogDb.cs` |
+| **How** | Keeps the sequence reset for SQLite and skips it for Npgsql, where imported entities receive database-generated IDs. |
+| **Related** | PostgreSQL provider compatibility fix. No public issue. |
+
 ### `jellyfin_pgsql_migrate_rating_levels.patch`
 
 | | |
@@ -87,6 +98,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Why** | Npgsql permits only one active command per connection; streaming the ratings query while executing updates caused startup to fail with `NpgsqlOperationInProgressException`. |
 | **Where** | `Jellyfin.Server/Migrations/Routines/20260910120000_MigrateRatingLevels.cs` |
 | **How** | Adds `ToArray()` before the update loop so the query reader is closed before any `ExecuteUpdate` call. |
+| **Related** | PostgreSQL provider compatibility fix. No public issue. |
+
+### `jellyfin_pgsql_strip_embedded_linked_children.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Makes the dead serialized-item-key cleanup migration work with both PostgreSQL and SQLite. |
+| **Why** | The upstream migration unconditionally used SQLite's `json_remove` and `json_valid`, causing PostgreSQL startup to fail with SQLSTATE `42883`. |
+| **Where** | `Jellyfin.Server/Migrations/Routines/20260911120000_StripEmbeddedLinkedChildren.cs` |
+| **How** | Selects SQL by EF provider; PostgreSQL validates and converts the text payload to `jsonb`, removes the three top-level keys, and stores it as text, while SQLite retains its existing JSON functions. |
 | **Related** | PostgreSQL provider compatibility fix. No public issue. |
 
 ### `jellyfin_unoptimized_query_fixes.patch`
