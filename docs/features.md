@@ -72,7 +72,7 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 **Where:** Plugin `Trailers/` and `TrailerController`; server [`jellyfin_trailer_history`](patches.md#jellyfin_trailer_historypatch); web [`jellyfin_web_ytdlp_trailers`](patches.md#jellyfin_web_ytdlp_trailerspatch). See [README configuration](../README.md#remote-youtube-trailers).
 
-**How:** The image bundles a pinned yt-dlp release. Standalone installs provide `yt-dlp` on `PATH` or set `Pgsql_YTDLP_PATH`. Jellyfin relays all trailer bytes, so server bandwidth is used. V1 supports public YouTube videos only.
+**How:** The image bundles a pinned yt-dlp release. Standalone installs provide `yt-dlp` on `PATH` or set `Pgsql_YTDLP_PATH`. Progressive MP4 sources are relayed directly with Range support; adaptive-only H.264/AAC sources are remuxed through Jellyfin's configured ffmpeg into fragmented MP4 without temporary downloads. Jellyfin relays all trailer bytes, so server bandwidth is used. Public YouTube videos are supported; private/account/geo bypass remains out of scope.
 
 ## Taste profiles, For You, and taste models
 

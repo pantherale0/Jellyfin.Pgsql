@@ -23,7 +23,8 @@ public sealed class YtDlpTrailerServiceTests
         using var httpClient = new HttpClient(handler);
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(httpClient);
-        var service = new YtDlpTrailerService(runner, factory.Object, NullLogger<YtDlpTrailerService>.Instance);
+        var remuxer = new Mock<ITrailerRemuxer>();
+        var service = new YtDlpTrailerService(runner, factory.Object, remuxer.Object, NullLogger<YtDlpTrailerService>.Instance);
 
         for (var index = 0; index < 2; index++)
         {
@@ -37,6 +38,27 @@ public sealed class YtDlpTrailerServiceTests
 
         Assert.Equal(1, runner.CallCount);
         Assert.Equal("bytes=10-20", handler.LastRange);
+    }
+
+    [Fact]
+    public async Task RelayAsync_UsesRemuxerForAdaptiveTracks()
+    {
+        var runner = new Mock<IYtDlpProcessRunner>();
+        runner.Setup(r => r.ResolveAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new YtDlpResolution(
+                "https://media.example/video.mp4",
+                new Dictionary<string, string>(),
+                "https://media.example/audio.m4a",
+                new Dictionary<string, string>()));
+        var factory = new Mock<IHttpClientFactory>();
+        var remuxer = new Mock<ITrailerRemuxer>();
+        var service = new YtDlpTrailerService(runner.Object, factory.Object, remuxer.Object, NullLogger<YtDlpTrailerService>.Instance);
+        var context = new DefaultHttpContext();
+
+        await service.RelayAsync("dQw4w9WgXcQ", context, CancellationToken.None);
+
+        remuxer.Verify(r => r.RelayAsync(It.Is<YtDlpResolution>(value => value.RequiresRemux), context, CancellationToken.None), Times.Once);
+        factory.Verify(f => f.CreateClient(It.IsAny<string>()), Times.Never);
     }
 
     private sealed class CountingRunner : IYtDlpProcessRunner
