@@ -96,11 +96,10 @@ diff --git a/Emby.Server.Implementations/Library/LibraryManager.cs b/Emby.Server
 index e36fd2ca2b..d5d3300bb8 100644
 --- a/Emby.Server.Implementations/Library/LibraryManager.cs
 +++ b/Emby.Server.Implementations/Library/LibraryManager.cs
-@@ -1263,6 +1263,53 @@ namespace Emby.Server.Implementations.Library
+@@ -1263,6 +1263,52 @@ namespace Emby.Server.Implementations.Library
              return item;
          }
  
-+
 +        public Person? GetPerson(PersonInfo person)
 +        {
 +            ArgumentNullException.ThrowIfNull(person);
@@ -150,7 +149,7 @@ index e36fd2ca2b..d5d3300bb8 100644
          /// <summary>
          /// Gets the studio.
          /// </summary>
-@@ -3688,7 +3735,7 @@ namespace Emby.Server.Implementations.Library
+@@ -3688,7 +3734,7 @@ namespace Emby.Server.Implementations.Library
                  {
                      try
                      {
@@ -159,7 +158,7 @@ index e36fd2ca2b..d5d3300bb8 100644
                      }
                      catch (Exception ex)
                      {
-@@ -3699,6 +3746,7 @@ namespace Emby.Server.Implementations.Library
+@@ -3699,6 +3745,7 @@ namespace Emby.Server.Implementations.Library
                  .Where(i => i is not null)
                  .Where(i => query.User is null || i!.IsVisible(query.User))
                  .OfType<BaseItem>()
@@ -167,7 +166,7 @@ index e36fd2ca2b..d5d3300bb8 100644
                  .ToList()
                  .AsReadOnly();
  
-@@ -3888,7 +3936,6 @@ namespace Emby.Server.Implementations.Library
+@@ -3888,7 +3935,6 @@ namespace Emby.Server.Implementations.Library
          private async Task SavePeopleMetadataAsync(IEnumerable<PersonInfo> people, CancellationToken cancellationToken)
          {
              var peopleList = people.ToList();
@@ -175,7 +174,7 @@ index e36fd2ca2b..d5d3300bb8 100644
  
              foreach (var person in peopleList)
              {
-@@ -3896,16 +3943,25 @@ namespace Emby.Server.Implementations.Library
+@@ -3896,16 +3942,25 @@ namespace Emby.Server.Implementations.Library
  
                  var itemUpdateType = ItemUpdateType.MetadataDownload;
                  var saveEntity = false;
@@ -206,7 +205,7 @@ index e36fd2ca2b..d5d3300bb8 100644
                          saveEntity = true;
                      }
                      catch (Exception ex)
-@@ -3917,11 +3973,22 @@ namespace Emby.Server.Implementations.Library
+@@ -3917,11 +3972,22 @@ namespace Emby.Server.Implementations.Library
  
                  foreach (var id in person.ProviderIds)
                  {
