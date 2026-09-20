@@ -39,11 +39,19 @@ public sealed class YtDlpProcessRunner : IYtDlpProcessRunner
         startInfo.ArgumentList.Add("--socket-timeout");
         startInfo.ArgumentList.Add("15");
         startInfo.ArgumentList.Add("--format");
-        startInfo.ArgumentList.Add("best[protocol^=http][ext=mp4][vcodec^=avc1][acodec^=mp4a][height<=1080]/best[protocol^=http][ext=mp4][vcodec!=none][acodec!=none]");
+        startInfo.ArgumentList.Add("best[protocol^=http][ext=mp4][vcodec^=avc1][acodec^=mp4a][height<=1080]/bestvideo[protocol^=http][ext=mp4][vcodec^=avc1][height<=1080]+bestaudio[protocol^=http][ext=m4a][acodec^=mp4a]");
         startInfo.ArgumentList.Add("--print");
         startInfo.ArgumentList.Add("%(url)j");
         startInfo.ArgumentList.Add("--print");
         startInfo.ArgumentList.Add("%(http_headers)j");
+        startInfo.ArgumentList.Add("--print");
+        startInfo.ArgumentList.Add("%(requested_formats.0.url)j");
+        startInfo.ArgumentList.Add("--print");
+        startInfo.ArgumentList.Add("%(requested_formats.0.http_headers)j");
+        startInfo.ArgumentList.Add("--print");
+        startInfo.ArgumentList.Add("%(requested_formats.1.url)j");
+        startInfo.ArgumentList.Add("--print");
+        startInfo.ArgumentList.Add("%(requested_formats.1.http_headers)j");
         startInfo.ArgumentList.Add("https://www.youtube.com/watch?v=" + videoId);
 
         using var process = new Process { StartInfo = startInfo };
@@ -75,21 +83,24 @@ public sealed class YtDlpProcessRunner : IYtDlpProcessRunner
             }
 
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (lines.Length != 2)
+            if (lines.Length == 2)
+            {
+                return ParseProgressive(lines[0], lines[1]);
+            }
+
+            if (lines.Length != 6)
             {
                 throw new YtDlpException("yt-dlp returned an invalid response.");
             }
 
-            var url = JsonSerializer.Deserialize<string>(lines[0]);
-            var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(lines[1]);
-            if (string.IsNullOrWhiteSpace(url)
-                || !Uri.TryCreate(url, UriKind.Absolute, out var uri)
-                || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+            if (!string.Equals(lines[0], "NA", StringComparison.Ordinal))
             {
-                throw new YtDlpException("yt-dlp returned an invalid stream URL.");
+                return ParseProgressive(lines[0], lines[1]);
             }
 
-            return new YtDlpResolution(url, headers ?? new Dictionary<string, string>());
+            var video = ParseResource(lines[2], lines[3]);
+            var audio = ParseResource(lines[4], lines[5]);
+            return new YtDlpResolution(video.Url, video.Headers, audio.Url, audio.Headers);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -101,6 +112,26 @@ public sealed class YtDlpProcessRunner : IYtDlpProcessRunner
             TryKill(process);
             throw;
         }
+    }
+
+    private static YtDlpResolution ParseProgressive(string urlJson, string headersJson)
+    {
+        var resource = ParseResource(urlJson, headersJson);
+        return new YtDlpResolution(resource.Url, resource.Headers);
+    }
+
+    private static ResolvedResource ParseResource(string urlJson, string headersJson)
+    {
+        var url = JsonSerializer.Deserialize<string>(urlJson);
+        var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(headersJson);
+        if (string.IsNullOrWhiteSpace(url)
+            || !Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+        {
+            throw new YtDlpException("yt-dlp returned an invalid stream URL.");
+        }
+
+        return new ResolvedResource(url, headers ?? new Dictionary<string, string>());
     }
 
     private static async Task<string> ReadBoundedAsync(StreamReader reader, CancellationToken cancellationToken)
@@ -138,4 +169,6 @@ public sealed class YtDlpProcessRunner : IYtDlpProcessRunner
             // The process exited between the check and kill.
         }
     }
+
+    private sealed record ResolvedResource(string Url, IReadOnlyDictionary<string, string> Headers);
 }

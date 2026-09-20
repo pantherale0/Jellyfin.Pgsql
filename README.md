@@ -119,6 +119,10 @@ Trailer playback—both local trailer files and remote YouTube trailers—is del
 excluded from resume state, played status, playback statistics, and taste/neural
 recommendation inputs.
 
+When YouTube exposes only separate adaptive tracks, the plugin streams them through
+Jellyfin's configured ffmpeg as fragmented MP4 without temporary downloads. These remuxed
+responses are not byte-seekable; progressive sources retain normal HTTP Range support.
+
 The published image includes yt-dlp. Standalone plugin installations must install it on
 the Jellyfin host; set `Pgsql_YTDLP_PATH` to an alternate executable path when it is not
 available as `yt-dlp` on `PATH`. Changes require a restart. Private, age-restricted,

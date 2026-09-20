@@ -23,6 +23,7 @@ public sealed class YtDlpTrailerService
     private readonly ConcurrentDictionary<string, Lazy<Task<YtDlpResolution>>> _pending = new(StringComparer.Ordinal);
     private readonly IYtDlpProcessRunner _runner;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ITrailerRemuxer _remuxer;
     private readonly ILogger<YtDlpTrailerService> _logger;
 
     /// <summary>
@@ -30,14 +31,17 @@ public sealed class YtDlpTrailerService
     /// </summary>
     /// <param name="runner">The yt-dlp process runner.</param>
     /// <param name="httpClientFactory">HTTP client factory.</param>
+    /// <param name="remuxer">Adaptive-track remuxer.</param>
     /// <param name="logger">Logger.</param>
     public YtDlpTrailerService(
         IYtDlpProcessRunner runner,
         IHttpClientFactory httpClientFactory,
+        ITrailerRemuxer remuxer,
         ILogger<YtDlpTrailerService> logger)
     {
         _runner = runner;
         _httpClientFactory = httpClientFactory;
+        _remuxer = remuxer;
         _logger = logger;
     }
 
@@ -51,6 +55,12 @@ public sealed class YtDlpTrailerService
     public async Task RelayAsync(string videoId, HttpContext context, CancellationToken cancellationToken)
     {
         var resolution = await ResolveAsync(videoId, cancellationToken).ConfigureAwait(false);
+        if (resolution.RequiresRemux)
+        {
+            await _remuxer.RelayAsync(resolution, context, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         var response = await SendAsync(resolution, context, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Gone)
         {

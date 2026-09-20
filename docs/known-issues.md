@@ -24,7 +24,7 @@ Most product features (taste, playback stats, Emby import, Live TV patches, etc.
 | TV Latest optimisation | Plugin ports Season/Series container logic; **re-check** when syncing to new Jellyfin releases. |
 | Command timeout | Stock Jellyfin’s 30s Npgsql default is tight for large remote DBs; this image defaults `Pgsql_COMMAND_TIMEOUT` to `90`. |
 | Custom image required | Patched APIs and web UIs are not available if you only drop the plugin DLL into stock Jellyfin. |
-| Remote trailer dependency | YouTube extractor behavior changes independently of Jellyfin. Remote trailers may stop resolving until the pinned yt-dlp release is updated. Private/authenticated/age-restricted/geo-bypassed videos are unsupported; relaying consumes server bandwidth and the old iframe is not used as fallback. |
+| Remote trailer dependency | YouTube extractor behavior changes independently of Jellyfin. Remote trailers may stop resolving until the pinned yt-dlp release is updated. Private/authenticated/age-restricted/geo-bypassed videos are unsupported; relaying consumes server bandwidth and the old iframe is not used as fallback. Adaptive-only trailers are streamed through ffmpeg and therefore do not support byte-range seeking. |
 | Submodule/patch drift | Every upstream bump can break `git apply`; maintainers must refresh patches. |
 | SSO redirect URI | Must be an absolute configured URI (`JELLYFIN_SSO_OIDC_REDIRECT_URI`); do not derive from `Request.Host`. |
 | Live TV RBAC categories | M3U `group-title` categories appear in SSO allowlists only after a guide refresh with [`jellyfin_z_livetv_rbac_allowlist`](patches.md#jellyfin_z_livetv_rbac_allowlistpatch). HDHomeRun/XMLTV-only setups typically get EPG Kids/Sports/News categories, not playlist groups. |

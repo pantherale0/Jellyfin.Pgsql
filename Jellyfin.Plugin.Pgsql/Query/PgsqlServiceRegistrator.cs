@@ -39,6 +39,7 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<EmbyUserDataMatcher>();
         serviceCollection.AddSingleton<EmbyUserDataImportService>();
         serviceCollection.AddSingleton<IYtDlpProcessRunner, YtDlpProcessRunner>();
+        serviceCollection.AddSingleton<ITrailerRemuxer, FfmpegTrailerRemuxer>();
         serviceCollection.AddSingleton<YtDlpTrailerService>();
 
         serviceCollection.AddSingleton<RedisConnectionAccessor>();

@@ -53,8 +53,15 @@ public sealed class TrailerController : ControllerBase
         }
         catch (YtDlpException ex)
         {
-            _logger.LogWarning(ex, "Unable to resolve YouTube trailer {VideoId}", videoId);
-            Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            _logger.LogWarning(ex, "Unable to play YouTube trailer {VideoId}", videoId);
+            if (!Response.HasStarted)
+            {
+                Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            }
+            else
+            {
+                HttpContext.Abort();
+            }
         }
         catch (HttpRequestException ex)
         {
