@@ -6,7 +6,7 @@ index 509ab5756f..a7c7407ec3 100644
  using Microsoft.Extensions.Hosting;
  using Microsoft.Extensions.Logging;
  using Episode = MediaBrowser.Controller.Entities.TV.Episode;
-+using Trailer = MediaBrowser.Controller.Entities.Movies.Trailer;
++using Trailer = MediaBrowser.Controller.Entities.Trailer;
  
  namespace Emby.Server.Implementations.Session
  {
