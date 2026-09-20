@@ -78,6 +78,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 
 ## 2. Postgres / query performance
 
+### `jellyfin_pgsql_migrate_rating_levels.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Makes the parental-rating migration compatible with PostgreSQL by materializing distinct rating strings before issuing updates. |
+| **Why** | Npgsql permits only one active command per connection; streaming the ratings query while executing updates caused startup to fail with `NpgsqlOperationInProgressException`. |
+| **Where** | `Jellyfin.Server/Migrations/Routines/20260910120000_MigrateRatingLevels.cs` |
+| **How** | Adds `ToArray()` before the update loop so the query reader is closed before any `ExecuteUpdate` call. |
+| **Related** | PostgreSQL provider compatibility fix. No public issue. |
+
 ### `jellyfin_unoptimized_query_fixes.patch`
 
 | | |
