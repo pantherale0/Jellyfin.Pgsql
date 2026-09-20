@@ -10,6 +10,7 @@ This project is **highly experimental** and maintained for personal use. Expect 
 
 | Issue | Topic | Notes |
 |---|---|---|
+| [pantherale0#15](https://github.com/pantherale0/Jellyfin.Pgsql/issues/15) | Replace trailers functionality | Implemented by the yt-dlp relay; YouTube remains an external compatibility dependency described below. |
 | [pantherale0#5](https://github.com/pantherale0/Jellyfin.Pgsql/issues/5) | SSO Mapping config broken | Dashboard SSO mappings hit auth failures (401); addressed in web RBAC/auth handling. |
 | [pantherale0#1](https://github.com/pantherale0/Jellyfin.Pgsql/issues/1), [#2](https://github.com/pantherale0/Jellyfin.Pgsql/issues/2), [#4](https://github.com/pantherale0/Jellyfin.Pgsql/issues/4) | Migration sync failures | Auto-opened/updated with label `migration-sync-failure` when the scheduled sync workflow fails. |
 
@@ -23,6 +24,7 @@ Most product features (taste, playback stats, Emby import, Live TV patches, etc.
 | TV Latest optimisation | Plugin ports Season/Series container logic; **re-check** when syncing to new Jellyfin releases. |
 | Command timeout | Stock Jellyfin’s 30s Npgsql default is tight for large remote DBs; this image defaults `Pgsql_COMMAND_TIMEOUT` to `90`. |
 | Custom image required | Patched APIs and web UIs are not available if you only drop the plugin DLL into stock Jellyfin. |
+| Remote trailer dependency | YouTube extractor behavior changes independently of Jellyfin. Remote trailers may stop resolving until the pinned yt-dlp release is updated. Private/authenticated/age-restricted/geo-bypassed videos are unsupported; relaying consumes server bandwidth and the old iframe is not used as fallback. |
 | Submodule/patch drift | Every upstream bump can break `git apply`; maintainers must refresh patches. |
 | SSO redirect URI | Must be an absolute configured URI (`JELLYFIN_SSO_OIDC_REDIRECT_URI`); do not derive from `Request.Host`. |
 | Live TV RBAC categories | M3U `group-title` categories appear in SSO allowlists only after a guide refresh with [`jellyfin_z_livetv_rbac_allowlist`](patches.md#jellyfin_z_livetv_rbac_allowlistpatch). HDHomeRun/XMLTV-only setups typically get EPG Kids/Sports/News categories, not playlist groups. |

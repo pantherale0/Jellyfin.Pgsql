@@ -1,0 +1,39 @@
+diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
+index 509ab5756f..a7c7407ec3 100644
+--- a/Emby.Server.Implementations/Session/SessionManager.cs
++++ b/Emby.Server.Implementations/Session/SessionManager.cs
+@@ -43,6 +43,7 @@ using Microsoft.EntityFrameworkCore;
+ using Microsoft.Extensions.Hosting;
+ using Microsoft.Extensions.Logging;
+ using Episode = MediaBrowser.Controller.Entities.TV.Episode;
++using Trailer = MediaBrowser.Controller.Entities.Movies.Trailer;
+ 
+ namespace Emby.Server.Implementations.Session
+ {
+@@ -936,7 +937,7 @@ namespace Emby.Server.Implementations.Session
+ 
+             var users = GetUsers(session);
+ 
+-            if (libraryItem is not null)
++            if (libraryItem is not null and not Trailer)
+             {
+                 var progressItem = GetProgressItem(libraryItem, info.MediaSourceId);
+                 foreach (var user in users)
+@@ -1089,7 +1090,7 @@ namespace Emby.Server.Implementations.Session
+             var users = GetUsers(session);
+ 
+             // only update saved user data on actual check-ins, not automated ones
+-            if (libraryItem is not null && !isAutomated)
++            if (libraryItem is not null and not Trailer && !isAutomated)
+             {
+                 var progressItem = GetProgressItem(libraryItem, info.MediaSourceId);
+                 foreach (var user in users)
+@@ -1356,7 +1357,7 @@ namespace Emby.Server.Implementations.Session
+             var users = GetUsers(session);
+             var playedToCompletion = false;
+ 
+-            if (libraryItem is not null)
++            if (libraryItem is not null and not Trailer)
+             {
+                 var progressItem = GetProgressItem(libraryItem, info.MediaSourceId);
+                 foreach (var user in users)

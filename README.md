@@ -109,6 +109,21 @@ To build the image locally instead:
 docker build -f docker/Dockerfile --build-arg JELLYFIN_VERSION=12.1 -t jellyfin.pgsql .
 ```
 
+## Remote YouTube trailers
+
+The bundled web client plays remote YouTube trailers through Jellyfin's normal HTML5
+player. The server resolves a progressive MP4 with the pinned yt-dlp binary and relays
+the bytes, including seek/Range requests. This consumes Jellyfin server bandwidth.
+
+Trailer playback—both local trailer files and remote YouTube trailers—is deliberately
+excluded from resume state, played status, playback statistics, and taste/neural
+recommendation inputs.
+
+The published image includes yt-dlp. Standalone plugin installations must install it on
+the Jellyfin host; set `Pgsql_YTDLP_PATH` to an alternate executable path when it is not
+available as `yt-dlp` on `PATH`. Changes require a restart. Private, age-restricted,
+authenticated, and geo-bypassed YouTube playback is not supported.
+
 ## Single Sign-On (SSO) with RBAC via OAuth2/OIDC
 
 The custom Docker image supports built-in Single Sign-On (SSO) using OpenID Connect (OIDC) / OAuth2 with Role-Based Access Control (RBAC). 

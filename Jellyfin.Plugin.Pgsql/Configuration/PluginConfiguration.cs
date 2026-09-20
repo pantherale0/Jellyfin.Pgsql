@@ -13,6 +13,12 @@ namespace Jellyfin.Plugin.Pgsql.Configuration;
 public class PluginConfiguration : BasePluginConfiguration
 {
     /// <summary>
+    /// Gets or sets the yt-dlp executable path used to resolve remote YouTube trailers.
+    /// Overridden by <c>Pgsql_YTDLP_PATH</c>.
+    /// </summary>
+    public string YtDlpPath { get; set; } = "yt-dlp";
+
+    /// <summary>
     /// Gets or sets a value indicating whether query result caching (Latest/Resume) is enabled.
     /// Overridden by <c>Pgsql_CACHE_ENABLED</c>.
     /// </summary>
