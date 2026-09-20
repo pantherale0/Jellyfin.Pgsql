@@ -1,0 +1,70 @@
+diff --git a/src/components/playback/playbackmanager.js b/src/components/playback/playbackmanager.js
+index 7307958e5f..f2fd523fc5 100644
+--- a/src/components/playback/playbackmanager.js
++++ b/src/components/playback/playbackmanager.js
+@@ -78,7 +78,7 @@ function triggerPlayerChange(playbackManagerInstance, newPlayer, newTarget, prev
+ }
+ 
+ function reportPlayback(playbackManagerInstance, state, player, reportPlaylist, serverId, method, progressEventName) {
+-    if (!serverId) {
++    if (!serverId || state.NowPlayingItem?.SuppressPlaybackReporting) {
+         // Not a server item
+         // We can expand on this later and possibly report them
+         Events.trigger(playbackManagerInstance, 'reportplayback', [false]);
+@@ -104,6 +104,29 @@ function reportPlayback(playbackManagerInstance, state, player, reportPlaylist,
+     });
+ }
+ 
++function getYoutubeVideoId(value) {
++    try {
++        const url = new URL(value);
++        const host = url.hostname.toLowerCase();
++        let videoId;
++
++        if (host === 'youtu.be') {
++            videoId = url.pathname.split('/').filter(Boolean)[0];
++        } else if (['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com'].includes(host)) {
++            const pathParts = url.pathname.split('/').filter(Boolean);
++            if (url.pathname === '/watch') {
++                videoId = url.searchParams.get('v');
++            } else if (['shorts', 'embed'].includes(pathParts[0])) {
++                videoId = pathParts[1];
++            }
++        }
++
++        return /^[A-Za-z0-9_-]{11}$/.test(videoId || '') ? videoId : null;
++    } catch {
++        return null;
++    }
++}
++
+ function getPlaylistSync(playbackManagerInstance, player) {
+     player = player || playbackManagerInstance._currentPlayer;
+     if (player && !enableLocalPlaylistManagement(player)) {
+@@ -4095,16 +4118,24 @@ export class PlaybackManager {
+ 
+         if (item.LocalTrailerCount) {
+             items = await apiClient.getLocalTrailers(apiClient.getCurrentUserId(), item.Id);
++            items = items.map(trailer => ({
++                ...trailer,
++                SuppressPlaybackReporting: true
++            }));
+         }
+ 
+         if (!items?.length) {
+             items = (item.RemoteTrailers || []).map((t) => {
++                const youtubeVideoId = getYoutubeVideoId(t.Url);
+                 return {
+                     Name: t.Name || (item.Name + ' Trailer'),
+-                    Url: t.Url,
++                    Url: youtubeVideoId ? apiClient.getUrl(`Pgsql/Trailers/${youtubeVideoId}/stream`, {
++                        ApiKey: apiClient.accessToken()
++                    }) : t.Url,
+                     MediaType: 'Video',
+                     Type: 'Trailer',
+-                    ServerId: apiClient.serverId()
++                    ServerId: apiClient.serverId(),
++                    SuppressPlaybackReporting: true
+                 };
+             });
+         }

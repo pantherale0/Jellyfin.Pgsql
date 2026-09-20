@@ -6,6 +6,7 @@ using Jellyfin.Plugin.Pgsql.Ha;
 using Jellyfin.Plugin.Pgsql.PlaybackReportingImport;
 using Jellyfin.Plugin.Pgsql.Similar;
 using Jellyfin.Plugin.Pgsql.Taste;
+using Jellyfin.Plugin.Pgsql.Trailers;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Persistence;
@@ -37,6 +38,8 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<EmbySqliteReader>();
         serviceCollection.AddSingleton<EmbyUserDataMatcher>();
         serviceCollection.AddSingleton<EmbyUserDataImportService>();
+        serviceCollection.AddSingleton<IYtDlpProcessRunner, YtDlpProcessRunner>();
+        serviceCollection.AddSingleton<YtDlpTrailerService>();
 
         serviceCollection.AddSingleton<RedisConnectionAccessor>();
         RegisterHa(serviceCollection);

@@ -76,6 +76,7 @@ public sealed class RebuildPlaybackActivityDailyTask : IScheduledTask, IConfigur
         var transcode = (int)PlayMethod.Transcode;
 
         var rows = await dbContext.PlaybackActivity.AsNoTracking()
+            .Where(p => p.MediaType != "Trailer")
             .GroupBy(p => p.DatePlayed.Date)
             .Select(g => new PlaybackActivityDaily
             {

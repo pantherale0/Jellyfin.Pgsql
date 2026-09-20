@@ -554,7 +554,7 @@ public sealed class TasteShadowNeuralTrainer
             r.RunTimeTicks));
 
         var playbackAgg = await context.PlaybackActivity.AsNoTracking()
-            .Where(p => p.UserId == userId && p.DatePlayed >= cutoff && p.PlayedTicks > 0)
+            .Where(p => p.MediaType != "Trailer" && p.UserId == userId && p.DatePlayed >= cutoff && p.PlayedTicks > 0)
             .Join(
                 context.BaseItems.AsNoTracking().Where(i => i.Type == itemType),
                 p => p.ItemId,

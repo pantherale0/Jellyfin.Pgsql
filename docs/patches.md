@@ -534,6 +534,28 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | Record activity on playback events; expose authenticated user routes and elevated aggregates. |
 | **Related** | Web `jellyfin_web_user_playback_stats`. No public issue. |
 
+### `jellyfin_trailer_history.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Keeps local trailer playback out of UserData history and playback-statistics rows while retaining active-session lifecycle behavior. |
+| **Why** | Trailer watches must not create resume/play-count state or become taste/neural recommendation signals. |
+| **Where** | `Emby.Server.Implementations/Session/SessionManager.cs` |
+| **How** | Skips playback start/progress/stop persistence when the resolved library item is a `Trailer`; applies after `jellyfin_playback_statistics` so its insert path is covered too. |
+| **Related** | Web companion `jellyfin_web_ytdlp_trailers`; plugin trailer relay. [pantherale0#15](https://github.com/pantherale0/Jellyfin.Pgsql/issues/15). |
+
+### `jellyfin_web_ytdlp_trailers.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin-web` |
+| **What** | Sends YouTube trailers through the plugin relay and the standard HTML5 player; suppresses playback reporting for every local or remote trailer launched by `playTrailers`. |
+| **Why** | The iframe player is inconsistent, and trailer playback must not pollute history or recommendations. |
+| **Where** | `src/components/playback/playbackmanager.js` |
+| **How** | Strictly extracts video IDs from supported YouTube URL forms, builds an authenticated `/Pgsql/Trailers/{id}/stream` URL, marks trailer queue items transient, and short-circuits centralized playback reporting. |
+| **Related** | Server companion `jellyfin_trailer_history`; plugin trailer relay. [pantherale0#15](https://github.com/pantherale0/Jellyfin.Pgsql/issues/15). |
+
 ### `jellyfin_web_user_playback_stats.patch`
 
 | | |
@@ -828,4 +850,3 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 ## File count
 
 **68** patches: **40** `jellyfin_*.patch` (server), **28** `jellyfin_web*.patch` (web).
-

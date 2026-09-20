@@ -66,6 +66,7 @@ public static class TasteForYouEngageMetrics
         var playback = await context.PlaybackActivity.AsNoTracking()
             .Where(p => userIds.Contains(p.UserId)
                 && itemIds.Contains(p.ItemId)
+                && p.MediaType != "Trailer"
                 && p.PlayedTicks > 0
                 && p.DatePlayed >= lookbackStart)
             .Select(p => new TasteEngageEvent(p.UserId, p.ItemId, p.DatePlayed))

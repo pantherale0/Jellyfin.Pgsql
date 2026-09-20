@@ -1,4 +1,6 @@
 ARG JELLYFIN_VERSION=12.1
+ARG YTDLP_VERSION=2026.08.19
+ARG YTDLP_SHA256=58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a
 
 # Web build stage
 FROM node:24-alpine AS web-build
@@ -77,6 +79,8 @@ RUN dotnet ef migrations bundle \
 
 # Final stage - Jellyfin with plugin
 FROM jellyfin/jellyfin:${JELLYFIN_VERSION}
+ARG YTDLP_VERSION
+ARG YTDLP_SHA256
 
 # Install PostgreSQL 18 client tools for backup/restore functionality
 RUN apt-get update && \
@@ -85,6 +89,9 @@ RUN apt-get update && \
     echo "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] http://apt.postgresql.org/pub/repos/apt/ $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list && \
     apt-get update && \
     apt-get install -y postgresql-client-18 xmlstarlet pgloader && \
+    wget --quiet -O /usr/local/bin/yt-dlp "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp_linux" && \
+    echo "${YTDLP_SHA256}  /usr/local/bin/yt-dlp" | sha256sum --check --strict && \
+    chmod 0755 /usr/local/bin/yt-dlp && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

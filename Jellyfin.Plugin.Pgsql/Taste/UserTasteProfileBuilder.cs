@@ -79,7 +79,7 @@ public sealed class UserTasteProfileBuilder
             .ConfigureAwait(false);
 
         var playbackUserIds = await context.PlaybackActivity.AsNoTracking()
-            .Where(p => p.DatePlayed >= cutoff)
+            .Where(p => p.MediaType != "Trailer" && p.DatePlayed >= cutoff)
             .Select(p => p.UserId)
             .Distinct()
             .ToListAsync(cancellationToken)
@@ -489,7 +489,7 @@ public sealed class UserTasteProfileBuilder
             .ConfigureAwait(false);
 
         var playbackRows = await context.PlaybackActivity.AsNoTracking()
-            .CountAsync(p => p.DatePlayed >= cutoff, cancellationToken)
+            .CountAsync(p => p.MediaType != "Trailer" && p.DatePlayed >= cutoff, cancellationToken)
             .ConfigureAwait(false);
 
         var movieCount = await context.BaseItems.AsNoTracking()
@@ -639,7 +639,7 @@ public sealed class UserTasteProfileBuilder
             r.RunTimeTicks));
 
         var playbackAgg = await context.PlaybackActivity.AsNoTracking()
-            .Where(p => p.UserId == userId && p.DatePlayed >= cutoff && p.PlayedTicks > 0)
+            .Where(p => p.MediaType != "Trailer" && p.UserId == userId && p.DatePlayed >= cutoff && p.PlayedTicks > 0)
             .Join(
                 context.BaseItems.AsNoTracking().Where(i => i.Type == itemType),
                 p => p.ItemId,
@@ -739,7 +739,7 @@ public sealed class UserTasteProfileBuilder
             .ConfigureAwait(false);
 
         var episodePlayback = await context.PlaybackActivity.AsNoTracking()
-            .Where(p => p.UserId == userId && p.DatePlayed >= cutoff && p.PlayedTicks > 0)
+            .Where(p => p.MediaType != "Trailer" && p.UserId == userId && p.DatePlayed >= cutoff && p.PlayedTicks > 0)
             .Join(
                 context.BaseItems.AsNoTracking()
                     .Where(i => i.Type == episodeType && i.SeriesId != null),
