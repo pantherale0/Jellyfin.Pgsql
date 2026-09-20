@@ -2042,9 +2042,9 @@ index f78d464659..d7fdbc0193 100644
          private readonly IHttpClientFactory _httpClientFactory;
          private readonly ILogger<XmlTvListingsProvider> _logger;
 +        private readonly object _programmeCacheLock = new();
-+        private ProgrammeCacheEntry? _programmeCache;
  
          private readonly ConcurrentDictionary<string, DateTime> _lastDownloadFailures = new(StringComparer.Ordinal);
++        private ProgrammeCacheEntry? _programmeCache;
  
 @@ -220,11 +223,101 @@ namespace Jellyfin.LiveTv.Listings
              _logger.LogDebug("Getting xmltv programs for channel {Id}", channelId);
