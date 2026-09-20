@@ -688,11 +688,12 @@ index a5b6bc4604..c0d56e0b5c 100644
              var historyRepository = dbContext.GetService<IHistoryRepository>();
              var migrationsAssembly = dbContext.GetService<IMigrationsAssembly>();
              var completedMigrations = 0;
-@@ -303,8 +310,15 @@ internal class JellyfinMigrationService
+@@ -303,8 +310,16 @@ internal class JellyfinMigrationService
  
                  completedMigrations++;
              }
 -
++
              return completedMigrations > 0;
 +            }
 +            finally
