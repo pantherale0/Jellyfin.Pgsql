@@ -1,5 +1,5 @@
 diff --git a/Jellyfin.Api/Controllers/DynamicHlsController.cs b/Jellyfin.Api/Controllers/DynamicHlsController.cs
-index 034a9dea55..4c11fdec1a 100644
+index 034a9dea55..f7a4b3d557 100644
 --- a/Jellyfin.Api/Controllers/DynamicHlsController.cs
 +++ b/Jellyfin.Api/Controllers/DynamicHlsController.cs
 @@ -1473,23 +1473,48 @@ public class DynamicHlsController : BaseJellyfinApiController
@@ -56,7 +56,7 @@ index 034a9dea55..4c11fdec1a 100644
                  startTranscoding = true;
              }
  
-@@ -2022,11 +2047,39 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -2022,11 +2047,47 @@ public class DynamicHlsController : BaseJellyfinApiController
              return null;
          }
  
@@ -70,6 +70,14 @@ index 034a9dea55..4c11fdec1a 100644
 +        if (job is null || job.HasExited)
 +        {
 +            return null;
++        }
++
++        // A seek restart reuses the playlist name and intentionally leaves older segment files
++        // in place. Use the active ffmpeg generation instead of the directory-wide minimum so a
++        // missing old segment cannot be mistaken for output the current process will still create.
++        if (job.StartSegmentIndex.HasValue)
++        {
++            return job.StartSegmentIndex.Value;
 +        }
 +
 +        var file = GetFirstTranscodingFile(playlist, segmentExtension, _fileSystem);
@@ -98,7 +106,7 @@ index 034a9dea55..4c11fdec1a 100644
      }
  
      private static FileSystemMetadata? GetLastTranscodingFile(string playlist, string segmentExtension, IFileSystem fileSystem)
-@@ -2037,8 +2090,10 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -2037,8 +2098,10 @@ public class DynamicHlsController : BaseJellyfinApiController
  
          try
          {
@@ -109,7 +117,7 @@ index 034a9dea55..4c11fdec1a 100644
                  .MaxBy(fileSystem.GetLastWriteTimeUtc);
          }
          catch (IOException)
-@@ -2047,6 +2102,26 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -2047,6 +2110,26 @@ public class DynamicHlsController : BaseJellyfinApiController
          }
      }
  
@@ -158,6 +166,65 @@ index ab4d0eb2e0..b2d4f8c35a 100644
                  readrate = 10;
                  inputModifier += $" -readrate {readrate}";
              }
+diff --git a/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs b/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
+index 5045030b9b..df857f1dc5 100644
+--- a/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
++++ b/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
+@@ -52,6 +52,11 @@ public sealed class TranscodingJob : IDisposable
+     /// </summary>
+     public string? Path { get; set; }
+ 
++    /// <summary>
++    /// Gets or sets the first HLS media segment index produced by this job.
++    /// </summary>
++    public int? StartSegmentIndex { get; set; }
++
+     /// <summary>
+     /// Gets or sets the type.
+     /// </summary>
+diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
+index dfc057f611..bc08a18e67 100644
+--- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
++++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
+@@ -445,6 +445,10 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+             state.Request.DeviceId,
+             state,
+             cancellationTokenSource);
++        if (transcodingJobType == TranscodingJobType.Hls)
++        {
++            transcodingJob.StartSegmentIndex = GetHlsStartSegmentIndex(commandLineArguments);
++        }
+ 
+         _logger.LogInformation("{Filename} {Arguments}", process.StartInfo.FileName, process.StartInfo.Arguments);
+ 
+@@ -574,6 +578,27 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+            && state.RunTimeTicks.HasValue
+            && state.RunTimeTicks.Value >= TimeSpan.FromMinutes(5).Ticks;
+ 
++    internal static int? GetHlsStartSegmentIndex(string commandLineArguments)
++    {
++        const string Marker = " -start_number ";
++        var markerIndex = commandLineArguments.LastIndexOf(Marker, StringComparison.Ordinal);
++        if (markerIndex < 0)
++        {
++            return null;
++        }
++
++        var value = commandLineArguments.AsSpan(markerIndex + Marker.Length);
++        var separatorIndex = value.IndexOf(' ');
++        if (separatorIndex >= 0)
++        {
++            value = value[..separatorIndex];
++        }
++
++        return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var startSegmentIndex)
++            ? startSegmentIndex
++            : null;
++    }
++
+     private TranscodingJob OnTranscodeBeginning(
+         string path,
+         string? playSessionId,
 diff --git a/src/Jellyfin.MediaEncoding.Hls/Playlist/DynamicHlsPlaylistGenerator.cs b/src/Jellyfin.MediaEncoding.Hls/Playlist/DynamicHlsPlaylistGenerator.cs
 index c970fd8a61..043418fda4 100644
 --- a/src/Jellyfin.MediaEncoding.Hls/Playlist/DynamicHlsPlaylistGenerator.cs
@@ -248,3 +315,26 @@ index c970fd8a61..043418fda4 100644
      internal static bool IsExtractionAllowedForFile(ReadOnlySpan<char> filePath, IReadOnlyList<string> allowedExtensions)
      {
          var extension = Path.GetExtension(filePath);
+diff --git a/tests/Jellyfin.MediaEncoding.Tests/Transcoding/HlsStartSegmentIndexTests.cs b/tests/Jellyfin.MediaEncoding.Tests/Transcoding/HlsStartSegmentIndexTests.cs
+new file mode 100644
+index 0000000000..d706f5c877
+--- /dev/null
++++ b/tests/Jellyfin.MediaEncoding.Tests/Transcoding/HlsStartSegmentIndexTests.cs
+@@ -0,0 +1,17 @@
++using MediaBrowser.MediaEncoding.Transcoding;
++using Xunit;
++
++namespace Jellyfin.MediaEncoding.Tests.Transcoding;
++
++public class HlsStartSegmentIndexTests
++{
++    [Theory]
++    [InlineData("-f hls -start_number 0 -hls_segment_filename output%d.mp4", 0)]
++    [InlineData("-ss 00:40:35.433 -f hls -start_number 811 -hls_segment_filename output%d.mp4", 811)]
++    [InlineData("-f hls -start_number invalid -hls_segment_filename output%d.mp4", null)]
++    [InlineData("-f hls -hls_segment_filename output%d.mp4", null)]
++    public void GetHlsStartSegmentIndex_ParsesFfmpegArguments(string arguments, int? expected)
++    {
++        Assert.Equal(expected, TranscodeManager.GetHlsStartSegmentIndex(arguments));
++    }
++}

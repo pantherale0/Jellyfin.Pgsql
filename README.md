@@ -68,6 +68,7 @@ appear in the Latest row.
 | `Pgsql_CACHE_ENABLED` | `true` | Enable query result caching |
 | `Pgsql_CACHE_BACKEND` | `Redis` | `Redis`, `Memory` or `Off`. Falls back to `Memory` when no Redis connection string is configured |
 | `REDIS_CONNECTION_STRING` | empty | StackExchange.Redis connection string, e.g. `redis.databases.svc.cluster.local:6379` |
+| `Pgsql_REDIS_OPERATION_TIMEOUT_MS` | `250` | Redis cache-operation timeout in milliseconds (clamped to 50–5000); a timeout fails open to memory until the health probe recovers |
 | `Pgsql_CACHE_LATEST_TTL` | `120` | Latest cache TTL in seconds |
 | `Pgsql_CACHE_RESUME_TTL` | `30` | Resume cache TTL in seconds; `0` disables Resume caching |
 | `Pgsql_CACHE_BROWSE_TTL` | `60` | Library browse `/Items` page cache TTL in seconds; `0` disables browse caching |
@@ -80,7 +81,9 @@ appear in the Latest row.
 Use the in-process `Memory` backend for a single Jellyfin instance; use `Redis` when running
 multiple replicas or when the cache should survive container restarts. Redis keeps one shared
 multiplexer with background health probes: home APIs only hit Redis when status is `Ready`,
-otherwise they fail fast to the memory fallback (no per-request timeout wait).
+otherwise they fail fast to the memory fallback (no per-request timeout wait). The default
+250 ms operation deadline avoids false cache-health flapping under short local Redis stalls while
+keeping the first request after a real failure bounded.
 
 Known trade-offs:
 
@@ -154,6 +157,8 @@ Configure the OIDC integration using the following environment variables in your
 | `JELLYFIN_SSO_OIDC_ADMIN_ROLE` | `jellyfin_admin` | The role/group name that grants Administrator privileges in Jellyfin |
 | `JELLYFIN_SSO_OIDC_BIRTHDATE_CLAIM` | `birthdate` | The claim containing the user's date of birth (`YYYY-MM-DD`). Used to set max parental rating from age on each login. Missing/invalid values leave the existing rating unchanged. |
 | `JELLYFIN_SSO_OIDC_CREATE_USERS` | `true` | Set to `false` to disable auto-creation of new users |
+
+Startup environment logging redacts values whose names indicate credentials (including secrets, passwords, tokens, API keys, private keys, and connection strings). This only protects future logs: rotate any credential that appeared in logs produced by an older image.
 
 ### How it is Built
 To maintain a clean upstream repository, changes to the `jellyfin` server and `jellyfin-web` client are packaged as patches under [`patches/`](patches/):

@@ -19,6 +19,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | New controller handles authorize/callback/session flows driven by `JELLYFIN_SSO_OIDC_*` env configuration; matching `sso_rbac.json` groups merge preferences additively on login (blocking Live TV unrated also blocks `LiveTvProgram`). |
 | **Related** | Companion web: `jellyfin_web_rbac`, `jellyfin_web_tv_quickconnect_login`. Enforcement/persist: `jellyfin_z_livetv_rbac_allowlist`. README SSO section. Fork [pantherale0#5](https://github.com/pantherale0/Jellyfin.Pgsql/issues/5) (SSO mappings UI auth). |
 
+### `jellyfin_startup_secret_redaction.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Redacts secret-bearing `JELLYFIN_*`, `DOTNET_*`, and `ASPNETCORE_*` environment values from startup logs. |
+| **Why** | Stock startup diagnostics log matching environment variables verbatim; custom variables such as `JELLYFIN_SSO_OIDC_CLIENT_SECRET` therefore leaked credentials into ordinary server logs. |
+| **Where** | `StartupHelpers.cs`, `StartupHelpersTests.cs` |
+| **How** | Names containing password, secret, token, API/private-key, or connection-string markers retain their name but log `[REDACTED]`; tests cover sensitive and safe names. |
+| **Related** | Rotate any credential that appeared in logs before this patch. No public issue. |
+
 ### `jellyfin_web_sso_script.patch`
 
 | | |
@@ -307,11 +318,11 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | | |
 |---|---|
 | **Target** | `jellyfin` |
-| **What** | Avoids thrash-restarting ffmpeg near EOF during HLS remux segment requests. |
-| **Why** | Clients requesting late segments caused repeated `-ss`/`-start_number` restarts. |
-| **Where** | `DynamicHlsController.cs`, `EncodingHelper.cs`, `DynamicHlsPlaylistGenerator.cs` |
-| **How** | Smarter restart/playlist logic for remux jobs. |
-| **Related** | [jellyfin#13668](https://github.com/jellyfin/jellyfin/issues/13668). |
+| **What** | Avoids thrash-restarting ffmpeg near EOF and keeps HLS seek generations distinct. |
+| **Why** | Clients requesting late segments caused repeated `-ss`/`-start_number` restarts. Older files left beside a restarted playlist could also make a missing segment look like part of the active range, leaving requests waiting forever while healthy ffmpeg output went unused. |
+| **Where** | `DynamicHlsController.cs`, `TranscodingJob.cs`, `TranscodeManager.cs`, `EncodingHelper.cs`, `DynamicHlsPlaylistGenerator.cs`, tests |
+| **How** | Records the active job's `-start_number` on `TranscodingJob`; backward/missing-segment decisions use that generation boundary instead of the directory-wide minimum across stale files. Retains the smarter remux playlist/restart logic. |
+| **Related** | [jellyfin#13668](https://github.com/jellyfin/jellyfin/issues/13668); fork [pantherale0#17](https://github.com/pantherale0/Jellyfin.Pgsql/issues/17). |
 
 ### `jellyfin_hdr10plus_mpegts_sei.patch`
 
@@ -833,10 +844,10 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | | |
 |---|---|
 | **Target** | `jellyfin-web` |
-| **What** | Friendlier playback error UX: `playbackError.ts` mapper, dialog with summary + tip + Try Again / Try with Transcoding actions, HLS `X-Playback-Error-Code` parsing, PlaybackInfo JSON error parsing, rewritten `en-us` copy, Live TV multiview i18n toasts, auto-retry once on `LiveStreamFenced`. |
-| **Why** | Stock web UI shows harsh “Playback Error” modals with technical copy and no recovery actions; HA `LiveStreamFenced` JSON was ignored. |
+| **What** | Friendlier playback error UX: `playbackError.ts` mapper, dialog with summary + tip + Try Again / Try with Transcoding actions, HLS `X-Playback-Error-Code` parsing, PlaybackInfo JSON error parsing, rewritten `en-us` copy, Live TV multiview i18n toasts, auto-retry once on `LiveStreamFenced`, and resilient subtitle/audio stream switching. |
+| **Why** | Stock web UI shows harsh “Playback Error” modals with technical copy and no recovery actions; HA `LiveStreamFenced` JSON was ignored. Stream changes also waited forever if best-effort cleanup of the previous transcode rejected. |
 | **Where** | `playbackError.ts`, `playbackmanager.js`, `htmlMediaHelper.js`, `multiviewManager.js`, `en-us.json` |
-| **How** | Maps server + client error codes to `PlaybackErrorFriendly.*` strings; preserves silent transcode fallback retries before showing the dialog. Applies after `jellyfin_web_zzz_livetv_multiview` (`zzzz_` band). |
+| **How** | Maps server + client error codes to `PlaybackErrorFriendly.*` strings; preserves silent transcode fallback retries before showing the dialog. A failed `stopActiveEncodings` call is logged but no longer prevents loading the replacement stream; post-switch cleanup is also rejection-safe. Applies after `jellyfin_web_zzz_livetv_multiview` (`zzzz_` band). |
 | **Related** | Server companion: `jellyfin_zzz_playback_errors`. Mobile apps should implement the same code contract (see [features](features.md#playback-error-messaging)). No public issue. |
 
 ### `jellyfin_web_zzzz_tv_playback_perf.patch`
@@ -882,4 +893,4 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 
 ## File count
 
-**68** patches: **40** `jellyfin_*.patch` (server), **28** `jellyfin_web*.patch` (web).
+**76** patches: **47** `jellyfin_*.patch` (server), **29** `jellyfin_web*.patch` (web).
