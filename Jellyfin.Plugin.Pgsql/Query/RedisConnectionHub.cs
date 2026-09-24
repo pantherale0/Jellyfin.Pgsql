@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.IO;
 using System.Threading;
 using Microsoft.Extensions.Logging;
@@ -28,6 +29,9 @@ public enum RedisAvailability
 /// </summary>
 public sealed class RedisConnectionHub : IDisposable
 {
+    private const int DefaultOperationTimeoutMilliseconds = 250;
+    private const int MinimumOperationTimeoutMilliseconds = 50;
+    private const int MaximumOperationTimeoutMilliseconds = 5000;
     private static readonly TimeSpan ProbeIntervalWhenUnhealthy = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan ProbeIntervalWhenHealthy = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ProbeBackoffAfterFailure = TimeSpan.FromSeconds(2);
@@ -89,9 +93,11 @@ public sealed class RedisConnectionHub : IDisposable
             // on every Latest/Resume/NextUp request when Redis is unreachable.
             configuration.BacklogPolicy = BacklogPolicy.FailFast;
             // Residual timeouts only apply when CanUse is true but the link dies mid-op.
+            var operationTimeout = ResolveOperationTimeoutMilliseconds(
+                Environment.GetEnvironmentVariable("Pgsql_REDIS_OPERATION_TIMEOUT_MS"));
             configuration.ConnectTimeout = 1000;
-            configuration.SyncTimeout = 100;
-            configuration.AsyncTimeout = 100;
+            configuration.SyncTimeout = operationTimeout;
+            configuration.AsyncTimeout = operationTimeout;
             // Detect dead TCP sooner than the StackExchange default (60s).
             configuration.KeepAlive = 15;
 
@@ -120,6 +126,16 @@ public sealed class RedisConnectionHub : IDisposable
 
         db = _connection.GetDatabase();
         return true;
+    }
+
+    internal static int ResolveOperationTimeoutMilliseconds(string? value)
+    {
+        if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+        {
+            return DefaultOperationTimeoutMilliseconds;
+        }
+
+        return Math.Clamp(parsed, MinimumOperationTimeoutMilliseconds, MaximumOperationTimeoutMilliseconds);
     }
 
     /// <summary>

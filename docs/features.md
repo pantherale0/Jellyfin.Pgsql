@@ -18,7 +18,7 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 **Where:** [`Jellyfin.Plugin.Pgsql/Query/`](../Jellyfin.Plugin.Pgsql/Query/); toggles `Pgsql_CACHE_*`, `Pgsql_PG_OPTIMIZE_*`, `REDIS_CONNECTION_STRING` ([README](../README.md#query-cache-and-optimisation-optional-experimental)).
 
-**How:** Cache keys are per user and per view (never shared across users). Failures fall back to stock Jellyfin queries. Redis uses a shared persistent multiplexer with background PING health: request paths only touch Redis when status is `Ready`; `Unknown`/`Unavailable` skip immediately to the in-process memory fallback (no SyncTimeout wait). Default Latest TTL is 120s; browse pages default to 60s (`Pgsql_CACHE_BROWSE_TTL`). Browse cache stores `(TotalRecordCount, ids[])` for recursive SortName-style library pages.
+**How:** Cache keys are per user and per view (never shared across users). Failures fall back to stock Jellyfin queries. Redis uses a shared persistent multiplexer with background PING health: request paths only touch Redis when status is `Ready`; `Unknown`/`Unavailable` skip immediately to the in-process memory fallback (no repeated SyncTimeout wait). Cache operations default to a bounded 250 ms deadline (`Pgsql_REDIS_OPERATION_TIMEOUT_MS`) so brief local stalls do not cause the 100 ms false-unhealthy flapping seen under load. Default Latest TTL is 120s; browse pages default to 60s (`Pgsql_CACHE_BROWSE_TTL`). Browse cache stores `(TotalRecordCount, ids[])` for recursive SortName-style library pages.
 
 **Patches that help home/query load:** [`jellyfin_home_api_performance`](patches.md#jellyfin_home_api_performancepatch), [`jellyfin_unoptimized_query_fixes`](patches.md#jellyfin_unoptimized_query_fixespatch), [`jellyfin_query_split_userdata`](patches.md#jellyfin_query_split_userdatapatch), [`jellyfin_z_items_browse_perf`](patches.md#jellyfin_z_items_browse_perfpatch), [`jellyfin_latest_tv_always_series`](patches.md#jellyfin_latest_tv_always_seriespatch), [`jellyfin_zzz_byname_access_semijoin`](patches.md#jellyfin_zzz_byname_access_semijoinpatch), [`jellyfin_zzzz_people_query_perf`](patches.md#jellyfin_zzzz_people_query_perfpatch). Descendant-query memory fixes are stock Jellyfin as of v12.0-rc6 ([jellyfin#17602](https://github.com/jellyfin/jellyfin/issues/17602)).
 
@@ -38,12 +38,12 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 **Where:**
 
-- Server: [`jellyfin_sso.patch`](patches.md#jellyfin_ssopatch) (`SSOController`), [`jellyfin_z_livetv_rbac_allowlist.patch`](patches.md#jellyfin_z_livetv_rbac_allowlistpatch) (ChannelGroup persist + parental enforcement)
+- Server: [`jellyfin_sso.patch`](patches.md#jellyfin_ssopatch) (`SSOController`), [`jellyfin_z_livetv_rbac_allowlist.patch`](patches.md#jellyfin_z_livetv_rbac_allowlistpatch) (ChannelGroup persist + parental enforcement), [`jellyfin_startup_secret_redaction.patch`](patches.md#jellyfin_startup_secret_redactionpatch) (credential-safe startup logging)
 - Web: [`jellyfin_web_rbac.patch`](patches.md#jellyfin_web_rbacpatch) (SSO Mappings UI)
 - TV: [`jellyfin_web_tv_quickconnect_login`](patches.md#jellyfin_web_tv_quickconnect_loginpatch), [`jellyfin_web_quickconnect_modal`](patches.md#jellyfin_web_quickconnect_modalpatch)
 - Config: `JELLYFIN_SSO_OIDC_*` ([README](../README.md#single-sign-on-sso-with-rbac-via-oauth2oidc))
 
-**How:** When SSO env vars are set, the web client redirects to the IdP. Callback is the configured absolute `JELLYFIN_SSO_OIDC_REDIRECT_URI` (not derived from `Host`). Matching IdP groups merge `sso_rbac.json` additively onto the user. Emergency bypass: `?local=true` on the login URL. TV clients skip forced redirect and open Quick Connect.
+**How:** When SSO env vars are set, the web client redirects to the IdP. Callback is the configured absolute `JELLYFIN_SSO_OIDC_REDIRECT_URI` (not derived from `Host`). Matching IdP groups merge `sso_rbac.json` additively onto the user. Emergency bypass: `?local=true` on the login URL. TV clients skip forced redirect and open Quick Connect. Startup logging redacts credential-like environment variables; credentials exposed by an older image must still be rotated.
 
 **Live TV allowlist:** With “Live TV” under block-unrated, channels without ratings are hidden unless allowlisted by M3U `group-title` category, EPG category (`Kids` / `Sports` / `News`), or individual channel. Whitelisted Live TV also bypasses AllowedTags (BlockedTags still apply). Refresh the Live TV guide after changing M3U groups so categories appear in the UI.
 
@@ -107,7 +107,7 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 ## Playback / encoding tooling
 
-**What:** Lazy transcoding pipeline probe exposed to admins; hardware encoder capability API + dashboard; HLS remux restart behaviour; HDR10+ SEI strip on MPEG-TS; Chrome/Opera MKV DirectPlay false-positive fix; **transcode codec fallback** (parallel AV1/H.264 init race, sequential encoder chain, Activity Log alerts, dashboard toggles).
+**What:** Lazy transcoding pipeline probe exposed to admins; hardware encoder capability API + dashboard; generation-aware HLS remux restart behaviour; HDR10+ SEI strip on MPEG-TS; Chrome/Opera MKV DirectPlay false-positive fix; **transcode codec fallback** (parallel AV1/H.264 init race, sequential encoder chain, Activity Log alerts, dashboard toggles).
 
 **Where:** [Playback / encoding group](patches.md#3-playback--encoding). Codec fallback: [`jellyfin_z_transcode_codec_fallback`](patches.md#jellyfin_z_transcode_codec_fallbackpatch) + [`jellyfin_web_z_transcode_codec_fallback`](patches.md#jellyfin_web_z_transcode_codec_fallbackpatch). Upstream: [jellyfin#13668](https://github.com/jellyfin/jellyfin/issues/13668), [jellyfin#16823](https://github.com/jellyfin/jellyfin/issues/16823), [jellyfin-web#7651](https://github.com/jellyfin/jellyfin-web/issues/7651).
 
@@ -115,7 +115,7 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 ## Playback error messaging
 
-**What:** Structured playback failure codes from the server and a friendlier web dialog (summary, tip, Try Again / Try with Transcoding). Mid-stream HLS failures expose intent via the `X-Playback-Error-Code` response header; pre-play failures use `PlaybackInfoResponse.errorCode` (+ optional `message`).
+**What:** Structured playback failure codes from the server and a friendlier web dialog (summary, tip, Try Again / Try with Transcoding). Mid-stream HLS failures expose intent via the `X-Playback-Error-Code` response header; pre-play failures use `PlaybackInfoResponse.errorCode` (+ optional `message`). Subtitle/audio stream changes proceed even when cleanup of the previous transcode transiently fails.
 
 **Where:** [`jellyfin_zzz_playback_errors`](patches.md#jellyfin_zzz_playback_errorspatch) + [`jellyfin_web_zzzz_playback_errors`](patches.md#jellyfin_web_zzzz_playback_errorspatch).
 
