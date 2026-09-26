@@ -247,6 +247,28 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 
 ## 3. Playback / encoding
 
+### `jellyfin_zzzzz_device_playback_options.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Administrator-managed, sparse playback and transcoding options for an exact registered device; dedicated SQLite migration. |
+| **Why** | Fix a specific player's codec, HDR/SDR, or decoder quirks without changing other devices or enabling server-wide capabilities. |
+| **Where** | `DevicePlaybackOptionsDto`, `DeviceManager`, `DevicesController`, `DevicePlaybackOptionsHelper`, `StreamingHelpers`, `MediaInfoHelper`, `DynamicHlsController`, `TranscodeManager`, SQLite migrations |
+| **How** | Admin `PUT /Devices/Options/Playback?id=…` stores a versioned JSON document; `GET /Devices/Options` includes sparse options. Requests find the registered device from the authenticated access token (not a URL/header device id), clone global encoding options and narrow user/server limits. The effective settings are pinned to an HLS/progressive transcode job and reused across later requests and codec fallback. Admin device deletion removes its options. Requires the matching PostgreSQL migration when using the plugin. |
+| **Related** | Applied after [`jellyfin_z_transcode_codec_fallback`](#jellyfin_z_transcode_codec_fallbackpatch) and [`jellyfin_transcoding_pipeline`](#jellyfin_transcoding_pipelinepatch). Companion [`jellyfin_web_zzzzz_device_playback_options`](#jellyfin_web_zzzzz_device_playback_optionspatch). No public issue. |
+
+### `jellyfin_web_zzzzz_device_playback_options.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin-web` |
+| **What** | Devices → Edit dialog for per-device playback, tone mapping, codec preference, audio, quality and hardware overrides. |
+| **Why** | Admins need to see inherited server values and intentionally override only the problematic registered device. |
+| **Where** | `DevicePlaybackEditor.tsx`, dashboard devices route |
+| **How** | Displays inherited values and explicit inherit/override controls; GET/PUT custom device APIs use the CamelCase Accept profile. Saves the name separately so existing name-only updates preserve playback options. |
+| **Related** | Requires [`jellyfin_zzzzz_device_playback_options`](#jellyfin_zzzzz_device_playback_optionspatch); applies after other Devices and transcoding dashboard patches. No public issue. |
+
 ### `jellyfin_transcoding_pipeline.patch`
 
 | | |

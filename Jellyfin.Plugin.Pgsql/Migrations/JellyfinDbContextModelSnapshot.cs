@@ -1342,6 +1342,9 @@ namespace Jellyfin.Plugin.Pgsql.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("PlaybackOptionsJson")
+                        .HasColumnType("text");
+
                     b.HasKey("Id");
 
                     b.HasIndex("DeviceId")

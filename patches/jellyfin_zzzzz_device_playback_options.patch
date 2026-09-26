@@ -1,0 +1,3520 @@
+diff --git a/Jellyfin.Api/Controllers/DevicesController.cs b/Jellyfin.Api/Controllers/DevicesController.cs
+index 2bbfeb40b8..b3d504d5e8 100644
+--- a/Jellyfin.Api/Controllers/DevicesController.cs
++++ b/Jellyfin.Api/Controllers/DevicesController.cs
+@@ -115,6 +115,36 @@ public class DevicesController : BaseJellyfinApiController
+         return NoContent();
+     }
+ 
++    /// <summary>
++    /// Replaces an exact device's playback overrides. Empty options clear them.
++    /// </summary>
++    /// <param name="id">The registered device identifier.</param>
++    /// <param name="playbackOptions">The replacement sparse options.</param>
++    /// <returns>No content on success.</returns>
++    [HttpPut("Options/Playback")]
++    [RequestSizeLimit(16_384)]
++    [ProducesResponseType(StatusCodes.Status204NoContent)]
++    [ProducesResponseType(StatusCodes.Status400BadRequest)]
++    [ProducesResponseType(StatusCodes.Status404NotFound)]
++    public async Task<ActionResult> UpdateDevicePlaybackOptions(
++        [FromQuery, Required] string id,
++        [FromBody, Required] DevicePlaybackOptionsDto playbackOptions)
++    {
++        if (_deviceManager.GetDevice(id) is null)
++        {
++            return NotFound();
++        }
++
++        var error = DevicePlaybackOptionsHelper.Validate(playbackOptions);
++        if (error is not null)
++        {
++            return BadRequest(error);
++        }
++
++        await _deviceManager.UpdateDevicePlaybackOptions(id, playbackOptions).ConfigureAwait(false);
++        return NoContent();
++    }
++
+     /// <summary>
+     /// Deletes devices.
+     /// </summary>
+@@ -141,6 +171,8 @@ public class DevicesController : BaseJellyfinApiController
+             {
+                 await _sessionManager.Logout(session).ConfigureAwait(false);
+             }
++
++            await _deviceManager.DeleteDeviceOptions(device.Id!).ConfigureAwait(false);
+         }
+ 
+         return NoContent();
+diff --git a/Jellyfin.Api/Controllers/DynamicHlsController.cs b/Jellyfin.Api/Controllers/DynamicHlsController.cs
+index 3e11b89d0c..f6ae534f35 100644
+--- a/Jellyfin.Api/Controllers/DynamicHlsController.cs
++++ b/Jellyfin.Api/Controllers/DynamicHlsController.cs
+@@ -65,7 +65,6 @@ public class DynamicHlsController : BaseJellyfinApiController
+     private readonly EncodingHelper _encodingHelper;
+     private readonly IDynamicHlsPlaylistGenerator _dynamicHlsPlaylistGenerator;
+     private readonly DynamicHlsHelper _dynamicHlsHelper;
+-    private readonly EncodingOptions _encodingOptions;
+     private readonly ITranscodeCodecRaceCoordinator _codecRaceCoordinator;
+     private readonly TranscodeSessionBinding _sessionBinding;
+ 
+@@ -113,8 +112,6 @@ public class DynamicHlsController : BaseJellyfinApiController
+         _dynamicHlsPlaylistGenerator = dynamicHlsPlaylistGenerator;
+         _codecRaceCoordinator = codecRaceCoordinator;
+         _sessionBinding = sessionBinding;
+-
+-        _encodingOptions = serverConfigurationManager.GetEncodingOptions();
+     }
+ 
+     /// <summary>
+@@ -334,7 +331,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+                                 .ConfigureAwait(false);
+                             _encodingHelper.AttachMediaSourceInfo(
+                                 state,
+-                                _encodingOptions,
++                                state.EffectiveEncodingOptions,
+                                 liveStreamResponse.MediaSource,
+                                 state.RequestedUrl);
+                             state.Request.LiveStreamId = liveStreamResponse.MediaSource.LiveStreamId;
+@@ -1591,7 +1588,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+ 
+                     streamingRequest.StartTimeTicks = streamingRequest.CurrentRuntimeTicks;
+ 
+-                    var useCodecFallback = _encodingOptions.EnableTranscodeCodecFallback
++                    var useCodecFallback = state.EffectiveEncodingOptions.EnableTranscodeCodecFallback
+                         && state.VideoRequest is not null
+                         && !EncodingHelper.IsCopyCodec(state.OutputVideoCodec);
+ 
+@@ -1722,7 +1719,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+             InitSegmentIndex = initSegmentIndex,
+             SegmentIndex = segmentIndex,
+             IsInitSegmentRequest = isInitSegmentRequest,
+-            CreateStateForCodecAsync = (codec, ct) => CreateStreamStateForCodecAsync(streamingRequest, codec, ct),
++            CreateStateForCodecAsync = (codec, ct) => CreateStreamStateForCodecAsync(streamingRequest, codec, state, ct),
+             BuildCommandLineArguments = (attemptState, playlistPath, startNumber) =>
+                 GetCommandLineArguments(playlistPath, attemptState, false, startNumber)
+         };
+@@ -1731,6 +1728,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+     private async Task<StreamState> CreateStreamStateForCodecAsync(
+         StreamingRequestDto streamingRequest,
+         string codec,
++        StreamState originalState,
+         CancellationToken cancellationToken)
+     {
+         var clonedRequest = CloneStreamingRequest(streamingRequest);
+@@ -1750,7 +1748,9 @@ public class DynamicHlsController : BaseJellyfinApiController
+                 _encodingHelper,
+                 _transcodeManager,
+                 TranscodingJobType,
+-                cancellationToken)
++                cancellationToken,
++                originalState.EffectiveEncodingOptions,
++                originalState.DevicePlaybackOptions)
+             .ConfigureAwait(false);
+     }
+ 
+@@ -1908,8 +1908,8 @@ public class DynamicHlsController : BaseJellyfinApiController
+ 
+     private string GetCommandLineArguments(string outputPath, StreamState state, bool isEventPlaylist, int startNumber)
+     {
+-        var videoCodec = _encodingHelper.GetVideoEncoder(state, _encodingOptions);
+-        var threads = EncodingHelper.GetNumberOfThreads(state, _encodingOptions, videoCodec);
++        var videoCodec = _encodingHelper.GetVideoEncoder(state, state.EffectiveEncodingOptions);
++        var threads = EncodingHelper.GetNumberOfThreads(state, state.EffectiveEncodingOptions, videoCodec);
+ 
+         var mapArgs = state.IsOutputVideo ? _encodingHelper.GetMapArgs(state) : string.Empty;
+ 
+@@ -1921,7 +1921,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+ 
+         var segmentFormat = string.Empty;
+         var segmentContainer = outputExtension.TrimStart('.');
+-        var inputModifier = _encodingHelper.GetInputModifier(state, _encodingOptions, segmentContainer);
++        var inputModifier = _encodingHelper.GetInputModifier(state, state.EffectiveEncodingOptions, segmentContainer);
+         var hlsArguments = $"-hls_playlist_type {(isEventPlaylist ? "event" : "vod")} -hls_list_size 0";
+ 
+         if (string.Equals(segmentContainer, "ts", StringComparison.OrdinalIgnoreCase))
+@@ -1955,8 +1955,8 @@ public class DynamicHlsController : BaseJellyfinApiController
+             segmentFormat = "mpegts";
+         }
+ 
+-        var maxMuxingQueueSize = _encodingOptions.MaxMuxingQueueSize > 128
+-            ? _encodingOptions.MaxMuxingQueueSize.ToString(CultureInfo.InvariantCulture)
++        var maxMuxingQueueSize = state.EffectiveEncodingOptions.MaxMuxingQueueSize > 128
++            ? state.EffectiveEncodingOptions.MaxMuxingQueueSize.ToString(CultureInfo.InvariantCulture)
+             : "128";
+ 
+         var baseUrlParam = string.Empty;
+@@ -1972,7 +1972,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+             CultureInfo.InvariantCulture,
+             "{0} {1} -map_metadata -1 -map_chapters -1 -threads {2} {3} {4} {5} -copyts -avoid_negative_ts disabled -max_muxing_queue_size {6} -f hls -max_delay 5000000 -hls_time {7} -hls_segment_type {8} -start_number {9}{10} -hls_segment_filename \"{11}\" {12} -y \"{13}\"",
+             inputModifier,
+-            _encodingHelper.GetInputArgument(state, _encodingOptions, segmentContainer),
++            _encodingHelper.GetInputArgument(state, state.EffectiveEncodingOptions, segmentContainer),
+             threads,
+             mapArgs,
+             GetVideoArguments(state, startNumber, isEventPlaylist, segmentContainer),
+@@ -2034,7 +2034,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+             if (audioBitrate.HasValue && !EncodingHelper.LosslessAudioCodecs.Contains(state.ActualOutputAudioCodec, StringComparison.OrdinalIgnoreCase))
+             {
+                 var vbrParam = _encodingHelper.GetAudioVbrModeParam(audioCodec, audioBitrate.Value, audioChannels ?? 2);
+-                if (_encodingOptions.EnableAudioVbr && state.EnableAudioVbrEncoding && vbrParam is not null)
++                if (state.EffectiveEncodingOptions.EnableAudioVbr && state.EnableAudioVbrEncoding && vbrParam is not null)
+                 {
+                     audioTranscodeParams += vbrParam;
+                 }
+@@ -2059,7 +2059,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+ 
+         if (EncodingHelper.IsCopyCodec(audioCodec))
+         {
+-            var videoCodec = _encodingHelper.GetVideoEncoder(state, _encodingOptions);
++            var videoCodec = _encodingHelper.GetVideoEncoder(state, state.EffectiveEncodingOptions);
+             var copyArgs = "-codec:a:0 copy" + bitStreamArgs + strictArgs;
+ 
+             return copyArgs;
+@@ -2069,7 +2069,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+ 
+         var channels = state.OutputAudioChannels;
+ 
+-        var useDownMixAlgorithm = DownMixAlgorithmsHelper.AlgorithmFilterStrings.ContainsKey((_encodingOptions.DownMixStereoAlgorithm, DownMixAlgorithmsHelper.InferChannelLayout(state.AudioStream)));
++        var useDownMixAlgorithm = DownMixAlgorithmsHelper.AlgorithmFilterStrings.ContainsKey((state.EffectiveEncodingOptions.DownMixStereoAlgorithm, DownMixAlgorithmsHelper.InferChannelLayout(state.AudioStream)));
+ 
+         if (channels.HasValue
+             && (channels.Value != 2
+@@ -2082,7 +2082,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+         if (bitrate.HasValue && !EncodingHelper.LosslessAudioCodecs.Contains(actualOutputAudioCodec, StringComparison.OrdinalIgnoreCase))
+         {
+             var vbrParam = _encodingHelper.GetAudioVbrModeParam(audioCodec, bitrate.Value, channels ?? 2);
+-            if (_encodingOptions.EnableAudioVbr && state.EnableAudioVbrEncoding && vbrParam is not null)
++            if (state.EffectiveEncodingOptions.EnableAudioVbr && state.EnableAudioVbrEncoding && vbrParam is not null)
+             {
+                 args += vbrParam;
+             }
+@@ -2103,7 +2103,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+             args += " -ar 48000";
+         }
+ 
+-        args += _encodingHelper.GetAudioFilterParam(state, _encodingOptions);
++        args += _encodingHelper.GetAudioFilterParam(state, state.EffectiveEncodingOptions);
+ 
+         return args;
+     }
+@@ -2128,7 +2128,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+             return string.Empty;
+         }
+ 
+-        var codec = _encodingHelper.GetVideoEncoder(state, _encodingOptions);
++        var codec = _encodingHelper.GetVideoEncoder(state, state.EffectiveEncodingOptions);
+ 
+         var args = "-codec:v:0 " + codec;
+ 
+@@ -2188,7 +2188,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+         }
+         else
+         {
+-            args += _encodingHelper.GetVideoQualityParam(state, codec, _encodingOptions, isEventPlaylist ? DefaultEventEncoderPreset : DefaultVodEncoderPreset);
++            args += _encodingHelper.GetVideoQualityParam(state, codec, state.EffectiveEncodingOptions, isEventPlaylist ? DefaultEventEncoderPreset : DefaultVodEncoderPreset);
+ 
+             // Set the key frame params for video encoding to match the hls segment time.
+             args += _encodingHelper.GetHlsVideoKeyFrameArguments(state, codec, state.SegmentLength, isEventPlaylist, startNumber);
+@@ -2201,7 +2201,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+             }
+ 
+             // video processing filters.
+-            var videoProcessParam = _encodingHelper.GetVideoProcessingFilterParam(state, _encodingOptions, codec);
++            var videoProcessParam = _encodingHelper.GetVideoProcessingFilterParam(state, state.EffectiveEncodingOptions, codec);
+ 
+             var negativeMapArgs = _encodingHelper.GetNegativeMapArgsByFilters(state, videoProcessParam);
+ 
+diff --git a/Jellyfin.Api/Controllers/VideosController.cs b/Jellyfin.Api/Controllers/VideosController.cs
+index f700c45fe6..0ade67e207 100644
+--- a/Jellyfin.Api/Controllers/VideosController.cs
++++ b/Jellyfin.Api/Controllers/VideosController.cs
+@@ -494,8 +494,7 @@ public class VideosController : BaseJellyfinApiController
+         }
+ 
+         // Need to start ffmpeg (because media can't be returned directly)
+-        var encodingOptions = _serverConfigurationManager.GetEncodingOptions();
+-        var ffmpegCommandLineArguments = _encodingHelper.GetProgressiveVideoFullCommandLine(state, encodingOptions, EncoderPreset.superfast);
++        var ffmpegCommandLineArguments = _encodingHelper.GetProgressiveVideoFullCommandLine(state, state.EffectiveEncodingOptions, EncoderPreset.superfast);
+         return await FileStreamResponseHelpers.GetTranscodedFile(
+             state,
+             isHeadRequest,
+diff --git a/Jellyfin.Api/Helpers/AudioHelper.cs b/Jellyfin.Api/Helpers/AudioHelper.cs
+index 1c9d6e4495..5583ec28fc 100644
+--- a/Jellyfin.Api/Helpers/AudioHelper.cs
++++ b/Jellyfin.Api/Helpers/AudioHelper.cs
+@@ -143,8 +143,7 @@ public class AudioHelper
+         }
+ 
+         // Need to start ffmpeg (because media can't be returned directly)
+-        var encodingOptions = _serverConfigurationManager.GetEncodingOptions();
+-        var ffmpegCommandLineArguments = _encodingHelper.GetProgressiveAudioFullCommandLine(state, encodingOptions, outputPath);
++        var ffmpegCommandLineArguments = _encodingHelper.GetProgressiveAudioFullCommandLine(state, state.EffectiveEncodingOptions, outputPath);
+         return await FileStreamResponseHelpers.GetTranscodedFile(
+             state,
+             isHeadRequest,
+diff --git a/Jellyfin.Api/Helpers/DevicePlaybackOptionsHelper.cs b/Jellyfin.Api/Helpers/DevicePlaybackOptionsHelper.cs
+new file mode 100644
+index 0000000000..9477e5fb80
+--- /dev/null
++++ b/Jellyfin.Api/Helpers/DevicePlaybackOptionsHelper.cs
+@@ -0,0 +1,197 @@
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using System.Security.Claims;
++using Jellyfin.Api.Extensions;
++using Jellyfin.Data.Dtos;
++using Jellyfin.Data.Queries;
++using MediaBrowser.Controller.Devices;
++using MediaBrowser.Model.Configuration;
++using MediaBrowser.Model.Entities;
++using Microsoft.AspNetCore.Http;
++using Microsoft.Extensions.DependencyInjection;
++
++namespace Jellyfin.Api.Helpers;
++
++/// <summary>
++/// Resolves a playback policy using the authenticated token's registered device, never a client-supplied device id.
++/// </summary>
++public static class DevicePlaybackOptionsHelper
++{
++    private static readonly HashSet<string> KnownHardwareCodecs = new(StringComparer.OrdinalIgnoreCase)
++    {
++        "av1", "h264", "hevc", "mpeg1video", "mpeg2video", "mpeg4", "vc1", "vp8", "vp9"
++    };
++
++    /// <summary>Gets overrides owned by the current request's registered access token.</summary>
++    /// <param name="context">The request context.</param>
++    /// <returns>Sparse options, or null for API keys and unregistered tokens.</returns>
++    public static DevicePlaybackOptionsDto? GetAuthenticatedOptions(HttpContext context)
++        => GetAuthenticatedOptions(context.RequestServices.GetRequiredService<IDeviceManager>(), context.User);
++
++    /// <summary>Gets overrides owned by an authenticated registered access token.</summary>
++    /// <param name="deviceManager">The device manager.</param>
++    /// <param name="user">The authenticated principal.</param>
++    /// <returns>Sparse options, or null for API keys and unregistered tokens.</returns>
++    public static DevicePlaybackOptionsDto? GetAuthenticatedOptions(IDeviceManager deviceManager, ClaimsPrincipal user)
++    {
++        var token = user.GetToken();
++        if (user.GetIsApiKey() || string.IsNullOrWhiteSpace(token))
++        {
++            return null;
++        }
++
++        var deviceId = deviceManager.GetDevices(new DeviceQuery { AccessToken = token }).Items.FirstOrDefault()?.DeviceId;
++        return string.IsNullOrEmpty(deviceId) ? null : deviceManager.GetDeviceOptions(deviceId)?.PlaybackOptions;
++    }
++
++    /// <summary>Clones the global configuration and applies the device's sparse overrides.</summary>
++    /// <param name="global">Server-wide encoding options.</param>
++    /// <param name="overrides">Token-owned overrides.</param>
++    /// <returns>An isolated effective configuration.</returns>
++    public static EncodingOptions CreateEffectiveOptions(EncodingOptions global, DevicePlaybackOptionsDto? overrides)
++    {
++        var options = global.Clone();
++        if (overrides is null)
++        {
++            return options;
++        }
++
++        // Hardware and codec permissions can only narrow server-wide capabilities.
++        options.EnableHardwareEncoding &= overrides.EnableHardwareEncoding ?? true;
++        options.AllowHevcEncoding &= overrides.AllowHevcEncoding ?? true;
++        options.AllowAv1Encoding &= overrides.AllowAv1Encoding ?? true;
++        options.EnableTranscodeCodecFallback &= overrides.EnableTranscodeCodecFallback ?? true;
++        options.EnableParallelCodecRace &= overrides.EnableParallelCodecRace ?? true;
++        options.EnableDecodingColorDepth10Hevc &= overrides.EnableDecodingColorDepth10Hevc ?? true;
++        options.EnableDecodingColorDepth10Vp9 &= overrides.EnableDecodingColorDepth10Vp9 ?? true;
++        options.EnableDecodingColorDepth10HevcRext &= overrides.EnableDecodingColorDepth10HevcRext ?? true;
++        options.EnableDecodingColorDepth12HevcRext &= overrides.EnableDecodingColorDepth12HevcRext ?? true;
++        options.EnableEnhancedNvdecDecoder &= overrides.EnableEnhancedNvdecDecoder ?? true;
++        options.EnableIntelLowPowerH264HwEncoder &= overrides.EnableIntelLowPowerH264HwEncoder ?? true;
++        options.EnableIntelLowPowerHevcHwEncoder &= overrides.EnableIntelLowPowerHevcHwEncoder ?? true;
++        if (overrides.HardwareDecodingCodecs is not null)
++        {
++            var allowed = overrides.HardwareDecodingCodecs.ToHashSet(StringComparer.OrdinalIgnoreCase);
++            options.HardwareDecodingCodecs = (options.HardwareDecodingCodecs ?? []).Where(allowed.Contains).ToArray();
++        }
++
++        Apply(overrides.EnableAudioVbr, value => options.EnableAudioVbr = value);
++        Apply(overrides.DownMixAudioBoost, value => options.DownMixAudioBoost = value);
++        ApplyEnum<DownMixStereoAlgorithms>(overrides.DownMixStereoAlgorithm, value => options.DownMixStereoAlgorithm = value);
++        Apply(overrides.EnableTonemapping, value => options.EnableTonemapping = value);
++        Apply(overrides.EnableVppTonemapping, value => options.EnableVppTonemapping = value);
++        Apply(overrides.EnableVideoToolboxTonemapping, value => options.EnableVideoToolboxTonemapping = value);
++        ApplyEnum<TonemappingAlgorithm>(overrides.TonemappingAlgorithm, value => options.TonemappingAlgorithm = value);
++        ApplyEnum<TonemappingMode>(overrides.TonemappingMode, value => options.TonemappingMode = value);
++        ApplyEnum<TonemappingRange>(overrides.TonemappingRange, value => options.TonemappingRange = value);
++        Apply(overrides.TonemappingDesat, value => options.TonemappingDesat = value);
++        Apply(overrides.TonemappingPeak, value => options.TonemappingPeak = value);
++        Apply(overrides.TonemappingParam, value => options.TonemappingParam = value);
++        Apply(overrides.VppTonemappingBrightness, value => options.VppTonemappingBrightness = value);
++        Apply(overrides.VppTonemappingContrast, value => options.VppTonemappingContrast = value);
++        Apply(overrides.H264Crf, value => options.H264Crf = value);
++        Apply(overrides.H265Crf, value => options.H265Crf = value);
++        ApplyEnum<EncoderPreset>(overrides.EncoderPreset, value => options.EncoderPreset = value);
++        Apply(overrides.DeinterlaceDoubleRate, value => options.DeinterlaceDoubleRate = value);
++        ApplyEnum<DeinterlaceMethod>(overrides.DeinterlaceMethod, value => options.DeinterlaceMethod = value);
++        ApplyEnum<HlsAudioSeekStrategy>(overrides.HlsAudioSeekStrategy, value => options.HlsAudioSeekStrategy = value);
++        Apply(overrides.PreferSystemNativeHwDecoder, value => options.PreferSystemNativeHwDecoder = value);
++        return options;
++    }
++
++    /// <summary>Validates administrator-supplied playback options before persistence.</summary>
++    /// <param name="options">Sparse options.</param>
++    /// <returns>An error message or null for valid settings.</returns>
++    public static string? Validate(DevicePlaybackOptionsDto options)
++    {
++        if (options.MaxStreamingBitrate is <= 0 or > 1_000_000_000)
++        {
++            return "MaxStreamingBitrate must be between 1 and 1000000000.";
++        }
++
++        if (options.H264Crf is < 0 or > 51 || options.H265Crf is < 0 or > 51)
++        {
++            return "CRF must be between 0 and 51.";
++        }
++
++        if (!InRange(options.DownMixAudioBoost, 0, 10)
++            || !InRange(options.TonemappingDesat, 0, 1)
++            || !InRange(options.TonemappingPeak, 0, 1000)
++            || !InRange(options.TonemappingParam, 0, 10)
++            || !InRange(options.VppTonemappingBrightness, -100, 100)
++            || !InRange(options.VppTonemappingContrast, 0, 10))
++        {
++            return "A numeric playback setting is out of range.";
++        }
++
++        if (!ValidEnum<DownMixStereoAlgorithms>(options.DownMixStereoAlgorithm)
++            || !ValidEnum<TonemappingAlgorithm>(options.TonemappingAlgorithm)
++            || !ValidEnum<TonemappingMode>(options.TonemappingMode)
++            || !ValidEnum<TonemappingRange>(options.TonemappingRange)
++            || !ValidEnum<EncoderPreset>(options.EncoderPreset)
++            || !ValidEnum<DeinterlaceMethod>(options.DeinterlaceMethod)
++            || !ValidEnum<HlsAudioSeekStrategy>(options.HlsAudioSeekStrategy))
++        {
++            return "Unknown playback setting enum value.";
++        }
++
++        if (options.PreferredVideoCodec is not null && NormalizeCodec(options.PreferredVideoCodec) is null)
++        {
++            return "PreferredVideoCodec must be h264, hevc, or av1.";
++        }
++
++        if (options.HardwareDecodingCodecs is { Length: > 32 }
++            || options.HardwareDecodingCodecs?.Any(codec => codec is null || !KnownHardwareCodecs.Contains(codec)) == true)
++        {
++            return "HardwareDecodingCodecs contains an unsupported codec.";
++        }
++
++        return null;
++    }
++
++    /// <summary>Promotes a codec only if the client already advertised it.</summary>
++    /// <param name="codecs">Client-advertised codecs.</param>
++    /// <param name="preferredCodec">Preferred codec.</param>
++    /// <returns>The reordered advertised codecs.</returns>
++    public static string[] ReorderVideoCodecs(IEnumerable<string> codecs, string? preferredCodec)
++    {
++        var values = codecs.ToArray();
++        var preferred = NormalizeCodec(preferredCodec);
++        return preferred is null ? values : values.OrderByDescending(codec => NormalizeCodec(codec) == preferred).ToArray();
++    }
++
++    private static string? NormalizeCodec(string? codec)
++        => codec?.Trim().ToLowerInvariant() switch
++        {
++            "h264" or "avc" or "avc1" => "h264",
++            "hevc" or "h265" or "hvc1" => "hevc",
++            "av1" or "av01" => "av1",
++            _ => null
++        };
++
++    private static bool InRange(double? value, double min, double max)
++        => value is null || (double.IsFinite(value.Value) && value >= min && value <= max);
++
++    private static bool ValidEnum<T>(string? value)
++        where T : struct, Enum
++        => value is null || (Enum.TryParse<T>(value, true, out var parsed) && Enum.IsDefined(parsed));
++
++    private static void Apply<T>(T? value, Action<T> setter)
++        where T : struct
++    {
++        if (value.HasValue)
++        {
++            setter(value.Value);
++        }
++    }
++
++    private static void ApplyEnum<T>(string? value, Action<T> setter)
++        where T : struct, Enum
++    {
++        if (Enum.TryParse<T>(value, true, out var parsed) && Enum.IsDefined(parsed))
++        {
++            setter(parsed);
++        }
++    }
++}
+diff --git a/Jellyfin.Api/Helpers/DynamicHlsHelper.cs b/Jellyfin.Api/Helpers/DynamicHlsHelper.cs
+index 4995d37f4b..100ec87a22 100644
+--- a/Jellyfin.Api/Helpers/DynamicHlsHelper.cs
++++ b/Jellyfin.Api/Helpers/DynamicHlsHelper.cs
+@@ -232,7 +232,7 @@ public class DynamicHlsHelper
+ 
+         if (state.VideoStream is not null && state.VideoRequest is not null)
+         {
+-            var encodingOptions = _serverConfigurationManager.GetEncodingOptions();
++            var encodingOptions = state.EffectiveEncodingOptions;
+ 
+             // Provide AV1 and HEVC SDR entrances for backward compatibility.
+             foreach (var sdrVideoCodec in new[] { "av1", "hevc" })
+diff --git a/Jellyfin.Api/Helpers/MediaInfoHelper.cs b/Jellyfin.Api/Helpers/MediaInfoHelper.cs
+index ec59734fd0..0e28dbf20d 100644
+--- a/Jellyfin.Api/Helpers/MediaInfoHelper.cs
++++ b/Jellyfin.Api/Helpers/MediaInfoHelper.cs
+@@ -227,6 +227,19 @@ public class MediaInfoHelper
+         bool alwaysBurnInSubtitleWhenTranscoding,
+         IPAddress ipAddress)
+     {
++        var devicePolicy = DevicePlaybackOptionsHelper.GetAuthenticatedOptions(_deviceManager, claimsPrincipal);
++        enableDirectPlay &= devicePolicy?.AllowDirectPlay ?? true;
++        enableDirectStream &= devicePolicy?.AllowDirectStream ?? true;
++        if (devicePolicy?.MaxStreamingBitrate is int deviceBitrateLimit)
++        {
++            maxBitrate = Math.Min(maxBitrate ?? deviceBitrateLimit, deviceBitrateLimit);
++        }
++
++        if (item is Audio)
++        {
++            enableTranscoding &= devicePolicy?.AllowAudioTranscoding ?? true;
++        }
++
+         var streamBuilder = new StreamBuilder(_mediaEncoder, _logger);
+ 
+         var options = new MediaOptions
+@@ -298,24 +311,31 @@ public class MediaInfoHelper
+ 
+         if (streamInfo is not null)
+         {
++            streamInfo.VideoCodecs = DevicePlaybackOptionsHelper.ReorderVideoCodecs(
++                streamInfo.VideoCodecs, devicePolicy?.PreferredVideoCodec);
+             streamInfo.PlaySessionId = playSessionId;
+             streamInfo.StartPositionTicks = startTimeTicks;
+ 
+-            mediaSource.SupportsDirectPlay = streamInfo.PlayMethod == PlayMethod.DirectPlay;
++            mediaSource.SupportsDirectPlay = enableDirectPlay && streamInfo.PlayMethod == PlayMethod.DirectPlay;
+ 
+             // Players do not handle this being set according to PlayMethod
+-            mediaSource.SupportsDirectStream =
+-                options.EnableDirectStream
++            mediaSource.SupportsDirectStream = enableDirectStream &&
++                (options.EnableDirectStream
+                     ? streamInfo.PlayMethod == PlayMethod.DirectPlay || streamInfo.PlayMethod == PlayMethod.DirectStream
+-                    : streamInfo.PlayMethod == PlayMethod.DirectPlay;
++                    : streamInfo.PlayMethod == PlayMethod.DirectPlay);
+ 
+-            mediaSource.SupportsTranscoding =
+-                streamInfo.PlayMethod == PlayMethod.DirectStream
+-                || mediaSource.TranscodingContainer is not null
+-                || profile.TranscodingProfiles.Any(i => i.Type == streamInfo.MediaType && i.Context == options.Context);
++            mediaSource.SupportsTranscoding = enableTranscoding
++                && (streamInfo.PlayMethod == PlayMethod.DirectStream
++                    || mediaSource.TranscodingContainer is not null
++                    || profile.TranscodingProfiles.Any(i => i.Type == streamInfo.MediaType && i.Context == options.Context));
+ 
+             if (item is Audio)
+             {
++                if (devicePolicy?.AllowAudioTranscoding == false)
++                {
++                    mediaSource.SupportsTranscoding = false;
++                }
++
+                 if (!user.HasPermission(PermissionKind.EnableAudioPlaybackTranscoding))
+                 {
+                     mediaSource.SupportsTranscoding = false;
+@@ -323,6 +343,22 @@ public class MediaInfoHelper
+             }
+             else if (item is Video)
+             {
++                // Keep remux/audio-only transcodes available; a target codec name alone
++                // is not proof of encoding. StreamingHelpers checks the final copy choice.
++                if (devicePolicy?.AllowAudioTranscoding == false
++                    && streamInfo.TargetAudioCodec.Count > 0
++                    && !streamInfo.TargetAudioCodec.Contains(streamInfo.TargetAudioStream?.Codec, StringComparer.OrdinalIgnoreCase))
++                {
++                    mediaSource.SupportsTranscoding = false;
++                }
++
++                if (devicePolicy?.AllowVideoTranscoding == false
++                    && streamInfo.TargetVideoCodec.Count > 0
++                    && !streamInfo.TargetVideoCodec.Contains(streamInfo.TargetVideoStream?.Codec, StringComparer.OrdinalIgnoreCase))
++                {
++                    mediaSource.SupportsTranscoding = false;
++                }
++
+                 if (!user.HasPermission(PermissionKind.EnableAudioPlaybackTranscoding)
+                     && !user.HasPermission(PermissionKind.EnableVideoPlaybackTranscoding)
+                     && !user.HasPermission(PermissionKind.EnablePlaybackRemuxing))
+diff --git a/Jellyfin.Api/Helpers/StreamingHelpers.cs b/Jellyfin.Api/Helpers/StreamingHelpers.cs
+index 4f79c252c9..c0f5a595f7 100644
+--- a/Jellyfin.Api/Helpers/StreamingHelpers.cs
++++ b/Jellyfin.Api/Helpers/StreamingHelpers.cs
+@@ -6,6 +6,7 @@ using System.Linq;
+ using System.Threading;
+ using System.Threading.Tasks;
+ using Jellyfin.Api.Extensions;
++using Jellyfin.Data.Dtos;
+ using Jellyfin.Data.Enums;
+ using Jellyfin.Extensions;
+ using MediaBrowser.Common.Configuration;
+@@ -15,6 +16,7 @@ using MediaBrowser.Controller.Entities;
+ using MediaBrowser.Controller.Library;
+ using MediaBrowser.Controller.MediaEncoding;
+ using MediaBrowser.Controller.Streaming;
++using MediaBrowser.Model.Configuration;
+ using MediaBrowser.Model.Dlna;
+ using MediaBrowser.Model.Dto;
+ using Microsoft.AspNetCore.Http;
+@@ -41,6 +43,8 @@ public static class StreamingHelpers
+     /// <param name="transcodeManager">Instance of the <see cref="ITranscodeManager"/> interface.</param>
+     /// <param name="transcodingJobType">The <see cref="TranscodingJobType"/>.</param>
+     /// <param name="cancellationToken">The <see cref="CancellationToken"/>.</param>
++    /// <param name="pinnedEncodingOptions">Previously pinned encoding settings for a codec retry.</param>
++    /// <param name="pinnedDeviceOptions">Previously pinned device policy for a codec retry.</param>
+     /// <returns>A <see cref="Task"/> containing the current <see cref="StreamState"/>.</returns>
+     public static async Task<StreamState> GetStreamingState(
+         StreamingRequestDto streamingRequest,
+@@ -53,9 +57,14 @@ public static class StreamingHelpers
+         EncodingHelper encodingHelper,
+         ITranscodeManager transcodeManager,
+         TranscodingJobType transcodingJobType,
+-        CancellationToken cancellationToken)
++        CancellationToken cancellationToken,
++        EncodingOptions? pinnedEncodingOptions = null,
++        DevicePlaybackOptionsDto? pinnedDeviceOptions = null)
+     {
+         var httpRequest = httpContext.Request;
++        var deviceOptions = pinnedEncodingOptions is null
++            ? DevicePlaybackOptionsHelper.GetAuthenticatedOptions(httpContext)
++            : pinnedDeviceOptions;
+         if (!string.IsNullOrWhiteSpace(streamingRequest.Params))
+         {
+             ParseParams(streamingRequest);
+@@ -78,7 +87,11 @@ public static class StreamingHelpers
+         {
+             Request = streamingRequest,
+             RequestedUrl = url,
+-            UserAgent = httpRequest.Headers[HeaderNames.UserAgent]
++            UserAgent = httpRequest.Headers[HeaderNames.UserAgent],
++            PlaybackOwnerToken = httpContext.User.GetToken(),
++            DevicePlaybackOptions = deviceOptions,
++            EffectiveEncodingOptions = pinnedEncodingOptions?.Clone()
++                ?? DevicePlaybackOptionsHelper.CreateEffectiveOptions(serverConfigurationManager.GetEncodingOptions(), deviceOptions)
+         };
+ 
+         var userId = httpContext.User.GetUserId();
+@@ -89,7 +102,8 @@ public static class StreamingHelpers
+ 
+         if (state.IsVideoRequest && !string.IsNullOrWhiteSpace(state.Request.VideoCodec))
+         {
+-            state.SupportedVideoCodecs = state.Request.VideoCodec.Split(',', StringSplitOptions.RemoveEmptyEntries);
++            state.SupportedVideoCodecs = DevicePlaybackOptionsHelper.ReorderVideoCodecs(
++                state.Request.VideoCodec.Split(',', StringSplitOptions.RemoveEmptyEntries), deviceOptions?.PreferredVideoCodec);
+             state.Request.VideoCodec = state.SupportedVideoCodecs.FirstOrDefault();
+         }
+ 
+@@ -113,12 +127,61 @@ public static class StreamingHelpers
+         state.IsInputVideo = item.MediaType == MediaType.Video;
+ 
+         MediaSourceInfo? mediaSource = null;
+-        if (string.IsNullOrWhiteSpace(streamingRequest.LiveStreamId))
++        var currentJob = !string.IsNullOrWhiteSpace(streamingRequest.PlaySessionId)
++            ? transcodeManager.GetTranscodingJob(streamingRequest.PlaySessionId)
++            : null;
++        // A client-supplied PlaySessionId must never grant another token's job snapshot.
++        if (currentJob is not null
++            && (!string.Equals(currentJob.PlaybackOwnerToken, state.PlaybackOwnerToken, StringComparison.Ordinal)
++                || !currentJob.PlaybackItemId.Equals(streamingRequest.Id)
++                || (streamingRequest.LiveStreamId is not null
++                    && currentJob.LiveStreamId is not null
++                    && !string.Equals(currentJob.LiveStreamId, streamingRequest.LiveStreamId, StringComparison.Ordinal))))
++        {
++            currentJob = null;
++        }
++
++        if (currentJob?.EffectiveEncodingOptions is not null)
++        {
++            state.EffectiveEncodingOptions = currentJob.EffectiveEncodingOptions.Clone();
++            state.DevicePlaybackOptions = currentJob.DevicePlaybackOptions;
++            if (state.SupportedVideoCodecs is not null)
++            {
++                state.SupportedVideoCodecs = DevicePlaybackOptionsHelper.ReorderVideoCodecs(
++                    state.SupportedVideoCodecs, state.DevicePlaybackOptions?.PreferredVideoCodec);
++                state.Request.VideoCodec = state.SupportedVideoCodecs.FirstOrDefault();
++            }
++        }
++
++        if (streamingRequest.Static && state.DevicePlaybackOptions?.AllowDirectPlay == false)
++        {
++            throw new System.Security.SecurityException("Direct play is disabled for this device.");
++        }
++
++        if (state.DevicePlaybackOptions?.AllowDirectStream == false)
++        {
++            streamingRequest.AllowVideoStreamCopy = false;
++            streamingRequest.AllowAudioStreamCopy = false;
++        }
++
++        if (state.DevicePlaybackOptions?.MaxStreamingBitrate is int maxDeviceBitrate)
+         {
+-            var currentJob = !string.IsNullOrWhiteSpace(streamingRequest.PlaySessionId)
+-                ? transcodeManager.GetTranscodingJob(streamingRequest.PlaySessionId)
+-                : null;
++            var cappedAudioBitrate = Math.Min(streamingRequest.AudioBitRate ?? 0, maxDeviceBitrate);
++            if (streamingRequest.AudioBitRate.HasValue)
++            {
++                streamingRequest.AudioBitRate = cappedAudioBitrate;
++            }
++
++            if (state.VideoRequest is not null)
++            {
++                state.VideoRequest.VideoBitRate = Math.Min(
++                    state.VideoRequest.VideoBitRate ?? maxDeviceBitrate,
++                    Math.Max(1, maxDeviceBitrate - cappedAudioBitrate));
++            }
++        }
+ 
++        if (string.IsNullOrWhiteSpace(streamingRequest.LiveStreamId))
++        {
+             if (currentJob is not null)
+             {
+                 mediaSource = currentJob.MediaSource;
+@@ -158,9 +221,7 @@ public static class StreamingHelpers
+             }
+         }
+ 
+-        var encodingOptions = serverConfigurationManager.GetEncodingOptions();
+-
+-        encodingHelper.AttachMediaSourceInfo(state, encodingOptions, mediaSource, url);
++        encodingHelper.AttachMediaSourceInfo(state, state.EffectiveEncodingOptions, mediaSource, url);
+ 
+         string? containerInternal = Path.GetExtension(state.RequestedUrl);
+ 
+@@ -201,7 +262,7 @@ public static class StreamingHelpers
+             state.OutputVideoCodec = state.Request.VideoCodec;
+             state.OutputVideoBitrate = encodingHelper.GetVideoBitrateParamValue(state.VideoRequest, state.VideoStream, state.OutputVideoCodec);
+ 
+-            encodingHelper.TryStreamCopy(state, encodingOptions);
++            encodingHelper.TryStreamCopy(state, state.EffectiveEncodingOptions);
+ 
+             if (!EncodingHelper.IsCopyCodec(state.OutputVideoCodec) && state.OutputVideoBitrate.HasValue)
+             {
+@@ -249,6 +310,21 @@ public static class StreamingHelpers
+             }
+         }
+ 
++        if (state.AudioStream is not null
++            && state.DevicePlaybackOptions?.AllowAudioTranscoding == false
++            && !EncodingHelper.IsCopyCodec(state.OutputAudioCodec))
++        {
++            throw new System.Security.SecurityException("Audio transcoding is disabled for this device.");
++        }
++
++        if (state.VideoStream is not null
++            && state.IsVideoRequest
++            && state.DevicePlaybackOptions?.AllowVideoTranscoding == false
++            && !EncodingHelper.IsCopyCodec(state.OutputVideoCodec))
++        {
++            throw new System.Security.SecurityException("Video transcoding is disabled for this device.");
++        }
++
+         var ext = string.IsNullOrWhiteSpace(state.OutputContainer)
+             ? GetOutputFileExtension(state, mediaSource)
+             : ("." + GetContainerFileExtension(state.OutputContainer));
+diff --git a/Jellyfin.Data/Dtos/DeviceOptionsDto.cs b/Jellyfin.Data/Dtos/DeviceOptionsDto.cs
+index aad5787097..1802c99821 100644
+--- a/Jellyfin.Data/Dtos/DeviceOptionsDto.cs
++++ b/Jellyfin.Data/Dtos/DeviceOptionsDto.cs
+@@ -19,4 +19,9 @@ public class DeviceOptionsDto
+     /// Gets or sets the custom name.
+     /// </summary>
+     public string? CustomName { get; set; }
++
++    /// <summary>
++    /// Gets or sets this device's sparse playback overrides.
++    /// </summary>
++    public DevicePlaybackOptionsDto? PlaybackOptions { get; set; }
+ }
+diff --git a/Jellyfin.Data/Dtos/DevicePlaybackOptionsDto.cs b/Jellyfin.Data/Dtos/DevicePlaybackOptionsDto.cs
+new file mode 100644
+index 0000000000..8f2029165f
+--- /dev/null
++++ b/Jellyfin.Data/Dtos/DevicePlaybackOptionsDto.cs
+@@ -0,0 +1,127 @@
++namespace Jellyfin.Data.Dtos;
++
++/// <summary>
++/// Sparse playback policy for an exact registered device. Null values inherit server defaults.
++/// </summary>
++public sealed class DevicePlaybackOptionsDto
++{
++    /// <summary>Gets or sets the maximum streaming bitrate in bits per second.</summary>
++    public int? MaxStreamingBitrate { get; set; }
++
++    /// <summary>Gets or sets whether direct play is allowed.</summary>
++    public bool? AllowDirectPlay { get; set; }
++
++    /// <summary>Gets or sets whether direct streaming is allowed.</summary>
++    public bool? AllowDirectStream { get; set; }
++
++    /// <summary>Gets or sets whether video transcoding is allowed.</summary>
++    public bool? AllowVideoTranscoding { get; set; }
++
++    /// <summary>Gets or sets whether audio transcoding is allowed.</summary>
++    public bool? AllowAudioTranscoding { get; set; }
++
++    /// <summary>Gets or sets a preferred advertised output video codec.</summary>
++    public string? PreferredVideoCodec { get; set; }
++
++    /// <summary>Gets or sets whether variable bitrate audio encoding is enabled.</summary>
++    public bool? EnableAudioVbr { get; set; }
++
++    /// <summary>Gets or sets audio downmix boost.</summary>
++    public double? DownMixAudioBoost { get; set; }
++
++    /// <summary>Gets or sets the downmix algorithm.</summary>
++    public string? DownMixStereoAlgorithm { get; set; }
++
++    /// <summary>Gets or sets whether tone mapping is enabled.</summary>
++    public bool? EnableTonemapping { get; set; }
++
++    /// <summary>Gets or sets whether VPP tone mapping is enabled.</summary>
++    public bool? EnableVppTonemapping { get; set; }
++
++    /// <summary>Gets or sets whether VideoToolbox tone mapping is enabled.</summary>
++    public bool? EnableVideoToolboxTonemapping { get; set; }
++
++    /// <summary>Gets or sets the tone-mapping algorithm.</summary>
++    public string? TonemappingAlgorithm { get; set; }
++
++    /// <summary>Gets or sets the tone-mapping mode.</summary>
++    public string? TonemappingMode { get; set; }
++
++    /// <summary>Gets or sets the tone-mapping range.</summary>
++    public string? TonemappingRange { get; set; }
++
++    /// <summary>Gets or sets tone-mapping desaturation.</summary>
++    public double? TonemappingDesat { get; set; }
++
++    /// <summary>Gets or sets tone-mapping peak.</summary>
++    public double? TonemappingPeak { get; set; }
++
++    /// <summary>Gets or sets tone-mapping parameter.</summary>
++    public double? TonemappingParam { get; set; }
++
++    /// <summary>Gets or sets VPP brightness.</summary>
++    public double? VppTonemappingBrightness { get; set; }
++
++    /// <summary>Gets or sets VPP contrast.</summary>
++    public double? VppTonemappingContrast { get; set; }
++
++    /// <summary>Gets or sets H.264 CRF.</summary>
++    public int? H264Crf { get; set; }
++
++    /// <summary>Gets or sets HEVC CRF.</summary>
++    public int? H265Crf { get; set; }
++
++    /// <summary>Gets or sets the encoder preset.</summary>
++    public string? EncoderPreset { get; set; }
++
++    /// <summary>Gets or sets whether double-rate deinterlacing is enabled.</summary>
++    public bool? DeinterlaceDoubleRate { get; set; }
++
++    /// <summary>Gets or sets the deinterlacing method.</summary>
++    public string? DeinterlaceMethod { get; set; }
++
++    /// <summary>Gets or sets whether hardware encoding is enabled.</summary>
++    public bool? EnableHardwareEncoding { get; set; }
++
++    /// <summary>Gets or sets whether HEVC encoding is allowed.</summary>
++    public bool? AllowHevcEncoding { get; set; }
++
++    /// <summary>Gets or sets whether AV1 encoding is allowed.</summary>
++    public bool? AllowAv1Encoding { get; set; }
++
++    /// <summary>Gets or sets whether codec fallback is enabled.</summary>
++    public bool? EnableTranscodeCodecFallback { get; set; }
++
++    /// <summary>Gets or sets whether parallel codec races are enabled.</summary>
++    public bool? EnableParallelCodecRace { get; set; }
++
++    /// <summary>Gets or sets the HLS audio seek strategy.</summary>
++    public string? HlsAudioSeekStrategy { get; set; }
++
++    /// <summary>Gets or sets the allowed hardware decoding codecs.</summary>
++    public string[]? HardwareDecodingCodecs { get; set; }
++
++    /// <summary>Gets or sets whether 10-bit HEVC hardware decoding is enabled.</summary>
++    public bool? EnableDecodingColorDepth10Hevc { get; set; }
++
++    /// <summary>Gets or sets whether 10-bit VP9 hardware decoding is enabled.</summary>
++    public bool? EnableDecodingColorDepth10Vp9 { get; set; }
++
++    /// <summary>Gets or sets whether 10-bit HEVC RExt hardware decoding is enabled.</summary>
++    public bool? EnableDecodingColorDepth10HevcRext { get; set; }
++
++    /// <summary>Gets or sets whether 12-bit HEVC RExt hardware decoding is enabled.</summary>
++    public bool? EnableDecodingColorDepth12HevcRext { get; set; }
++
++    /// <summary>Gets or sets whether enhanced NVDEC is enabled.</summary>
++    public bool? EnableEnhancedNvdecDecoder { get; set; }
++
++    /// <summary>Gets or sets whether the native hardware decoder is preferred.</summary>
++    public bool? PreferSystemNativeHwDecoder { get; set; }
++
++    /// <summary>Gets or sets whether low-power H.264 encoding is enabled.</summary>
++    public bool? EnableIntelLowPowerH264HwEncoder { get; set; }
++
++    /// <summary>Gets or sets whether low-power HEVC encoding is enabled.</summary>
++    public bool? EnableIntelLowPowerHevcHwEncoder { get; set; }
++}
+diff --git a/Jellyfin.Server.Implementations/Devices/DeviceManager.cs b/Jellyfin.Server.Implementations/Devices/DeviceManager.cs
+index d0d52a23fb..0967cd371b 100644
+--- a/Jellyfin.Server.Implementations/Devices/DeviceManager.cs
++++ b/Jellyfin.Server.Implementations/Devices/DeviceManager.cs
+@@ -2,6 +2,8 @@ using System;
+ using System.Collections.Concurrent;
+ using System.Collections.Generic;
+ using System.Linq;
++using System.Text.Json;
++using System.Text.Json.Serialization;
+ using System.Threading.Tasks;
+ using Jellyfin.Data;
+ using Jellyfin.Data.Dtos;
+@@ -20,6 +22,7 @@ using MediaBrowser.Model.Dto;
+ using MediaBrowser.Model.Querying;
+ using MediaBrowser.Model.Session;
+ using Microsoft.EntityFrameworkCore;
++using Microsoft.Extensions.Logging;
+ 
+ namespace Jellyfin.Server.Implementations.Devices
+ {
+@@ -30,6 +33,8 @@ namespace Jellyfin.Server.Implementations.Devices
+     {
+         private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
+         private readonly IUserManager _userManager;
++        private readonly ILogger<DeviceManager> _logger;
++        private static readonly JsonSerializerOptions SparseJsonOptions = new() { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
+         private readonly ConcurrentDictionary<string, ClientCapabilities> _capabilitiesMap = new();
+         private readonly ConcurrentDictionary<int, Device> _devices;
+         private readonly ConcurrentDictionary<string, DeviceOptions> _deviceOptions;
+@@ -39,10 +44,12 @@ namespace Jellyfin.Server.Implementations.Devices
+         /// </summary>
+         /// <param name="dbProvider">The database provider.</param>
+         /// <param name="userManager">The user manager.</param>
+-        public DeviceManager(IDbContextFactory<JellyfinDbContext> dbProvider, IUserManager userManager)
++        /// <param name="logger">The logger.</param>
++        public DeviceManager(IDbContextFactory<JellyfinDbContext> dbProvider, IUserManager userManager, ILogger<DeviceManager> logger)
+         {
+             _dbProvider = dbProvider;
+             _userManager = userManager;
++            _logger = logger;
+             _devices = new ConcurrentDictionary<int, Device>();
+             _deviceOptions = new ConcurrentDictionary<string, DeviceOptions>();
+ 
+@@ -94,6 +101,45 @@ namespace Jellyfin.Server.Implementations.Devices
+             DeviceOptionsUpdated?.Invoke(this, new GenericEventArgs<Tuple<string, DeviceOptions>>(new Tuple<string, DeviceOptions>(deviceId, deviceOptions)));
+         }
+ 
++        /// <inheritdoc />
++        public async Task UpdateDevicePlaybackOptions(string deviceId, DevicePlaybackOptionsDto playbackOptions)
++        {
++            ArgumentException.ThrowIfNullOrEmpty(deviceId);
++            ArgumentNullException.ThrowIfNull(playbackOptions);
++            DeviceOptions deviceOptions;
++            await using (var dbContext = await _dbProvider.CreateDbContextAsync().ConfigureAwait(false))
++            {
++                if (!await dbContext.Devices.AnyAsync(device => device.DeviceId == deviceId).ConfigureAwait(false))
++                {
++                    throw new ResourceNotFoundException("Device not found");
++                }
++
++                deviceOptions = await dbContext.DeviceOptions.FirstOrDefaultAsync(option => option.DeviceId == deviceId).ConfigureAwait(false)
++                    ?? new DeviceOptions(deviceId);
++                if (deviceOptions.Id == 0)
++                {
++                    dbContext.DeviceOptions.Add(deviceOptions);
++                }
++
++                deviceOptions.PlaybackOptionsJson = JsonSerializer.Serialize(playbackOptions, SparseJsonOptions) == "{}"
++                    ? null
++                    : JsonSerializer.Serialize(new DevicePlaybackDocument(1, playbackOptions), SparseJsonOptions);
++                await dbContext.SaveChangesAsync().ConfigureAwait(false);
++            }
++
++            _deviceOptions[deviceId] = deviceOptions;
++            DeviceOptionsUpdated?.Invoke(this, new GenericEventArgs<Tuple<string, DeviceOptions>>(Tuple.Create(deviceId, deviceOptions)));
++        }
++
++        /// <inheritdoc />
++        public async Task DeleteDeviceOptions(string deviceId)
++        {
++            await using var dbContext = await _dbProvider.CreateDbContextAsync().ConfigureAwait(false);
++            await dbContext.DeviceOptions.Where(option => option.DeviceId == deviceId).ExecuteDeleteAsync().ConfigureAwait(false);
++            _deviceOptions.TryRemove(deviceId, out _);
++            _capabilitiesMap.TryRemove(deviceId, out _);
++        }
++
+         /// <inheritdoc />
+         public async Task<Device> CreateDevice(Device device)
+         {
+@@ -111,12 +157,17 @@ namespace Jellyfin.Server.Implementations.Devices
+         /// <inheritdoc />
+         public DeviceOptionsDto? GetDeviceOptions(string deviceId)
+         {
+-            if (_deviceOptions.TryGetValue(deviceId, out var deviceOptions))
++            // Read the database for cross-node consistency; this cache is process-local.
++            using var dbContext = _dbProvider.CreateDbContext();
++            var deviceOptions = dbContext.DeviceOptions.AsNoTracking().FirstOrDefault(option => option.DeviceId == deviceId);
++            if (deviceOptions is not null)
+             {
+                 return ToDeviceOptionsDto(deviceOptions);
+             }
+ 
+-            return null;
++            return dbContext.Devices.Any(device => device.DeviceId == deviceId)
++                ? new DeviceOptionsDto { DeviceId = deviceId, PlaybackOptions = new DevicePlaybackOptionsDto() }
++                : null;
+         }
+ 
+         /// <inheritdoc />
+@@ -274,9 +325,35 @@ namespace Jellyfin.Server.Implementations.Devices
+                 Id = options.Id,
+                 DeviceId = options.DeviceId,
+                 CustomName = options.CustomName,
++                PlaybackOptions = DeserializePlaybackOptions(options.PlaybackOptionsJson)
+             };
+         }
+ 
++        private DevicePlaybackOptionsDto? DeserializePlaybackOptions(string? json)
++        {
++            if (string.IsNullOrWhiteSpace(json))
++            {
++                return new DevicePlaybackOptionsDto();
++            }
++
++            try
++            {
++                var document = JsonSerializer.Deserialize<DevicePlaybackDocument>(json);
++                if (document is { Version: 1, Options: not null })
++                {
++                    return document.Options;
++                }
++            }
++            catch (JsonException exception)
++            {
++                _logger.LogWarning(exception, "Ignoring malformed playback policy for a registered device");
++                return null;
++            }
++
++            _logger.LogWarning("Ignoring unsupported device playback policy version");
++            return null;
++        }
++
+         private DeviceInfoDto ToDeviceInfoDto(DeviceInfo info)
+         {
+             return new()
+@@ -309,5 +386,7 @@ namespace Jellyfin.Server.Implementations.Devices
+                 IconUrl = capabilities.IconUrl
+             };
+         }
++
++        private sealed record DevicePlaybackDocument(int Version, DevicePlaybackOptionsDto Options);
+     }
+ }
+diff --git a/MediaBrowser.Controller/Devices/IDeviceManager.cs b/MediaBrowser.Controller/Devices/IDeviceManager.cs
+index ea38950d32..c559ffdd4a 100644
+--- a/MediaBrowser.Controller/Devices/IDeviceManager.cs
++++ b/MediaBrowser.Controller/Devices/IDeviceManager.cs
+@@ -101,6 +101,21 @@ public interface IDeviceManager
+     /// <returns>A <see cref="Task"/> representing the update of the device options.</returns>
+     Task UpdateDeviceOptions(string deviceId, string? deviceName);
+ 
++    /// <summary>
++    /// Replaces an exact device's sparse playback policy without changing its name.
++    /// </summary>
++    /// <param name="deviceId">The registered device identifier.</param>
++    /// <param name="playbackOptions">The replacement sparse policy.</param>
++    /// <returns>The update task.</returns>
++    Task UpdateDevicePlaybackOptions(string deviceId, DevicePlaybackOptionsDto playbackOptions);
++
++    /// <summary>
++    /// Removes the options row after an administrator deletes a registered device.
++    /// </summary>
++    /// <param name="deviceId">The deleted device identifier.</param>
++    /// <returns>The deletion task.</returns>
++    Task DeleteDeviceOptions(string deviceId);
++
+     /// <summary>
+     /// Gets the options of a device.
+     /// </summary>
+diff --git a/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs b/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
+index 9cf7b9aca6..314dfd5070 100644
+--- a/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
++++ b/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
+@@ -1,6 +1,8 @@
+ using System;
+ using System.Diagnostics;
+ using System.Threading;
++using Jellyfin.Data.Dtos;
++using MediaBrowser.Model.Configuration;
+ using MediaBrowser.Model.Dto;
+ using Microsoft.Extensions.Logging;
+ 
+@@ -81,6 +83,18 @@ public sealed class TranscodingJob : IDisposable
+     /// </summary>
+     public string? DeviceId { get; set; }
+ 
++    /// <summary>Gets or sets the effective encoding settings pinned to this job.</summary>
++    public EncodingOptions? EffectiveEncodingOptions { get; set; }
++
++    /// <summary>Gets or sets the sparse device restrictions pinned to this job.</summary>
++    public DevicePlaybackOptionsDto? DevicePlaybackOptions { get; set; }
++
++    /// <summary>Gets or sets the authenticated access token that owns this job.</summary>
++    public string? PlaybackOwnerToken { get; set; }
++
++    /// <summary>Gets or sets the media item this job is streaming.</summary>
++    public Guid PlaybackItemId { get; set; }
++
+     /// <summary>
+     /// Gets or sets cancellation token source.
+     /// </summary>
+diff --git a/MediaBrowser.Controller/Streaming/StreamState.cs b/MediaBrowser.Controller/Streaming/StreamState.cs
+index 829d1068fd..9e1f7d9352 100644
+--- a/MediaBrowser.Controller/Streaming/StreamState.cs
++++ b/MediaBrowser.Controller/Streaming/StreamState.cs
+@@ -1,6 +1,8 @@
+ using System;
++using Jellyfin.Data.Dtos;
+ using MediaBrowser.Controller.Library;
+ using MediaBrowser.Controller.MediaEncoding;
++using MediaBrowser.Model.Configuration;
+ using MediaBrowser.Model.Dlna;
+ 
+ namespace MediaBrowser.Controller.Streaming;
+@@ -32,6 +34,15 @@ public class StreamState : EncodingJobInfo, IDisposable
+     /// </summary>
+     public string? RequestedUrl { get; set; }
+ 
++    /// <summary>Gets or sets the effective options pinned to this playback.</summary>
++    public EncodingOptions EffectiveEncodingOptions { get; set; } = null!;
++
++    /// <summary>Gets or sets the sparse device restrictions pinned to this playback.</summary>
++    public DevicePlaybackOptionsDto? DevicePlaybackOptions { get; set; }
++
++    /// <summary>Gets or sets the authenticated access token that owns this playback.</summary>
++    public string? PlaybackOwnerToken { get; set; }
++
+     /// <summary>
+     /// Gets or sets the request.
+     /// </summary>
+diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs
+index e19a9a1eeb..f76a3a54fa 100644
+--- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs
++++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeCodecRaceCoordinator.cs
+@@ -58,7 +58,7 @@ public sealed class TranscodeCodecRaceCoordinator : ITranscodeCodecRaceCoordinat
+         TranscodeCodecFallbackContext context,
+         CancellationToken cancellationToken)
+     {
+-        var encodingOptions = _serverConfigurationManager.GetEncodingOptions();
++        var encodingOptions = context.State.EffectiveEncodingOptions;
+         var requestedCodec = context.State.OutputVideoCodec ?? context.State.Request.VideoCodec ?? string.Empty;
+ 
+         if (TranscodeCodecFallbackChain.IsRaceEligible(context.State, encodingOptions, context.IsInitSegmentRequest))
+diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
+index 4487a82a5c..d0ebfca7e4 100644
+--- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
++++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
+@@ -376,7 +376,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+         {
+             var audioCodec = state.ActualOutputAudioCodec;
+             var videoCodec = state.ActualOutputVideoCodec;
+-            var hardwareAccelerationType = _serverConfigurationManager.GetEncodingOptions().HardwareAccelerationType;
++            var hardwareAccelerationType = (job?.EffectiveEncodingOptions ?? state.EffectiveEncodingOptions).HardwareAccelerationType;
+ 
+             long? bufferTicks = null;
+             if (job?.TranscodingPositionTicks is not null && job.DownloadPositionTicks is not null)
+@@ -755,7 +755,11 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+                 Id = transcodingJobId,
+                 PlaySessionId = playSessionId,
+                 LiveStreamId = liveStreamId,
+-                MediaSource = state.MediaSource
++                MediaSource = state.MediaSource,
++                EffectiveEncodingOptions = state.EffectiveEncodingOptions.Clone(),
++                DevicePlaybackOptions = state.DevicePlaybackOptions,
++                PlaybackOwnerToken = state.PlaybackOwnerToken,
++                PlaybackItemId = state.Request.Id
+             };
+ 
+             _activeTranscodingJobs.Add(job);
+@@ -826,7 +830,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+                     new LiveStreamRequest { OpenToken = state.MediaSource.OpenToken },
+                     cancellationTokenSource.Token)
+                 .ConfigureAwait(false);
+-            var encodingOptions = _serverConfigurationManager.GetEncodingOptions();
++            var encodingOptions = state.EffectiveEncodingOptions;
+ 
+             _encodingHelper.AttachMediaSourceInfo(state, encodingOptions, liveStreamResponse.MediaSource, state.RequestedUrl);
+ 
+diff --git a/MediaBrowser.Model/Configuration/EncodingOptions.cs b/MediaBrowser.Model/Configuration/EncodingOptions.cs
+index 790b1ee8df..68da7b6ddf 100644
+--- a/MediaBrowser.Model/Configuration/EncodingOptions.cs
++++ b/MediaBrowser.Model/Configuration/EncodingOptions.cs
+@@ -1,6 +1,7 @@
+ #pragma warning disable CA1819 // XML serialization handles collections improperly, so we need to use arrays
+ 
+ #nullable disable
++using System;
+ using System.ComponentModel;
+ using MediaBrowser.Model.Entities;
+ 
+@@ -362,4 +363,16 @@ public class EncodingOptions
+     /// </summary>
+     [DefaultValue(HlsAudioSeekStrategy.TrimCopiedAudio)]
+     public HlsAudioSeekStrategy HlsAudioSeekStrategy { get; set; }
++
++    /// <summary>
++    /// Clones the configuration for a single playback, including mutable array properties.
++    /// </summary>
++    /// <returns>An independent encoding options snapshot.</returns>
++    public EncodingOptions Clone()
++    {
++        var clone = (EncodingOptions)MemberwiseClone();
++        clone.HardwareDecodingCodecs = (string[])HardwareDecodingCodecs?.Clone();
++        clone.AllowOnDemandMetadataBasedKeyframeExtractionForExtensions = (string[])AllowOnDemandMetadataBasedKeyframeExtractionForExtensions?.Clone();
++        return clone;
++    }
+ }
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/Security/DeviceOptions.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/Security/DeviceOptions.cs
+index 8ac3e364c4..a281e36eae 100644
+--- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/Security/DeviceOptions.cs
++++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/Entities/Security/DeviceOptions.cs
+@@ -31,5 +31,10 @@ namespace Jellyfin.Database.Implementations.Entities.Security
+         /// Gets or sets the custom name.
+         /// </summary>
+         public string? CustomName { get; set; }
++
++        /// <summary>
++        /// Gets or sets the versioned sparse playback policy document.
++        /// </summary>
++        public string? PlaybackOptionsJson { get; set; }
+     }
+ }
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260926204012_AddDevicePlaybackOptions.Designer.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260926204012_AddDevicePlaybackOptions.Designer.cs
+new file mode 100644
+index 0000000000..7c274bf2d8
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260926204012_AddDevicePlaybackOptions.Designer.cs
+@@ -0,0 +1,2150 @@
++﻿// <auto-generated />
++using System;
++using Jellyfin.Database.Implementations;
++using Microsoft.EntityFrameworkCore;
++using Microsoft.EntityFrameworkCore.Infrastructure;
++using Microsoft.EntityFrameworkCore.Migrations;
++using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
++
++#nullable disable
++
++namespace Jellyfin.Database.Providers.Sqlite.Migrations
++{
++    [DbContext(typeof(JellyfinDbContext))]
++    [Migration("20260926204012_AddDevicePlaybackOptions")]
++    partial class AddDevicePlaybackOptions
++    {
++        /// <inheritdoc />
++        protected override void BuildTargetModel(ModelBuilder modelBuilder)
++        {
++#pragma warning disable 612, 618
++            modelBuilder.HasAnnotation("ProductVersion", "10.0.11");
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.AccessSchedule", b =>
++                {
++                    b.Property<int>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("DayOfWeek")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<double>("EndHour")
++                        .HasColumnType("REAL");
++
++                    b.Property<double>("StartHour")
++                        .HasColumnType("REAL");
++
++                    b.Property<Guid>("UserId")
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("UserId");
++
++                    b.ToTable("AccessSchedules");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.ActivityLog", b =>
++                {
++                    b.Property<int>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("INTEGER");
++
++                    b.Property<DateTime>("DateCreated")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ItemId")
++                        .HasMaxLength(256)
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("LogSeverity")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("Name")
++                        .IsRequired()
++                        .HasMaxLength(512)
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Overview")
++                        .HasMaxLength(512)
++                        .HasColumnType("TEXT");
++
++                    b.Property<uint>("RowVersion")
++                        .IsConcurrencyToken()
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("ShortOverview")
++                        .HasMaxLength(512)
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Type")
++                        .IsRequired()
++                        .HasMaxLength(256)
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid>("UserId")
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("DateCreated");
++
++                    b.ToTable("ActivityLogs");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.AncestorId", b =>
++                {
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid>("ParentItemId")
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("ItemId", "ParentItemId");
++
++                    b.HasIndex("ParentItemId");
++
++                    b.ToTable("AncestorIds");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.AttachmentStreamInfo", b =>
++                {
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("Index")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("Codec")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("CodecTag")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Comment")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Filename")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("MimeType")
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("ItemId", "Index");
++
++                    b.ToTable("AttachmentStreamInfos");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemEntity", b =>
++                {
++                    b.Property<Guid>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Album")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("AlbumArtists")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Artists")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int?>("Audio")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<Guid?>("ChannelId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("CleanName")
++                        .HasColumnType("TEXT");
++
++                    b.Property<float?>("CommunityRating")
++                        .HasColumnType("REAL");
++
++                    b.Property<float?>("CriticRating")
++                        .HasColumnType("REAL");
++
++                    b.Property<string>("CustomRating")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Data")
++                        .HasColumnType("TEXT");
++
++                    b.Property<DateTime?>("DateCreated")
++                        .HasColumnType("TEXT");
++
++                    b.Property<DateTime?>("DateLastMediaAdded")
++                        .HasColumnType("TEXT");
++
++                    b.Property<DateTime?>("DateLastRefreshed")
++                        .HasColumnType("TEXT");
++
++                    b.Property<DateTime?>("DateLastSaved")
++                        .HasColumnType("TEXT");
++
++                    b.Property<DateTime?>("DateModified")
++                        .HasColumnType("TEXT");
++
++                    b.Property<DateTime?>("EndDate")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("EpisodeTitle")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ExternalId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ExternalSeriesId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ExternalServiceId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int?>("ExtraType")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("ForcedSortName")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Genres")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int?>("Height")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("IndexNumber")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("InheritedParentalRatingSubValue")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("InheritedParentalRatingValue")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("IsFolder")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("IsInMixedFolder")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("IsLocked")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("IsMovie")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("IsRepeat")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("IsSeries")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("IsVirtualItem")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<float?>("LUFS")
++                        .HasColumnType("REAL");
++
++                    b.Property<string>("MediaType")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Name")
++                        .HasColumnType("TEXT");
++
++                    b.Property<float?>("NormalizationGain")
++                        .HasColumnType("REAL");
++
++                    b.Property<string>("OfficialRating")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("OriginalLanguage")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("OriginalTitle")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Overview")
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid?>("OwnerId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid?>("ParentId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int?>("ParentIndexNumber")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("Path")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("PreferredMetadataCountryCode")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("PreferredMetadataLanguage")
++                        .HasColumnType("TEXT");
++
++                    b.Property<DateTime?>("PremiereDate")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("PresentationUniqueKey")
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid?>("PrimaryVersionId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ProductionLocations")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int?>("ProductionYear")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<long?>("RunTimeTicks")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<Guid?>("SeasonId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("SeasonName")
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid?>("SeriesId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("SeriesName")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("SeriesPresentationUniqueKey")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ShowId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<long?>("Size")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("SortName")
++                        .HasColumnType("TEXT");
++
++                    b.Property<DateTime?>("StartDate")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Studios")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Tagline")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Tags")
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid?>("TopParentId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int?>("TotalBitrate")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("Type")
++                        .IsRequired()
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("UnratedType")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int?>("Width")
++                        .HasColumnType("INTEGER");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("Name");
++
++                    b.HasIndex("OwnerId");
++
++                    b.HasIndex("ParentId");
++
++                    b.HasIndex("Path");
++
++                    b.HasIndex("PresentationUniqueKey");
++
++                    b.HasIndex("PrimaryVersionId")
++                        .HasFilter("\"PrimaryVersionId\" IS NOT NULL");
++
++                    b.HasIndex("SeasonId");
++
++                    b.HasIndex("SeriesId");
++
++                    b.HasIndex("SeriesName");
++
++                    b.HasIndex("ExtraType", "OwnerId");
++
++                    b.HasIndex("SeriesName", "DateCreated");
++
++                    b.HasIndex("TopParentId", "Id");
++
++                    b.HasIndex("Type", "CleanName");
++
++                    b.HasIndex("TopParentId", "Type", "IsVirtualItem")
++                        .HasFilter("\"PrimaryVersionId\" IS NULL AND (\"OwnerId\" IS NULL OR \"ExtraType\" IS NOT NULL)");
++
++                    b.HasIndex("Type", "TopParentId", "Id");
++
++                    b.HasIndex("Type", "TopParentId", "PresentationUniqueKey");
++
++                    b.HasIndex("Type", "TopParentId", "SortName");
++
++                    b.HasIndex("Type", "TopParentId", "StartDate");
++
++                    b.HasIndex("MediaType", "TopParentId", "IsVirtualItem", "PresentationUniqueKey");
++
++                    b.HasIndex("TopParentId", "IsFolder", "IsVirtualItem", "DateCreated");
++
++                    b.HasIndex("TopParentId", "MediaType", "IsVirtualItem", "DateCreated");
++
++                    b.HasIndex("TopParentId", "Type", "IsVirtualItem", "DateCreated");
++
++                    b.HasIndex("Type", "SeriesPresentationUniqueKey", "IsFolder", "IsVirtualItem");
++
++                    b.HasIndex("Type", "SeriesPresentationUniqueKey", "ParentIndexNumber", "IndexNumber");
++
++                    b.HasIndex("Type", "SeriesPresentationUniqueKey", "PresentationUniqueKey", "SortName");
++
++                    b.HasIndex("Type", "TopParentId", "ChannelId", "StartDate");
++
++                    b.HasIndex("IsFolder", "TopParentId", "IsVirtualItem", "PresentationUniqueKey", "DateCreated");
++
++                    b.HasIndex("Type", "TopParentId", "IsVirtualItem", "PresentationUniqueKey", "DateCreated");
++
++                    b.ToTable("BaseItems");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++
++                    b.HasData(
++                        new
++                        {
++                            Id = new Guid("00000000-0000-0000-0000-000000000001"),
++                            IsFolder = false,
++                            IsInMixedFolder = false,
++                            IsLocked = false,
++                            IsMovie = false,
++                            IsRepeat = false,
++                            IsSeries = false,
++                            IsVirtualItem = false,
++                            Name = "This is a placeholder item for UserData that has been detached from its original item",
++                            Type = "PLACEHOLDER"
++                        });
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemImageInfo", b =>
++                {
++                    b.Property<Guid>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("TEXT");
++
++                    b.Property<byte[]>("Blurhash")
++                        .HasColumnType("BLOB");
++
++                    b.Property<DateTime?>("DateModified")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("Height")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("ImageType")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Path")
++                        .IsRequired()
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("Width")
++                        .HasColumnType("INTEGER");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("ItemId", "ImageType");
++
++                    b.HasIndex("ItemId", "ImageType", "Path")
++                        .IsUnique();
++
++                    b.ToTable("BaseItemImageInfos");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemMetadataField", b =>
++                {
++                    b.Property<int>("Id")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("Id", "ItemId");
++
++                    b.HasIndex("ItemId");
++
++                    b.ToTable("BaseItemMetadataFields");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemProvider", b =>
++                {
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ProviderId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ProviderValue")
++                        .IsRequired()
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("ItemId", "ProviderId");
++
++                    b.HasIndex("ProviderId", "ItemId", "ProviderValue");
++
++                    b.ToTable("BaseItemProviders");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemTrailerType", b =>
++                {
++                    b.Property<int>("Id")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("Id", "ItemId");
++
++                    b.HasIndex("ItemId");
++
++                    b.ToTable("BaseItemTrailerTypes");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.Chapter", b =>
++                {
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("ChapterIndex")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<DateTime?>("ImageDateModified")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ImagePath")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Name")
++                        .HasColumnType("TEXT");
++
++                    b.Property<long>("StartPositionTicks")
++                        .HasColumnType("INTEGER");
++
++                    b.HasKey("ItemId", "ChapterIndex");
++
++                    b.ToTable("Chapters");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.CustomItemDisplayPreferences", b =>
++                {
++                    b.Property<int>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("Client")
++                        .IsRequired()
++                        .HasMaxLength(32)
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Key")
++                        .IsRequired()
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid>("UserId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Value")
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("UserId", "ItemId", "Client", "Key")
++                        .IsUnique();
++
++                    b.ToTable("CustomItemDisplayPreferences");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.DisplayPreferences", b =>
++                {
++                    b.Property<int>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("ChromecastVersion")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("Client")
++                        .IsRequired()
++                        .HasMaxLength(32)
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("DashboardTheme")
++                        .HasMaxLength(32)
++                        .HasColumnType("TEXT");
++
++                    b.Property<bool>("EnableNextVideoInfoOverlay")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("IndexBy")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("ScrollDirection")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("ShowBackdrop")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("ShowSidebar")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("SkipBackwardLength")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("SkipForwardLength")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("TvHome")
++                        .HasMaxLength(32)
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid>("UserId")
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("UserId", "ItemId", "Client")
++                        .IsUnique();
++
++                    b.ToTable("DisplayPreferences");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.HomeSection", b =>
++                {
++                    b.Property<int>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("DisplayPreferencesId")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("Order")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("Type")
++                        .HasColumnType("INTEGER");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("DisplayPreferencesId");
++
++                    b.ToTable("HomeSection");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.ImageInfo", b =>
++                {
++                    b.Property<int>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("INTEGER");
++
++                    b.Property<DateTime>("LastModified")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Path")
++                        .IsRequired()
++                        .HasMaxLength(512)
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid?>("UserId")
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("UserId")
++                        .IsUnique();
++
++                    b.ToTable("ImageInfos");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.ItemDisplayPreferences", b =>
++                {
++                    b.Property<int>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("Client")
++                        .IsRequired()
++                        .HasMaxLength(32)
++                        .HasColumnType("TEXT");
++
++                    b.Property<int?>("IndexBy")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<bool>("RememberIndexing")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("RememberSorting")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("SortBy")
++                        .IsRequired()
++                        .HasMaxLength(64)
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("SortOrder")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<Guid>("UserId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("ViewType")
++                        .HasColumnType("INTEGER");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("UserId");
++
++                    b.ToTable("ItemDisplayPreferences");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.ItemValue", b =>
++                {
++                    b.Property<Guid>("ItemValueId")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("CleanValue")
++                        .IsRequired()
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("Type")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("Value")
++                        .IsRequired()
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("ItemValueId");
++
++                    b.HasIndex("Type", "CleanValue");
++
++                    b.HasIndex("Type", "Value")
++                        .IsUnique();
++
++                    b.ToTable("ItemValues");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.ItemValueMap", b =>
++                {
++                    b.Property<Guid>("ItemValueId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("ItemValueId", "ItemId");
++
++                    b.HasIndex("ItemId");
++
++                    b.ToTable("ItemValuesMap");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.KeyframeData", b =>
++                {
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.PrimitiveCollection<string>("KeyframeTicks")
++                        .HasColumnType("TEXT");
++
++                    b.Property<long>("TotalDuration")
++                        .HasColumnType("INTEGER");
++
++                    b.HasKey("ItemId");
++
++                    b.ToTable("KeyframeData");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.LinkedChildEntity", b =>
++                {
++                    b.Property<Guid>("ParentId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("SortOrder")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<Guid>("ChildId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("ChildType")
++                        .HasColumnType("INTEGER");
++
++                    b.HasKey("ParentId", "SortOrder");
++
++                    b.HasIndex("ChildId", "ChildType");
++
++                    b.HasIndex("ParentId", "ChildType");
++
++                    b.ToTable("LinkedChildren", (string)null);
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.MediaSegment", b =>
++                {
++                    b.Property<Guid>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("TEXT");
++
++                    b.Property<long>("EndTicks")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("SegmentProviderId")
++                        .IsRequired()
++                        .HasColumnType("TEXT");
++
++                    b.Property<long>("StartTicks")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("Type")
++                        .HasColumnType("INTEGER");
++
++                    b.HasKey("Id");
++
++                    b.ToTable("MediaSegments");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.MediaStreamInfo", b =>
++                {
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("StreamIndex")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("AspectRatio")
++                        .HasColumnType("TEXT");
++
++                    b.Property<float?>("AverageFrameRate")
++                        .HasColumnType("REAL");
++
++                    b.Property<int?>("BitDepth")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("BitRate")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("BlPresentFlag")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("ChannelLayout")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int?>("Channels")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("Codec")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("CodecTag")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("CodecTimeBase")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ColorPrimaries")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ColorSpace")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ColorTransfer")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Comment")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int?>("DvBlSignalCompatibilityId")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("DvLevel")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("DvProfile")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("DvVersionMajor")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("DvVersionMinor")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("ElPresentFlag")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool?>("Hdr10PlusPresentFlag")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("Height")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool?>("IsAnamorphic")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool?>("IsAvc")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("IsDefault")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("IsExternal")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("IsForced")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool?>("IsHearingImpaired")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool?>("IsInterlaced")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("IsOriginal")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("KeyFrames")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Language")
++                        .HasColumnType("TEXT");
++
++                    b.Property<float?>("Level")
++                        .HasColumnType("REAL");
++
++                    b.Property<string>("NalLengthSize")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Path")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("PixelFormat")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Profile")
++                        .HasColumnType("TEXT");
++
++                    b.Property<float?>("RealFrameRate")
++                        .HasColumnType("REAL");
++
++                    b.Property<int?>("RefFrames")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("Rotation")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("RpuPresentFlag")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("SampleRate")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("StreamType")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("TimeBase")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Title")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int?>("Width")
++                        .HasColumnType("INTEGER");
++
++                    b.HasKey("ItemId", "StreamIndex");
++
++                    b.HasIndex("StreamType", "ItemId", "Language", "IsExternal");
++
++                    b.ToTable("MediaStreamInfos");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.People", b =>
++                {
++                    b.Property<Guid>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Name")
++                        .IsRequired()
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("PersonType")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ProviderKey")
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("Name");
++
++                    b.HasIndex("ProviderKey");
++
++                    b.ToTable("Peoples");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.PeopleBaseItemMap", b =>
++                {
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid>("PeopleId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Role")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int?>("ListOrder")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("SortOrder")
++                        .HasColumnType("INTEGER");
++
++                    b.HasKey("ItemId", "PeopleId", "Role");
++
++                    b.HasIndex("ItemId", "ListOrder");
++
++                    b.HasIndex("ItemId", "SortOrder");
++
++                    b.HasIndex("PeopleId", "ItemId");
++
++                    b.ToTable("PeopleBaseItemMap");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.Permission", b =>
++                {
++                    b.Property<int>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("Kind")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<uint>("RowVersion")
++                        .IsConcurrencyToken()
++                        .HasColumnType("INTEGER");
++
++                    b.Property<Guid>("UserId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<bool>("Value")
++                        .HasColumnType("INTEGER");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("UserId", "Kind")
++                        .IsUnique();
++
++                    b.ToTable("Permissions");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.PlaybackActivity", b =>
++                {
++                    b.Property<Guid>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid?>("ChannelId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ChannelName")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ClientName")
++                        .HasColumnType("TEXT");
++
++                    b.Property<DateTime>("DatePlayed")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int?>("DeviceId")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("DeviceName")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("EpisodeTitle")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Genres")
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ItemName")
++                        .IsRequired()
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ItemSubGroup")
++                        .IsRequired()
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("MediaType")
++                        .IsRequired()
++                        .HasColumnType("TEXT");
++
++                    b.Property<int?>("PlayMethod")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("PlaybackMethod")
++                        .HasColumnType("TEXT");
++
++                    b.Property<long>("PlayedTicks")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<Guid?>("SeriesId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("SeriesName")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ShowId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("TranscodeReasons")
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid>("UserId")
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("DeviceId");
++
++                    b.HasIndex("UserId");
++
++                    b.ToTable("PlaybackActivity");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.PlaybackActivityDaily", b =>
++                {
++                    b.Property<DateTime>("Date")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("DirectPlayCount")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("DirectStreamCount")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("PlayCount")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<long>("TotalTicks")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("TranscodeCount")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("UniqueUsers")
++                        .HasColumnType("INTEGER");
++
++                    b.HasKey("Date");
++
++                    b.ToTable("PlaybackActivityDaily");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.Preference", b =>
++                {
++                    b.Property<int>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("Kind")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<uint>("RowVersion")
++                        .IsConcurrencyToken()
++                        .HasColumnType("INTEGER");
++
++                    b.Property<Guid>("UserId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Value")
++                        .IsRequired()
++                        .HasMaxLength(65535)
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("UserId", "Kind")
++                        .IsUnique();
++
++                    b.ToTable("Preferences");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.Security.ApiKey", b =>
++                {
++                    b.Property<int>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("AccessToken")
++                        .IsRequired()
++                        .HasColumnType("TEXT");
++
++                    b.Property<DateTime>("DateCreated")
++                        .HasColumnType("TEXT");
++
++                    b.Property<DateTime>("DateLastActivity")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Name")
++                        .IsRequired()
++                        .HasMaxLength(64)
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("AccessToken")
++                        .IsUnique();
++
++                    b.ToTable("ApiKeys");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.Security.Device", b =>
++                {
++                    b.Property<int>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("AccessToken")
++                        .IsRequired()
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("AppName")
++                        .IsRequired()
++                        .HasMaxLength(64)
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("AppVersion")
++                        .IsRequired()
++                        .HasMaxLength(32)
++                        .HasColumnType("TEXT");
++
++                    b.Property<DateTime>("DateCreated")
++                        .HasColumnType("TEXT");
++
++                    b.Property<DateTime>("DateLastActivity")
++                        .HasColumnType("TEXT");
++
++                    b.Property<DateTime>("DateModified")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("DeviceId")
++                        .IsRequired()
++                        .HasMaxLength(256)
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("DeviceName")
++                        .IsRequired()
++                        .HasMaxLength(64)
++                        .HasColumnType("TEXT");
++
++                    b.Property<bool>("IsActive")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<Guid>("UserId")
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("AccessToken", "DateLastActivity");
++
++                    b.HasIndex("DeviceId", "DateLastActivity");
++
++                    b.HasIndex("UserId", "DeviceId");
++
++                    b.ToTable("Devices");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.Security.DeviceOptions", b =>
++                {
++                    b.Property<int>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("CustomName")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("DeviceId")
++                        .IsRequired()
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("PlaybackOptionsJson")
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("DeviceId")
++                        .IsUnique();
++
++                    b.ToTable("DeviceOptions");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.TasteModelEvalRun", b =>
++                {
++                    b.Property<Guid>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("TEXT");
++
++                    b.Property<double?>("Accuracy")
++                        .HasColumnType("REAL");
++
++                    b.Property<double?>("Auc")
++                        .HasColumnType("REAL");
++
++                    b.Property<DateTime>("CreatedAt")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int?>("ForYouEngageCount")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<double?>("ForYouEngageRate")
++                        .HasColumnType("REAL");
++
++                    b.Property<int?>("ForYouEngageWindowDays")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("ForYouImpressionCount")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("HoldoutCount")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<double?>("HoldoutFraction")
++                        .HasColumnType("REAL");
++
++                    b.Property<DateTime?>("HoldoutWindowEnd")
++                        .HasColumnType("TEXT");
++
++                    b.Property<DateTime?>("HoldoutWindowStart")
++                        .HasColumnType("TEXT");
++
++                    b.Property<double?>("MeanPrecisionAt10")
++                        .HasColumnType("REAL");
++
++                    b.Property<string>("ModelPath")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("NegativeCount")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("Notes")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("PositiveCount")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<double?>("PrecisionAt10")
++                        .HasColumnType("REAL");
++
++                    b.Property<string>("SplitType")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("TrainCount")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<long>("TrainDurationMs")
++                        .HasColumnType("INTEGER");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("CreatedAt");
++
++                    b.ToTable("TasteModelEvalRuns");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.TrickplayInfo", b =>
++                {
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("Width")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("Bandwidth")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("Height")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("Interval")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("ThumbnailCount")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("TileHeight")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("TileWidth")
++                        .HasColumnType("INTEGER");
++
++                    b.HasKey("ItemId", "Width");
++
++                    b.ToTable("TrickplayInfos");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.User", b =>
++                {
++                    b.Property<Guid>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("AudioLanguagePreference")
++                        .HasMaxLength(255)
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("AuthenticationProviderId")
++                        .IsRequired()
++                        .HasMaxLength(255)
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("CastReceiverId")
++                        .HasMaxLength(32)
++                        .HasColumnType("TEXT");
++
++                    b.Property<bool>("DisplayCollectionsView")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("DisplayMissingEpisodes")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("EnableAutoLogin")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("EnableLocalPassword")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("EnableNextEpisodeAutoPlay")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("EnableUserPreferenceAccess")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("HidePlayedInLatest")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<long>("InternalId")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("InvalidLoginAttemptCount")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<DateTime?>("LastActivityDate")
++                        .HasColumnType("TEXT");
++
++                    b.Property<DateTime?>("LastLoginDate")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int?>("LoginAttemptsBeforeLockout")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("MaxActiveSessions")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("MaxParentalRatingScore")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("MaxParentalRatingSubScore")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("MustUpdatePassword")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("NormalizedUsername")
++                        .IsRequired()
++                        .HasMaxLength(255)
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("Password")
++                        .HasMaxLength(65535)
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("PasswordResetProviderId")
++                        .IsRequired()
++                        .HasMaxLength(255)
++                        .HasColumnType("TEXT");
++
++                    b.Property<bool>("PlayDefaultAudioTrack")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("RememberAudioSelections")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("RememberSubtitleSelections")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int?>("RemoteClientBitrateLimit")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<uint>("RowVersion")
++                        .IsConcurrencyToken()
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("SubtitleLanguagePreference")
++                        .HasMaxLength(255)
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("SubtitleMode")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("SyncPlayAccess")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("Username")
++                        .IsRequired()
++                        .HasMaxLength(255)
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("NormalizedUsername")
++                        .IsUnique();
++
++                    b.HasIndex("Username")
++                        .IsUnique();
++
++                    b.ToTable("Users");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.UserData", b =>
++                {
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid>("UserId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("CustomDataKey")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int?>("AudioStreamIndex")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("IsFavorite")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<DateTime?>("LastPlayedDate")
++                        .HasColumnType("TEXT");
++
++                    b.Property<bool?>("Likes")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<int>("PlayCount")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<long>("PlaybackPositionTicks")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<bool>("Played")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<double?>("Rating")
++                        .HasColumnType("REAL");
++
++                    b.Property<DateTime?>("RetentionDate")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int?>("SubtitleStreamIndex")
++                        .HasColumnType("INTEGER");
++
++                    b.HasKey("ItemId", "UserId", "CustomDataKey");
++
++                    b.HasIndex("UserId", "PlaybackPositionTicks");
++
++                    b.HasIndex("UserId", "Rating");
++
++                    b.HasIndex("ItemId", "UserId", "IsFavorite");
++
++                    b.HasIndex("ItemId", "UserId", "LastPlayedDate");
++
++                    b.HasIndex("ItemId", "UserId", "PlaybackPositionTicks");
++
++                    b.HasIndex("ItemId", "UserId", "Played");
++
++                    b.HasIndex("UserId", "IsFavorite", "ItemId");
++
++                    b.HasIndex("UserId", "ItemId", "LastPlayedDate");
++
++                    b.HasIndex("UserId", "Played", "ItemId");
++
++                    b.ToTable("UserData");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.UserTasteBecauseYouRecommendation", b =>
++                {
++                    b.Property<Guid>("UserId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid>("SourceItemId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("Rank")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("Score")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("SourceKind")
++                        .IsRequired()
++                        .HasColumnType("TEXT");
++
++                    b.Property<DateTime>("UpdatedAt")
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("UserId", "SourceItemId", "Rank");
++
++                    b.HasIndex("UserId", "SourceKind");
++
++                    b.ToTable("UserTasteBecauseYouRecommendations");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.UserTasteProfile", b =>
++                {
++                    b.Property<Guid>("UserId")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("FeaturesJson")
++                        .IsRequired()
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("SampleCount")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<DateTime>("UpdatedAt")
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("UserId");
++
++                    b.ToTable("UserTasteProfiles");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.UserTasteRecommendation", b =>
++                {
++                    b.Property<Guid>("UserId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ItemType")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("Rank")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("Score")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<string>("Tier")
++                        .IsRequired()
++                        .HasColumnType("TEXT");
++
++                    b.Property<DateTime>("UpdatedAt")
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("UserId", "ItemType", "Rank");
++
++                    b.HasIndex("UserId", "ItemType");
++
++                    b.ToTable("UserTasteRecommendations");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.UserTasteRecommendationImpression", b =>
++                {
++                    b.Property<Guid>("Id")
++                        .ValueGeneratedOnAdd()
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid>("ItemId")
++                        .HasColumnType("TEXT");
++
++                    b.Property<string>("ItemType")
++                        .IsRequired()
++                        .HasColumnType("TEXT");
++
++                    b.Property<int>("Rank")
++                        .HasColumnType("INTEGER");
++
++                    b.Property<DateTime>("ServedAt")
++                        .HasColumnType("TEXT");
++
++                    b.Property<Guid>("UserId")
++                        .HasColumnType("TEXT");
++
++                    b.HasKey("Id");
++
++                    b.HasIndex("UserId", "ServedAt");
++
++                    b.HasIndex("UserId", "ItemId", "ServedAt");
++
++                    b.ToTable("UserTasteRecommendationImpressions");
++
++                    b.HasAnnotation("Sqlite:UseSqlReturningClause", false);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.AccessSchedule", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.User", null)
++                        .WithMany("AccessSchedules")
++                        .HasForeignKey("UserId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.AncestorId", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Item")
++                        .WithMany("Parents")
++                        .HasForeignKey("ItemId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "ParentItem")
++                        .WithMany("Children")
++                        .HasForeignKey("ParentItemId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++
++                    b.Navigation("Item");
++
++                    b.Navigation("ParentItem");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.AttachmentStreamInfo", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Item")
++                        .WithMany()
++                        .HasForeignKey("ItemId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++
++                    b.Navigation("Item");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemEntity", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Owner")
++                        .WithMany("Extras")
++                        .HasForeignKey("OwnerId")
++                        .OnDelete(DeleteBehavior.NoAction);
++
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "DirectParent")
++                        .WithMany("DirectChildren")
++                        .HasForeignKey("ParentId")
++                        .OnDelete(DeleteBehavior.Cascade);
++
++                    b.Navigation("DirectParent");
++
++                    b.Navigation("Owner");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemImageInfo", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Item")
++                        .WithMany("Images")
++                        .HasForeignKey("ItemId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++
++                    b.Navigation("Item");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemMetadataField", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Item")
++                        .WithMany("LockedFields")
++                        .HasForeignKey("ItemId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++
++                    b.Navigation("Item");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemProvider", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Item")
++                        .WithMany("Provider")
++                        .HasForeignKey("ItemId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++
++                    b.Navigation("Item");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemTrailerType", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Item")
++                        .WithMany("TrailerTypes")
++                        .HasForeignKey("ItemId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++
++                    b.Navigation("Item");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.Chapter", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Item")
++                        .WithMany("Chapters")
++                        .HasForeignKey("ItemId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++
++                    b.Navigation("Item");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.DisplayPreferences", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.User", null)
++                        .WithMany("DisplayPreferences")
++                        .HasForeignKey("UserId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.HomeSection", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.DisplayPreferences", null)
++                        .WithMany("HomeSections")
++                        .HasForeignKey("DisplayPreferencesId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.ImageInfo", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.User", null)
++                        .WithOne("ProfileImage")
++                        .HasForeignKey("Jellyfin.Database.Implementations.Entities.ImageInfo", "UserId")
++                        .OnDelete(DeleteBehavior.Cascade);
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.ItemDisplayPreferences", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.User", null)
++                        .WithMany("ItemDisplayPreferences")
++                        .HasForeignKey("UserId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.ItemValueMap", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Item")
++                        .WithMany("ItemValues")
++                        .HasForeignKey("ItemId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.ItemValue", "ItemValue")
++                        .WithMany("BaseItemsMap")
++                        .HasForeignKey("ItemValueId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++
++                    b.Navigation("Item");
++
++                    b.Navigation("ItemValue");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.KeyframeData", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Item")
++                        .WithMany()
++                        .HasForeignKey("ItemId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++
++                    b.Navigation("Item");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.LinkedChildEntity", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Child")
++                        .WithMany("LinkedChildOfEntities")
++                        .HasForeignKey("ChildId")
++                        .OnDelete(DeleteBehavior.NoAction)
++                        .IsRequired();
++
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Parent")
++                        .WithMany("LinkedChildEntities")
++                        .HasForeignKey("ParentId")
++                        .OnDelete(DeleteBehavior.NoAction)
++                        .IsRequired();
++
++                    b.Navigation("Child");
++
++                    b.Navigation("Parent");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.MediaStreamInfo", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Item")
++                        .WithMany("MediaStreams")
++                        .HasForeignKey("ItemId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++
++                    b.Navigation("Item");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.PeopleBaseItemMap", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Item")
++                        .WithMany("Peoples")
++                        .HasForeignKey("ItemId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.People", "People")
++                        .WithMany("BaseItems")
++                        .HasForeignKey("PeopleId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++
++                    b.Navigation("Item");
++
++                    b.Navigation("People");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.Permission", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.User", null)
++                        .WithMany("Permissions")
++                        .HasForeignKey("UserId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.PlaybackActivity", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.Security.Device", "Device")
++                        .WithMany()
++                        .HasForeignKey("DeviceId");
++
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.User", "User")
++                        .WithMany()
++                        .HasForeignKey("UserId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++
++                    b.Navigation("Device");
++
++                    b.Navigation("User");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.Preference", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.User", null)
++                        .WithMany("Preferences")
++                        .HasForeignKey("UserId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.Security.Device", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.User", "User")
++                        .WithMany()
++                        .HasForeignKey("UserId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++
++                    b.Navigation("User");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.UserData", b =>
++                {
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.BaseItemEntity", "Item")
++                        .WithMany("UserData")
++                        .HasForeignKey("ItemId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++
++                    b.HasOne("Jellyfin.Database.Implementations.Entities.User", "User")
++                        .WithMany()
++                        .HasForeignKey("UserId")
++                        .OnDelete(DeleteBehavior.Cascade)
++                        .IsRequired();
++
++                    b.Navigation("Item");
++
++                    b.Navigation("User");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.BaseItemEntity", b =>
++                {
++                    b.Navigation("Chapters");
++
++                    b.Navigation("Children");
++
++                    b.Navigation("DirectChildren");
++
++                    b.Navigation("Extras");
++
++                    b.Navigation("Images");
++
++                    b.Navigation("ItemValues");
++
++                    b.Navigation("LinkedChildEntities");
++
++                    b.Navigation("LinkedChildOfEntities");
++
++                    b.Navigation("LockedFields");
++
++                    b.Navigation("MediaStreams");
++
++                    b.Navigation("Parents");
++
++                    b.Navigation("Peoples");
++
++                    b.Navigation("Provider");
++
++                    b.Navigation("TrailerTypes");
++
++                    b.Navigation("UserData");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.DisplayPreferences", b =>
++                {
++                    b.Navigation("HomeSections");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.ItemValue", b =>
++                {
++                    b.Navigation("BaseItemsMap");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.People", b =>
++                {
++                    b.Navigation("BaseItems");
++                });
++
++            modelBuilder.Entity("Jellyfin.Database.Implementations.Entities.User", b =>
++                {
++                    b.Navigation("AccessSchedules");
++
++                    b.Navigation("DisplayPreferences");
++
++                    b.Navigation("ItemDisplayPreferences");
++
++                    b.Navigation("Permissions");
++
++                    b.Navigation("Preferences");
++
++                    b.Navigation("ProfileImage");
++                });
++#pragma warning restore 612, 618
++        }
++    }
++}
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260926204012_AddDevicePlaybackOptions.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260926204012_AddDevicePlaybackOptions.cs
+new file mode 100644
+index 0000000000..226e3b425c
+--- /dev/null
++++ b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/20260926204012_AddDevicePlaybackOptions.cs
+@@ -0,0 +1,26 @@
++using Microsoft.EntityFrameworkCore.Migrations;
++
++#nullable disable
++
++namespace Jellyfin.Database.Providers.Sqlite.Migrations
++{
++    /// <inheritdoc />
++    public partial class AddDevicePlaybackOptions : Migration
++    {
++        /// <inheritdoc />
++        protected override void Up(MigrationBuilder migrationBuilder)
++        {
++            migrationBuilder.AddColumn<string>(
++                name: "PlaybackOptionsJson",
++                table: "DeviceOptions",
++                type: "TEXT",
++                nullable: true);
++        }
++
++        /// <inheritdoc />
++        protected override void Down(MigrationBuilder migrationBuilder)
++        {
++            migrationBuilder.DropColumn(name: "PlaybackOptionsJson", table: "DeviceOptions");
++        }
++    }
++}
+diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
+index 0c35ccc992a8ca3eed0c85c23add068e4d9df006..aed70d898b49b58f6e17580b611593c5cf586d87 100644
+GIT binary patch
+delta 42
+ycmbRGgSq7=^M?0JCl^Qy2?yjPRwgATXZshFWaj4;dll#BO;!xA+$^{3dnf>wLlTSt
+
+delta 18
+acmZqq$vpK3^M?0JCvV_3*xa}5TPOfuehLKu
+
+diff --git a/tests/Jellyfin.Api.Tests/Helpers/DevicePlaybackOptionsHelperTests.cs b/tests/Jellyfin.Api.Tests/Helpers/DevicePlaybackOptionsHelperTests.cs
+new file mode 100644
+index 0000000000..239488c442
+--- /dev/null
++++ b/tests/Jellyfin.Api.Tests/Helpers/DevicePlaybackOptionsHelperTests.cs
+@@ -0,0 +1,101 @@
++using System;
++using System.Security.Claims;
++using Jellyfin.Api.Constants;
++using Jellyfin.Api.Helpers;
++using Jellyfin.Data.Dtos;
++using Jellyfin.Data.Queries;
++using Jellyfin.Database.Implementations.Entities.Security;
++using MediaBrowser.Controller.Devices;
++using MediaBrowser.Model.Configuration;
++using MediaBrowser.Model.Querying;
++using Moq;
++using Xunit;
++
++namespace Jellyfin.Api.Tests.Helpers;
++
++/// <summary>
++/// Tests device identity and effective encoding policy isolation.
++/// </summary>
++public class DevicePlaybackOptionsHelperTests
++{
++    /// <summary>
++    /// Client-supplied device claims do not override the registered token owner.
++    /// </summary>
++    [Fact]
++    public void GetAuthenticatedOptions_UsesRegisteredTokenInsteadOfDeviceClaim()
++    {
++        var device = new Device(Guid.NewGuid(), "client", "1", "Own TV", "own-device") { AccessToken = "own-token" };
++        var manager = new Mock<IDeviceManager>();
++        manager.Setup(m => m.GetDevices(It.IsAny<DeviceQuery>()))
++            .Returns((DeviceQuery query) => query.AccessToken == device.AccessToken
++                ? new QueryResult<Device>([device])
++                : new QueryResult<Device>([]));
++        manager.Setup(m => m.GetDeviceOptions("own-device"))
++            .Returns(new DeviceOptionsDto { PlaybackOptions = new DevicePlaybackOptionsDto { PreferredVideoCodec = "h264" } });
++        var principal = new ClaimsPrincipal(new ClaimsIdentity(
++            [new Claim(InternalClaimTypes.Token, "own-token"), new Claim(InternalClaimTypes.DeviceId, "victim-device")],
++            "test"));
++
++        Assert.Equal("h264", DevicePlaybackOptionsHelper.GetAuthenticatedOptions(manager.Object, principal)?.PreferredVideoCodec);
++        manager.Verify(m => m.GetDeviceOptions("victim-device"), Times.Never);
++    }
++
++    /// <summary>
++    /// API keys are not associated with an exact registered device.
++    /// </summary>
++    [Fact]
++    public void GetAuthenticatedOptions_ApiKeyDoesNotUseDeviceClaim()
++    {
++        var manager = new Mock<IDeviceManager>();
++        var principal = new ClaimsPrincipal(new ClaimsIdentity(
++            [new Claim(InternalClaimTypes.Token, "key"), new Claim(InternalClaimTypes.IsApiKey, "true"), new Claim(InternalClaimTypes.DeviceId, "victim-device")],
++            "test"));
++
++        Assert.Null(DevicePlaybackOptionsHelper.GetAuthenticatedOptions(manager.Object, principal));
++        manager.Verify(m => m.GetDevices(It.IsAny<DeviceQuery>()), Times.Never);
++    }
++
++    /// <summary>
++    /// Clones mutable settings and intersects hardware/codec permissions with the server.
++    /// </summary>
++    [Fact]
++    public void CreateEffectiveOptions_NeverMutatesOrExpandsGlobalCapabilities()
++    {
++        var global = new EncodingOptions
++        {
++            AllowHevcEncoding = false,
++            EnableParallelCodecRace = false,
++            HardwareDecodingCodecs = ["h264", "hevc"],
++            TonemappingAlgorithm = MediaBrowser.Model.Entities.TonemappingAlgorithm.hable
++        };
++        var overrides = new DevicePlaybackOptionsDto
++        {
++            AllowHevcEncoding = true,
++            EnableParallelCodecRace = true,
++            HardwareDecodingCodecs = ["av1", "hevc"],
++            TonemappingAlgorithm = "bt2390",
++            TonemappingRange = "tv"
++        };
++
++        var effective = DevicePlaybackOptionsHelper.CreateEffectiveOptions(global, overrides);
++        Assert.False(effective.AllowHevcEncoding);
++        Assert.False(effective.EnableParallelCodecRace);
++        Assert.Equal(["hevc"], effective.HardwareDecodingCodecs);
++        Assert.Equal(MediaBrowser.Model.Entities.TonemappingAlgorithm.bt2390, effective.TonemappingAlgorithm);
++        Assert.Equal(MediaBrowser.Model.Entities.TonemappingRange.tv, effective.TonemappingRange);
++        effective.HardwareDecodingCodecs[0] = "av1";
++        Assert.Equal(["h264", "hevc"], global.HardwareDecodingCodecs);
++    }
++
++    /// <summary>
++    /// A device preference cannot introduce an unsupported output codec.
++    /// </summary>
++    [Fact]
++    public void ReorderVideoCodecs_DoesNotAddUnsupportedCodecs()
++    {
++        Assert.Equal(["h264", "hevc"], DevicePlaybackOptionsHelper.ReorderVideoCodecs(["hevc", "h264"], "h264"));
++        Assert.Equal(["hevc"], DevicePlaybackOptionsHelper.ReorderVideoCodecs(["hevc"], "h264"));
++        Assert.NotNull(DevicePlaybackOptionsHelper.Validate(new DevicePlaybackOptionsDto { TonemappingPeak = double.NaN }));
++        Assert.NotNull(DevicePlaybackOptionsHelper.Validate(new DevicePlaybackOptionsDto { TonemappingRange = "invalid" }));
++    }
++}
