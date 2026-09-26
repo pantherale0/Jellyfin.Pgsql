@@ -34,7 +34,7 @@ Patches are applied in **byte-order lexicographic order** (`LC_ALL=C sort`). Loc
 - Unprefixed thematic names apply in alphabetical order among themselves.
 - `jellyfin_z_*` / `jellyfin_web_z_*` run late so they can edit files already touched by earlier patches (HA leadership, Live TV RBAC allowlist, taste impressions).
 - `jellyfin_zz_*` / `jellyfin_web_zz_*` run late (for example person identity, Emby import UI).
-- `jellyfin_zzz_*` / `jellyfin_zzzz_*` run last among server patches (by-name access semi-join, people name search / batched `HasSegments`).
+- `jellyfin_zzz_*` / `jellyfin_zzzz_*` run late (by-name access semi-join, people name search / batched `HasSegments`). `jellyfin_zzzzz_*` and `jellyfin_web_zzzzz_*` follow those dependencies for exact-device playback settings.
 
 Some patches document explicit prerequisites in a `#` preamble when apply order matters beyond lexicographic sort. Those comments are authoritative when refreshing patches.
 
@@ -51,12 +51,12 @@ That applies each patch as a commit on `--from`, `git rebase --onto` the new tag
 ./scripts/apply-patches.sh jellyfin
 ./scripts/apply-patches.sh jellyfin-web
 
-# After editing a clean submodule checkout
-git -C jellyfin diff > patches/jellyfin_<name>.patch
-git -C jellyfin-web diff > patches/jellyfin_web_<name>.patch
-git -C jellyfin checkout -- .
-git -C jellyfin-web checkout -- .
+# After editing the submodule with existing patches applied
+./scripts/export-patch.sh jellyfin_<name>.patch
+./scripts/export-patch.sh jellyfin_web_<name>.patch
 ```
+
+The exporter snapshots changed **file contents** before rebuilding the dependency baseline, then diffs only the restored feature edits against it (`--binary` for SQLite snapshots). Replaying `git diff HEAD` on that baseline would duplicate already-applied dependency hunks. The web export also builds the static bundle; clean both patched submodule worktrees back to their pinned tags after validation.
 
 ## Build composition
 

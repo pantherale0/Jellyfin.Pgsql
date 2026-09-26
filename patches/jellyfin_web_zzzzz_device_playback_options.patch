@@ -1,0 +1,378 @@
+diff --git a/src/apps/dashboard/features/devices/components/DevicePlaybackEditor.tsx b/src/apps/dashboard/features/devices/components/DevicePlaybackEditor.tsx
+new file mode 100644
+index 0000000000..f08a3c06b2
+--- /dev/null
++++ b/src/apps/dashboard/features/devices/components/DevicePlaybackEditor.tsx
+@@ -0,0 +1,287 @@
++/* eslint-disable react/jsx-no-bind -- Dynamic per-field handlers keep inherited and explicit override state together. */
++import type { DeviceInfoDto } from '@jellyfin/sdk/lib/generated-client/models/device-info-dto';
++import Alert from '@mui/material/Alert';
++import Box from '@mui/material/Box';
++import Button from '@mui/material/Button';
++import Checkbox from '@mui/material/Checkbox';
++import Dialog from '@mui/material/Dialog';
++import DialogActions from '@mui/material/DialogActions';
++import DialogContent from '@mui/material/DialogContent';
++import DialogTitle from '@mui/material/DialogTitle';
++import FormControlLabel from '@mui/material/FormControlLabel';
++import MenuItem from '@mui/material/MenuItem';
++import Stack from '@mui/material/Stack';
++import TextField from '@mui/material/TextField';
++import Typography from '@mui/material/Typography';
++import React, { useCallback, useEffect, useState } from 'react';
++
++import { useUpdateDevice } from 'apps/dashboard/features/devices/api/useUpdateDevice';
++import { CODECS } from 'apps/dashboard/features/playback/constants/codecs';
++import { useApi } from 'hooks/useApi';
++import { useNamedConfiguration } from 'hooks/useNamedConfiguration';
++import globalize from 'lib/globalize';
++
++type SettingValue = boolean | number | string | string[];
++type PlaybackSettings = Record<string, SettingValue | null | undefined>;
++
++type Field = {
++    key: string;
++    label: string;
++    kind: 'boolean' | 'number' | 'select';
++    values?: readonly string[];
++    min?: number;
++    max?: number;
++    step?: number;
++    note?: string;
++};
++
++const FIELDS: { title: string; fields: Field[] }[] = [
++    {
++        title: 'Playback and codec selection',
++        fields: [
++            { key: 'maxStreamingBitrate', label: 'Maximum streaming bitrate (bits/s)', kind: 'number', min: 1, max: 1000000000 },
++            { key: 'allowDirectPlay', label: 'Allow direct play', kind: 'boolean' },
++            { key: 'allowDirectStream', label: 'Allow direct stream', kind: 'boolean' },
++            { key: 'allowVideoTranscoding', label: 'Allow video transcoding', kind: 'boolean' },
++            { key: 'allowAudioTranscoding', label: 'Allow audio transcoding', kind: 'boolean' },
++            { key: 'preferredVideoCodec', label: 'Preferred video codec', kind: 'select', values: [ 'h264', 'hevc', 'av1' ], note: 'Only reorders codecs advertised by this client.' }
++        ]
++    },
++    {
++        title: 'Tone mapping and color',
++        fields: [
++            { key: 'enableTonemapping', label: 'Enable tone mapping', kind: 'boolean' },
++            { key: 'enableVppTonemapping', label: 'Enable VPP tone mapping', kind: 'boolean' },
++            { key: 'enableVideoToolboxTonemapping', label: 'Enable VideoToolbox tone mapping', kind: 'boolean' },
++            { key: 'tonemappingAlgorithm', label: 'Tone-mapping algorithm', kind: 'select', values: [ 'none', 'clip', 'linear', 'gamma', 'reinhard', 'hable', 'mobius', 'bt2390' ] },
++            { key: 'tonemappingMode', label: 'Tone-mapping mode', kind: 'select', values: [ 'auto', 'max', 'rgb', 'lum', 'itp' ] },
++            { key: 'tonemappingRange', label: 'Tone-mapping range', kind: 'select', values: [ 'auto', 'tv', 'pc' ] },
++            { key: 'tonemappingDesat', label: 'Desaturation', kind: 'number', min: 0, max: 1, step: 0.01 },
++            { key: 'tonemappingPeak', label: 'Source peak (0 = automatic; 100 = 1000 nits)', kind: 'number', min: 0, max: 1000, step: 0.1 },
++            { key: 'tonemappingParam', label: 'Tone-mapping parameter', kind: 'number', min: 0, max: 10, step: 0.01 },
++            { key: 'vppTonemappingBrightness', label: 'VPP brightness', kind: 'number', min: -100, max: 100, step: 0.1 },
++            { key: 'vppTonemappingContrast', label: 'VPP contrast', kind: 'number', min: 0, max: 10, step: 0.01 }
++        ]
++    },
++    {
++        title: 'Encoding, audio and deinterlacing',
++        fields: [
++            { key: 'enableAudioVbr', label: 'Variable-bitrate audio', kind: 'boolean' },
++            { key: 'downMixAudioBoost', label: 'Audio downmix boost', kind: 'number', min: 0, max: 10, step: 0.1 },
++            { key: 'downMixStereoAlgorithm', label: 'Stereo downmix algorithm', kind: 'select', values: [ 'None', 'Dave750', 'NightmodeDialogue', 'Rfc7845', 'Ac4' ] },
++            { key: 'h264Crf', label: 'H.264 CRF', kind: 'number', min: 0, max: 51 },
++            { key: 'h265Crf', label: 'HEVC CRF', kind: 'number', min: 0, max: 51 },
++            { key: 'encoderPreset', label: 'Encoder preset', kind: 'select', values: [ 'auto', 'placebo', 'veryslow', 'slower', 'slow', 'medium', 'fast', 'faster', 'veryfast', 'superfast', 'ultrafast' ] },
++            { key: 'deinterlaceDoubleRate', label: 'Double-rate deinterlacing', kind: 'boolean' },
++            { key: 'deinterlaceMethod', label: 'Deinterlacing method', kind: 'select', values: [ 'yadif', 'bwdif' ] },
++            { key: 'hlsAudioSeekStrategy', label: 'HLS audio seeking', kind: 'select', values: [ 'TrimCopiedAudio', 'TranscodeAudio' ] }
++        ]
++    },
++    {
++        title: 'Hardware and fallback',
++        fields: [
++            { key: 'enableHardwareEncoding', label: 'Hardware encoding', kind: 'boolean' },
++            { key: 'allowHevcEncoding', label: 'Allow HEVC encoding', kind: 'boolean' },
++            { key: 'allowAv1Encoding', label: 'Allow AV1 encoding', kind: 'boolean' },
++            { key: 'enableTranscodeCodecFallback', label: 'Codec fallback', kind: 'boolean' },
++            { key: 'enableParallelCodecRace', label: 'Parallel codec race', kind: 'boolean' },
++            { key: 'enableDecodingColorDepth10Hevc', label: '10-bit HEVC decode', kind: 'boolean' },
++            { key: 'enableDecodingColorDepth10Vp9', label: '10-bit VP9 decode', kind: 'boolean' },
++            { key: 'enableDecodingColorDepth10HevcRext', label: '10-bit HEVC RExt decode', kind: 'boolean' },
++            { key: 'enableDecodingColorDepth12HevcRext', label: '12-bit HEVC RExt decode', kind: 'boolean' },
++            { key: 'enableEnhancedNvdecDecoder', label: 'Enhanced NVDEC', kind: 'boolean' },
++            { key: 'preferSystemNativeHwDecoder', label: 'Prefer native hardware decoder', kind: 'boolean' },
++            { key: 'enableIntelLowPowerH264HwEncoder', label: 'Intel low-power H.264 encoder', kind: 'boolean' },
++            { key: 'enableIntelLowPowerHevcHwEncoder', label: 'Intel low-power HEVC encoder', kind: 'boolean' }
++        ]
++    }
++];
++
++const CAMEL_CASE_ACCEPT = 'application/json; profile="CamelCase"';
++
++const displayValue = (value: unknown): string => {
++    if (value == null) return 'client / user / server default';
++    if (Array.isArray(value)) return value.join(', ') || 'none';
++    if (typeof value === 'boolean') return value ? 'Enabled' : 'Disabled';
++    return String(value);
++};
++
++type Props = { device: DeviceInfoDto; onClose: () => void };
++
++const DevicePlaybackEditor = ({ device, onClose }: Props) => {
++    const { api } = useApi();
++    const updateDevice = useUpdateDevice();
++    const { data: globalOptions } = useNamedConfiguration<Record<string, unknown>>('encoding');
++    const [ name, setName ] = useState(device.CustomName || device.Name || '');
++    const [ settings, setSettings ] = useState<PlaybackSettings>({});
++    const [ isLoading, setIsLoading ] = useState(true);
++    const [ isSaving, setIsSaving ] = useState(false);
++    const [ error, setError ] = useState('');
++
++    useEffect(() => {
++        if (!api || !device.Id) return;
++        let disposed = false;
++        setIsLoading(true);
++        void api.axiosInstance.get<{ customName?: string; playbackOptions?: PlaybackSettings }>(
++            '/Devices/Options',
++            { params: { id: device.Id }, headers: { Accept: CAMEL_CASE_ACCEPT } }
++        ).then(response => {
++            if (disposed) return;
++            setName(response.data.customName || device.Name || '');
++            setSettings(response.data.playbackOptions || {});
++            setIsLoading(false);
++        }).catch((cause: unknown) => {
++            if (!disposed) {
++                setError(String(cause));
++                setIsLoading(false);
++            }
++        });
++        return () => {
++            disposed = true;
++        };
++    }, [ api, device.Id, device.Name ]);
++
++    const inherited = useCallback((key: string) => (
++        globalOptions?.[key.charAt(0).toUpperCase() + key.slice(1)]
++    ), [ globalOptions ]);
++
++    const changeSetting = useCallback((key: string, value: SettingValue | null) => {
++        setSettings(current => ({ ...current, [key]: value }));
++    }, []);
++
++    const onSave = useCallback(async () => {
++        if (!api || !device.Id) return;
++        const payload = Object.fromEntries(Object.entries(settings).filter(([, value]) => value != null));
++        setIsSaving(true);
++        setError('');
++        try {
++            await api.axiosInstance.put('/Devices/Options/Playback', payload, {
++                params: { id: device.Id }, headers: { Accept: CAMEL_CASE_ACCEPT }
++            });
++            if (name.trim() !== (device.CustomName || device.Name || '')) {
++                await updateDevice.mutateAsync({
++                    id: device.Id,
++                    deviceOptionsDto: { CustomName: name.trim() || undefined }
++                });
++            }
++            onClose();
++        } catch (cause) {
++            setError(String(cause));
++        } finally {
++            setIsSaving(false);
++        }
++    }, [ api, device.CustomName, device.Id, device.Name, name, onClose, settings, updateDevice ]);
++
++    const renderField = (field: Field) => {
++        const current = settings[field.key];
++        const baseline = inherited(field.key);
++        const isOverridden = current != null;
++        const hint = `Inherited: ${displayValue(baseline)}` + (field.note ? `. ${field.note}` : '');
++
++        if (field.kind === 'boolean') {
++            return <TextField
++                key={field.key}
++                select
++                fullWidth
++                size='small'
++                label={field.label}
++                helperText={hint}
++                value={isOverridden ? String(current) : 'inherit'}
++                onChange={event => changeSetting(field.key, event.target.value === 'inherit' ? null : event.target.value === 'true')}
++            >
++                <MenuItem value='inherit'>Inherit ({displayValue(baseline)})</MenuItem>
++                <MenuItem value='true'>Enabled</MenuItem>
++                <MenuItem value='false'>Disabled</MenuItem>
++            </TextField>;
++        }
++
++        if (field.kind === 'select') {
++            return <TextField
++                key={field.key}
++                select
++                fullWidth
++                size='small'
++                label={field.label}
++                helperText={hint}
++                value={isOverridden ? String(current) : 'inherit'}
++                onChange={event => changeSetting(field.key, event.target.value === 'inherit' ? null : event.target.value)}
++            >
++                <MenuItem value='inherit'>Inherit ({displayValue(baseline)})</MenuItem>
++                {field.values?.map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}
++            </TextField>;
++        }
++
++        return <Box key={field.key} sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
++            <FormControlLabel
++                control={<Checkbox
++                    checked={isOverridden}
++                    onChange={event => changeSetting(field.key, event.target.checked ? Number(baseline ?? field.min ?? 0) : null)}
++                />}
++                label='Override'
++            />
++            <TextField
++                fullWidth
++                type='number'
++                size='small'
++                label={field.label}
++                helperText={hint}
++                disabled={!isOverridden}
++                value={isOverridden ? current : ''}
++                slotProps={{ htmlInput: { min: field.min, max: field.max, step: field.step ?? 1 } }}
++                onChange={event => changeSetting(field.key, event.target.value === '' ? null : Number(event.target.value))}
++            />
++        </Box>;
++    };
++
++    const decodeValue = settings.hardwareDecodingCodecs;
++    const decodeOverridden = Array.isArray(decodeValue);
++    const inheritedCodecs = Array.isArray(inherited('hardwareDecodingCodecs')) ? inherited('hardwareDecodingCodecs') as string[] : [];
++
++    return <Dialog open onClose={onClose} maxWidth='md' fullWidth>
++        <DialogTitle>{globalize.translate('Edit')}: {device.Name}</DialogTitle>
++        <DialogContent dividers>
++            {error && <Alert severity='error'>{error}</Alert>}
++            {isLoading ? <Typography>Loading device options…</Typography> : <Stack spacing={3} sx={{ pt: 1 }}>
++                <TextField
++                    label={globalize.translate('LabelDevice')}
++                    value={name}
++                    onChange={event => setName(event.target.value)}
++                    fullWidth
++                />
++                <Typography variant='body2'>Settings apply only to this registered device. Inherit uses the server setting. Hardware and codec permissions can only be reduced.</Typography>
++                {FIELDS.map(group => <Stack key={group.title} spacing={2}>
++                    <Typography variant='h6'>{group.title}</Typography>
++                    {group.fields.map(renderField)}
++                </Stack>)}
++                <Stack spacing={1}>
++                    <Typography variant='h6'>Hardware decoding codecs</Typography>
++                    <FormControlLabel control={<Checkbox
++                        checked={decodeOverridden}
++                        onChange={event => changeSetting('hardwareDecodingCodecs', event.target.checked ? inheritedCodecs : null)}
++                    />} label={`Override (inherited: ${displayValue(inheritedCodecs)})`} />
++                    {decodeOverridden && <Box sx={{ display: 'flex', flexWrap: 'wrap' }}>
++                        {CODECS.map(codec => <FormControlLabel
++                            key={codec.codec}
++                            control={<Checkbox
++                                checked={(decodeValue as string[]).includes(codec.codec)}
++                                onChange={event => changeSetting('hardwareDecodingCodecs', event.target.checked ?
++                                    [ ...(decodeValue as string[]), codec.codec ] :
++                                    (decodeValue as string[]).filter(value => value !== codec.codec))}
++                            />}
++                            label={codec.name}
++                        />)}
++                    </Box>}
++                </Stack>
++            </Stack>}
++        </DialogContent>
++        <DialogActions>
++            <Button onClick={onClose}>{globalize.translate('Cancel')}</Button>
++            <Button disabled={isLoading || isSaving} onClick={onSave} variant='contained'>
++                {globalize.translate('Save')}
++            </Button>
++        </DialogActions>
++    </Dialog>;
++};
++
++export default DevicePlaybackEditor;
++/* eslint-enable react/jsx-no-bind */
+diff --git a/src/apps/dashboard/routes/devices/index.tsx b/src/apps/dashboard/routes/devices/index.tsx
+index 46f656f1ef..20ba304fde 100644
+--- a/src/apps/dashboard/routes/devices/index.tsx
++++ b/src/apps/dashboard/routes/devices/index.tsx
+@@ -15,8 +15,8 @@ import TablePage, { DEFAULT_TABLE_OPTIONS } from 'apps/dashboard/components/tabl
+ import UserAvatarButton from 'apps/dashboard/components/UserAvatarButton';
+ import { useDeleteDevice } from 'apps/dashboard/features/devices/api/useDeleteDevice';
+ import { useDevices } from 'apps/dashboard/features/devices/api/useDevices';
+-import { useUpdateDevice } from 'apps/dashboard/features/devices/api/useUpdateDevice';
+ import DeviceNameCell from 'apps/dashboard/features/devices/components/DeviceNameCell';
++import DevicePlaybackEditor from 'apps/dashboard/features/devices/components/DevicePlaybackEditor';
+ import type { DeviceInfoCell } from 'apps/dashboard/features/devices/types/deviceInfoCell';
+ import ConfirmDialog from 'components/ConfirmDialog';
+ import { useApi } from 'hooks/useApi';
+@@ -57,8 +57,10 @@ export const Component = () => {
+     const [ isDeleteConfirmOpen, setIsDeleteConfirmOpen ] = useState(false);
+     const [ isDeleteAllConfirmOpen, setIsDeleteAllConfirmOpen ] = useState(false);
+     const [ pendingDeleteDeviceId, setPendingDeleteDeviceId ] = useState<string>();
++    const [ editingDevice, setEditingDevice ] = useState<DeviceInfoDto>();
+     const deleteDevice = useDeleteDevice();
+-    const updateDevice = useUpdateDevice();
++
++    const onCloseDeviceEditor = useCallback(() => setEditingDevice(undefined), []);
+ 
+     const isLoading = isDevicesLoading || isUsersLoading;
+ 
+@@ -177,27 +179,6 @@ export const Component = () => {
+         // Do not reset the page index when refetching data
+         autoResetPageIndex: !isRefetching,
+ 
+-        // Editing device name
+-        enableEditing: true,
+-        onEditingRowSave: ({ table, row, values }) => {
+-            const newName = values.Name?.trim();
+-            const hasChanged = row.original.CustomName ?
+-                newName !== row.original.CustomName :
+-                newName !== row.original.Name;
+-
+-            // If the name has changed, save it as the custom name
+-            if (row.original.Id && hasChanged) {
+-                updateDevice.mutate({
+-                    id: row.original.Id,
+-                    deviceOptionsDto: {
+-                        CustomName: newName || undefined
+-                    }
+-                });
+-            }
+-
+-            table.setEditingRow(null); //exit editing mode
+-        },
+-
+         // Custom actions
+         enableRowActions: true,
+         positionActionsColumn: 'last',
+@@ -207,7 +188,7 @@ export const Component = () => {
+                 size: 100
+             }
+         },
+-        renderRowActions: ({ row, table }) => {
++        renderRowActions: ({ row }) => {
+             const isDeletable = api && row.original.Id && api.deviceInfo.id === row.original.Id;
+             return (
+                 <Box
+@@ -222,7 +203,7 @@ export const Component = () => {
+                     <Tooltip title={globalize.translate('Edit')}>
+                         <IconButton
+                             // eslint-disable-next-line react/jsx-no-bind
+-                            onClick={() => table.setEditingRow(row)}
++                            onClick={() => setEditingDevice(row.original)}
+                         >
+                             <Edit />
+                         </IconButton>
+@@ -270,6 +251,12 @@ export const Component = () => {
+             isError={isDevicesError || isUsersError}
+             errorMessage={globalize.translate('DevicesLoadError')}
+         >
++            {editingDevice && (
++                <DevicePlaybackEditor
++                    device={editingDevice}
++                    onClose={onCloseDeviceEditor}
++                />
++            )}
+             <ConfirmDialog
+                 open={isDeleteConfirmOpen}
+                 title={globalize.translate('HeaderDeleteDevice')}

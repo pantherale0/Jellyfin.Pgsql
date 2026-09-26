@@ -113,6 +113,14 @@ Operator-facing map of capabilities in this fork: what you get, how to configure
 
 **How (codec fallback):** Enabled by default (`EnableTranscodeCodecFallback`, `EnableParallelCodecRace` in Dashboard → Playback → Transcoding). When AV1 encode fails at HLS init, the server races or falls back to H.264 (etc.), 302-redirects the client to the winning playlist, and writes deduplicated Activity Log entries. Devices → playback info shows an `AV1 → H.264 fallback` badge when active.
 
+### Per-device playback and transcoding options
+
+**What:** Dashboard → Devices → Edit lets administrators override playback permissions, a maximum streaming bitrate, preferred output codec, tone mapping, audio/quality/deinterlacing, hardware decoding/encoding and codec fallback for **one registered device**. Each field inherits the server or client policy until explicitly overridden. A preferred codec only reorders codecs the client already advertised; e.g. prefer H.264 over HEVC for an SDR Android TV while keeping HEVC on other devices. Tone mapping can use BT.2390, TV color range and automatic source peak (`0`); peak `100` means 1000-nit input, not a 100-nit SDR output target.
+
+**Where:** Server [`jellyfin_zzzzz_device_playback_options`](patches.md#jellyfin_zzzzz_device_playback_optionspatch) with SQLite schema migration, plugin `Jellyfin.Plugin.Pgsql/Migrations/20260926204250_AddDevicePlaybackOptions.cs` for PostgreSQL, web [`jellyfin_web_zzzzz_device_playback_options`](patches.md#jellyfin_web_zzzzz_device_playback_optionspatch).
+
+**How:** Admin-only `GET /Devices/Options` and `PUT /Devices/Options/Playback` read/replace sparse settings; `{}` clears them. Existing `POST /Devices/Options` still edits the name without clearing overrides. Playback uses the authenticated access token's registered device, not a client-supplied device id; API keys do not get device overrides. Hardware/HEVC/AV1/race permissions and codec decode lists cannot exceed global settings. Effective encoding settings are cloned and pinned to an active playback job. Deleting a device in the dashboard removes its saved overrides. No extra environment variables are needed.
+
 ## Playback error messaging
 
 **What:** Structured playback failure codes from the server and a friendlier web dialog (summary, tip, Try Again / Try with Transcoding). Mid-stream HLS failures expose intent via the `X-Playback-Error-Code` response header; pre-play failures use `PlaybackInfoResponse.errorCode` (+ optional `message`). Subtitle/audio stream changes proceed even when cleanup of the previous transcode transiently fails.
