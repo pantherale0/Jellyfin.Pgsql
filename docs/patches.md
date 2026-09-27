@@ -266,7 +266,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **What** | Devices → Edit dialog for per-device playback, tone mapping, codec preference, audio, quality and hardware overrides. |
 | **Why** | Admins need to see inherited server values and intentionally override only the problematic registered device. |
 | **Where** | `DevicePlaybackEditor.tsx`, dashboard devices route |
-| **How** | Displays inherited values and explicit inherit/override controls; GET/PUT custom device APIs use the CamelCase Accept profile. Saves the name separately so existing name-only updates preserve playback options. |
+| **How** | Displays inherited values and explicit inherit/override controls; GET/PUT custom device API calls send both `Authorization: api.authorizationHeader` and the CamelCase Accept profile. Saves the name separately so existing name-only updates preserve playback options. |
 | **Related** | Requires [`jellyfin_zzzzz_device_playback_options`](#jellyfin_zzzzz_device_playback_optionspatch); applies after other Devices and transcoding dashboard patches. No public issue. |
 
 ### `jellyfin_transcoding_pipeline.patch`

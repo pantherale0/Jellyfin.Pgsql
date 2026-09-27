@@ -1,6 +1,6 @@
 diff --git a/src/apps/dashboard/features/devices/components/DevicePlaybackEditor.tsx b/src/apps/dashboard/features/devices/components/DevicePlaybackEditor.tsx
 new file mode 100644
-index 0000000000..f08a3c06b2
+index 0000000000..81806592a1
 --- /dev/null
 +++ b/src/apps/dashboard/features/devices/components/DevicePlaybackEditor.tsx
 @@ -0,0 +1,287 @@
@@ -130,7 +130,7 @@ index 0000000000..f08a3c06b2
 +        setIsLoading(true);
 +        void api.axiosInstance.get<{ customName?: string; playbackOptions?: PlaybackSettings }>(
 +            '/Devices/Options',
-+            { params: { id: device.Id }, headers: { Accept: CAMEL_CASE_ACCEPT } }
++            { params: { id: device.Id }, headers: { Accept: CAMEL_CASE_ACCEPT, Authorization: api.authorizationHeader } }
 +        ).then(response => {
 +            if (disposed) return;
 +            setName(response.data.customName || device.Name || '');
@@ -162,7 +162,7 @@ index 0000000000..f08a3c06b2
 +        setError('');
 +        try {
 +            await api.axiosInstance.put('/Devices/Options/Playback', payload, {
-+                params: { id: device.Id }, headers: { Accept: CAMEL_CASE_ACCEPT }
++                params: { id: device.Id }, headers: { Accept: CAMEL_CASE_ACCEPT, Authorization: api.authorizationHeader }
 +            });
 +            if (name.trim() !== (device.CustomName || device.Name || '')) {
 +                await updateDevice.mutateAsync({
