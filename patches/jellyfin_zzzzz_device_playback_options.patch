@@ -882,7 +882,7 @@ index 0000000000..8f2029165f
 +    public bool? EnableIntelLowPowerHevcHwEncoder { get; set; }
 +}
 diff --git a/Jellyfin.Server.Implementations/Devices/DeviceManager.cs b/Jellyfin.Server.Implementations/Devices/DeviceManager.cs
-index d0d52a23fb..0967cd371b 100644
+index d0d52a23fb..8d14d895a8 100644
 --- a/Jellyfin.Server.Implementations/Devices/DeviceManager.cs
 +++ b/Jellyfin.Server.Implementations/Devices/DeviceManager.cs
 @@ -2,6 +2,8 @@ using System;
@@ -975,17 +975,16 @@ index d0d52a23fb..0967cd371b 100644
          /// <inheritdoc />
          public DeviceOptionsDto? GetDeviceOptions(string deviceId)
          {
--            if (_deviceOptions.TryGetValue(deviceId, out var deviceOptions))
-+            // Read the database for cross-node consistency; this cache is process-local.
-+            using var dbContext = _dbProvider.CreateDbContext();
-+            var deviceOptions = dbContext.DeviceOptions.AsNoTracking().FirstOrDefault(option => option.DeviceId == deviceId);
-+            if (deviceOptions is not null)
++            // Playback endpoints call this for each stream/segment request. Use the cache
++            // populated at startup and updated by writes so normal playback does not block
++            // on a synchronous database read per request.
+             if (_deviceOptions.TryGetValue(deviceId, out var deviceOptions))
              {
                  return ToDeviceOptionsDto(deviceOptions);
              }
  
 -            return null;
-+            return dbContext.Devices.Any(device => device.DeviceId == deviceId)
++            return _devices.Values.Any(device => string.Equals(device.DeviceId, deviceId, StringComparison.Ordinal))
 +                ? new DeviceOptionsDto { DeviceId = deviceId, PlaybackOptions = new DevicePlaybackOptionsDto() }
 +                : null;
          }
