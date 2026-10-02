@@ -120,24 +120,112 @@ index 1a4c9da41c..20665e1650 100644
  
      private static IQueryable<BaseItemEntity> ApplyNameFilters(IQueryable<BaseItemEntity> dbQuery, InternalItemsQuery filter)
 diff --git a/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs b/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs
-index a7b0b1c1fc..9e452f752b 100644
+index a7b0b1c1fc..d8bf341e5b 100644
 --- a/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs
 +++ b/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs
-@@ -180,7 +180,12 @@ public class ItemPersistenceService : IItemPersistenceService
+@@ -2,6 +2,7 @@
+ 
+ using System;
+ using System.Collections.Generic;
++using System.Data;
+ using System.Globalization;
+ using System.Linq;
+ using System.Threading;
+@@ -15,4 +16,5 @@ using MediaBrowser.Controller.Playlists;
+ using Microsoft.EntityFrameworkCore;
++using Microsoft.EntityFrameworkCore.Storage;
+ using Microsoft.Extensions.Logging;
+ using BaseItemDto = MediaBrowser.Controller.Entities.BaseItem;
+ using DbLinkedChildType = Jellyfin.Database.Implementations.Entities.LinkedChildType;
+@@ -180,39 +182,60 @@ public class ItemPersistenceService : IItemPersistenceService
      {
          ArgumentNullException.ThrowIfNull(item);
  
 -        var images = item.ImageInfos.Select(e => BaseItemMapper.MapImageToEntity(item.Id, e)).ToArray();
-+        // Guard against duplicate image entries (same type + path) ever being persisted.
-+        // Without this, duplicates in the in-memory ImageInfos collection would be inserted
-+        // verbatim and accumulate over time (BaseItemImageInfos uses a random GUID PK).
 +        var images = BaseItemMapper.DeduplicateImageInfos(item.ImageInfos)
 +            .Select(e => BaseItemMapper.MapImageToEntity(item.Id, e))
 +            .ToArray();
  
          var context = await _dbProvider.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
          await using (context.ConfigureAwait(false))
-@@ -292,7 +297,7 @@ public class ItemPersistenceService : IItemPersistenceService
+         {
+-            await context.BaseItemImageInfos
+-                .Where(e => e.ItemId == item.Id)
+-                .ExecuteDeleteAsync(cancellationToken)
+-                .ConfigureAwait(false);
++            var transaction = await context.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
++            await using (transaction.ConfigureAwait(false))
++            {
++                var isPostgres = context.Database.ProviderName == "Npgsql.EntityFrameworkCore.PostgreSQL";
++                // Delete owned rows first to preserve the same lock order as ItemPersistenceService.DeleteItem.
++                await context.BaseItemImageInfos
++                    .Where(e => e.ItemId == item.Id)
++                    .ExecuteDeleteAsync(cancellationToken)
++                    .ConfigureAwait(false);
++
++                bool itemExists;
++                if (isPostgres)
++                {
++                    // Hold a key-share lock until the images are saved. A concurrent item delete
++                    // then either finishes first (so this is a no-op) or waits for the image save,
++                    // allowing its cascade to remove the images afterwards.
++                    await using var command = context.Database.GetDbConnection().CreateCommand();
++                    command.Transaction = transaction.GetDbTransaction();
++                    command.CommandText = "SELECT 1 FROM \"BaseItems\" WHERE \"Id\" = @itemId FOR KEY SHARE";
++                    var parameter = command.CreateParameter();
++                    parameter.ParameterName = "itemId";
++                    parameter.DbType = DbType.Guid;
++                    parameter.Value = item.Id;
++                    command.Parameters.Add(parameter);
++                    itemExists = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null;
++                }
++                else
++                {
++                    // The delete above acquires SQLite's write lock before checking, preventing
++                    // another writer from deleting the item before the image insert.
++                    itemExists = await context.BaseItems
++                        .AnyAsync(bi => bi.Id == item.Id, cancellationToken)
++                        .ConfigureAwait(false);
++                }
+ 
+-            await context.BaseItemImageInfos
+-                .AddRangeAsync(images, cancellationToken)
+-                .ConfigureAwait(false);
++                if (!itemExists)
++                {
++                    _logger.LogWarning("Unable to save ImageInfo for non existing BaseItem {ItemId}", item.Id);
++                    await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
++                    return;
++                }
+ 
+-            try
+-            {
+-                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+-            }
+-            catch (DbUpdateException)
+-            {
+-                // Checking that the item exists before writing leaves a gap a scan can delete it
+-                // through, turning the insert into a foreign key violation that fails the whole
+-                // refresh instead of the no-op intended here. Let the insert be the check: it is the
+-                // only point at which the answer cannot go stale. Nothing is orphaned by the delete
+-                // above, because deleting the item cascades to its images anyway.
+-                if (await context.BaseItems
+-                    .AnyAsync(bi => bi.Id == item.Id, cancellationToken)
+-                    .ConfigureAwait(false))
+-                {
+-                    throw;
+-                }
+-
+-                _logger.LogWarning("Unable to save ImageInfo for non existing BaseItem {ItemId}", item.Id);
++                await context.BaseItemImageInfos
++                    .AddRangeAsync(images, cancellationToken)
++                    .ConfigureAwait(false);
++                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
++                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+             }
+         }
+     }
+@@ -292,7 +315,7 @@ public class ItemPersistenceService : IItemPersistenceService
              {
                  if (entity.Images is { Count: > 0 })
                  {
