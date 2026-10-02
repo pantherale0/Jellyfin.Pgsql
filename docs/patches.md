@@ -516,7 +516,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **What** | Deduplicate BaseItem image info rows and enforce a unique index. |
 | **Why** | Duplicate image-info rows break uniqueness and waste storage/query time. |
 | **Where** | `BaseItemMapper`, `ItemPersistenceService`, image-info configuration, dedupe routine + unique index migration, tests |
-| **How** | Mapper/persistence dedupe; migration cleans existing duplicates then adds unique index. |
+| **How** | Mapper/persistence dedupe; migration cleans existing duplicates then adds unique index. Image saves lock the parent item through delete-and-reinsert, so a concurrent item deletion cannot race into a foreign-key failure. |
 | **Related** | No public issue. |
 
 ### `jellyfin_media_updated_path_refresh.patch`
