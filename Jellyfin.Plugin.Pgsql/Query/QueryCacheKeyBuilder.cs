@@ -204,6 +204,12 @@ internal static class QueryCacheKeyBuilder
             .Append('|').Append(filter.EnableGroupByMetadataKey ? '1' : '0')
             .Append('|').Append(Flag(filter.CollapseBoxSetItems));
 
+        // Alphabet boundaries affect both the IDs and TotalRecordCount. Length-prefix
+        // strings so user-supplied separators cannot alias another combination.
+        AppendString(builder, filter.NameStartsWith);
+        AppendString(builder, filter.NameStartsWithOrGreater);
+        AppendString(builder, filter.NameLessThan);
+
         AppendGuids(builder, filter.TopParentIds);
         AppendGuids(builder, filter.AncestorIds);
         AppendGuids(builder, filter.ItemIds);
@@ -234,6 +240,11 @@ internal static class QueryCacheKeyBuilder
         }
 
         return builder.ToString();
+    }
+
+    private static void AppendString(StringBuilder builder, string? value)
+    {
+        builder.Append('|').Append(value?.Length ?? 0).Append(':').Append(value);
     }
 
     private static char Flag(bool? value)

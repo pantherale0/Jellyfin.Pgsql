@@ -16,6 +16,8 @@ Deep documentation (benefits/drawbacks, architecture, features, full patch catal
 | [Patches](docs/patches.md) | What / why / where / how for every file in `patches/` |
 | [Known issues](docs/known-issues.md) | Fork tracker items and inherited Postgres caveats |
 
+The experimental standalone frontend in [`ui-next/`](ui-next/) has its own [development and security notes](ui-next/README.md); it is not yet included in the production image.
+
 ## Contributing, issues, and pull requests
 
 Issues and pull requests on this repository are **locked to collaborators only** (primarily for automated CI/CD, such as migration sync). This is intentional: the project is not set up for open contribution via PRs or issue trackers.

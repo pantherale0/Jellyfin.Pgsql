@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="theme-color" content="#090b10" />
+    <title>UI Next · Debug Launcher</title>
+    <style>
+      :root { color-scheme: dark; font-family: "Segoe UI", Arial, sans-serif; background: #090b10; color: #f6f5f2; }
+      * { box-sizing: border-box; }
+      body { display: grid; min-height: 100vh; margin: 0; padding: 1.2rem; place-items: center; background: radial-gradient(ellipse at 20% 18%, rgba(127,168,72,.14), transparent 42%), #090b10; }
+      main { width: min(100%, 520px); padding: clamp(1.4rem, 5vw, 2.4rem); border: 1px solid rgba(255,255,255,.1); border-radius: 18px; background: #13161d; box-shadow: 0 28px 90px rgba(0,0,0,.35); }
+      .mark { display: grid; width: 44px; height: 44px; margin-bottom: 1.8rem; place-items: center; border-radius: 14px 14px 14px 5px; color: #11150c; background: #b2ef5a; font-size: 1.4rem; font-weight: 900; }
+      .tag { margin: 0 0 .6rem; color: #b2ef5a; font-size: .7rem; font-weight: 800; letter-spacing: .18em; }
+      h1 { margin: 0; font-size: clamp(2.1rem, 8vw, 3rem); letter-spacing: -.06em; }
+      p { color: #a5a5ad; line-height: 1.6; }
+      label { display: grid; gap: .5rem; margin: 1.6rem 0 1rem; color: #d8d8dc; font-size: .88rem; font-weight: 650; }
+      input { width: 100%; min-height: 50px; padding: .75rem .9rem; border: 1px solid rgba(255,255,255,.15); border-radius: 9px; color: white; background: #0c0f14; font: inherit; }
+      input:focus-visible, button:focus-visible { outline: 3px solid #b2ef5a; outline-offset: 3px; }
+      button { width: 100%; min-height: 49px; border: 0; border-radius: 999px; color: #11150c; background: #b2ef5a; font: inherit; font-weight: 750; cursor: pointer; }
+      button:hover { background: #c5ff72; }
+      .error { min-height: 1.3em; margin: -.3rem 0 .8rem; color: #ffc2c2; font-size: .84rem; }
+      .tip { margin: 1.2rem 0 0; font-size: .78rem; }
+      .url { color: #d7efb5; overflow-wrap: anywhere; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="mark" aria-hidden="true">J</div>
+      <p class="tag">UI NEXT · DEVELOPMENT</p>
+      <h1>Choose a backend.</h1>
+      <p>Launch the preview against a Jellyfin server. You’ll sign in on the next screen; credentials are not entered or stored here.</p>
+      <form id="launcher">
+        <label for="server">Jellyfin server address
+          <input id="server" type="url" placeholder="https://jellyfin.example.com" autocomplete="url" required />
+        </label>
+        <p class="error" id="error" role="alert"></p>
+        <button type="submit">Open UI Next</button>
+      </form>
+      <p class="tip">For another-origin backend servers, allow this development site in Jellyfin’s CORS settings. Use HTTPS, or HTTP only for localhost.</p>
+    </main>
+    <script>
+      (function () {
+        var input = document.getElementById('server');
+        var error = document.getElementById('error');
+        var preset = /(?:^|[?&])server=([^&]*)/.exec(window.location.search);
+        input.value = preset ? decodeURIComponent(preset[1].replace(/\+/g, ' ')) : window.location.origin;
+        document.getElementById('launcher').addEventListener('submit', function (event) {
+          event.preventDefault();
+          error.textContent = '';
+          try {
+            var address = input.value.trim();
+            var target = new URL(address);
+            var local = target.hostname === 'localhost' || target.hostname === '127.0.0.1';
+            if (target.protocol !== 'https:' && !(target.protocol === 'http:' && (local || window.location.protocol === 'http:'))) {
+              throw new Error('Use HTTPS for the backend unless testing over HTTP from a local development server.');
+            }
+            if (target.username || target.password || target.search || target.hash) {
+              throw new Error('Enter the server address only, without credentials, query parameters, or fragments.');
+            }
+            target.pathname = target.pathname.replace(/\/(web|web\/index\.html)\/?$/i, '').replace(/\/$/, '');
+            window.location.assign('./?server=' + encodeURIComponent(target.toString().replace(/\/$/, '')));
+          } catch (e) {
+            error.textContent = e instanceof Error ? e.message : 'Enter a valid Jellyfin server address.';
+          }
+        });
+      }());
+    </script>
+  </body>
+</html>

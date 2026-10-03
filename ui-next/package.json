@@ -1,0 +1,23 @@
+{
+  "name": "jellyfin-ui-next",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --open",
+    "dev:debug": "vite --host 0.0.0.0 --open /debug.html",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "hls.js": "^1.5.20",
+    "preact": "^10.26.4"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.1",
+    "@types/node": "^26.6.4",
+    "@vitejs/plugin-legacy": "^6.1.1",
+    "typescript": "~5.8.3",
+    "vite": "^6.2.6"
+  }
+}
