@@ -8,6 +8,7 @@ How this repository builds a PostgreSQL-backed Jellyfin image without committing
 |---|---|
 | [`Jellyfin.Plugin.Pgsql/`](../Jellyfin.Plugin.Pgsql/) | PostgreSQL EF provider, migrations, query cache, fuzzy search, taste, Emby import, admin APIs, optional active-standby HA |
 | [`Jellyfin.Plugin.Seerr/`](../Jellyfin.Plugin.Seerr/) | Seerr/Jellyseerr client plugin (search, request, parental filtering) |
+| [`ui-next/`](../ui-next/) | Experimental standalone Preact/Vite web client; separate from the upstream web submodule and not yet included in the production image |
 | [`jellyfin/`](../jellyfin/), [`jellyfin-web/`](../jellyfin-web/) | Upstream git submodules — **patch targets only**; keep working trees clean of committed local edits |
 | [`patches/`](../patches/) | All server/web customizations as flat `*.patch` files |
 | [`scripts/apply-patches.sh`](../scripts/apply-patches.sh) | Routes and applies patches by filename |
@@ -59,6 +60,8 @@ That applies each patch as a commit on `--from`, `git rebase --onto` the new tag
 The exporter snapshots changed **file contents** before rebuilding the dependency baseline, then diffs only the restored feature edits against it (`--binary` for SQLite snapshots). Replaying `git diff HEAD` on that baseline would duplicate already-applied dependency hunks. The web export also builds the static bundle; clean both patched submodule worktrees back to their pinned tags after validation.
 
 ## Build composition
+
+`ui-next/` currently has its own npm build (`npm run build` in that directory) and emits a static site to `ui-next/dist/`. It is intentionally not part of the image build yet: server path routing, web-wrapper startup expectations, auth behavior, and TV playback must be validated before deployment wiring is added.
 
 ```mermaid
 flowchart LR
