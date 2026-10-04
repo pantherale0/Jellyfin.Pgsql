@@ -1,5 +1,5 @@
 import { h, render } from 'preact';
-import { memo } from 'preact/compat';
+import { memo, lazy, Suspense } from 'preact/compat';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { JellyfinApi, peekCachedImage, releaseCachedImage, retainCachedImage } from './api';
 import { LiveTvPage } from './live-tv';
@@ -9,9 +9,10 @@ import { ProfileScreen, type ProfileScreenName } from './profile';
 import { buildHomeFeedBlocks, HomeFeed } from './home-feed';
 import { clearRememberedToken, getRememberedUsers, rememberUser, type RememberedUser } from './remembered-users';
 import type { PlaybackChoice } from './player-model';
-import { AdminDashboard } from './admin/admin-dashboard';
 import type { LiveTab, MediaItem, RecommendationGroup, Session } from './types';
 import './style.css';
+
+const AdminDashboard = lazy(() => import('./admin/admin-dashboard').then(module => ({ default: module.AdminDashboard })));
 
 const SESSION_KEY = 'jellyfin-ui-next-session';
 const SAVED_SERVER_KEY = 'jellyfin-ui-next-server';
@@ -165,11 +166,12 @@ function getSavedServer(): string {
 
 function App() {
     const [ session, setSession ] = useState<Session | null>(() => readSession());
-    const [ view, setView ] = useState<'home' | 'library' | 'show' | 'search' | 'details' | 'player' | 'live' | 'profile' | 'admin'>('home');
+    const [ view, setView ] = useState<'home' | 'library' | 'show' | 'search' | 'details' | 'player' | 'live' | 'profile' | 'admin'>(() => window.location.hash.startsWith('#admin/') ? 'admin' : 'home');
     const [ profileScreen, setProfileScreen ] = useState<ProfileScreenName>('playback');
     const [ profileMenuOpen, setProfileMenuOpen ] = useState(false);
     const [ rememberedUsers, setRememberedUsers ] = useState<RememberedUser[]>([]);
     const [ isAdministrator, setIsAdministrator ] = useState(false);
+    const [ adminAccessChecked, setAdminAccessChecked ] = useState(false);
     const [ liveTab, setLiveTab ] = useState<LiveTab>('now');
     const [ server, setServer ] = useState(getSavedServer);
     const [ username, setUsername ] = useState('');
@@ -242,6 +244,8 @@ function App() {
     const tvClient = isTvClient();
 
     useEffect(() => {
+        setAdminAccessChecked(false);
+        setIsAdministrator(false);
         if (!session) {
             setIsAdministrator(false);
             setRememberedUsers([]);
@@ -254,9 +258,15 @@ function App() {
             if (active) setIsAdministrator(user.Policy?.IsAdministrator === true);
         }).catch(() => {
             if (active) setIsAdministrator(false);
-        });
+        }).finally(() => { if (active) setAdminAccessChecked(true); });
         return () => { active = false; };
     }, [ session ]);
+
+    useEffect(() => {
+        const route = () => { if (window.location.hash.startsWith('#admin/')) setView('admin'); };
+        window.addEventListener('hashchange', route);
+        return () => window.removeEventListener('hashchange', route);
+    }, []);
 
     useEffect(() => {
         if (!profileMenuOpen) return;
@@ -1200,6 +1210,12 @@ function App() {
         else goHome();
     };
 
+    if (view === 'admin') {
+        const backToMedia = () => { window.history.replaceState(null, '', window.location.pathname + window.location.search); setView('home'); };
+        if (!adminAccessChecked || !isAdministrator || !api) return <main class="admin-workspace"><section class="ad-page" role="status"><h1>{adminAccessChecked ? 'Administrator access required' : 'Checking administrator access…'}</h1><button class="ad-btn" onClick={backToMedia}>Back to media</button></section></main>;
+        return <Suspense fallback={<main class="admin-workspace"><p class="ad-page" role="status">Loading admin workspace…</p></main>}><AdminDashboard key={session.user.Id} api={api} session={session} onBack={backToMedia} /></Suspense>;
+    }
+
     return <>
     <div class="app-shell" aria-hidden={view === 'player'}>
         <header class="topbar">
@@ -1238,7 +1254,7 @@ function App() {
                         {isAdministrator && <>
                             <div class="profile-menu-divider" />
                             <p class="profile-menu-label">Server administration</p>
-                            <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); setView('admin'); profileReturnView.current = 'home'; }}>Admin workspace</button>
+                            <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); window.location.hash = 'admin/overview'; setView('admin'); profileReturnView.current = 'home'; }}>Admin workspace</button>
                             <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); window.location.assign(`${session.server}/web/index.html#!/dashboard`); }}>Classic dashboard</button>
                             <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); window.location.assign(`${session.server}/web/index.html#!/metadata`); }}>Metadata manager</button>
                         </>}
@@ -1338,7 +1354,6 @@ function App() {
             {view === 'search' && <section class="catalog-page"><div class="catalog-heading"><button class="back-link" data-focusable="true" onClick={goHome}>← <span>Home</span></button><p class="eyebrow">SEARCH RESULTS</p><h1>Results for “{search}”</h1><p class="muted">{items.length} titles</p></div>{items.length ? <VirtualizedMediaGrid items={items} api={api} onSelect={selectItem} /> : !loading && <EmptyState title="No matches found" text="Try another search or choose a different library." />}</section>}
             {view === 'live' && api && <LiveTvPage api={api} userId={session.user.Id} tab={liveTab} onTab={next => { setLiveTab(next); rememberLiveQuery(next); }} onPlay={item => void play(item, 'live')} />}
             {view === 'details' && selected && <DetailPage api={api} item={selected} onBack={() => { if (tvSeries) setView('show'); else { clearShowQuery(); setView(activeLibrary ? 'library' : 'home'); } }} onPlay={() => void play(selected)} />}
-            {view === 'admin' && api && <AdminDashboard api={api} session={session} onBack={() => setView('home')} />}
         </main>
     </div>
     {view === 'player' && playerUrl && <Player url={playerUrl} item={playerItem} playback={playback} api={api} tvClient={tvClient} onBack={leavePlayer} onPlayItem={next => void play(next)} onPlaybackReported={itemId => void applyReportedPlayback(itemId)} onError={() => setError('Playback could not start in this browser. Try another quality or playback method.')} />}

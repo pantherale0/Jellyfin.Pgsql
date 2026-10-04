@@ -236,7 +236,7 @@ export function clearImageCache(): void {
     imageCache.clear();
 }
 
-function xhrRequest<T>(url: string, method = 'GET', headers: Record<string, string> = {}, body?: string, emptyOk = false, priority = 2, signal?: AbortSignal | null): Promise<T> {
+function xhrRequest<T>(url: string, method = 'GET', headers: Record<string, string> = {}, body?: Document | XMLHttpRequestBodyInit, emptyOk = false, priority = 2, signal?: AbortSignal | null, responseType: 'json' | 'text' = 'json', maxResponseBytes?: number): Promise<T> {
     return new Promise((resolve, reject) => {
         if (signal?.aborted) { reject(new DOMException('The request was cancelled.', 'AbortError')); return; }
         const cleanup = () => signal?.removeEventListener('abort', onAbort);
@@ -288,7 +288,7 @@ function xhrRequest<T>(url: string, method = 'GET', headers: Record<string, stri
                     cleanup();
                     try {
                         if (signal?.aborted) reject(new DOMException('The request was cancelled.', 'AbortError'));
-                        else resolve(JSON.parse(text) as T);
+                        else resolve((responseType === 'text' ? text : JSON.parse(text)) as T);
                     } catch (_error) {
                         reject(new Error('The server returned an invalid response.'));
                     }
@@ -301,6 +301,12 @@ function xhrRequest<T>(url: string, method = 'GET', headers: Record<string, stri
                 else deliver();
             };
             xhr.onerror = () => settle(() => reject(new Error('Could not reach the Jellyfin server. Check the address and connection.')));
+            xhr.onprogress = event => {
+                if (maxResponseBytes && event.loaded > maxResponseBytes) {
+                    settle(() => reject(new Error('This log exceeds the 2 MB viewer limit. Select a smaller log file.')));
+                    xhr.abort();
+                }
+            };
             xhr.ontimeout = () => settle(() => reject(new Error('The Jellyfin server took too long to respond.')));
             xhr.onabort = () => settle(() => reject(new Error('The request was cancelled.')));
             xhr.timeout = 20000;
@@ -438,7 +444,7 @@ export class JellyfinApi {
 
     async request<T>(path: string, init: RequestInit = {}, emptyOk = false, priority = 2): Promise<T> {
         const headers: Record<string, string> = { 'Authorization': authorization(this.session.token) };
-        if (init.body) headers['Content-Type'] = 'application/json';
+        if (init.body && !(typeof FormData !== 'undefined' && init.body instanceof FormData)) headers['Content-Type'] = 'application/json';
         if (init.headers && typeof init.headers === 'object') {
             Object.keys(init.headers).forEach(key => {
                 const value = (init.headers as Record<string, string>)[key];
@@ -446,11 +452,18 @@ export class JellyfinApi {
             });
         }
         try {
-            return await xhrRequest<T>(`${this.session.server}${path}`, init.method || 'GET', headers, typeof init.body === 'string' ? init.body : undefined, emptyOk, priority, init.signal);
+            const body = typeof init.body === 'string' || (typeof FormData !== 'undefined' && init.body instanceof FormData) ? init.body : undefined;
+            return await xhrRequest<T>(`${this.session.server}${path}`, init.method || 'GET', headers, body, emptyOk, priority, init.signal);
         } catch (error) {
             if (error instanceof Error && error.message.indexOf('(401)') >= 0) throw new Error('Your session expired. Sign in again.');
             throw error;
         }
+    }
+
+    async requestText(path: string, priority = 1): Promise<string> {
+        const headers = { 'Authorization': authorization(this.session.token) };
+        return xhrRequest<string>(`${this.session.server}${path}`, 'GET', headers, undefined, false, priority, undefined, 'text', 2 * 1024 * 1024)
+            .then(value => typeof value === 'string' ? value : String(value));
     }
 
     async getViews(): Promise<MediaItem[]> {
