@@ -386,8 +386,13 @@ export class JellyfinApi {
         const configUrl = import.meta.env.DEV
             ? `/__debug/sso-config?server=${encodeURIComponent(server)}`
             : `${server}/sso/config`;
-        const result = await xhrRequest<{ Enabled?: boolean; enabled?: boolean }>(configUrl);
-        return result.Enabled === true || result.enabled === true;
+        try {
+            const result = await xhrRequest<{ Enabled?: boolean; enabled?: boolean }>(configUrl);
+            return result.Enabled === true || result.enabled === true;
+        } catch (_error) {
+            // Optional feature probe: treat proxy/debug failures as "not enabled".
+            return false;
+        }
     }
 
     static async beginSso(serverInput: string): Promise<void> {
@@ -399,7 +404,12 @@ export class JellyfinApi {
 
     static async isQuickConnectEnabled(serverInput: string): Promise<boolean> {
         const server = normalizeServer(serverInput);
-        return xhrRequest<boolean>(`${server}/QuickConnect/Enabled`);
+        try {
+            return await xhrRequest<boolean>(`${server}/QuickConnect/Enabled`);
+        } catch (_error) {
+            // Some deployments/proxies return 500 for this probe; fail closed.
+            return false;
+        }
     }
 
     static async getUserSession(session: Session): Promise<JellyfinUser> {
