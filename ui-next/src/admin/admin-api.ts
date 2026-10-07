@@ -120,6 +120,25 @@ export function createAdminApi(api: JellyfinApi) {
     const refreshLibrary = (itemId: string): Promise<void> => post(`/Items/${encodeURIComponent(itemId)}/Refresh`);
     const addLibrary = (name: string, collectionType: string, paths: string[]): Promise<void> => api.request<void>(`/Library/VirtualFolders?${new URLSearchParams({ name, ...(collectionType ? { collectionType } : {}), paths: paths.join(','), refreshLibrary: 'false' })}`, { method: 'POST', body: JSON.stringify({ LibraryOptions: { PathInfos: paths.map(Path => ({ Path })) } }) }, true);
     const removeLibrary = (name: string): Promise<void> => del(`/Library/VirtualFolders?${new URLSearchParams({ name, refreshLibrary: 'false' })}`);
+    const updateLibrary = (library: LibraryInfo): Promise<void> => {
+        const params = new URLSearchParams({ name: library.Name!, ...library.CollectionType ? { collectionType: library.CollectionType! } : {} });
+        if (library.Options?.Path && Array.isArray(library.Options.Path)) {
+            params.set('paths', library.Options.Path.join(','));
+        }
+        return api.request<void>(`/Library/VirtualFolders?${params}`, { method: 'POST', body: JSON.stringify({ LibraryOptions: { PathInfos: library.Options?.Path?.map(p => ({ Path: p })) || [] } }) }, true);
+    };
+    const setLibraryOptions = (library: LibraryInfo, options: Partial<LibraryInfo['Options']>): Promise<void> => {
+        const currentPaths = Array.isArray(library.Options?.Path) ? library.Options.Path : [];
+        const optionPaths = options && Array.isArray((options as any).Path) ? ((options as any).Path as string[]) : [];
+        const mergedPaths = [...new Set([...currentPaths, ...optionPaths])];
+        return updateLibrary({
+            ...library,
+            Options: {
+                ...(library.Options || {}),
+                Path: mergedPaths,
+            },
+        });
+    };
 
     /* Plugins */
     const getPlugins = (): Promise<PluginInfo[]> => get<PluginInfo[]>('/Plugins').catch(() => []);

@@ -150,6 +150,7 @@ export function AdminDashboard({ api, session, onBack }: AdminDashboardProps) {
             {section === 'plugins' && <AdminAllPlugins adminApi={adminApi} onNavigate={navigate} />}
             {isPlugin(section) && activePlugin && <PluginRouter name={activePlugin.Name || ''} displayName={activePlugin.DisplayName || activePlugin.Name || 'Plugin'} pluginId={activePlugin.PluginId} adminApi={adminApi} session={session} />}
             {isPlugin(section) && !activePlugin && pluginPages.length > 0 && <div class="ad-page"><h1 class="ad-page-title">Plugin not found</h1><p class="ad-note">The plugin configuration page could not be loaded. It may have been disabled or removed.</p></div>}
+            {(!section || !CORE_NAV.some(n => n.id === section) && !isPlugin(section)) && <div class="ad-page"><h1 class="ad-page-title">Unknown section</h1><p class="ad-note">The requested admin section could not be found.</p></div>}
         </main>
     </div>;
 }
