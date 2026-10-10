@@ -621,7 +621,7 @@ export class JellyfinApi {
             ...(libraryOptions ? mapLibraryQuery(query!, { ...libraryOptions, StartIndex: startIndex, Limit: libraryOptions.Limit ?? pageSize, IncludeItemTypes: includeItemTypes, Recursive: recursive }) : {
                 Limit: pageSize,
                 StartIndex: startIndex,
-                Fields: 'Overview,PrimaryImageAspectRatio,UserData,CommunityRating,ProductionYear,RunTimeTicks,IndexNumber,ParentIndexNumber,SeriesId,SeasonId',
+                Fields: 'Overview,PrimaryImageAspectRatio,UserData,CommunityRating,ProductionYear,RunTimeTicks,IndexNumber,ParentIndexNumber,SeriesId,SeasonId,ChannelName',
                 SortBy: 'SortName',
                 SortOrder: 'Ascending'
             })

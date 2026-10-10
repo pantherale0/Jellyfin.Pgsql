@@ -1,5 +1,7 @@
 dev-env/
 **/node_modules/
+ui-next/.env*
+ui-next/dist/
 **/bin/
 **/obj/
 .git/

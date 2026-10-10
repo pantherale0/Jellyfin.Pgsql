@@ -81,9 +81,20 @@ export function HomeFeed({ blocks, api, onSelect, onPlay, onNeedMore, hasMore, l
     const [ heights, setHeights ] = useState<Record<string, number>>({});
     const railOffsets = useRef<Record<string, number>>({});
     const container = useRef<HTMLDivElement>(null);
+    const previousBlocks = useRef(blocks);
     const activeRef = useRef(activeBlock);
-    activeRef.current = activeBlock;
-    const windowRange = useMemo(() => ({ start: Math.max(0, activeBlock - 1), end: Math.min(blocks.length, activeBlock + 2) }), [ activeBlock, blocks.length ]);
+    const paging = useRef({ hasMore, loadingMore, onNeedMore });
+    const previousId = previousBlocks.current[activeBlock]?.id;
+    const matchingIndex = previousBlocks.current === blocks ? activeBlock : blocks.findIndex(block => block.id === previousId);
+    const renderedActiveBlock = Math.max(0, matchingIndex);
+    activeRef.current = renderedActiveBlock;
+    paging.current = { hasMore, loadingMore, onNeedMore };
+    const windowRange = useMemo(() => ({ start: Math.max(0, renderedActiveBlock - 1), end: Math.min(blocks.length, renderedActiveBlock + 2) }), [ renderedActiveBlock, blocks.length ]);
+    useLayoutEffect(() => {
+        if (previousBlocks.current === blocks) return;
+        previousBlocks.current = blocks;
+        setActiveBlock(renderedActiveBlock);
+    }, [ blocks, renderedActiveBlock ]);
 
     const measure = useCallback((entry: ResizeObserverEntry) => {
         const node = entry.target as HTMLElement;
@@ -96,37 +107,57 @@ export function HomeFeed({ blocks, api, onSelect, onPlay, onNeedMore, hasMore, l
     useEffect(() => {
         const root = container.current;
         if (!root) return;
+        let focusFrame = 0;
         const onKey = (event: KeyboardEvent) => {
-            const railCard = (event.target as HTMLElement | null)?.closest<HTMLElement>('.home-feed-rail-items [data-focusable="true"]');
-            if (event.key === 'ArrowDown' && railCard) {
-                const block = railCard.closest<HTMLElement>('[data-block-index]');
-                const currentIndex = Number(block?.dataset.blockIndex);
-                const nextSpotlight = root.querySelector<HTMLElement>(`[data-block-index="${currentIndex + 1}"] .home-spotlight-primary`);
-                if (nextSpotlight) {
-                    nextSpotlight.focus();
+            const target = event.target instanceof HTMLElement ? event.target : null;
+            const block = target?.closest<HTMLElement>('[data-block-index]');
+            if (block && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+                const nextIndex = Number(block.dataset.blockIndex) + (event.key === 'ArrowDown' ? 1 : -1);
+                const nextBlock = root.querySelector<HTMLElement>(`[data-block-index="${nextIndex}"]`);
+                if (nextBlock) {
                     event.preventDefault();
                     event.stopImmediatePropagation();
+                    if (focusFrame) window.cancelAnimationFrame(focusFrame);
+                    setActiveBlock(nextIndex);
+                    const headerBottom = document.querySelector('.topbar')?.getBoundingClientRect().bottom || 0;
+                    window.scrollTo(0, window.scrollY + nextBlock.getBoundingClientRect().top - headerBottom - 16);
+                    // The adjacent block may still be a virtualized placeholder.
+                    focusFrame = window.requestAnimationFrame(() => {
+                        focusFrame = 0;
+                        root.querySelector<HTMLElement>(`[data-block-index="${nextIndex}"] .home-spotlight-primary, [data-block-index="${nextIndex}"] .home-feed-rail-items [data-focusable="true"]`)?.focus();
+                    });
+                    return;
+                }
+                if (nextIndex === blocks.length && paging.current.hasMore) {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    if (!paging.current.loadingMore) paging.current.onNeedMore();
                     return;
                 }
             }
             const current = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-spotlight-id]');
             if (!current) return;
             const actions = Array.from(current.querySelectorAll<HTMLElement>('.home-spotlight-actions [data-focusable="true"]'));
-            const nextId = current.querySelector<HTMLElement>('.home-spotlight-next')?.dataset.nextBlock;
             if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && actions.includes(event.target as HTMLElement)) {
-                const index = actions.indexOf(event.target as HTMLElement);
-                const next = actions[Math.max(0, Math.min(actions.length - 1, index + (event.key === 'ArrowRight' ? 1 : -1)))];
-                if (next && next !== event.target) { next.focus(); event.preventDefault(); event.stopImmediatePropagation(); }
-            } else if (event.key === 'ArrowDown' && actions.includes(event.target as HTMLElement) && nextId) {
-                const nextCard = root.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(nextId)}"] .home-feed-rail-items [data-focusable="true"]`);
-                nextCard?.focus();
+                // Clamp travel to the row. Falling through at either end
+                // flings focus to a distant rail card, which reads as losing
+                // the spotlight. Up and Down still leave the row freely.
+                const enabled = actions.filter(button => !(button as HTMLButtonElement).disabled);
+                const at = enabled.indexOf(event.target as HTMLElement);
+                const step = event.key === 'ArrowRight' ? 1 : -1;
+                const next = enabled[Math.max(0, Math.min(enabled.length - 1, at < 0 ? (step > 0 ? 0 : enabled.length - 1) : at + step))];
                 event.preventDefault();
                 event.stopImmediatePropagation();
+                if (next && next !== event.target) next.focus();
+                return;
             }
         };
         root.addEventListener('keydown', onKey, true);
-        return () => root.removeEventListener('keydown', onKey, true);
-    }, []);
+        return () => {
+            root.removeEventListener('keydown', onKey, true);
+            if (focusFrame) window.cancelAnimationFrame(focusFrame);
+        };
+    }, [blocks.length]);
 
     useEffect(() => {
         const root = container.current;
@@ -177,14 +208,16 @@ export function HomeFeed({ blocks, api, onSelect, onPlay, onNeedMore, hasMore, l
     useEffect(() => {
         const sentinel = container.current?.querySelector('.home-feed-sentinel');
         if (!sentinel || !hasMore || loadingMore || typeof IntersectionObserver === 'undefined') return;
+        // Remote users navigate by focus, not scroll position, so the feed
+        // can sit pinned at its rendered edge while the sentinel is still
+        // far below. Pull early so the next page is usually rendered before
+        // focus runs out of targets.
         const observer = new IntersectionObserver(entries => {
             if (entries.some(entry => entry.isIntersecting)) onNeedMore();
-        }, { rootMargin: '600px 0px' });
+        }, { rootMargin: '2000px 0px' });
         observer.observe(sentinel);
         return () => observer.disconnect();
     }, [ hasMore, loadingMore, onNeedMore, blocks.length ]);
-
-    useEffect(() => { setActiveBlock(0); }, [ blocks.map(block => block.id).join('|') ]);
 
     if (!blocks.length) return null;
     return <div class="home-feed-blocks" ref={container}>
@@ -249,9 +282,9 @@ function HomeFeedCard({ item, api, onSelect }: { item: MediaItem; api: JellyfinA
             {hasImage
                 ? <img src={src} alt="" loading="lazy" onError={() => setImageFailed(true)} />
                 : <span class="home-feed-card-fallback" aria-hidden="true"><span class="home-feed-fallback-glow" /><span class="home-feed-fallback-icon">{liveProgram ? 'LIVE' : initials || 'J'}</span><span class="home-feed-fallback-label">{liveProgram ? item.ChannelName || 'ON NOW' : item.Type === 'Series' ? 'SERIES' : 'IN YOUR LIBRARY'}</span></span>}
+            <span class="home-feed-card-overlay"><strong>{item.Name}</strong><small>{item.ProductionYear || item.SeriesName || 'In your library'}</small></span>
             {type === 'landscape' && progress > 0 && <i style={{ width: `${progress}%` }} />}
         </span>
-        <strong>{item.Name}</strong><small>{item.ProductionYear || item.SeriesName || 'In your library'}</small>
     </button>;
 }
 
@@ -280,7 +313,7 @@ function Spotlight({ block, api, onSelect, onPlay, nextBlockId }: {
         const target = event.target as HTMLElement;
         const spotlight = target.closest<HTMLElement>('.home-spotlight');
         if (!spotlight || !target.matches('.home-spotlight-actions [data-focusable="true"]')) return;
-        window.scrollTo({ top: window.scrollY + spotlight.getBoundingClientRect().top - (window.innerHeight - spotlight.offsetHeight) / 2, behavior: 'smooth' });
+        window.scrollTo(0, window.scrollY + spotlight.getBoundingClientRect().top - (window.innerHeight - spotlight.offsetHeight) / 2);
     };
     return <section class={`home-spotlight home-spotlight-${block.spotlightType || 'discovery'}`} data-spotlight-id={block.id} onFocusIn={focusSpotlight}>
         <div ref={background} class="home-spotlight-background" style={image ? { backgroundImage: `url("${image}")` } : undefined} />

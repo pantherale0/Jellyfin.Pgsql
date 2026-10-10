@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { JellyfinApi, peekCachedImage, releaseCachedImage, retainCachedImage } from './api';
-import { GUIDE_CHANNEL_WIDTH, GUIDE_HEADER_HEIGHT, GUIDE_ROW_HEIGHT, PIXELS_PER_MINUTE, artType, elapsedStop, episodeCode, formatClock, formatRange, guideSegments, isAiring, mediaTags, programBadges, rulerTicks, segmentBox, timelineWidth, timeRenderPadding, visibleIndexRange, visibleTimeRange, type GuideDay, type GuideSegment } from './live-model';
+import { GUIDE_CHANNEL_WIDTH, GUIDE_HEADER_HEIGHT, GUIDE_ROW_HEIGHT, PIXELS_PER_MINUTE, artType, directionalFocusIndex, elapsedStop, episodeCode, formatClock, formatRange, guideSegments, isAiring, mediaTags, moveGuideFocus, moveGuideToolbar, programBadges, rulerTicks, segmentBox, timelineWidth, timeRenderPadding, visibleIndexRange, visibleTimeRange, type GuideDay, type GuideDirection, type GuideFocusProgram, type GuideFocusTarget, type GuideNavigationContext, type GuideSegment, type GuideToolbarControl } from './live-model';
 import type { LiveChannelFilter, MediaItem } from './types';
 
 const FILTERS: Array<{ id: LiveChannelFilter; label: string }> = [
@@ -11,6 +11,23 @@ const FILTERS: Array<{ id: LiveChannelFilter; label: string }> = [
     { id: 'movies', label: 'Movies' },
     { id: 'kids', label: 'Kids' }
 ];
+
+function isLiveChannelFilter(value: string): value is LiveChannelFilter {
+    return FILTERS.some(option => option.id === value);
+}
+
+function guideFocusTarget(element: HTMLElement): GuideFocusTarget | null {
+    const channelId = element.getAttribute('data-channel-id');
+    if (!channelId) return null;
+    if (element.getAttribute('data-rail') === 'true') return { kind: 'channel', channelId };
+    if (element.classList.contains('live-star')) return { kind: 'favorite', channelId };
+    const programId = element.getAttribute('data-program-id');
+    const start = Number(element.getAttribute('data-start'));
+    const end = Number(element.getAttribute('data-end'));
+    return programId && Number.isFinite(start) && Number.isFinite(end)
+        ? { kind: 'program', channelId, programId, start, end }
+        : null;
+}
 
 export function LiveThumb({ api, item, width = 96, className = '' }: { api: JellyfinApi; item: MediaItem; width?: number; className?: string }) {
     const [ src, setSrc ] = useState('');
@@ -78,8 +95,60 @@ interface LiveGuideProps {
     onExtend: (direction: 'back' | 'forward') => void;
     onVisible: (start: number, end: number) => void;
     onToggleFavorite: (channel: MediaItem) => void;
-    onOpenProgram: (program: MediaItem, channel: MediaItem) => void;
+    onOpenProgram: (program: MediaItem, channel: MediaItem, origin: HTMLElement) => void;
     onTune: (channel: MediaItem) => void;
+}
+
+export function GuideToolbar({ days, dayStart, digits, filter, onDay, onFilter, onFocusChannels }: {
+    days: GuideDay[];
+    dayStart: number;
+    digits: string;
+    filter: LiveChannelFilter;
+    onDay: (start: number) => void;
+    onFilter: (filter: LiveChannelFilter) => void;
+    onFocusChannels: () => void;
+}) {
+    const root = useRef<HTMLDivElement>(null);
+
+    const onKeyDown = (event: KeyboardEvent) => {
+        const target = event.target instanceof HTMLElement ? event.target : null;
+        if (!target || event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+        const dayIndex = target.getAttribute('data-guide-day-index');
+        const isFilter = target.getAttribute('data-guide-filter') === 'true';
+        if (!isFilter && dayIndex === null) return;
+        const from: GuideToolbarControl = isFilter
+            ? { kind: 'filter' }
+            : { kind: 'day', index: Number(dayIndex) };
+        if (from.kind === 'day' && !Number.isInteger(from.index)) return;
+        const move = moveGuideToolbar({ from, direction: event.key, dayCount: days.length });
+        if (move.kind === 'native') {
+            event.stopPropagation();
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        if (move.kind === 'focus') {
+            const selector = move.target.kind === 'filter'
+                ? '[data-guide-filter="true"]'
+                : `[data-guide-day-index="${move.target.index}"]`;
+            root.current?.querySelector<HTMLElement>(selector)?.focus();
+        } else if (move.kind === 'tabs') {
+            document.querySelector<HTMLElement>('.live-tabs [aria-selected="true"]')?.focus();
+        } else if (move.kind === 'channels') onFocusChannels();
+    };
+
+    return <div class="live-toolbar" ref={root} onKeyDown={onKeyDown}>
+        <div class="live-pills" role="group" aria-label="Guide day">
+            {days.map((day, index) => <button type="button" data-focusable="true" data-guide-day-index={index} class={day.start === dayStart ? 'live-pill active' : 'live-pill'} key={day.start} onClick={() => onDay(day.start)}>{day.label}</button>)}
+        </div>
+        {digits && <p class="live-digits" aria-live="polite">Channel {digits}</p>}
+        <select class="live-filter" data-focusable="true" data-guide-filter="true" aria-label="Channel filter" value={filter} onChange={event => {
+            const value = event.currentTarget.value;
+            if (isLiveChannelFilter(value)) onFilter(value);
+        }}>
+            {FILTERS.map(option => <option value={option.id} key={option.id}>{option.label}</option>)}
+        </select>
+    </div>;
 }
 
 export function LiveGuide(props: LiveGuideProps) {
@@ -166,24 +235,31 @@ export function LiveGuide(props: LiveGuideProps) {
         if (!pending) return;
         const scroller = scrollerRef.current;
         if (!scroller) return;
+        const programs = (props.programsByChannel[pending.channelId] || []).map(program => ({
+            programId: program.Id,
+            start: Date.parse(program.StartDate || ''),
+            end: Date.parse(program.EndDate || '')
+        })).filter(program => program.programId && Number.isFinite(program.start) && Number.isFinite(program.end))
+            .sort((left, right) => left.start - right.start);
+        const target = programs.find(program => pending.time >= program.start && pending.time < program.end)
+            || programs.find(program => program.start >= pending.time);
+        if (!target) return;
         const buttons = scroller.querySelectorAll<HTMLButtonElement>('button[data-program-id]');
         let match: HTMLButtonElement | null = null;
         for (let i = 0; i < buttons.length; i++) {
-            const button = buttons[i];
-            if (button.getAttribute('data-channel-id') !== pending.channelId) continue;
-            const start = Number(button.getAttribute('data-start') || 0);
-            const end = Number(button.getAttribute('data-end') || 0);
-            if (pending.time >= start && pending.time < end) {
-                match = button;
+            if (buttons[i].getAttribute('data-channel-id') === pending.channelId && buttons[i].getAttribute('data-program-id') === target.programId) {
+                match = buttons[i];
                 break;
             }
-            if (!match && start >= pending.time) match = button;
         }
         if (match) {
             match.focus();
             pendingTime.current = null;
+            return;
         }
-    }, [ scroll, props.channels, props.programsByChannel, props.windowStart ]);
+        const targetScrollLeft = Math.max(0, ((target.start - props.windowStart) / 60000) * PIXELS_PER_MINUTE);
+        if (Math.abs(scroller.scrollLeft - targetScrollLeft) > 1) scroller.scrollLeft = targetScrollLeft;
+    }, [ scroll, props.channels, props.programsByChannel, props.windowStart, props.windowEnd ]);
 
     const publishScroll = () => {
         const scroller = scrollerRef.current;
@@ -208,10 +284,10 @@ export function LiveGuide(props: LiveGuideProps) {
         }
     };
 
-    const buttonsFor = (channelId: string, program: boolean): HTMLButtonElement[] => {
+    const buttonsFor = (channelId: string, kind: GuideFocusTarget['kind']): HTMLButtonElement[] => {
         const scroller = scrollerRef.current;
         if (!scroller) return [];
-        const selector = program ? 'button[data-program-id]' : 'button[data-rail="true"]';
+        const selector = kind === 'program' ? 'button[data-program-id]' : kind === 'channel' ? 'button[data-rail="true"]' : 'button.live-star';
         const nodes = scroller.querySelectorAll<HTMLButtonElement>(selector);
         const list: HTMLButtonElement[] = [];
         for (let i = 0; i < nodes.length; i++) {
@@ -220,10 +296,69 @@ export function LiveGuide(props: LiveGuideProps) {
         return list;
     };
 
+    const focusGuideTarget = (target: GuideFocusTarget): boolean => {
+        const button = buttonsFor(target.channelId, target.kind).find(candidate => target.kind !== 'program' || candidate.getAttribute('data-program-id') === target.programId);
+        if (!button) return false;
+        button.focus();
+        return true;
+    };
+
     const focusChannel = (channelId: string) => {
-        const button = buttonsFor(channelId, false)[0];
+        const button = buttonsFor(channelId, 'channel')[0];
         if (button) button.focus();
         else document.querySelector<HTMLElement>('.live-filter')?.focus();
+    };
+
+    const navigationContext = (from: GuideFocusTarget, direction: GuideDirection): GuideNavigationContext => {
+        const channelIds = props.channels.map(channel => channel.Id);
+        const channelIndex = channelIds.indexOf(from.channelId);
+        const relevantChannels = new Set([from.channelId]);
+        if (direction === 'ArrowUp' && channelIndex > 0) relevantChannels.add(channelIds[channelIndex - 1]);
+        if (direction === 'ArrowDown' && channelIndex >= 0 && channelIndex < channelIds.length - 1) relevantChannels.add(channelIds[channelIndex + 1]);
+        const programsByChannel: Record<string, GuideFocusProgram[]> = {};
+        relevantChannels.forEach(channelId => {
+            const programs: GuideFocusProgram[] = [];
+            for (const program of props.programsByChannel[channelId] || []) {
+                const start = Date.parse(program.StartDate || '');
+                const end = Date.parse(program.EndDate || '');
+                if (program.Id && Number.isFinite(start) && Number.isFinite(end) && end > props.windowStart && start < props.windowEnd) {
+                    programs.push({ programId: program.Id, start, end });
+                }
+            }
+            programs.sort((left, right) => left.start - right.start);
+            programsByChannel[channelId] = programs;
+        });
+        const scroller = scrollerRef.current;
+        return {
+            channels: channelIds,
+            programsByChannel,
+            visibleStart: props.windowStart + ((scroller?.scrollLeft || 0) / PIXELS_PER_MINUTE) * 60000,
+            canExtendForward: props.windowEnd < props.dayStart + 86400000
+        };
+    };
+
+    const applyGuideMove = (move: ReturnType<typeof moveGuideFocus>) => {
+        if (move.kind === 'clamp') return;
+        if (move.kind === 'toolbar') {
+            document.querySelector<HTMLElement>('.live-filter')?.focus();
+            return;
+        }
+        if (move.kind === 'extend') {
+            const now = Date.now();
+            if (now - extendLock.current < 350) return;
+            extendLock.current = now;
+            pendingTime.current = { channelId: move.channelId, time: move.time };
+            props.onExtend(move.direction);
+            return;
+        }
+        if (move.kind === 'focus') {
+            if (focusGuideTarget(move.target) || move.target.kind !== 'program') return;
+            const scroller = scrollerRef.current;
+            if (!scroller) return;
+            pendingTime.current = { channelId: move.target.channelId, time: move.target.start };
+            scroller.scrollLeft = Math.max(0, ((move.target.start - props.windowStart) / 60000) * PIXELS_PER_MINUTE);
+            return;
+        }
     };
 
     const scrollRow = (index: number) => {
@@ -238,89 +373,24 @@ export function LiveGuide(props: LiveGuideProps) {
 
     const onKeyDown = (event: KeyboardEvent) => {
         if (props.sheetOpen) return;
-        const target = event.target as HTMLElement | null;
-        if (!target || target instanceof HTMLSelectElement || target instanceof HTMLInputElement) return;
-        const channelId = target.getAttribute('data-channel-id') || '';
-        const index = props.channels.findIndex(channel => channel.Id === channelId);
-        if (!channelId || index < 0) return;
-        const rail = target.getAttribute('data-rail') === 'true';
-        const onProgram = Boolean(target.getAttribute('data-program-id'));
-        const start = Number(target.getAttribute('data-start') || 0);
-        if (event.key === 'ArrowLeft') {
-            event.preventDefault();
-            event.stopPropagation();
-            if (!onProgram) {
-                if (rail) document.querySelector<HTMLElement>('.live-filter')?.focus();
-                else focusChannel(channelId);
-                return;
-            }
-            const programs = buttonsFor(channelId, true).sort((a, b) => Number(a.getAttribute('data-start')) - Number(b.getAttribute('data-start')));
-            const currentIndex = programs.indexOf(target as HTMLButtonElement);
-            const previous = currentIndex > 0 ? programs[currentIndex - 1] : null;
-            const scroller = scrollerRef.current;
-            const railEdge = (scroller?.getBoundingClientRect().left || 0) + GUIDE_CHANNEL_WIDTH;
-            if (previous && previous.getBoundingClientRect().left >= railEdge) {
-                previous.focus();
-                return;
-            }
-            if (previous && scroller && scroller.scrollLeft > 0) {
-                pendingTime.current = { channelId, time: start - 30 * 60000 };
-                scroller.scrollLeft = Math.max(0, scroller.scrollLeft - 30 * PIXELS_PER_MINUTE);
-                return;
-            }
-            focusChannel(channelId);
-            return;
-        }
-        if (event.key === 'ArrowRight') {
-            event.preventDefault();
-            event.stopPropagation();
-            if (!onProgram) {
-                const first = buttonsFor(channelId, true)[0];
-                if (first) first.focus();
-                return;
-            }
-            const programs = buttonsFor(channelId, true).sort((a, b) => Number(a.getAttribute('data-start')) - Number(b.getAttribute('data-start')));
-            const currentIndex = programs.indexOf(target as HTMLButtonElement);
-            const next = currentIndex >= 0 ? programs[currentIndex + 1] : null;
-            const scroller = scrollerRef.current;
-            const edge = scroller ? scroller.getBoundingClientRect().right - 24 : 0;
-            if (next && next.getBoundingClientRect().left < edge) {
-                next.focus();
-                return;
-            }
-            if (scroller) {
-                pendingTime.current = { channelId, time: start + 30 * 60000 };
-                scroller.scrollLeft += 30 * PIXELS_PER_MINUTE;
-            }
-            return;
-        }
-        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-            event.preventDefault();
-            event.stopPropagation();
-            const nextIndex = index + (event.key === 'ArrowDown' ? 1 : -1);
-            const nextChannel = props.channels[nextIndex];
-            if (!nextChannel) return;
+        const target = event.target instanceof HTMLElement ? event.target : null;
+        const direction = event.key;
+        if (!target || direction !== 'ArrowLeft' && direction !== 'ArrowRight' && direction !== 'ArrowUp' && direction !== 'ArrowDown') return;
+        const from = guideFocusTarget(target);
+        if (!from) return;
+        event.preventDefault();
+        event.stopPropagation();
+        pendingTime.current = null;
+        const vertical = direction === 'ArrowUp' || direction === 'ArrowDown';
+        const channelIndex = props.channels.findIndex(channel => channel.Id === from.channelId);
+        if (vertical) {
+            const nextIndex = channelIndex + (direction === 'ArrowDown' ? 1 : -1);
+            if (!props.channels[nextIndex]) return;
             scrollRow(nextIndex);
-            window.requestAnimationFrame(() => {
-                if (rail) {
-                    focusChannel(nextChannel.Id);
-                    return;
-                }
-                const programs = buttonsFor(nextChannel.Id, true);
-                let match: HTMLButtonElement | null = null;
-                for (let i = 0; i < programs.length; i++) {
-                    const opened = Number(programs[i].getAttribute('data-start') || 0);
-                    const closed = Number(programs[i].getAttribute('data-end') || 0);
-                    if (start >= opened && start < closed) {
-                        match = programs[i];
-                        break;
-                    }
-                    if (!match && opened >= start) match = programs[i];
-                }
-                if (match) match.focus();
-                else focusChannel(nextChannel.Id);
-            });
+            window.requestAnimationFrame(() => applyGuideMove(moveGuideFocus({ from, direction, context: navigationContext(from, direction) })));
+            return;
         }
+        applyGuideMove(moveGuideFocus({ from, direction, context: navigationContext(from, direction) }));
     };
 
     const showHover = (program: MediaItem, channel: MediaItem, target: HTMLElement) => {
@@ -337,15 +407,13 @@ export function LiveGuide(props: LiveGuideProps) {
     };
 
     return <div class="live-guide-wrap">
-        <div class="live-toolbar">
-            <div class="live-pills" role="group" aria-label="Guide day">
-                {props.days.map(day => <button type="button" data-focusable="true" class={day.start === props.dayStart ? 'live-pill active' : 'live-pill'} key={day.start} onClick={() => props.onDay(day.start)}>{day.label}</button>)}
-            </div>
-            {props.digits && <p class="live-digits" aria-live="polite">Channel {props.digits}</p>}
-            <select class="live-filter" aria-label="Channel filter" value={props.filter} onChange={event => props.onFilter((event.target as HTMLSelectElement).value as LiveChannelFilter)}>
-                {FILTERS.map(option => <option value={option.id} key={option.id}>{option.label}</option>)}
-            </select>
-        </div>
+        <GuideToolbar days={props.days} dayStart={props.dayStart} digits={props.digits} filter={props.filter} onDay={props.onDay} onFilter={props.onFilter} onFocusChannels={() => {
+            const channel = props.channels[0];
+            if (!channel) return;
+            const index = props.channels.findIndex(item => item.Id === channel.Id);
+            scrollRow(index);
+            window.requestAnimationFrame(() => focusChannel(channel.Id));
+        }} />
         {props.error && <p class="notice error" role="alert">{props.error}</p>}
         <div class="live-guide-scroll" ref={scrollerRef} onScroll={publishScroll} onKeyDown={onKeyDown} role="grid" aria-label="Program guide" aria-rowcount={props.channels.length} aria-colcount={2}>
             <div class="live-guide-canvas" style={{ width: `${GUIDE_CHANNEL_WIDTH + width}px`, height: `${GUIDE_HEADER_HEIGHT + props.channels.length * GUIDE_ROW_HEIGHT}px` }}>
@@ -370,7 +438,7 @@ export function LiveGuide(props: LiveGuideProps) {
             <ProgramSummary program={hover.program} channel={hover.channel} now={props.now} />
             <div class="live-actions">
                 <button type="button" class="button primary" onClick={() => props.onTune(hover.channel)}>Watch Now</button>
-                <button type="button" class="button secondary" onClick={() => props.onOpenProgram(hover.program, hover.channel)}>Details</button>
+                <button type="button" class="button secondary" onClick={event => props.onOpenProgram(hover.program, hover.channel, event.currentTarget)}>Details</button>
             </div>
         </div>}
     </div>;
@@ -384,7 +452,7 @@ function GuideRow({ api, channel, index, segments, windowStart, now, onToggleFav
     windowStart: number;
     now: number;
     onToggleFavorite: (channel: MediaItem) => void;
-    onOpenProgram: (program: MediaItem, channel: MediaItem) => void;
+    onOpenProgram: (program: MediaItem, channel: MediaItem, origin: HTMLElement) => void;
     onTune: (channel: MediaItem) => void;
     onHover: (program: MediaItem, channel: MediaItem, target: HTMLElement) => void;
     onHide: () => void;
@@ -418,7 +486,7 @@ function GuideRow({ api, channel, index, segments, windowStart, now, onToggleFav
                     data-end={String(Date.parse(program.EndDate || '') || segment.end)}
                     key={segment.key}
                     style={{ left: `${box.left}px`, width: `${box.width}px`, ['--elapsed']: `${Math.round(stop * 100)}%` }}
-                    onClick={() => onOpenProgram(program, channel)}
+                    onClick={event => onOpenProgram(program, channel, event.currentTarget)}
                     onMouseEnter={event => onHover(program, channel, event.currentTarget as HTMLElement)}
                     onMouseLeave={onHide}
                 >

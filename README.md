@@ -16,7 +16,7 @@ Deep documentation (benefits/drawbacks, architecture, features, full patch catal
 | [Patches](docs/patches.md) | What / why / where / how for every file in `patches/` |
 | [Known issues](docs/known-issues.md) | Fork tracker items and inherited Postgres caveats |
 
-The experimental standalone frontend in [`ui-next/`](ui-next/) has its own [development and security notes](ui-next/README.md); it is not yet included in the production image.
+The experimental frontend in [`ui-next/`](ui-next/) has its own [development and security notes](ui-next/README.md). The standard image still serves the patched classic web UI; an opt-in `ui-next-test` image is available for early testing.
 
 ## Contributing, issues, and pull requests
 
@@ -52,6 +52,22 @@ services:
 ```
 
 Images are built and published automatically on every push to `master`, when a release is cut, or on the daily schedule when a new Jellyfin version tag is needed. See [Release flow](#release-flow) below.
+
+### Early UI Next test image
+
+To test UI Next without changing the standard image tags, run the **Build & Publish Docker Image** workflow manually and set **Web UI** to `ui-next`. Enter the Jellyfin version from `.github/jellyfin-sync-state.json`.
+
+The workflow publishes `ghcr.io/pantherale0/jellyfin.pgsql:ui-next-test` and a versioned tag such as `ghcr.io/pantherale0/jellyfin.pgsql:ui-next-test-12.1`. Neither tag changes the normal version tag or `latest`.
+
+Use the versioned test tag in Compose:
+
+```yaml
+services:
+  jellyfin:
+    image: ghcr.io/pantherale0/jellyfin.pgsql:ui-next-test-12.1
+```
+
+To return to the classic web UI, change the image back to the matching standard Jellyfin-version tag, such as `ghcr.io/pantherale0/jellyfin.pgsql:12.1`. The UI Next test image hides links to the classic dashboard and Metadata manager. Physical TV and wrapper compatibility remains under test.
 
 ## Query cache and optimisation (optional, experimental)
 

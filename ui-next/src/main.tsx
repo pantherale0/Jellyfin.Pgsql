@@ -2,14 +2,17 @@ import { h, render } from 'preact';
 import { memo, lazy, Suspense } from 'preact/compat';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { JellyfinApi, peekCachedImage, releaseCachedImage, retainCachedImage } from './api';
+import { classicWebAvailable } from './build-features';
 import { LiveTvPage } from './live-tv';
 import { LibraryPage } from './library';
 import { Player } from './player';
 import { ProfileScreen, type ProfileScreenName } from './profile';
 import { buildHomeFeedBlocks, HomeFeed } from './home-feed';
 import { clearRememberedToken, getRememberedUsers, rememberUser, type RememberedUser } from './remembered-users';
+import { episodeCode, formatClock, isAiring } from './live-model';
 import type { PlaybackChoice } from './player-model';
 import type { LiveTab, MediaItem, RecommendationGroup, Session } from './types';
+import { enterShowSeason, moveShowFocus, type Context, type Direction, type EpisodeControl, type ShowBookmark, type ShowFocusResult, type ShowTarget } from './show-navigation';
 import './style.css';
 
 const AdminDashboard = lazy(() => import('./admin/admin-dashboard').then(module => ({ default: module.AdminDashboard })));
@@ -18,6 +21,7 @@ const SESSION_KEY = 'jellyfin-ui-next-session';
 const SAVED_SERVER_KEY = 'jellyfin-ui-next-server';
 const SIGNED_OUT_KEY = 'jellyfin-ui-next-signed-out';
 const configuredServer = import.meta.env.VITE_JELLYFIN_SERVER_URL?.trim() || '';
+const classicWebLinksAvailable = classicWebAvailable(import.meta.env.VITE_CLASSIC_WEB_AVAILABLE);
 
 function comparableServer(server: string): string | null {
     try {
@@ -51,6 +55,12 @@ function isTvClient(): boolean {
         || Boolean((window as Window & { NativeShell?: unknown }).NativeShell);
 }
 
+type ContentOrigin =
+    | { kind: 'show'; bookmark: ShowBookmark }
+    | { kind: 'home' | 'library' | 'search' | 'live'; scrollY: number };
+
+type PlaybackOrigin = ContentOrigin | { kind: 'details'; item: MediaItem; parent: ContentOrigin; scrollY: number };
+
 interface FocusEntry {
     element: HTMLElement;
     left: number;
@@ -66,6 +76,9 @@ function collectFocusEntries(root: ParentNode): FocusEntry[] {
     const entries: FocusEntry[] = [];
     for (let index = 0; index < nodes.length; index++) {
         const element = nodes[index];
+        // A disabled control swallows .focus() with no effect, so offering
+        // one as a navigation target pins remote users with no feedback.
+        if ((element as HTMLButtonElement).disabled === true || element.getAttribute('aria-disabled') === 'true') continue;
         const rect = element.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) entries.push({ element, left: rect.left, top: rect.top, width: rect.width, height: rect.height });
     }
@@ -91,6 +104,8 @@ function focusTarget(entries: FocusEntry[], current: HTMLElement, direction: [nu
     if (!currentEntry) return { known: false, element: null };
     const cx = currentEntry.left + currentEntry.width / 2;
     const cy = currentEntry.top + currentEntry.height / 2;
+    const cRight = currentEntry.left + currentEntry.width;
+    const cBottom = currentEntry.top + currentEntry.height;
     let nearest: HTMLElement | null = null;
     let nearestScore = Number.POSITIVE_INFINITY;
     for (let index = 0; index < entries.length; index++) {
@@ -100,8 +115,15 @@ function focusTarget(entries: FocusEntry[], current: HTMLElement, direction: [nu
         const dy = entry.top + entry.height / 2 - cy;
         const primary = direction[0] ? dx * direction[0] : dy * direction[1];
         const cross = direction[0] ? Math.abs(dy) : Math.abs(dx);
+        // Wide controls (keyboard space bar, rails) center far from their
+        // edge, so pure center geometry prefers a slightly-offset near key
+        // over the directly-adjacent same-row key. Prefer candidates that
+        // share the current element's cross-axis band.
+        const overlap = direction[0]
+            ? Math.min(entry.top + entry.height, cBottom) - Math.max(entry.top, currentEntry.top)
+            : Math.min(entry.left + entry.width, cRight) - Math.max(entry.left, currentEntry.left);
         if (primary > 4) {
-            const score = primary + cross * 2;
+            const score = primary + cross * 2 + (overlap > 0 ? 0 : 1000);
             if (score < nearestScore) {
                 nearest = entry.element;
                 nearestScore = score;
@@ -204,7 +226,23 @@ function App() {
     const [ seasonSpacerHeights, setSeasonSpacerHeights ] = useState<Record<string, number>>({});
     const [ items, setItems ] = useState<MediaItem[]>([]);
     const [ selected, setSelected ] = useState<MediaItem | null>(null);
+    const [ showRestore, setShowRestore ] = useState<ShowBookmark | null>(null);
+    const [ contentRestore, setContentRestore ] = useState<{ kind: 'home' | 'library' | 'search' | 'live'; scrollY: number } | null>(null);
+    const [ detailRestore, setDetailRestore ] = useState<{ itemId: string; scrollY: number } | null>(null);
+    const detailOrigin = useRef<ContentOrigin | null>(null);
+    const playbackOrigin = useRef<PlaybackOrigin | null>(null);
+    const detailRequest = useRef(0);
+    const playbackRequest = useRef(0);
+    const renderedView = useRef(view);
+    renderedView.current = view;
     const [ search, setSearch ] = useState('');
+    const [ searchDraft, setSearchDraft ] = useState('');
+    const searchReq = useRef(0);
+    const searchReturn = useRef(false);
+    const [ searchExpanded, setSearchExpanded ] = useState(false);
+    const searchInputRef = useRef<HTMLInputElement>(null);
+    const lastFocusRect = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
+    const lastModality = useRef<'keyboard' | 'pointer'>('pointer');
     const [ playerUrl, setPlayerUrl ] = useState('');
     const [ playerItem, setPlayerItem ] = useState<MediaItem | null>(null);
     const [ playback, setPlayback ] = useState<PlaybackChoice | null>(null);
@@ -225,7 +263,11 @@ function App() {
     const hamburgerRef = useRef<HTMLButtonElement>(null);
     const recommendationPaginationRef = useRef<HTMLDivElement>(null);
     const seasonNodes = useRef<Record<string, HTMLElement | null>>({});
-    const episodeRequests = useRef<Record<string, boolean>>({});
+    const episodeRequests = useRef<Record<string, Promise<MediaItem[]>>>({});
+    const showGeneration = useRef(0);
+    const showSeasonsRef = useRef(showSeasons);
+    showSeasonsRef.current = showSeasons;
+    const scrollSeasonSync = useRef<() => void>(() => undefined);
     const episodesBySeasonRef = useRef<Record<string, MediaItem[]>>({});
     const activeSeasonIdRef = useRef('');
     const programmaticScroll = useRef(false);
@@ -234,7 +276,6 @@ function App() {
     const showInUrl = useRef(false);
     const openItemRef = useRef<(item: MediaItem) => void>(() => undefined);
     const playRef = useRef<(item: MediaItem) => void>(() => undefined);
-    const playerOrigin = useRef<'live' | null>(null);
     const restoredLive = useRef(false);
     const selectItem = useCallback((item: MediaItem) => { void openItemRef.current(item); }, []);
     const playItem = useCallback((item: MediaItem) => { void playRef.current(item); }, []);
@@ -242,6 +283,20 @@ function App() {
     activeSeasonIdRef.current = activeSeasonId;
     const api = useMemo(() => session ? new JellyfinApi(session) : null, [ session ]);
     const tvClient = isTvClient();
+    const switchReturnSession = useRef<Session | null>(null);
+
+    useEffect(() => {
+        if (session) {
+            switchReturnSession.current = null;
+            return;
+        }
+        const frame = window.requestAnimationFrame(() => {
+            const card = document.querySelector<HTMLElement>('.login-card');
+            if (!card || card.contains(document.activeElement)) return;
+            card.querySelector<HTMLElement>('[data-focusable="true"]:not(:disabled)')?.focus();
+        });
+        return () => window.cancelAnimationFrame(frame);
+    }, [ session, localLogin, quickConnectSelected, ssoEnabled, quickConnectEnabled ]);
 
     useEffect(() => {
         setAdminAccessChecked(false);
@@ -268,21 +323,43 @@ function App() {
         return () => window.removeEventListener('hashchange', route);
     }, []);
 
+    const closeProfileMenu = useCallback(() => {
+        setProfileMenuOpen(false);
+        window.requestAnimationFrame(() => profileMenuRef.current?.querySelector<HTMLElement>('.profile-button')?.focus());
+    }, []);
+
     useEffect(() => {
         if (!profileMenuOpen) return;
         const onPointerDown = (event: MouseEvent) => {
             if (!profileMenuRef.current?.contains(event.target as Node)) setProfileMenuOpen(false);
         };
+        // A remote user arrows focus out onto the page behind the open menu.
+        // Close it as focus leaves, so it never lingers over content with no
+        // way back in. Focus on the toggle itself keeps it open.
+        const onFocusIn = (event: FocusEvent) => {
+            if (!profileMenuRef.current?.contains(event.target as Node)) setProfileMenuOpen(false);
+        };
         const onKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') setProfileMenuOpen(false);
+            // TV remotes report Back under several names and codes. Escape
+            // alone strands remotes whose Back key never reaches the page,
+            // and the open menu has no on-screen close path otherwise.
+            const back = event.key === 'Escape' || event.key === 'Backspace' || event.key === 'Back' || event.key === 'BrowserBack' || event.key === 'GoBack' || event.keyCode === 461 || event.keyCode === 10009;
+            if (!back) return;
+            if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) return;
+            if (document.querySelector('.profile-modal-backdrop, .mobile-nav-layer, .player-stage')) return;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            closeProfileMenu();
         };
         window.addEventListener('pointerdown', onPointerDown);
-        window.addEventListener('keydown', onKeyDown);
+        window.addEventListener('focusin', onFocusIn);
+        window.addEventListener('keydown', onKeyDown, true);
         return () => {
             window.removeEventListener('pointerdown', onPointerDown);
-            window.removeEventListener('keydown', onKeyDown);
+            window.removeEventListener('focusin', onFocusIn);
+            window.removeEventListener('keydown', onKeyDown, true);
         };
-    }, [ profileMenuOpen ]);
+    }, [ profileMenuOpen, closeProfileMenu ]);
 
     useEffect(() => {
         let active = true;
@@ -358,6 +435,209 @@ function App() {
         setIsMobileNavOpen(false);
         window.requestAnimationFrame(() => hamburgerRef.current?.focus());
     }, []);
+
+    useEffect(() => {
+        if (!searchExpanded || tvClient) return;
+        searchInputRef.current?.focus();
+    }, [ searchExpanded, tvClient ]);
+
+    useEffect(() => {
+        // Virtualized windows (home feed, library grid, episode feed) unmount
+        // the focused node when the window slides. The browser then parks
+        // focus on <body> and remote users lose their place with no feedback.
+        const onFocusIn = (event: FocusEvent) => {
+            const element = event.target as HTMLElement | null;
+            if (!element || element === document.body) return;
+            const rect = element.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) return;
+            lastFocusRect.current = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+        };
+        const onFocusOut = (event: FocusEvent) => {
+            const lost = event.target as HTMLElement | null;
+            if (!lost || lost === document.body) return;
+            // Overlays and menus manage their own focus. Recover only inside
+            // virtualized content (and the remounting hero copy) where
+            // unmounts happen under focus.
+            if (!lost.closest?.('.home-feed-blocks, .library-grid-items, .live-guide-canvas, .recommendation-hero')) return;
+            // Removal fires focusout while the node is still connected, then
+            // detaches it. Defer the check a frame: deliberate moves land
+            // somewhere synchronously, only a removal strands focus on body.
+            window.requestAnimationFrame(() => {
+                if (lost.isConnected) return;
+                if (document.activeElement && document.activeElement !== document.body) return;
+                const origin = lastFocusRect.current;
+                if (!origin) return;
+                const cx = origin.left + origin.width / 2;
+                const cy = origin.top + origin.height / 2;
+                let best: HTMLElement | null = null;
+                let bestScore = Number.POSITIVE_INFINITY;
+                for (const entry of collectFocusEntries(document)) {
+                    const dx = entry.left + entry.width / 2 - cx;
+                    const dy = entry.top + entry.height / 2 - cy;
+                    const score = Math.sqrt(dx * dx + dy * dy);
+                    if (score < bestScore) {
+                        bestScore = score;
+                        best = entry.element;
+                    }
+                }
+                if (best) {
+                    best.focus();
+                    best.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                }
+            });
+        };
+        document.addEventListener('focusin', onFocusIn);
+        document.addEventListener('focusout', onFocusOut);
+        return () => {
+            document.removeEventListener('focusin', onFocusIn);
+            document.removeEventListener('focusout', onFocusOut);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!tvClient) return;
+        let frame = 0;
+        let settleFrame = 0;
+        let observedFocus: HTMLElement | null = null;
+        const viewport = window.visualViewport;
+        const measure = (element: HTMLElement) => {
+            const rect = element.getBoundingClientRect();
+            const viewportTop = viewport?.offsetTop ?? 0;
+            const viewportBottom = viewportTop + (viewport?.height ?? window.innerHeight);
+            const left = viewport?.offsetLeft ?? 0;
+            const right = left + (viewport?.width ?? window.innerWidth);
+            const headerBottoms: number[] = [];
+            let targetHeaderTop: number | null = null;
+            for (const header of document.querySelectorAll<HTMLElement>('.topbar, .library-sticky, .season-mobile-rail, .season-section-header')) {
+                const headerRect = header.getBoundingClientRect();
+                if (!headerRect.width || !headerRect.height || headerRect.right <= rect.left || headerRect.left >= rect.right) continue;
+                const style = window.getComputedStyle(header);
+                const pinnedTop = Number.parseFloat(style.top);
+                if ((style.position !== 'sticky' && style.position !== 'fixed') || !Number.isFinite(pinnedTop)) continue;
+                if (headerRect.top > viewportTop + pinnedTop + 1 || headerRect.bottom <= viewportTop) continue;
+                if (header.contains(element)) targetHeaderTop = headerRect.top;
+                else headerBottoms.push(headerRect.bottom);
+            }
+            const top = Math.max(viewportTop, ...headerBottoms.filter(bottom => targetHeaderTop === null || bottom <= targetHeaderTop + 1));
+            let clipped = rect.left < left - 1 || rect.right > right + 1;
+            for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+                const style = window.getComputedStyle(parent);
+                const parentRect = parent.getBoundingClientRect();
+                const parentTop = parentRect.top + parent.clientTop;
+                const parentLeft = parentRect.left + parent.clientLeft;
+                const parentBottom = parentTop + parent.clientHeight;
+                const parentRight = parentLeft + parent.clientWidth;
+                if (/auto|scroll|hidden|clip/.test(style.overflowX)) {
+                    clipped ||= rect.width > parent.clientWidth
+                        ? rect.right < parentLeft - 1 || rect.left > parentRight + 1
+                        : rect.left < parentLeft - 1 || rect.right > parentRight + 1;
+                }
+                if (/auto|scroll|hidden|clip/.test(style.overflowY)) {
+                    clipped ||= rect.height > parent.clientHeight
+                        ? rect.bottom < parentTop - 1 || rect.top > parentBottom + 1
+                        : rect.top < parentTop - 1 || rect.bottom > parentBottom + 1;
+                }
+            }
+            // Pinned toolbar controls cannot move away from their own header or clear headers below it.
+            return { rect, top: top + (targetHeaderTop === null ? 16 : 0), bottom: viewportBottom - 16, clipped };
+        };
+        const keep = () => {
+            frame = 0;
+            if (lastModality.current !== 'keyboard') return;
+            if (document.querySelector('.profile-modal-backdrop, .mobile-nav-layer, .player-stage, .library-sheet-layer, [role="dialog"][aria-modal="true"]')) return;
+            const active = document.activeElement;
+            if (!(active instanceof HTMLElement) || active === document.body) return;
+            const element = active.closest<HTMLElement>('[data-focusable="true"]');
+            if (!element || element.closest('[role="menu"], [role="dialog"], .mobile-library-drawer, .player-drawer, .player-menu')) return;
+            let measured = measure(element);
+            if (!measured.rect.width || !measured.rect.height) return;
+            if (measured.clipped) {
+                for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+                    const style = window.getComputedStyle(parent);
+                    const rect = element.getBoundingClientRect();
+                    const parentRect = parent.getBoundingClientRect();
+                    const top = parentRect.top + parent.clientTop;
+                    const left = parentRect.left + parent.clientLeft;
+                    if (/auto|scroll|hidden/.test(style.overflowY)) {
+                        const delta = rect.height > parent.clientHeight || rect.top < top - 1
+                            ? rect.top - top
+                            : rect.bottom > top + parent.clientHeight + 1 ? rect.bottom - top - parent.clientHeight : 0;
+                        if (Math.abs(delta) > 1) parent.scrollTop += delta;
+                    }
+                    if (/auto|scroll|hidden/.test(style.overflowX)) {
+                        const delta = rect.width > parent.clientWidth || rect.left < left - 1
+                            ? rect.left - left
+                            : rect.right > left + parent.clientWidth + 1 ? rect.right - left - parent.clientWidth : 0;
+                        if (Math.abs(delta) > 1) parent.scrollLeft += delta;
+                    }
+                }
+                measured = measure(element);
+            }
+            const { rect, top, bottom } = measured;
+            const delta = rect.height > bottom - top || rect.top < top - 1
+                ? rect.top - top
+                : rect.bottom > bottom + 1 ? rect.bottom - bottom : 0;
+            if (Math.abs(delta) > 1) window.scrollBy(0, delta);
+        };
+        const schedule = () => {
+            if (lastModality.current !== 'keyboard' || settleFrame || frame) return;
+            // Allow capture handlers and next-frame navigation to finish first.
+            settleFrame = window.requestAnimationFrame(() => {
+                settleFrame = 0;
+                frame = window.requestAnimationFrame(keep);
+            });
+        };
+        const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
+        const onFocusIn = () => {
+            if (observedFocus) resize?.unobserve(observedFocus);
+            const active = document.activeElement;
+            observedFocus = active instanceof HTMLElement ? active.closest<HTMLElement>('[data-focusable="true"]') : null;
+            if (observedFocus) resize?.observe(observedFocus);
+            schedule();
+        };
+        const onKey = (event: KeyboardEvent) => {
+            lastModality.current = 'keyboard';
+            if (event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+                schedule();
+            }
+        };
+        const onPointer = () => {
+            lastModality.current = 'pointer';
+            if (settleFrame) window.cancelAnimationFrame(settleFrame);
+            if (frame) window.cancelAnimationFrame(frame);
+            settleFrame = frame = 0;
+        };
+        const mutations = new MutationObserver(schedule);
+        resize?.observe(document.body);
+        mutations.observe(document.body, { childList: true, subtree: true });
+        onFocusIn();
+        document.addEventListener('focusin', onFocusIn);
+        window.addEventListener('keydown', onKey, true);
+        window.addEventListener('pointerdown', onPointer, true);
+        window.addEventListener('mousedown', onPointer, true);
+        window.addEventListener('wheel', onPointer, { capture: true, passive: true });
+        window.addEventListener('touchstart', onPointer, { capture: true, passive: true });
+        window.addEventListener('scroll', schedule, { capture: true, passive: true });
+        window.addEventListener('resize', schedule);
+        viewport?.addEventListener('resize', schedule);
+        viewport?.addEventListener('scroll', schedule);
+        return () => {
+            document.removeEventListener('focusin', onFocusIn);
+            window.removeEventListener('keydown', onKey, true);
+            window.removeEventListener('pointerdown', onPointer, true);
+            window.removeEventListener('mousedown', onPointer, true);
+            window.removeEventListener('wheel', onPointer, true);
+            window.removeEventListener('touchstart', onPointer, true);
+            window.removeEventListener('scroll', schedule, true);
+            window.removeEventListener('resize', schedule);
+            viewport?.removeEventListener('resize', schedule);
+            viewport?.removeEventListener('scroll', schedule);
+            resize?.disconnect();
+            mutations.disconnect();
+            if (settleFrame) window.cancelAnimationFrame(settleFrame);
+            if (frame) window.cancelAnimationFrame(frame);
+        };
+    }, [ tvClient ]);
 
     const loadHome = useCallback(async () => {
         if (!api) return;
@@ -540,6 +820,15 @@ function App() {
     };
 
     const clearSignedInState = (showLogin = false) => {
+        showGeneration.current++;
+        episodeRequests.current = {};
+        detailRequest.current++;
+        playbackRequest.current++;
+        detailOrigin.current = null;
+        playbackOrigin.current = null;
+        setShowRestore(null);
+        setDetailRestore(null);
+        setContentRestore(null);
         clearShowQuery();
         clearLiveQuery();
         restoredLive.current = false;
@@ -611,10 +900,29 @@ function App() {
     };
 
     const signInAsAnotherUser = (usernameHint = '') => {
+        switchReturnSession.current = session;
         setProfileMenuOpen(false);
         setUsername(usernameHint);
         setPassword('');
-        clearSignedInState(true);
+        clearSignedInState(Boolean(usernameHint));
+        if (!usernameHint) {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('local');
+            window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+        }
+    };
+
+    const returnToUserSwitcher = () => {
+        const previous = switchReturnSession.current;
+        if (!previous) return;
+        setPassword('');
+        setError('');
+        setSession(previous);
+        setProfileScreen('accounts');
+        setView('profile');
+        const url = new URL(window.location.href);
+        url.searchParams.delete('local');
+        window.history.replaceState(null, '', url.pathname + url.search + url.hash);
     };
 
     const replaceLocation = (mutate: (params: URLSearchParams) => void) => {
@@ -661,7 +969,19 @@ function App() {
         });
     };
 
+    const invalidateShow = () => {
+        showGeneration.current++;
+        episodeRequests.current = {};
+        setShowRestore(null);
+    };
+
     const forgetShow = () => {
+        invalidateShow();
+        detailRequest.current++;
+        playbackRequest.current++;
+        detailOrigin.current = null;
+        playbackOrigin.current = null;
+        setSelected(null);
         clearShowQuery();
         setTvSeries(null);
         setShowSeasons([]);
@@ -672,12 +992,16 @@ function App() {
     };
 
     const goHome = () => {
+        searchReturn.current = false;
         forgetShow();
         clearLiveQuery();
         setView('home');
     };
 
     const openLive = (next: LiveTab = 'now', library?: MediaItem | null) => {
+        searchReturn.current = false;
+        invalidateShow();
+        detailRequest.current++;
         clearShowQuery();
         setTvSeries(null);
         setShowSeasons([]);
@@ -693,11 +1017,15 @@ function App() {
 
     const resetAndLoadLibrary = async (library: MediaItem) => {
         if (!api) return;
+        searchReturn.current = false;
         if (library.CollectionType?.toLowerCase() === 'livetv') {
             openLive('now', library);
             return;
         }
         clearLiveQuery();
+        invalidateShow();
+        detailRequest.current++;
+        setSelected(null);
         clearShowQuery();
         setActiveLibrary(library);
         setTvSeries(null);
@@ -714,6 +1042,9 @@ function App() {
     const openLibrary = resetAndLoadLibrary;
 
     const navigateLibraryUp = async () => {
+        invalidateShow();
+        detailRequest.current++;
+        setSelected(null);
         clearShowQuery();
         setTvSeries(null);
         setShowSeasons([]);
@@ -725,6 +1056,10 @@ function App() {
 
     const openSeries = async (series: MediaItem, requestedSeason?: string) => {
         if (!api) return;
+        invalidateShow();
+        const generation = showGeneration.current;
+        detailRequest.current++;
+        setSelected(null);
         showInUrl.current = true;
         restoredShowId.current = series.Id;
         setTvSeries(series);
@@ -740,7 +1075,9 @@ function App() {
         setError('');
         try {
             const response = await api.getSeasons(series.Id);
+            if (generation !== showGeneration.current) return;
             const seasons = (response.Items || []).slice().sort((a, b) => (a.IndexNumber ?? -1) - (b.IndexNumber ?? -1));
+            showSeasonsRef.current = seasons;
             setShowSeasons(seasons);
             if (!seasons.length) return;
             const seasonRequest = requestedSeason || queryParameter('season');
@@ -748,41 +1085,91 @@ function App() {
             const firstUnplayed = seasons.find(season => (season.UserData?.UnplayedItemCount || 0) > 0);
             const initialSeason = requested || seasons.find(season => season.IndexNumber === 1) || firstUnplayed || seasons[0];
             setActiveSeasonId(initialSeason.Id);
+            activeSeasonIdRef.current = initialSeason.Id;
             await loadSeasonWindow(series.Id, seasons, initialSeason.Id);
-            if (seasonRequest) window.requestAnimationFrame(() => scrollToSeason(initialSeason.Id, 'auto'));
+            if (generation === showGeneration.current && seasonRequest) window.requestAnimationFrame(() => {
+                if (generation === showGeneration.current) scrollToSeason(initialSeason.Id, 'auto');
+            });
         } catch (e) {
-            setError(messageOf(e));
+            if (generation === showGeneration.current) setError(messageOf(e));
         } finally {
-            setLoading(false);
+            if (generation === showGeneration.current) setLoading(false);
         }
     };
 
-    const loadSeasonEpisodes = useCallback(async (seriesId: string, seasonId: string) => {
-        if (!api || episodesBySeasonRef.current[seasonId] || episodeRequests.current[seasonId]) return;
-        episodeRequests.current[seasonId] = true;
+    const loadSeasonEpisodes = useCallback((seriesId: string, seasonId: string): Promise<MediaItem[]> => {
+        if (!api) return Promise.resolve([]);
+        const cached = episodesBySeasonRef.current[seasonId];
+        if (cached) return Promise.resolve(cached);
+        const existing = episodeRequests.current[seasonId];
+        if (existing) return existing;
+        const generation = showGeneration.current;
         setLoadingSeasons(current => ({ ...current, [seasonId]: true }));
-        try {
-            const episodes = await api.getAllSeasonEpisodes(seriesId, seasonId);
-            setEpisodesBySeason(current => ({ ...current, [seasonId]: episodes }));
-        } catch (e) {
-            setError(messageOf(e));
-        } finally {
-            delete episodeRequests.current[seasonId];
-            setLoadingSeasons(current => ({ ...current, [seasonId]: false }));
-        }
+        const request = api.getAllSeasonEpisodes(seriesId, seasonId).then(episodes => {
+            if (generation === showGeneration.current) setEpisodesBySeason(current => {
+                const seasons = showSeasonsRef.current;
+                const currentIndex = seasons.findIndex(season => season.Id === activeSeasonIdRef.current);
+                const requestedIndex = seasons.findIndex(season => season.Id === seasonId);
+                return currentIndex >= 0 && Math.abs(currentIndex - requestedIndex) <= 1
+                    ? { ...current, [seasonId]: episodes } : current;
+            });
+            return episodes;
+        }).catch(error => {
+            if (generation === showGeneration.current) setError(messageOf(error));
+            throw error;
+        }).finally(() => {
+            if (episodeRequests.current[seasonId] === request) {
+                delete episodeRequests.current[seasonId];
+                setLoadingSeasons(current => ({ ...current, [seasonId]: false }));
+            }
+        });
+        episodeRequests.current[seasonId] = request;
+        return request;
     }, [ api ]);
 
     const loadSeasonWindow = useCallback(async (seriesId: string, seasons: MediaItem[], seasonId: string) => {
         const index = seasons.findIndex(season => season.Id === seasonId);
         const nearby = seasons.slice(Math.max(0, index - 1), index + 2);
-        await Promise.all(nearby.map(season => loadSeasonEpisodes(seriesId, season.Id)));
+        await Promise.all(nearby.map(season => loadSeasonEpisodes(seriesId, season.Id).catch(() => [])));
     }, [ loadSeasonEpisodes ]);
+
+    const trimShowSeason = (seasonId: string, seasons: MediaItem[]) => {
+        const index = seasons.findIndex(season => season.Id === seasonId);
+        if (index < 0) return;
+        const keep = new Set(seasons.slice(Math.max(0, index - 1), index + 2).map(season => season.Id));
+        const outgoingHeights: Record<string, number> = {};
+        seasons.forEach(season => {
+            const section = seasonNodes.current[season.Id];
+            if (!keep.has(season.Id) && section && episodesBySeasonRef.current[season.Id]) {
+                const height = Math.ceil(section.getBoundingClientRect().height);
+                if (height > 0) outgoingHeights[season.Id] = height;
+            }
+        });
+        if (Object.keys(outgoingHeights).length) setSeasonSpacerHeights(current => mergeMeasuredHeights(current, outgoingHeights));
+        setEpisodesBySeason(current => {
+            if (Object.keys(current).every(id => keep.has(id))) return current;
+            const next = { ...current };
+            Object.keys(next).forEach(id => { if (!keep.has(id)) delete next[id]; });
+            return next;
+        });
+    };
+
+    const activateShowSeason = (seasonId: string) => {
+        if (!tvSeries || !showSeasons.some(season => season.Id === seasonId) || activeSeasonIdRef.current === seasonId) return;
+        activeSeasonIdRef.current = seasonId;
+        setActiveSeasonId(seasonId);
+        trimShowSeason(seasonId, showSeasons);
+        if (urlUpdateTimer.current) window.clearTimeout(urlUpdateTimer.current);
+        const season = showSeasons.find(item => item.Id === seasonId);
+        rememberShowQuery(tvSeries.Id, season?.IndexNumber !== undefined ? String(season.IndexNumber) : seasonId);
+    };
 
     const scrollToSeason = useCallback((seasonId: string, behavior: ScrollBehavior = 'smooth') => {
         const section = seasonNodes.current[seasonId];
         if (!section) return;
         programmaticScroll.current = true;
         if (programmaticScrollTimer.current) window.clearTimeout(programmaticScrollTimer.current);
+        activeSeasonIdRef.current = seasonId;
         setActiveSeasonId(seasonId);
         const season = showSeasons.find(item => item.Id === seasonId);
         if (season && tvSeries) rememberShowQuery(tvSeries.Id, season.IndexNumber !== undefined ? String(season.IndexNumber) : season.Id);
@@ -791,74 +1178,78 @@ function App() {
         } catch (_error) {
             section.scrollIntoView();
         }
-        programmaticScrollTimer.current = window.setTimeout(() => { programmaticScroll.current = false; }, behavior === 'smooth' ? 1000 : 100);
+        programmaticScrollTimer.current = window.setTimeout(() => {
+            programmaticScroll.current = false;
+            scrollSeasonSync.current();
+        }, behavior === 'smooth' ? 1000 : 100);
     }, [ showSeasons, tvSeries ]);
 
-    const scrollToSeasonAndLoad = async (seasonId: string) => {
+    const scrollToSeasonAndLoad = async (seasonId: string, signal?: AbortSignal) => {
         if (!tvSeries) return;
         const loading = loadSeasonWindow(tvSeries.Id, showSeasons, seasonId);
-        await window.requestAnimationFrame(() => undefined);
-        scrollToSeason(seasonId);
-        void loading;
+        if (signal?.aborted) return;
+        scrollToSeason(seasonId, tvClient ? 'auto' : 'smooth');
+        await loading;
     };
 
     const loadedSeasonKey = showSeasons.map(season => episodesBySeason[season.Id] ? season.Id : '').join('|');
 
     useEffect(() => {
-        if (!tvSeries || !showSeasons.length) return;
+        if (!tvSeries || !showSeasons.length || loading || view !== 'show') return;
         const seasons = showSeasons;
         const series = tvSeries;
-        const observer = new IntersectionObserver(entries => {
-            if (programmaticScroll.current) return;
-            const visible = entries.filter(entry => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
-            const seasonId = visible?.target.getAttribute('data-season-id');
-            if (!seasonId || seasonId === activeSeasonIdRef.current) return;
+        let frame = 0;
+        const syncSeason = () => {
+            frame = 0;
+            const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            const focused = active?.closest<HTMLElement>('.episode-card[data-season-id]');
+            const focusRect = focused?.getBoundingClientRect();
+            const focusSeason = lastModality.current === 'keyboard' && focusRect && focusRect.bottom > 120 && focusRect.top < window.innerHeight
+                ? focused?.dataset.seasonId : undefined;
+            const anchor = 120 + (window.innerHeight - 120) * .18;
+            const visible = seasons.map(season => ({ id: season.Id, rect: seasonNodes.current[season.Id]?.getBoundingClientRect() }))
+                .filter(entry => entry.rect && entry.rect.height > 0);
+            const sampled = visible.find(entry => entry.rect!.top <= anchor && entry.rect!.bottom > anchor)
+                || visible.reduce<typeof visible[number] | undefined>((best, entry) =>
+                    !best || Math.abs(entry.rect!.top - anchor) < Math.abs(best.rect!.top - anchor) ? entry : best, undefined);
+            const seasonId = programmaticScroll.current ? activeSeasonIdRef.current : focusSeason || sampled?.id;
+            if (!seasonId) return;
+            const changed = seasonId !== activeSeasonIdRef.current;
             const currentIndex = seasons.findIndex(season => season.Id === seasonId);
-            if (currentIndex >= 0) {
-                if (currentIndex > 0) void loadSeasonEpisodes(series.Id, seasons[currentIndex - 1].Id);
-                void loadSeasonEpisodes(series.Id, seasonId);
-                if (currentIndex < seasons.length - 1) void loadSeasonEpisodes(series.Id, seasons[currentIndex + 1].Id);
+            if (currentIndex < 0) return;
+            if (changed) {
+                if (currentIndex > 0) void loadSeasonEpisodes(series.Id, seasons[currentIndex - 1].Id).catch(() => undefined);
+                void loadSeasonEpisodes(series.Id, seasonId).catch(() => undefined);
+                if (currentIndex < seasons.length - 1) void loadSeasonEpisodes(series.Id, seasons[currentIndex + 1].Id).catch(() => undefined);
+                activeSeasonIdRef.current = seasonId;
+                setActiveSeasonId(seasonId);
             }
-            setActiveSeasonId(seasonId);
-            const keep = new Set(seasons.slice(Math.max(0, currentIndex - 1), currentIndex + 2).map(season => season.Id));
-            const outgoingHeights: Record<string, number> = {};
-            const loaded = episodesBySeasonRef.current;
-            seasons.forEach(season => {
-                const section = seasonNodes.current[season.Id];
-                if (!keep.has(season.Id) && section && loaded[season.Id]) {
-                    const height = Math.ceil(section.getBoundingClientRect().height);
-                    if (height > 0) outgoingHeights[season.Id] = height;
-                }
-            });
-            if (Object.keys(outgoingHeights).length) setSeasonSpacerHeights(current => mergeMeasuredHeights(current, outgoingHeights));
-            setEpisodesBySeason(current => {
-                const ids = Object.keys(current);
-                if (ids.length === keep.size && ids.every(id => keep.has(id))) return current;
-                const next = { ...current };
-                ids.forEach(id => { if (!keep.has(id)) delete next[id]; });
-                return next;
-            });
+            trimShowSeason(seasonId, seasons);
+            if (!changed) return;
             if (urlUpdateTimer.current) window.clearTimeout(urlUpdateTimer.current);
             urlUpdateTimer.current = window.setTimeout(() => {
                 urlUpdateTimer.current = undefined;
                 const season = seasons.find(item => item.Id === seasonId);
-                if (!season || !showInUrl.current) return;
+                if (!season || !showInUrl.current || activeSeasonIdRef.current !== seasonId) return;
                 rememberShowQuery(series.Id, season.IndexNumber !== undefined ? String(season.IndexNumber) : season.Id);
             }, 200);
-        }, { root: null, rootMargin: '-20% 0px -70% 0px', threshold: 0 });
-
-        seasons.forEach(season => {
-            const node = seasonNodes.current[season.Id];
-            if (node) observer.observe(node);
-        });
+        };
+        const schedule = () => { if (!frame) frame = window.requestAnimationFrame(syncSeason); };
+        scrollSeasonSync.current = schedule;
+        window.addEventListener('scroll', schedule, { passive: true });
+        window.addEventListener('resize', schedule);
+        schedule();
         return () => {
-            observer.disconnect();
+            window.removeEventListener('scroll', schedule);
+            window.removeEventListener('resize', schedule);
+            if (frame) window.cancelAnimationFrame(frame);
+            if (scrollSeasonSync.current === schedule) scrollSeasonSync.current = () => undefined;
             if (urlUpdateTimer.current) {
                 window.clearTimeout(urlUpdateTimer.current);
                 urlUpdateTimer.current = undefined;
             }
         };
-    }, [ tvSeries, showSeasons, loadSeasonEpisodes, loadedSeasonKey ]);
+    }, [ tvSeries, showSeasons, loadSeasonEpisodes, loadedSeasonKey, loading, view ]);
 
     useEffect(() => {
         if (!tvSeries || !showSeasons.length) return;
@@ -948,7 +1339,52 @@ function App() {
         openLive(live);
     }, [ api ]);
 
-    const openItem = async (item: MediaItem) => {
+    const contentOrigin = (): ContentOrigin => {
+        if (view === 'search') return { kind: 'search', scrollY: window.scrollY };
+        if (view === 'library') return { kind: 'library', scrollY: window.scrollY };
+        if (view === 'live') return { kind: 'live', scrollY: window.scrollY };
+        return { kind: 'home', scrollY: window.scrollY };
+    };
+
+    const returnToContent = (origin: ContentOrigin) => {
+        detailRequest.current++;
+        setSelected(null);
+        if (origin.kind === 'show') {
+            setShowRestore({ ...origin.bookmark });
+            setView('show');
+            return;
+        }
+        if (origin.kind === 'search') searchReturn.current = false;
+        setContentRestore(origin);
+        setView(origin.kind);
+    };
+
+    const returnFromDetails = () => {
+        const origin = detailOrigin.current || contentOrigin();
+        returnToContent(origin);
+        detailOrigin.current = null;
+    };
+
+    useLayoutEffect(() => {
+        if (!detailRestore || view !== 'details' || selected?.Id !== detailRestore.itemId) return;
+        const frame = window.requestAnimationFrame(() => {
+            window.scrollTo(0, detailRestore.scrollY);
+            document.querySelector<HTMLElement>('.detail-actions .button.primary')?.focus({ preventScroll: true });
+            setDetailRestore(null);
+        });
+        return () => window.cancelAnimationFrame(frame);
+    }, [ detailRestore, view, selected?.Id ]);
+
+    useLayoutEffect(() => {
+        if (!contentRestore || contentRestore.kind !== view) return;
+        const frame = window.requestAnimationFrame(() => {
+            window.scrollTo(0, contentRestore.scrollY);
+            setContentRestore(null);
+        });
+        return () => window.cancelAnimationFrame(frame);
+    }, [ contentRestore, view ]);
+
+    const openItem = async (item: MediaItem, origin?: ContentOrigin) => {
         if (!api) return;
         if (item.Type === 'Series') {
             await openSeries(item);
@@ -965,27 +1401,36 @@ function App() {
             await openLibrary(item);
             return;
         }
-        if (tvSeries && item.Type === 'Episode') {
-            const currentSeason = showSeasons.find(season => season.Id === activeSeasonId);
+        const parent = origin || contentOrigin();
+        if (tvSeries && item.Type === 'Episode' && parent.kind === 'show') {
+            const targetId = parent.bookmark.target;
+            const seasonId = targetId.kind === 'episode' ? targetId.seasonId : activeSeasonId;
+            const currentSeason = showSeasons.find(season => season.Id === seasonId);
             rememberShowQuery(tvSeries.Id, currentSeason ? (currentSeason.IndexNumber !== undefined ? String(currentSeason.IndexNumber) : currentSeason.Id) : undefined);
         }
+        const request = ++detailRequest.current;
+        detailOrigin.current = parent;
         setSelected(item);
         setView('details');
         try {
             const full = await api.getItem(item.Id);
-            setSelected(full);
+            if (request === detailRequest.current && renderedView.current === 'details') setSelected(full);
         } catch (_error) { /* The list item remains usable if details are unavailable. */ }
     };
 
-    const runSearch = async () => {
-        if (!api || !search.trim()) return;
+    const runSearch = async (query?: string) => {
+        const term = (query ?? search).trim();
+        if (!api || !term) return;
+        setSearch(term);
+        setSearchDraft(term);
+        setSearchExpanded(false);
         forgetShow();
         clearLiveQuery();
         setView('search');
         setLoading(true);
         setError('');
         try {
-            const response = await api.getItems('', 0, search.trim());
+            const response = await api.getItems('', 0, term);
             setItems(response.Items || []);
         } catch (e) {
             setError(messageOf(e));
@@ -994,26 +1439,60 @@ function App() {
         }
     };
 
-    const play = async (item: MediaItem, origin?: 'live') => {
+    useEffect(() => {
+        // TV search page queries live as the draft changes. Stale responses
+        // lose by request id; the timer debounces remote key repeats.
+        if (!tvClient || !api) return;
+        const term = searchDraft.trim();
+        if (term.length < 2) {
+            searchReq.current++;
+            setItems(current => current.length ? [] : current);
+            setLoading(false);
+            return;
+        }
+        const id = ++searchReq.current;
+        setLoading(true);
+        const timer = window.setTimeout(() => {
+            void api.getItems('', 0, term).then(response => {
+                if (id !== searchReq.current) return;
+                setItems(response.Items || []);
+                setSearch(term);
+                setLoading(false);
+            }).catch(e => {
+                if (id !== searchReq.current) return;
+                setError(messageOf(e));
+                setLoading(false);
+            });
+        }, 300);
+        return () => window.clearTimeout(timer);
+    }, [ searchDraft, api, tvClient ]);
+
+    const play = async (item: MediaItem, origin?: PlaybackOrigin) => {
         if (!api) return;
+        const returnOrigin: PlaybackOrigin = origin || (view === 'details' && selected
+            ? { kind: 'details', item: selected, parent: detailOrigin.current || contentOrigin(), scrollY: window.scrollY }
+            : contentOrigin());
+        const request = ++playbackRequest.current;
+        detailRequest.current++;
         setLoading(true);
         setError('');
-        playerOrigin.current = null;
         try {
             let playbackItem = item;
             if ((item.Type === 'Episode' || item.SeriesId) && !item.SeriesName) {
                 try { playbackItem = { ...item, ...(await api.getItem(item.Id)) }; } catch (_error) { playbackItem = item; }
             }
+            if (request !== playbackRequest.current) return;
             const result = await api.play(playbackItem);
+            if (request !== playbackRequest.current) return;
             setPlayerItem(playbackItem);
             setPlayback(result);
             setPlayerUrl(result.url);
-            playerOrigin.current = origin || null;
+            playbackOrigin.current = returnOrigin;
             setView('player');
         } catch (e) {
-            setError(messageOf(e));
+            if (request === playbackRequest.current) setError(messageOf(e));
         } finally {
-            setLoading(false);
+            if (request === playbackRequest.current) setLoading(false);
         }
     };
     openItemRef.current = openItem;
@@ -1021,6 +1500,28 @@ function App() {
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
+            if (!session) {
+                const back = event.key === 'Escape' || event.key === 'Back' || event.key === 'BrowserBack' || event.key === 'GoBack' || event.keyCode === 461 || event.keyCode === 10009;
+                if (back) {
+                    event.preventDefault();
+                    if (localLogin || quickConnectSelected) showSignInOptions();
+                    else returnToUserSwitcher();
+                    return;
+                }
+                const vertical = event.key === 'ArrowUp' || event.key === 'ArrowDown';
+                const horizontal = event.key === 'ArrowLeft' || event.key === 'ArrowRight';
+                const editing = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
+                if (!vertical && (!horizontal || editing)) return;
+                const card = document.querySelector<HTMLElement>('.login-card');
+                if (!card) return;
+                const controls = Array.from(card.querySelectorAll<HTMLElement>('[data-focusable="true"]:not(:disabled)'));
+                const index = controls.indexOf(document.activeElement as HTMLElement);
+                const next = index < 0 ? 0 : index + (event.key === 'ArrowUp' || event.key === 'ArrowLeft' ? -1 : 1);
+                controls[next]?.focus();
+                controls[next]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                event.preventDefault();
+                return;
+            }
             if ((event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) && (event.key === 'Backspace' || event.key === 'Delete')) return;
             if (event.key === 'Escape' || event.key === 'Backspace' || event.key === 'Back' || event.key === 'BrowserBack' || event.key === 'GoBack' || event.keyCode === 461 || event.keyCode === 10009) {
                 if (isMobileNavOpen) {
@@ -1028,15 +1529,28 @@ function App() {
                     closeMobileNav();
                     return;
                 }
+                if (view === 'profile') {
+                    event.preventDefault();
+                    setView(profileReturnView.current);
+                    return;
+                }
                 if (view === 'player') return;
                 if (view === 'details') {
-                    if (tvSeries) setView('show');
-                    else {
-                        clearShowQuery();
-                        setView(activeLibrary ? 'library' : 'home');
-                    }
+                    event.preventDefault();
+                    returnFromDetails();
+                    return;
+                }
+                if (searchReturn.current) {
+                    event.preventDefault();
+                    searchReturn.current = false;
+                    clearShowQuery();
+                    setView('search');
                 } else if (view === 'show') {
-                    void navigateLibraryUp();
+                    if (searchReturn.current) {
+                        searchReturn.current = false;
+                        clearShowQuery();
+                        setView('search');
+                    } else void navigateLibraryUp();
                 } else if (view === 'live') {
                     goHome();
                 } else if (view === 'library' || view === 'search') {
@@ -1069,29 +1583,41 @@ function App() {
                 }
                 return;
             }
-            if (!isTvClient() || event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+            if ((!isTvClient() && !(view === 'profile' && profileScreen === 'accounts')) || event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+            if (view === 'show' && event.key === 'ArrowDown' && event.target instanceof HTMLElement && event.target.closest('.topbar')) {
+                document.querySelector<HTMLElement>('.show-detail-view [data-show-control="back"]')?.focus();
+                event.preventDefault();
+                return;
+            }
             if (view === 'home' && recommendations.length > 1 && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
                 const target = event.target as HTMLElement;
                 if (target.closest('.recommendation-hero')) {
+                    // The copy (title, button) remounts per item, so stepping
+                    // from inside it destroys the focused button. Land on its
+                    // replacement to keep focus in the reel.
+                    const inEphemeral = target.closest('.recommendation-copy');
                     stepRecommendation(event.key === 'ArrowLeft' ? -1 : 1);
                     event.preventDefault();
+                    if (inEphemeral) {
+                        window.requestAnimationFrame(() => {
+                            document.querySelector<HTMLElement>('.recommendation-copy .button')?.focus();
+                        });
+                    }
                     return;
                 }
             }
-            if (view === 'show' && tvSeries && event.target instanceof HTMLElement) {
-                const seasonNav = event.target.closest<HTMLElement>('[data-season-nav]');
-                const inSidebar = Boolean(seasonNav?.closest('.season-sidebar'));
-                const inRail = Boolean(seasonNav?.closest('.season-mobile-rail'));
-                const movingSeason = (inSidebar && (event.key === 'ArrowUp' || event.key === 'ArrowDown'))
-                    || (inRail && (event.key === 'ArrowLeft' || event.key === 'ArrowRight'));
-                if (seasonNav && movingSeason) {
-                    const index = showSeasons.findIndex(season => season.Id === seasonNav.getAttribute('data-season-nav'));
-                    const next = index + (event.key === 'ArrowDown' || event.key === 'ArrowRight' ? 1 : -1);
-                    if (index >= 0 && next >= 0 && next < showSeasons.length) {
-                        void scrollToSeasonAndLoad(showSeasons[next].Id);
-                        event.preventDefault();
-                        return;
-                    }
+            if (view === 'home' && event.key === 'ArrowUp' && event.target instanceof HTMLElement) {
+                // The bottom chrome sits low and right, so raw geometry jumps
+                // from here to the profile button and strands the hero half
+                // visible with nowhere useful to go. Keep upward travel
+                // inside the hero by stepping to its primary action first.
+                const controls = event.target.closest<HTMLElement>('.recommendation-controls');
+                const primary = controls?.closest<HTMLElement>('.recommendation-hero')?.querySelector<HTMLElement>('.recommendation-copy .button');
+                if (controls && primary) {
+                    primary.focus();
+                    primary.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                    event.preventDefault();
+                    return;
                 }
             }
             const directions: Record<string, [number, number]> = {
@@ -1100,12 +1626,35 @@ function App() {
             const direction = directions[event.key];
             if (!direction) return;
             const current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            if (isMobileNavOpen && tvClient && mobileNavRef.current) {
+                const entries = collectFocusEntries(mobileNavRef.current);
+                const target = current ? focusTarget(entries, current, direction).element : null;
+                if (target) target.focus();
+                else if (!current || !mobileNavRef.current.contains(current)) entries[0]?.element.focus();
+                event.preventDefault();
+                return;
+            }
+            if (view === 'profile' && profileScreen === 'accounts') {
+                const picker = document.querySelector<HTMLElement>('.account-picker');
+                if (picker) {
+                    const entries = collectFocusEntries(picker);
+                    const result = current ? focusTarget(entries, current, direction) : null;
+                    if (result?.element) {
+                        result.element.focus();
+                        result.element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                    } else if (!result?.known) {
+                        picker.querySelector<HTMLElement>('.remembered-user')?.focus();
+                    }
+                    event.preventDefault();
+                    return;
+                }
+            }
             if (!current) {
                 focusEntries()[0]?.element.focus();
                 event.preventDefault();
                 return;
             }
-            const scopes = [ '.episode-list', '.virtualized-poster-grid', '.library-toolbar', '.alpha-scrubber', '.library-grid-items', '.media-row', '.season-sidebar', '.season-mobile-rail', '.primary-nav', '.mobile-library-drawer', '.recommendation-controls', '.episode-feed', '.live-tabs' ];
+            const scopes = [ '.episode-list', '.virtualized-poster-grid', '.library-toolbar', '.alpha-scrubber', '.library-grid-items', '.media-row', '.season-sidebar', '.season-mobile-rail', '.primary-nav', '.mobile-library-drawer', '.recommendation-controls', '.episode-feed', '.live-tabs', '.topbar', '.tv-search-keyboard', '.tv-search-panel', '.tv-search-results' ];
             for (let index = 0; index < scopes.length; index++) {
                 const scope = current.closest<HTMLElement>(scopes[index]);
                 if (!scope) continue;
@@ -1126,11 +1675,18 @@ function App() {
             if (result.element) {
                 result.element.focus();
                 event.preventDefault();
+            } else if (current) {
+                // True content edge: nothing lies in this direction. Layout
+                // shifts can leave the focused control off-screen with no
+                // further moves coming, so keep the focus ring visible.
+                // 'nearest' is a no-op when already visible.
+                current.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                event.preventDefault();
             }
         };
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, [ view, selected, activeLibrary, isMobileNavOpen, closeMobileNav, recommendations.length, stepRecommendation, tvSeries, showSeasons ]);
+    }, [ session, localLogin, quickConnectSelected, view, profileScreen, selected, activeLibrary, isMobileNavOpen, closeMobileNav, recommendations.length, stepRecommendation, tvSeries, showSeasons ]);
 
     if (!session) {
         if (!localLogin && (ssoEnabled === null || quickConnectEnabled === null)) {
@@ -1138,43 +1694,58 @@ function App() {
         }
         if (!localLogin && quickConnectSelected && quickConnectEnabled) {
             return <main class="login-page">
-                <section class="login-card" aria-labelledby="login-title">
-                    <div class="brand-mark">J</div><p class="eyebrow">QUICK CONNECT</p><h1 id="login-title">Connect your device.</h1>
-                    <p class="muted">On a signed-in Jellyfin device, open Quick Connect and enter this code.</p>
-                    {quickConnectCode ? <div class="quick-connect-code" aria-live="polite">{quickConnectCode}</div> : <p class="quick-connect-wait">{quickConnectBusy ? 'Requesting a code…' : 'Waiting for Quick Connect…'}</p>}
-                    {quickConnectError && <p class="notice error" role="alert">{quickConnectError}</p>}
-                    <p class="security-note">This code expires automatically. Approve it only on a device you trust.</p>
-                    {!tvClient && <button data-focusable="true" class="local-login-toggle" type="button" onClick={showSignInOptions}>Back to sign-in options</button>}
-                    {tvClient && <button data-focusable="true" class="local-login-toggle" type="button" onClick={useLocalLogin}>Use username and password</button>}
+                <section class="login-card login-layout" aria-labelledby="login-title">
+                    <div class="login-intro">
+                        <div class="login-brand"><span class="brand-mark">J</span><span>Jellyfin</span></div>
+                        <p class="eyebrow">QUICK CONNECT</p><h1 id="login-title">Your next watch<br />starts here.</h1>
+                        <p class="login-description">Sign in with your phone or computer. No typing on your TV.</p>
+                        <ol class="login-steps"><li>Open Jellyfin on a signed-in device.</li><li>Open your profile menu and choose Quick Connect.</li><li>Enter the code shown here to approve this device.</li></ol>
+                    </div>
+                    <div class="login-panel">
+                        <h2>Connect this device</h2><p class="muted">Enter this code on your signed-in device.</p>
+                        {quickConnectCode ? <div class="quick-connect-code" aria-live="polite">{quickConnectCode}</div> : <p class="quick-connect-wait">{quickConnectBusy ? 'Requesting a code…' : 'Waiting for Quick Connect…'}</p>}
+                        {quickConnectError && <p class="notice error" role="alert">{quickConnectError}</p>}
+                        <p class="security-note">This code expires automatically. Approve it only on a device you trust.</p>
+                        {!tvClient && <button data-focusable="true" class="local-login-toggle" type="button" onClick={showSignInOptions}>Back to sign-in options</button>}
+                        {tvClient && <button data-focusable="true" class="button secondary full login-choice" type="button" onClick={useLocalLogin}>Username and password<span class="login-choice-detail">Sign in with your Jellyfin account</span></button>}
+                        {switchReturnSession.current && <button data-focusable="true" class="local-login-toggle" type="button" onClick={returnToUserSwitcher}>Choose a profile</button>}
+                    </div>
                 </section>
             </main>;
         }
         return <main class="login-page">
-            <section class="login-card" aria-labelledby="login-title">
-                <div class="brand-mark">J</div>
-                <p class="eyebrow">YOUR MEDIA, YOUR WAY</p>
-                <h1 id="login-title">Welcome back.</h1>
-                <p class="muted">Connect to your Jellyfin server to continue.</p>
-                {localLogin && ssoEnabled && <p class="notice storage-warning" role="status">Local sign-in bypass is active for this page.</p>}
-                {ssoCheckFailed && <p class="notice error" role="status">Could not check whether SSO is enabled on this server. For a different-origin backend, allow this UI’s origin in Jellyfin CORS settings, then reload.</p>}
-                {error && <p class="notice error" role="alert">{error}</p>}
-                {!localLogin && !quickConnectSelected && <>
-                    {!tvClient && ssoEnabled && <button data-focusable="true" class="button secondary full" type="button" onClick={() => void JellyfinApi.beginSso(server)}>Continue with SSO</button>}
-                    <button data-focusable="true" class="button primary full" type="button" onClick={useQuickConnect}>Continue with Quick Access</button>
-                    {!quickConnectEnabled && <p class="security-note">Quick Connect is not enabled on this Jellyfin server.</p>}
-                    <button data-focusable="true" class="local-login-toggle" type="button" onClick={useLocalLogin}>Use username and password</button>
-                </>}
-                {quickConnectSelected && !quickConnectEnabled && <>
-                    <p class="notice error" role="status">Quick Connect is not enabled on this Jellyfin server.</p>
-                    <button data-focusable="true" class="button secondary full" type="button" onClick={tvClient ? useLocalLogin : showSignInOptions}>{tvClient ? 'Use username and password' : 'Back to sign-in options'}</button>
-                </>}
-                {localLogin && <form onSubmit={login}>
-                    {!configuredServer && <label>Server address<input data-focusable="true" type="url" value={server} onInput={e => setServer((e.target as HTMLInputElement).value)} placeholder="https://jellyfin.example.com" required autocomplete="url" /></label>}
-                    <label>Username<input data-focusable="true" value={username} onInput={e => setUsername((e.target as HTMLInputElement).value)} required autocomplete="username" /></label>
-                    <label>Password<input data-focusable="true" type="password" value={password} onInput={e => setPassword((e.target as HTMLInputElement).value)} required autocomplete="current-password" /></label>
-                    <button data-focusable="true" class="button primary full" type="submit" disabled={busy}>{busy ? 'Connecting…' : 'Sign in'}</button>
-                </form>}
-                {localLogin && <button data-focusable="true" class="local-login-toggle" type="button" onClick={showSignInOptions}>Back to sign-in options</button>}
+            <section class="login-card login-layout" aria-labelledby="login-title">
+                <div class="login-intro">
+                    <div class="login-brand"><span class="brand-mark">J</span><span>Jellyfin</span></div>
+                    <p class="eyebrow">YOUR MEDIA, YOUR WAY</p>
+                    <h1 id="login-title">Make yourself<br />at home.</h1>
+                    <p class="login-description">Your movies, shows, and live TV.<br />Sign in and pick up where you left off.</p>
+                    <p class="login-remote-hint">Use ↑ ↓ to move · Select to continue</p>
+                </div>
+                <div class="login-panel">
+                    <h2>{localLogin ? 'Sign in with your account' : 'Choose how to sign in'}</h2>
+                    <p class="muted">{localLogin ? 'Enter your Jellyfin username and password.' : 'Quick Connect lets you sign in from another device.'}</p>
+                    {ssoCheckFailed && <p class="notice error" role="status">Sign-in options could not be checked. Try reloading or sign in with your username and password.</p>}
+                    {error && <p class="notice error" role="alert">{error}</p>}
+                    {!localLogin && !quickConnectSelected && <>
+                        {!tvClient && ssoEnabled && <button data-focusable="true" class="button secondary full" type="button" onClick={() => void JellyfinApi.beginSso(server)}>Continue with SSO</button>}
+                        <button data-focusable="true" class="button primary full login-choice" type="button" disabled={!quickConnectEnabled} onClick={useQuickConnect}>Quick Connect<span class="login-choice-detail">Use your phone or computer</span></button>
+                        {!quickConnectEnabled && <p class="security-note">Quick Connect is not enabled on this Jellyfin server.</p>}
+                        <button data-focusable="true" class="button secondary full login-choice" type="button" onClick={useLocalLogin}>Username and password<span class="login-choice-detail">Sign in with your Jellyfin account</span></button>
+                    </>}
+                    {quickConnectSelected && !quickConnectEnabled && <>
+                        <p class="notice error" role="status">Quick Connect is not enabled on this Jellyfin server.</p>
+                        <button data-focusable="true" class="button secondary full" type="button" onClick={tvClient ? useLocalLogin : showSignInOptions}>{tvClient ? 'Use username and password' : 'Back to sign-in options'}</button>
+                    </>}
+                    {localLogin && <form onSubmit={login}>
+                        {!configuredServer && <label>Server address<input data-focusable="true" type="url" value={server} onInput={e => setServer((e.target as HTMLInputElement).value)} placeholder="https://jellyfin.example.com" required autocomplete="url" /></label>}
+                        <label>Username<input data-focusable="true" value={username} onInput={e => setUsername((e.target as HTMLInputElement).value)} required autocomplete="username" /></label>
+                        <label>Password<input data-focusable="true" type="password" value={password} onInput={e => setPassword((e.target as HTMLInputElement).value)} required autocomplete="current-password" /></label>
+                        <button data-focusable="true" class="button primary full" type="submit" disabled={busy}>{busy ? 'Connecting…' : 'Sign in'}</button>
+                    </form>}
+                    {localLogin && <button data-focusable="true" class="local-login-toggle" type="button" onClick={showSignInOptions}>Back to sign-in options</button>}
+                    {switchReturnSession.current && <button data-focusable="true" class="local-login-toggle" type="button" onClick={returnToUserSwitcher}>Choose a profile</button>}
+                </div>
             </section>
         </main>;
     }
@@ -1197,17 +1768,20 @@ function App() {
     };
 
     const leavePlayer = () => {
+        playbackRequest.current++;
+        const origin = playbackOrigin.current;
+        playbackOrigin.current = null;
         setPlayerUrl('');
         setPlayerItem(null);
         setPlayback(null);
-        if (playerOrigin.current === 'live') {
-            playerOrigin.current = null;
-            setView('live');
+        if (origin?.kind === 'details') {
+            detailOrigin.current = origin.parent;
+            setSelected(origin.item);
+            setDetailRestore({ itemId: origin.item.Id, scrollY: origin.scrollY });
+            setView('details');
             return;
         }
-        if (selected) setView('details');
-        else if (tvSeries) setView('show');
-        else goHome();
+        returnToContent(origin || { kind: 'home', scrollY: 0 });
     };
 
     if (view === 'admin') {
@@ -1218,7 +1792,7 @@ function App() {
 
     return <>
     <div class="app-shell" aria-hidden={view === 'player'}>
-        <header class="topbar">
+        {!(view === 'profile' && profileScreen === 'accounts') && <header class="topbar">
             <a class="brand" href="#home" onClick={e => { e.preventDefault(); goHome(); }} aria-label="Jellyfin home"><span class="brand-mark small">J</span><span>Jellyfin</span></a>
             <button
                 ref={hamburgerRef}
@@ -1239,9 +1813,27 @@ function App() {
                     return <button data-focusable="true" class={isActive ? 'nav-link active' : 'nav-link'} key={library.Id} aria-current={isActive ? 'page' : undefined} onClick={() => void openLibrary(library)}>{library.Name}</button>;
                 })}
             </nav>
-            <form class="search-box" onSubmit={e => { e.preventDefault(); void runSearch(); }} role="search">
-                <span aria-hidden="true">⌕</span><input data-focusable="true" value={search} onInput={e => setSearch((e.target as HTMLInputElement).value)} placeholder="Search your library" aria-label="Search your library" />
-            </form>
+            <div class={searchExpanded && !tvClient ? 'search-box expanded' : 'search-box collapsed'} role="search">
+                <button
+                    class="search-toggle"
+                    data-focusable="true"
+                    type="button"
+                    aria-label="Search your library"
+                    aria-expanded={tvClient ? view === 'search' : searchExpanded}
+                    onClick={() => {
+                        if (tvClient) {
+                            setSearchDraft(search);
+                            forgetShow();
+                            clearLiveQuery();
+                            setView('search');
+                        } else setSearchExpanded(open => !open);
+                    }}
+                ><span aria-hidden="true">⌕</span></button>
+                {!tvClient && searchExpanded && <form class="search-expand-form" onSubmit={e => { e.preventDefault(); void runSearch(); }}>
+                    <input ref={searchInputRef} data-focusable="true" value={search} onInput={e => setSearch((e.target as HTMLInputElement).value)} onKeyDown={e => { if (e.key === 'Escape') setSearchExpanded(false); }} placeholder="Search your library" aria-label="Search your library" />
+                    <button data-focusable="true" class="search-submit" type="submit" aria-label="Submit search">→</button>
+                </form>}
+            </div>
             <div class="profile-menu-container" ref={profileMenuRef}>
                 <button class="profile-button" data-focusable="true" type="button" onClick={() => setProfileMenuOpen(open => !open)} aria-label={`Open ${session.user.Name} menu`} aria-haspopup="menu" aria-expanded={profileMenuOpen}><span>{session.user.Name.slice(0, 1).toUpperCase()}</span></button>
                 {profileMenuOpen && <div class="profile-menu" role="menu" aria-label={`${session.user.Name} menu`}>
@@ -1255,8 +1847,10 @@ function App() {
                             <div class="profile-menu-divider" />
                             <p class="profile-menu-label">Server administration</p>
                             <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); window.location.hash = 'admin/overview'; setView('admin'); profileReturnView.current = 'home'; }}>Admin workspace</button>
-                            <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); window.location.assign(`${session.server}/web/index.html#!/dashboard`); }}>Classic dashboard</button>
-                            <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); window.location.assign(`${session.server}/web/index.html#!/metadata`); }}>Metadata manager</button>
+                            {classicWebLinksAvailable && <>
+                                <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); window.location.assign(`${session.server}/web/index.html#!/dashboard`); }}>Classic dashboard</button>
+                                <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); window.location.assign(`${session.server}/web/index.html#!/metadata`); }}>Metadata manager</button>
+                            </>}
                         </>}
                     </>}
                     <div class="profile-menu-divider" />
@@ -1265,9 +1859,9 @@ function App() {
                     <button data-focusable="true" role="menuitem" class="sign-out-menu-item" type="button" onClick={logout}>Sign out</button>
                 </div>}
             </div>
-        </header>
+        </header>}
 
-        {isMobileNavOpen && <div class="mobile-nav-layer">
+        {isMobileNavOpen && !(view === 'profile' && profileScreen === 'accounts') && <div class="mobile-nav-layer">
             <button class="mobile-nav-backdrop" type="button" aria-label="Close navigation menu" onClick={closeMobileNav} />
             <nav id="mobile-library-drawer" ref={mobileNavRef} class="mobile-library-drawer" aria-label="Libraries" aria-modal="true" role="dialog">
                 <div class="drawer-heading">
@@ -1299,7 +1893,18 @@ function App() {
             />}
             {view === 'home' && <>
                 {recommendations.length > 0
-                    ? <section class="recommendation-hero" aria-label="Recommended for you">
+                    ? <section class="recommendation-hero" aria-label="Recommended for you" onFocusIn={e => {
+                        // TV remotes reveal tall blocks edge-first, which can
+                        // leave the hero half visible. Center it on entry
+                        // from outside so remote users see the whole banner.
+                        // Moves inside the hero (carousel stepping) skip this.
+                        if (!tvClient) return;
+                        const target = e.target as HTMLElement | null;
+                        const hero = target?.closest<HTMLElement>('.recommendation-hero');
+                        if (!hero) return;
+                        if (e.relatedTarget instanceof HTMLElement && hero.contains(e.relatedTarget)) return;
+                        hero.scrollIntoView({ block: 'center', inline: 'nearest' });
+                    }}>
                         <Artwork eager key={`recommendation-art-${recommendations[activeRecommendation].Id}`} api={api} item={recommendations[activeRecommendation]} backdrop className={`recommendation-art ${recommendationDirection}`} />
                         <div class="recommendation-shade" />
                         <div key={`recommendation-copy-${recommendations[activeRecommendation].Id}`} class={`recommendation-copy ${recommendationDirection}`} aria-live="polite">
@@ -1345,20 +1950,123 @@ function App() {
                 loadingSeasons={loadingSeasons}
                 spacerHeights={seasonSpacerHeights}
                 seasonNodes={seasonNodes}
-                onBack={() => void navigateLibraryUp()}
-                onSelectSeason={scrollToSeasonAndLoad}
-                onSelectEpisode={selectItem}
-                 onPlayEpisode={playItem}
+                 onBack={() => { if (searchReturn.current) { searchReturn.current = false; clearShowQuery(); setView('search'); } else void navigateLibraryUp(); }}
+                 backLabel={searchReturn.current ? 'Back to search' : activeLibrary ? 'Back to library' : 'Back to home'}
+                 loading={loading}
+                 onEnsureSeason={seasonId => loadSeasonEpisodes(tvSeries.Id, seasonId)}
+                 onActivateSeason={activateShowSeason}
+                 onSelectSeason={scrollToSeasonAndLoad}
+                 onSelectEpisode={(episode, bookmark) => { void openItem(episode, { kind: 'show', bookmark }); }}
+                 onPlayEpisode={(episode, bookmark) => { void play(episode, { kind: 'show', bookmark }); }}
+                 restore={showRestore}
+                 onRestoreComplete={() => setShowRestore(null)}
              />}
             {view === 'library' && activeLibrary && <LibraryPage key={activeLibrary.Id} api={api} library={activeLibrary} onBack={() => void navigateLibraryUp()} onSelect={selectItem} onPlay={playItem} />}
-            {view === 'search' && <section class="catalog-page"><div class="catalog-heading"><button class="back-link" data-focusable="true" onClick={goHome}>← <span>Home</span></button><p class="eyebrow">SEARCH RESULTS</p><h1>Results for “{search}”</h1><p class="muted">{items.length} titles</p></div>{items.length ? <VirtualizedMediaGrid items={items} api={api} onSelect={selectItem} /> : !loading && <EmptyState title="No matches found" text="Try another search or choose a different library." />}</section>}
-            {view === 'live' && api && <LiveTvPage api={api} userId={session.user.Id} tab={liveTab} onTab={next => { setLiveTab(next); rememberLiveQuery(next); }} onPlay={item => void play(item, 'live')} />}
-            {view === 'details' && selected && <DetailPage api={api} item={selected} onBack={() => { if (tvSeries) setView('show'); else { clearShowQuery(); setView(activeLibrary ? 'library' : 'home'); } }} onPlay={() => void play(selected)} />}
+            {view === 'search' && (tvClient && api
+                ? <TvSearchPage draft={searchDraft} onDraft={setSearchDraft} items={items} loading={loading} api={api} views={views} onOpenLibrary={library => void openLibrary(library)} onBack={goHome} onSelect={item => { searchReturn.current = true; selectItem(item); }} />
+                : <section class="catalog-page"><div class="catalog-heading"><button class="back-link" data-focusable="true" onClick={goHome}>← <span>Home</span></button><p class="eyebrow">SEARCH RESULTS</p><h1>Results for “{search}”</h1><p class="muted">{items.length} titles</p></div>{items.length ? <VirtualizedMediaGrid items={items} api={api} onSelect={selectItem} /> : !loading && <EmptyState title="No matches found" text="Try another search or choose a different library." />}</section>)}
+             {view === 'live' && api && <LiveTvPage api={api} userId={session.user.Id} tab={liveTab} onTab={next => { setLiveTab(next); rememberLiveQuery(next); }} onPlay={item => void play(item, { kind: 'live', scrollY: window.scrollY })} />}
+             {view === 'details' && selected && <DetailPage api={api} item={selected} backLabel={detailOrigin.current?.kind === 'show' ? 'Back to show' : detailOrigin.current?.kind === 'search' ? 'Back to search' : detailOrigin.current?.kind === 'library' ? 'Back to library' : 'Back to home'} onBack={returnFromDetails} onPlay={() => void play(selected)} />}
         </main>
     </div>
-    {view === 'player' && playerUrl && <Player url={playerUrl} item={playerItem} playback={playback} api={api} tvClient={tvClient} onBack={leavePlayer} onPlayItem={next => void play(next)} onPlaybackReported={itemId => void applyReportedPlayback(itemId)} onError={() => setError('Playback could not start in this browser. Try another quality or playback method.')} />}
+    {view === 'player' && playerUrl && <Player url={playerUrl} item={playerItem} playback={playback} api={api} tvClient={tvClient} onBack={leavePlayer} onPlayItem={next => void play(next, playbackOrigin.current || undefined)} onPlaybackReported={itemId => void applyReportedPlayback(itemId)} onError={() => setError('Playback could not start in this browser. Try another quality or playback method.')} />}
     {view !== 'player' && profileScreen === 'quickconnect' && session && api && <ProfileScreen screen="quickconnect" api={api} session={session} isAdministrator={isAdministrator} onBack={() => setProfileScreen('playback')} />}
     </>;
+}
+
+function TvSearchPage({ draft, onDraft, items, loading, api, views, onOpenLibrary, onBack, onSelect }: {
+    draft: string;
+    onDraft: (value: string) => void;
+    items: MediaItem[];
+    loading: boolean;
+    api: JellyfinApi | null;
+    views: MediaItem[];
+    onOpenLibrary: (library: MediaItem) => void;
+    onBack: () => void;
+    onSelect: (item: MediaItem) => void;
+}) {
+    const [ genres, setGenres ] = useState<Array<{ Name?: string; Id?: string }>>([]);
+    const pageRef = useRef<HTMLElement>(null);
+    const inputRef = useRef<HTMLInputElement>(null);
+    const rows: string[][] = [
+        [ '1', '2', '3', '4', '5', '6', '7', '8', '9', '0' ],
+        [ 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P' ],
+        [ 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L' ],
+        [ 'Z', 'X', 'C', 'V', 'B', 'N', 'M' ]
+    ];
+    useEffect(() => {
+        inputRef.current?.focus();
+    }, []);
+    useEffect(() => {
+        if (!api) return;
+        let active = true;
+        void api.getGenres('').then(result => {
+            if (active) setGenres((result || []).slice(0, 8));
+        }).catch(() => undefined);
+        return () => { active = false; };
+    }, [ api ]);
+    const focusInPage = (selector: string) => {
+        pageRef.current?.querySelector<HTMLElement>(selector)?.focus();
+    };
+    const exitFieldKeyDown = (e: KeyboardEvent) => {
+        const key = (e as KeyboardEvent).key;
+        const code = (e as KeyboardEvent).keyCode;
+        if (key === 'ArrowDown' || code === 40) {
+            e.preventDefault();
+            focusInPage('.tv-search-keyboard .tv-search-key');
+        } else if (key === 'ArrowUp' || code === 38) {
+            e.preventDefault();
+            focusInPage('.tv-search-back');
+        } else if (key === 'Escape') {
+            e.preventDefault();
+            onBack();
+        }
+    };
+    const append = (key: string) => {
+        onDraft((draft + (/^[A-Z]$/.test(key) ? key.toLowerCase() : key)).slice(0, 60));
+    };
+    const backspace = () => onDraft(draft.slice(0, -1));
+    const searching = draft.trim().length >= 2;
+    return <section ref={pageRef} class="tv-search-page" aria-label="Search your library">
+        <div class="tv-search-panel">
+            <button data-focusable="true" class="back-link tv-search-back" type="button" onClick={onBack}>← <span>Back</span></button>
+            <p class="eyebrow">SEARCH</p>
+            <h1>Find movies, shows and episodes</h1>
+            <form class="tv-search-field" onSubmit={e => e.preventDefault()}>
+                <input ref={inputRef} data-focusable="true" value={draft} onInput={e => onDraft((e.target as HTMLInputElement).value.slice(0, 60))} onKeyDown={exitFieldKeyDown} placeholder="Type a title…" aria-label="Search query" />
+            </form>
+            <div class="tv-search-keyboard" aria-label="On-screen keyboard">
+                {rows.map((row, rowIndex) => <div class="tv-search-row" key={rowIndex}>
+                    {row.map(key => <button data-focusable="true" class="tv-search-key" type="button" key={key} aria-label={`Type ${key}`} onClick={() => append(key)}>{key}</button>)}
+                    {rowIndex === 3 && <button data-focusable="true" class="tv-search-key tv-search-key-wide" type="button" aria-label="Backspace" onClick={backspace}>⌫</button>}
+                </div>)}
+                <div class="tv-search-row">
+                    <button data-focusable="true" class="tv-search-key tv-search-key-wide" type="button" onClick={() => onDraft(draft && !draft.endsWith(' ') ? draft + ' ' : draft)}>Space</button>
+                    <button data-focusable="true" class="tv-search-key tv-search-key-wide" type="button" onClick={() => onDraft('')}>Clear</button>
+                </div>
+            </div>
+        </div>
+        <div class="tv-search-results" aria-live="polite">
+            {searching ? <>
+                <p class="eyebrow">RESULTS</p>
+                {loading && <p class="muted" role="status">Searching…</p>}
+                {!loading && items.length > 0 && <p class="muted">{items.length} titles</p>}
+                {items.length > 0
+                    ? <VirtualizedMediaGrid items={items} api={api} onSelect={onSelect} showKind />
+                    : !loading && <EmptyState title="No matches found" text="Try another search or pick a suggestion." />}
+            </> : <>
+                <p class="eyebrow">POPULAR RIGHT NOW</p>
+                <h2>Start exploring</h2>
+                {genres.length > 0 && <div class="tv-suggest-group" aria-label="Genres">
+                    {genres.map(genre => genre.Name && <button key={genre.Name} data-focusable="true" class="home-library-chip" type="button" onClick={() => onDraft(genre.Name || '')}>{genre.Name}</button>)}
+                </div>}
+                {views.length > 0 && <div class="tv-suggest-group" aria-label="Libraries">
+                    {views.map(library => <button key={library.Id} data-focusable="true" class="home-library-chip" type="button" onClick={() => onOpenLibrary(library)}>{library.Name}</button>)}
+                </div>}
+                <p class="muted">Type two or more letters to search your whole library.</p>
+            </>}
+        </div>
+    </section>;
 }
 
 function messageOf(error: unknown): string {
@@ -1625,11 +2333,44 @@ function MediaRow({ title, subtitle, items, api, onSelect }: { title: string; su
     return <section class="section-block"><div class="section-heading"><div><p class="eyebrow">{subtitle}</p><h2>{title}</h2></div><div class="row-controls"><button data-focusable="true" aria-label="Scroll row left" onClick={e => (findSection(e.currentTarget)?.querySelector('.media-row') as HTMLElement)?.scrollBy({ left: -700, behavior: 'smooth' })}>←</button><button data-focusable="true" aria-label="Scroll row right" onClick={e => (findSection(e.currentTarget)?.querySelector('.media-row') as HTMLElement)?.scrollBy({ left: 700, behavior: 'smooth' })}>→</button></div></div><div class="media-row">{items.map(item => <MediaCard key={item.Id} api={api} item={item} onSelect={onSelect} />)}</div></section>;
 }
 
-const MediaCard = memo(function MediaCard({ api, item, onSelect, eager = false }: { api: JellyfinApi | null; item: MediaItem; onSelect: (item: MediaItem) => void; eager?: boolean }) {
-    return <button data-focusable="true" class="media-card" onClick={() => onSelect(item)} aria-label={`View ${item.Name}`}><Artwork eager={eager} api={api} item={item} /><span class="media-name">{item.Name}</span>{item.ProductionYear && <span class="media-year">{item.ProductionYear}</span>}{item.UserData?.PlayedPercentage !== undefined && item.UserData.PlayedPercentage > 0 && <span class="progress-track"><span style={{ width: `${Math.min(100, item.UserData.PlayedPercentage)}%` }} /></span>}</button>;
+function mediaKind(item: MediaItem): { label: string; detail: string; live: boolean } | null {
+    const liveProgram = Boolean(item.ChannelId || item.IsLive || item.Type === 'Program');
+    if (liveProgram) {
+        const now = Date.now();
+        if (isAiring(item, now)) return { label: 'Live', detail: item.ChannelName || '', live: true };
+        if (item.StartDate) {
+            const start = Date.parse(item.StartDate);
+            if (Number.isFinite(start)) return { label: formatClock(start), detail: item.ChannelName || '', live: false };
+        }
+        return { label: 'Live TV', detail: item.ChannelName || '', live: false };
+    }
+    if (item.Type === 'Episode' || item.SeriesId) {
+        const code = episodeCode(item);
+        return { label: code || 'Episode', detail: item.SeriesName || (item.ProductionYear ? String(item.ProductionYear) : ''), live: false };
+    }
+    const detail = item.ProductionYear ? String(item.ProductionYear) : '';
+    switch (item.Type) {
+        case 'Series': return { label: 'Series', detail, live: false };
+        case 'Movie': return { label: 'Movie', detail, live: false };
+        case 'BoxSet': return { label: 'Collection', detail, live: false };
+        case 'Person': return { label: 'Person', detail, live: false };
+        case 'TvChannel': return { label: 'Channel', detail, live: false };
+        case 'MusicAlbum':
+        case 'MusicArtist':
+        case 'Audio': return { label: 'Music', detail, live: false };
+        default: return item.Type ? { label: item.Type, detail, live: false } : (detail ? { label: '', detail, live: false } : null);
+    }
+}
+
+const MediaCard = memo(function MediaCard({ api, item, onSelect, eager = false, showKind = false }: { api: JellyfinApi | null; item: MediaItem; onSelect: (item: MediaItem) => void; eager?: boolean; showKind?: boolean }) {
+    const kind = showKind ? mediaKind(item) : null;
+    const fallback = item.ProductionYear ? String(item.ProductionYear) : (item.SeriesName || 'In your library');
+    return <button data-focusable="true" class="media-card" onClick={() => onSelect(item)} aria-label={`View ${item.Name}`}><span class="media-card-art"><Artwork eager={eager} api={api} item={item} /><span class="media-card-overlay"><span class="media-name">{item.Name}</span>{kind
+        ? <span class="media-year">{kind.label && <span class={kind.live ? 'media-kind-live' : 'media-kind'}>{kind.label}</span>}{kind.label && kind.detail ? ' · ' : ''}{kind.detail || (!kind.label ? fallback : '')}</span>
+        : <>{item.ProductionYear && <span class="media-year">{item.ProductionYear}</span>}</>}</span>{item.UserData?.PlayedPercentage !== undefined && item.UserData.PlayedPercentage > 0 && <span class="progress-track"><span style={{ width: `${Math.min(100, item.UserData.PlayedPercentage)}%` }} /></span>}</span></button>;
 });
 
-function VirtualizedMediaGrid({ items, api, onSelect, hasMore = false, onNearEnd }: { items: MediaItem[]; api: JellyfinApi | null; onSelect: (item: MediaItem) => void; hasMore?: boolean; onNearEnd?: () => void }) {
+function VirtualizedMediaGrid({ items, api, onSelect, hasMore = false, onNearEnd, showKind = false }: { items: MediaItem[]; api: JellyfinApi | null; onSelect: (item: MediaItem) => void; hasMore?: boolean; onNearEnd?: () => void; showKind?: boolean }) {
     const gridRef = useRef<HTMLDivElement>(null);
     const sentinelRef = useRef<HTMLDivElement>(null);
     const itemsLengthRef = useRef(items.length);
@@ -1731,14 +2472,20 @@ function VirtualizedMediaGrid({ items, api, onSelect, hasMore = false, onNearEnd
 
     return <div ref={gridRef} class="poster-grid virtualized-poster-grid">
         {beforeHeight > 0 && <div class="virtual-grid-spacer" aria-hidden="true" style={{ height: `${beforeHeight}px`, gridColumn: '1 / -1' }} />}
-        {items.slice(startIndex, endIndex).map(item => <div class="virtual-grid-cell" key={item.Id}><MediaCard eager api={api} item={item} onSelect={onSelect} /></div>)}
+        {items.slice(startIndex, endIndex).map(item => <div class="virtual-grid-cell" key={item.Id}><MediaCard eager api={api} item={item} onSelect={onSelect} showKind={showKind} /></div>)}
         {afterHeight > 0 && <div class="virtual-grid-spacer" aria-hidden="true" style={{ height: `${afterHeight}px`, gridColumn: '1 / -1' }} />}
         {hasMore && <div ref={sentinelRef} class="virtual-grid-sentinel" style={{ height: '1px', gridColumn: '1 / -1' }} aria-hidden="true" />}
     </div>;
 }
 
-function DetailPage({ api, item, onBack, onPlay }: { api: JellyfinApi | null; item: MediaItem; onBack: () => void; onPlay: () => void }) {
-    return <section class="detail-page"><Artwork eager api={api} item={item} backdrop className="detail-backdrop" /><div class="detail-gradient" /><div class="detail-content"><button data-focusable="true" class="back-link" onClick={onBack}>← <span>Back</span></button><p class="eyebrow">{item.Type || 'FEATURED'}</p><h1>{item.Name}</h1><div class="metadata">{item.ProductionYear && <span>{item.ProductionYear}</span>}{item.CommunityRating && <span>★ {item.CommunityRating.toFixed(1)}</span>}{item.RunTimeTicks && <span>{Math.round(item.RunTimeTicks / 600000000)} min</span>}</div><p class="overview">{item.Overview || 'A story waiting to be discovered.'}</p><div class="detail-actions"><button data-focusable="true" class="button primary" onClick={onPlay}>▶ <span>Play</span></button><button data-focusable="true" class="button secondary" onClick={onBack}>Back to library</button></div></div></section>;
+function DetailPage({ api, item, backLabel, onBack, onPlay }: { api: JellyfinApi | null; item: MediaItem; backLabel: string; onBack: () => void; onPlay: () => void }) {
+    const playRef = useRef<HTMLButtonElement>(null);
+    useEffect(() => {
+        if (!isTvClient()) return;
+        const frame = window.requestAnimationFrame(() => playRef.current?.focus());
+        return () => window.cancelAnimationFrame(frame);
+    }, [ item.Id ]);
+    return <section class="detail-page"><Artwork eager api={api} item={item} backdrop className="detail-backdrop" /><div class="detail-gradient" /><div class="detail-content"><button data-focusable="true" class="back-link" onClick={onBack}>← <span>{backLabel}</span></button><p class="eyebrow">{item.Type || 'FEATURED'}</p><h1>{item.Name}</h1><div class="metadata">{item.ProductionYear && <span>{item.ProductionYear}</span>}{item.CommunityRating && <span>★ {item.CommunityRating.toFixed(1)}</span>}{item.RunTimeTicks && <span>{Math.round(item.RunTimeTicks / 600000000)} min</span>}</div><p class="overview">{item.Overview || 'A story waiting to be discovered.'}</p><div class="detail-actions"><button ref={playRef} data-focusable="true" class="button primary" onClick={onPlay}>▶ <span>Play</span></button><button data-focusable="true" class="button secondary" onClick={onBack}>{backLabel}</button></div></div></section>;
 }
 
 function EmptyState({ title, text }: { title: string; text: string }) {
@@ -1769,37 +2516,348 @@ interface ShowDetailViewProps {
     spacerHeights: Record<string, number>;
     seasonNodes: { current: Record<string, HTMLElement | null> };
     onBack: () => void;
-    onSelectSeason: (seasonId: string) => void;
-    onSelectEpisode: (episode: MediaItem) => void;
-    onPlayEpisode: (episode: MediaItem) => void;
+    onEnsureSeason: (seasonId: string) => Promise<MediaItem[]>;
+    onActivateSeason: (seasonId: string) => void;
+    onSelectSeason: (seasonId: string, signal?: AbortSignal) => Promise<void>;
+    onSelectEpisode: (episode: MediaItem, bookmark: ShowBookmark) => void;
+    onPlayEpisode: (episode: MediaItem, bookmark: ShowBookmark) => void;
+    restore: ShowBookmark | null;
+    onRestoreComplete: () => void;
+    loading: boolean;
+    backLabel: string;
 }
 
-function ShowDetailView({
-    api,
-    series,
-    seasons,
-    activeSeasonId,
-    episodesBySeason,
-    loadingSeasons,
-    spacerHeights,
-    seasonNodes,
-    onBack,
-    onSelectSeason,
-    onSelectEpisode,
-    onPlayEpisode
-}: ShowDetailViewProps) {
-    const totalEpisodes = seasons.reduce((sum, season) => sum + (season.ChildCount || 0), 0);
+function ShowDetailView(props: ShowDetailViewProps) {
+    const { api, series, seasons, activeSeasonId, episodesBySeason, loadingSeasons, spacerHeights, seasonNodes, onBack, onSelectEpisode, onPlayEpisode, backLabel } = props;
+    const root = useRef<HTMLDivElement>(null);
+    const latest = useRef(props);
+    latest.current = props;
+    const intent = useRef<AbortController | null>(null);
+    const internalFocus = useRef(false);
+    const lastTarget = useRef<ShowTarget | null>(null);
+    const lastElement = useRef<HTMLElement | null>(null);
+    const userInput = useRef(false);
+    const initialEntry = useRef(false);
+    const restoreSeen = useRef<ShowBookmark | null>(null);
+    type PendingFocus = { owner: AbortController; target: ShowTarget; bookmark: ShowBookmark | null; settle: (focused: boolean) => void };
+    const pending = useRef<PendingFocus | null>(null);
+    const [ commit, setCommit ] = useState(0);
 
-    return <div class="show-detail-view">
+    useLayoutEffect(() => {
+        cancelIntent();
+        lastTarget.current = null;
+        lastElement.current = null;
+        userInput.current = false;
+        initialEntry.current = false;
+        restoreSeen.current = null;
+        return cancelIntent;
+    }, [ series.Id ]);
+
+    function owns(owner: AbortController): boolean {
+        return intent.current === owner && !owner.signal.aborted && Boolean(root.current?.isConnected);
+    }
+
+    function cancelIntent() {
+        intent.current?.abort();
+        intent.current = null;
+        pending.current?.settle(false);
+        pending.current = null;
+    }
+
+    function beginIntent(): AbortController {
+        cancelIntent();
+        const owner = new AbortController();
+        intent.current = owner;
+        return owner;
+    }
+
+    function visible(element: HTMLElement | null): element is HTMLElement {
+        return Boolean(element && element.getBoundingClientRect().width && element.getBoundingClientRect().height);
+    }
+
+    function navigatorNode(): HTMLElement | null {
+        const sidebar = root.current?.querySelector<HTMLElement>('.season-sidebar') || null;
+        return visible(sidebar) ? sidebar : root.current?.querySelector<HTMLElement>('.season-mobile-rail') || null;
+    }
+
+    function context(): Context {
+        const play = root.current?.querySelector<HTMLElement>('[data-show-control="play"]') || null;
+        const sidebar = root.current?.querySelector<HTMLElement>('.season-sidebar') || null;
+        return {
+            seasons: latest.current.seasons.map(season => ({ id: season.Id, episodeIds: latest.current.episodesBySeason[season.Id]?.map(episode => episode.Id) ?? null })),
+            activeSeasonId: latest.current.activeSeasonId,
+            layout: visible(sidebar) ? 'sidebar' : 'rail',
+            controls: visible(play) ? ['art', 'title', 'play'] : ['art', 'title']
+        };
+    }
+
+    function parseTarget(element: EventTarget | null): ShowTarget | null {
+        if (!(element instanceof HTMLElement)) return null;
+        const control = element.closest<HTMLElement>('[data-show-control]');
+        if (control && root.current?.contains(control)) {
+            const part = control.dataset.showControl;
+            if (part === 'back') return { kind: 'back' };
+            const episodeId = control.dataset.episodeId;
+            const seasonId = control.dataset.seasonId;
+            if ((part === 'art' || part === 'title' || part === 'play') && episodeId && seasonId) return { kind: 'episode', seasonId, episodeId, control: part };
+        }
+        const season = element.closest<HTMLElement>('[data-season-nav]');
+        if (season?.dataset.seasonNav && root.current?.contains(season)) return { kind: 'season', id: season.dataset.seasonNav };
+        return element.closest('.topbar') ? { kind: 'header' } : null;
+    }
+
+    function normalizeTarget(target: ShowTarget): ShowTarget {
+        if (target.kind === 'episode' && target.control === 'play' && !context().controls.includes('play')) return { ...target, control: 'title' };
+        return target;
+    }
+
+    function targetNode(target: ShowTarget): HTMLElement | null {
+        switch (target.kind) {
+            case 'header': {
+                const active = document.querySelector<HTMLElement>('.topbar .nav-link.active');
+                return visible(active) ? active : Array.from(document.querySelectorAll<HTMLElement>('.topbar [data-focusable="true"]')).find(element => visible(element)) || null;
+            }
+            case 'back':
+                return root.current?.querySelector<HTMLElement>('[data-show-control="back"]') || null;
+            case 'season':
+                return navigatorNode()?.querySelector<HTMLElement>(`[data-season-nav="${CSS.escape(target.id)}"]`) || null;
+            case 'episode':
+                return root.current?.querySelector<HTMLElement>(`[data-season-id="${CSS.escape(target.seasonId)}"][data-episode-id="${CSS.escape(target.episodeId)}"][data-show-control="${target.control}"]`) || null;
+        }
+    }
+
+    function focusTarget(target: ShowTarget, owner: AbortController, bookmark: ShowBookmark | null = null): boolean {
+        if (!owns(owner)) return false;
+        const normalized = normalizeTarget(target);
+        const node = targetNode(normalized);
+        if (!visible(node)) return false;
+        if (bookmark) {
+            window.scrollTo({ top: bookmark.scrollY, behavior: 'instant' });
+            const nav = navigatorNode();
+            if (nav) { nav.scrollTop = bookmark.navScroll.top; nav.scrollLeft = bookmark.navScroll.left; }
+        }
+        internalFocus.current = true;
+        try { node.focus({ preventScroll: true }); } finally { internalFocus.current = false; }
+        if (document.activeElement !== node || !owns(owner)) return false;
+        lastTarget.current = normalized;
+        lastElement.current = node;
+        if (!bookmark) node.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+        return true;
+    }
+
+    function frame(owner: AbortController): Promise<boolean> {
+        if (!owns(owner)) return Promise.resolve(false);
+        return new Promise(resolve => {
+            const aborted = () => { window.cancelAnimationFrame(id); resolve(false); };
+            const id = window.requestAnimationFrame(() => {
+                owner.signal.removeEventListener('abort', aborted);
+                resolve(owns(owner));
+            });
+            owner.signal.addEventListener('abort', aborted, { once: true });
+        });
+    }
+
+    function focusOnCommit(target: ShowTarget, owner: AbortController, bookmark: ShowBookmark | null = null): Promise<boolean> {
+        if (!owns(owner)) return Promise.resolve(false);
+        return new Promise(resolve => {
+            pending.current = { owner, target, bookmark, settle: resolve };
+            setCommit(value => value + 1);
+        });
+    }
+
+    useLayoutEffect(() => {
+        const request = pending.current;
+        if (!request) return;
+        pending.current = null;
+        request.settle(focusTarget(request.target, request.owner, request.bookmark));
+    }, [ commit, episodesBySeason, activeSeasonId, seasons ]);
+
+    async function selectSeason(id: string, owner: AbortController) {
+        if (!owns(owner)) return;
+        focusTarget({ kind: 'season', id }, owner);
+        latest.current.onActivateSeason(id);
+        try {
+            await latest.current.onSelectSeason(id, owner.signal);
+            if (!owns(owner)) return;
+            await frame(owner);
+            if (!owns(owner)) return;
+        } catch (_error) {
+            // The parent reports load failures; the navigator keeps focus.
+        }
+    }
+
+    async function applyMove(result: ShowFocusResult, owner: AbortController) {
+        const loaded = new Map<string, readonly string[]>();
+        const visited = new Set<string>();
+        while (owns(owner)) {
+            if (result.kind !== 'boundary') {
+                if (result.kind === 'season') {
+                    focusTarget(result, owner);
+                    latest.current.onActivateSeason(result.id);
+                } else if (result.kind === 'episode') {
+                    latest.current.onActivateSeason(result.seasonId);
+                    if (!focusTarget(result, owner)) {
+                        if (!await frame(owner) || !owns(owner)) return;
+                        if (!await focusOnCommit(result, owner) && owns(owner)) focusTarget({ kind: 'season', id: result.seasonId }, owner);
+                    }
+                } else focusTarget(result, owner);
+                return;
+            }
+            if (visited.has(result.seasonId)) return;
+            visited.add(result.seasonId);
+            const boundary = result;
+            focusTarget({ kind: 'season', id: boundary.seasonId }, owner);
+            latest.current.onActivateSeason(boundary.seasonId);
+            let episodes: MediaItem[];
+            try { episodes = await latest.current.onEnsureSeason(boundary.seasonId); } catch (_error) { return; }
+            if (!owns(owner)) return;
+            loaded.set(boundary.seasonId, episodes.map(episode => episode.Id));
+            if (!await frame(owner) || !owns(owner)) return;
+            const fresh = context();
+            const snapshot: Context = { ...fresh, seasons: fresh.seasons.map(season => ({ ...season, episodeIds: season.episodeIds ?? loaded.get(season.id) ?? null })) };
+            result = enterShowSeason(snapshot, boundary.seasonId, boundary.edge, boundary.control, boundary.step);
+            if (result.kind === 'episode') {
+                latest.current.onActivateSeason(result.seasonId);
+                const focused = await focusOnCommit(result, owner);
+                if (!owns(owner)) return;
+                if (!focused) focusTarget({ kind: 'season', id: result.seasonId }, owner);
+                return;
+            }
+        }
+    }
+
+    async function restoreBookmark(bookmark: ShowBookmark, owner: AbortController) {
+        let target = bookmark.target;
+        if (target.kind === 'episode' || target.kind === 'season') {
+            const id = target.kind === 'episode' ? target.seasonId : target.id;
+            if (!latest.current.seasons.some(season => season.Id === id)) {
+                const active = latest.current.activeSeasonId || latest.current.seasons[0]?.Id;
+                target = active ? { kind: 'season', id: active } : { kind: 'back' };
+            } else {
+                latest.current.onActivateSeason(id);
+                if (target.kind === 'episode') {
+                    let episodes = latest.current.episodesBySeason[id];
+                    if (!episodes) {
+                        focusTarget({ kind: 'season', id }, owner);
+                        try { episodes = await latest.current.onEnsureSeason(id); } catch (_error) { episodes = []; }
+                        if (!owns(owner)) return;
+                    }
+                    if (!episodes.some(episode => target.kind === 'episode' && episode.Id === target.episodeId)) target = { kind: 'season', id };
+                }
+            }
+        }
+        if (!await frame(owner) || !owns(owner)) return;
+        let focused = await focusOnCommit(target, owner, bookmark);
+        if (!owns(owner)) return;
+        if (!focused && target.kind === 'episode') {
+            focused = await focusOnCommit({ kind: 'season', id: target.seasonId }, owner, bookmark);
+            if (!owns(owner)) return;
+        }
+        if (focused) latest.current.onRestoreComplete();
+    }
+
+    useEffect(() => {
+        const onFocusIn = (event: FocusEvent) => {
+            if (!internalFocus.current) { userInput.current = true; cancelIntent(); }
+            const target = parseTarget(event.target);
+            lastTarget.current = target;
+            lastElement.current = event.target instanceof HTMLElement ? event.target : null;
+            if (target?.kind === 'episode') latest.current.onActivateSeason(target.seasonId);
+        };
+        const onInput = (event: Event) => {
+            if (event instanceof KeyboardEvent && !internalFocus.current) {
+                userInput.current = true;
+                cancelIntent();
+            } else if (!(event instanceof KeyboardEvent)) {
+                userInput.current = true;
+                lastElement.current = null;
+                cancelIntent();
+            }
+        };
+        const onResize = () => {
+            const active = document.activeElement;
+            const target = parseTarget(active) || lastTarget.current;
+            const element = active === document.body ? lastElement.current : active;
+            cancelIntent();
+            if (!target || !(element instanceof HTMLElement) || !root.current?.contains(element) || visible(element)) return;
+            const owner = beginIntent();
+            focusTarget(normalizeTarget(target), owner);
+        };
+        document.addEventListener('focusin', onFocusIn);
+        window.addEventListener('keydown', onInput, true);
+        window.addEventListener('pointerdown', onInput, true);
+        window.addEventListener('mousedown', onInput, true);
+        window.addEventListener('touchstart', onInput, true);
+        window.addEventListener('resize', onResize);
+        window.visualViewport?.addEventListener('resize', onResize);
+        return () => {
+            cancelIntent();
+            document.removeEventListener('focusin', onFocusIn);
+            window.removeEventListener('keydown', onInput, true);
+            window.removeEventListener('pointerdown', onInput, true);
+            window.removeEventListener('mousedown', onInput, true);
+            window.removeEventListener('touchstart', onInput, true);
+            window.removeEventListener('resize', onResize);
+            window.visualViewport?.removeEventListener('resize', onResize);
+        };
+    }, []);
+
+    useLayoutEffect(() => {
+        if (props.restore && props.restore.seriesId === series.Id) {
+            if (props.loading || restoreSeen.current === props.restore || userInput.current) return;
+            restoreSeen.current = props.restore;
+            initialEntry.current = true;
+            void restoreBookmark(props.restore, beginIntent());
+            return;
+        }
+        if (initialEntry.current || userInput.current || props.loading || !seasons.length || !activeSeasonId) return;
+        initialEntry.current = true;
+        if (!document.documentElement.classList.contains('tv-client') || document.activeElement !== document.body) return;
+        focusTarget({ kind: 'season', id: activeSeasonId }, beginIntent());
+    }, [ props.restore, props.loading, seasons, activeSeasonId, series.Id ]);
+
+    function handleKey(event: KeyboardEvent) {
+        if (!document.documentElement.classList.contains('tv-client')) return;
+        const key = event.key;
+        if (key !== 'ArrowUp' && key !== 'ArrowDown' && key !== 'ArrowLeft' && key !== 'ArrowRight') return;
+        const direction: Direction = key;
+        const from = parseTarget(event.target);
+        if (!from) return;
+        event.preventDefault();
+        event.stopPropagation();
+        userInput.current = true;
+        const owner = beginIntent();
+        const result = moveShowFocus(from, direction, context());
+        if (from.kind === 'season' && result.kind === 'season' && result.id !== from.id) {
+            void selectSeason(result.id, owner);
+        } else void applyMove(result, owner);
+    }
+
+    function clickSeason(id: string) {
+        userInput.current = true;
+        void selectSeason(id, beginIntent());
+    }
+
+    function captureBookmark(seasonId: string, episodeId: string, control: EpisodeControl): ShowBookmark {
+        const nav = navigatorNode();
+        const bookmark: ShowBookmark = { seriesId: latest.current.series.Id, target: { kind: 'episode', seasonId, episodeId, control }, scrollY: window.scrollY, navScroll: { top: nav?.scrollTop || 0, left: nav?.scrollLeft || 0 } };
+        cancelIntent();
+        return bookmark;
+    }
+
+    const totalEpisodes = seasons.reduce((sum, season) => sum + (season.ChildCount || 0), 0);
+    const endYear = series.EndDate ? new Date(series.EndDate).getFullYear() : null;
+
+    return <div ref={root} class="show-detail-view" onKeyDown={handleKey}>
         <section class="show-backdrop">
             <Artwork eager api={api} item={series} backdrop className="show-backdrop-art" />
             <div class="show-backdrop-shade" />
             <div class="show-header-copy">
-                <button class="back-link" data-focusable="true" onClick={onBack}>← <span>Back to library</span></button>
+                <button class="back-link" data-show-control="back" data-focusable="true" onClick={() => { cancelIntent(); onBack(); }}>← <span>{backLabel}</span></button>
                 <p class="eyebrow">TV SERIES</p>
                 <h1>{series.Name}</h1>
                 <div class="show-metadata">
-                    {series.ProductionYear && <span>{series.ProductionYear}{series.EndDate && `–${new Date(series.EndDate).getFullYear()}`}</span>}
+                    {series.ProductionYear && <span>{series.ProductionYear}{endYear && endYear !== series.ProductionYear && `–${endYear}`}</span>}
                     {series.CommunityRating && <span>★ {series.CommunityRating.toFixed(1)}</span>}
                     <span>{seasons.length} seasons</span>
                     {totalEpisodes > 0 && <span>{totalEpisodes} episodes</span>}
@@ -1815,7 +2873,7 @@ function ShowDetailView({
                 data-focusable="true"
                 class={season.Id === activeSeasonId ? 'season-pill active' : 'season-pill'}
                 aria-current={season.Id === activeSeasonId ? 'true' : undefined}
-                onClick={() => onSelectSeason(season.Id)}
+                onClick={() => clickSeason(season.Id)}
             >{season.IndexNumber === 0 ? 'Specials' : `Season ${season.IndexNumber ?? index + 1}`}</button>)}
         </nav>
 
@@ -1832,7 +2890,7 @@ function ShowDetailView({
                         data-focusable="true"
                         class={season.Id === activeSeasonId ? 'season-side-link active' : 'season-side-link'}
                         aria-current={season.Id === activeSeasonId ? 'true' : undefined}
-                        onClick={() => onSelectSeason(season.Id)}
+                        onClick={() => clickSeason(season.Id)}
                     >
                         <Artwork api={api} item={season} className="season-thumb" />
                         <span class="season-side-text"><strong>{season.IndexNumber === 0 ? 'Specials' : `Season ${season.IndexNumber ?? index + 1}`}</strong><small>{episodeCount} episodes</small>{episodes.length > 0 && <span class="season-progress"><i style={{ width: `${watched / episodes.length * 100}%` }} /></span>}</span>
@@ -1856,31 +2914,38 @@ function ShowDetailView({
                             <div class="season-heading-meta">{season.PremiereDate && <span>{new Date(season.PremiereDate).getFullYear()}</span>}<span>{episodeCount} episodes</span>{episodes?.length ? <span>{watched} watched</span> : null}</div>
                         </header>
                         {loadingSeasons[season.Id] && !episodes && <HomeSectionLoading label="Loading episodes…" />}
-                        {episodes && episodes.length > 0 && <div class="episode-list">{episodes.map(episode => <EpisodeCard key={episode.Id} api={api} episode={episode} onOpen={onSelectEpisode} onPlay={onPlayEpisode} />)}</div>}
+                        {episodes && episodes.length > 0 && <div class="episode-list">{episodes.map(episode => <EpisodeCard key={episode.Id} api={api} episode={episode} seasonId={season.Id} captureBookmark={captureBookmark} onOpen={onSelectEpisode} onPlay={onPlayEpisode} />)}</div>}
                         {!loadingSeasons[season.Id] && episodes && episodes.length === 0 && <p class="season-empty">No episodes are available in this season.</p>}
                     </section>;
                 })}
-                {!seasons.length && <EmptyState title="No seasons found" text="This TV show does not have any seasons available." />}
+                {!seasons.length && (props.loading ? <HomeSectionLoading label="Loading seasons…" /> : <EmptyState title="No seasons found" text="This TV show does not have any seasons available." />)}
             </div>
         </div>
     </div>;
 }
 
-const EpisodeCard = memo(function EpisodeCard({ api, episode, onOpen, onPlay }: { api: JellyfinApi | null; episode: MediaItem; onOpen: (episode: MediaItem) => void; onPlay: (episode: MediaItem) => void }) {
+const EpisodeCard = memo(function EpisodeCard({ api, episode, seasonId, captureBookmark, onOpen, onPlay }: {
+    api: JellyfinApi | null;
+    episode: MediaItem;
+    seasonId: string;
+    captureBookmark: (seasonId: string, episodeId: string, control: EpisodeControl) => ShowBookmark;
+    onOpen: (episode: MediaItem, bookmark: ShowBookmark) => void;
+    onPlay: (episode: MediaItem, bookmark: ShowBookmark) => void;
+}) {
     const progress = episode.UserData?.PlayedPercentage || 0;
-    return <article class={episode.UserData?.Played ? 'episode-card played' : 'episode-card'}>
-        <button class="episode-art-button" data-focusable="true" aria-label={`Play ${episode.Name}`} onClick={() => onPlay(episode)}>
+    return <article data-episode-id={episode.Id} data-season-id={seasonId} class={episode.UserData?.Played ? 'episode-card played' : 'episode-card'}>
+        <button class="episode-art-button" data-show-control="art" data-episode-id={episode.Id} data-season-id={seasonId} data-focusable="true" aria-label={`Play ${episode.Name}`} onClick={() => onPlay(episode, captureBookmark(seasonId, episode.Id, 'art'))}>
             <Artwork api={api} item={episode} className="episode-art" />
             {episode.RunTimeTicks && <span class="episode-runtime">{Math.round(episode.RunTimeTicks / 600000000)} min</span>}
             {episode.UserData?.Played && <span class="episode-watched" aria-label="Watched">✓</span>}
             {progress > 0 && progress < 100 && <span class="progress-track episode-progress"><span style={{ width: `${progress}%` }} /></span>}
         </button>
         <div class="episode-copy">
-            <button class="episode-title" data-focusable="true" onClick={() => onOpen(episode)}><span class="episode-number">{episode.IndexNumber !== undefined ? `E${String(episode.IndexNumber).padStart(2, '0')}` : 'EPISODE'}</span><span>{episode.Name}</span></button>
+            <button class="episode-title" data-show-control="title" data-episode-id={episode.Id} data-season-id={seasonId} data-focusable="true" onClick={() => onOpen(episode, captureBookmark(seasonId, episode.Id, 'title'))}><span class="episode-number">{episode.IndexNumber !== undefined ? `E${String(episode.IndexNumber).padStart(2, '0')}` : 'EPISODE'}</span><span>{episode.Name}</span></button>
             <div class="episode-meta">{episode.PremiereDate && <span>{new Date(episode.PremiereDate).toLocaleDateString()}</span>}{episode.RunTimeTicks && <span>{Math.round(episode.RunTimeTicks / 600000000)} min</span>}</div>
             {episode.Overview && <p>{episode.Overview}</p>}
         </div>
-        <button class="episode-play" data-focusable="true" aria-label={`Play ${episode.Name}`} onClick={() => onPlay(episode)}>▶</button>
+        <button class="episode-play" data-show-control="play" data-episode-id={episode.Id} data-season-id={seasonId} data-focusable="true" aria-label={`Play ${episode.Name}`} onClick={() => onPlay(episode, captureBookmark(seasonId, episode.Id, 'play'))}>▶</button>
     </article>;
 });
 

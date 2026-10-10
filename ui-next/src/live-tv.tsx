@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { JellyfinApi } from './api';
-import { LiveGuide, LiveThumb, ProgramSummary } from './live-guide';
-import { CHANNEL_PAGE_SIZE, GUIDE_CHUNK_MS, airingProgress, categoryLabel, channelFromProgram, chunkStarts, formatClock, formatRange, formatRemaining, groupOnNow, guideDays, initialGuideRange, isoTime, matchChannelIndex, mergePrograms, moveChannel, orderChannels, readChannelOrder, startOfLocalDay, upNextByChannel, withFavorite, writeChannelOrder, type GuideDay } from './live-model';
+import { GuideToolbar, LiveGuide, LiveThumb, ProgramSummary } from './live-guide';
+import { CHANNEL_PAGE_SIZE, GUIDE_CHUNK_MS, airingProgress, categoryLabel, channelFromProgram, chunkStarts, directionalFocusIndex, formatClock, formatRange, formatRemaining, groupOnNow, guideDays, initialGuideRange, isoTime, matchChannelIndex, mergePrograms, moveChannel, orderChannels, readChannelOrder, startOfLocalDay, upNextByChannel, withFavorite, writeChannelOrder, type FocusRect, type GuideDay, type GuideDirection } from './live-model';
 import type { LiveChannelFilter, LiveTab, LiveTimer, MediaItem } from './types';
 
 const TABS: Array<{ id: LiveTab; label: string }> = [
@@ -84,6 +84,23 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
     const digitBuffer = useRef('');
     const digitTimer = useRef<number>();
     const sheetRef = useRef<HTMLElement>(null);
+    const sheetOrigin = useRef<HTMLElement | null>(null);
+    const sheetOpen = Boolean(sheet);
+
+    const openSheet = (program: MediaItem, channel: MediaItem, origin: HTMLElement) => {
+        sheetOrigin.current = origin;
+        setActionError('');
+        setSheet({ program, channel });
+    };
+
+    const closeSheet = () => {
+        const origin = sheetOrigin.current;
+        sheetOrigin.current = null;
+        setSheet(null);
+        if (origin) window.requestAnimationFrame(() => {
+            if (origin.isConnected) origin.focus();
+        });
+    };
 
     const orderedGuide = useMemo(() => orderChannels(guideChannels, order), [ guideChannels, order ]);
     const orderedDirectory = useMemo(() => orderChannels(directory, order), [ directory, order ]);
@@ -279,17 +296,37 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
     }, [ api, expandedId, dayStart ]);
 
     useEffect(() => {
-        if (!sheet) return;
+        if (!sheetOpen) return;
         const onKey = (event: KeyboardEvent) => {
-            if (event.key !== 'Escape' && event.key !== 'Backspace' && event.key !== 'Back' && event.key !== 'BrowserBack' && event.key !== 'GoBack' && event.keyCode !== 461 && event.keyCode !== 10009) return;
+            if (event.key === 'Escape' || event.key === 'Backspace' || event.key === 'Back' || event.key === 'BrowserBack' || event.key === 'GoBack' || event.keyCode === 461 || event.keyCode === 10009) {
+                event.preventDefault();
+                event.stopPropagation();
+                closeSheet();
+                return;
+            }
+            if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+            const direction: GuideDirection = event.key;
             event.preventDefault();
             event.stopPropagation();
-            setSheet(null);
+            const dialog = sheetRef.current;
+            const controls = dialog ? Array.from(dialog.querySelectorAll<HTMLElement>('[data-focusable="true"]:not(:disabled)')) : [];
+            const active = document.activeElement;
+            const currentIndex = active instanceof HTMLElement ? controls.indexOf(active) : -1;
+            if (currentIndex < 0) {
+                controls[0]?.focus();
+                return;
+            }
+            const rectangles: FocusRect[] = controls.map(control => {
+                const rect = control.getBoundingClientRect();
+                return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+            });
+            const nextIndex = directionalFocusIndex(rectangles, currentIndex, direction);
+            if (nextIndex !== null) controls[nextIndex].focus();
         };
         window.addEventListener('keydown', onKey, true);
         sheetRef.current?.querySelector<HTMLElement>('[data-focusable="true"]')?.focus();
         return () => window.removeEventListener('keydown', onKey, true);
-    }, [ sheet ]);
+    }, [ sheetOpen ]);
 
     useEffect(() => {
         if (tab !== 'guide' && tab !== 'channels') return;
@@ -414,7 +451,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                         const following = program.ChannelId ? nextByChannel[program.ChannelId] : undefined;
                         const progress = airingProgress(program.StartDate, program.EndDate, now);
                         return <article class="live-card" key={program.Id}>
-                            <button type="button" class="live-card-main live-card-overlay" data-focusable="true" onClick={() => setSheet({ program, channel })}>
+                            <button type="button" class="live-card-main live-card-overlay" data-focusable="true" onClick={event => openSheet(program, channel, event.currentTarget)}>
                                 <span class="live-card-art"><LiveThumb api={api} item={program.ImageTags ? program : channel} width={640} /></span>
                                 <span class="live-card-scrim" />
                                 <span class="live-card-copy">
@@ -463,24 +500,12 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                 void ensurePrograms(orderedGuide.slice(start, end).map(channel => channel.Id), range.start, range.end);
             }}
             onToggleFavorite={channel => void toggleFavorite(channel)}
-            onOpenProgram={(program, channel) => { setActionError(''); setSheet({ program, channel }); }}
+            onOpenProgram={openSheet}
             onTune={channel => tune(channel)}
         />}
 
         {tab === 'guide' && compact && <div class="live-mobile">
-            <div class="live-toolbar">
-                <div class="live-pills" role="group" aria-label="Guide day">
-                    {days.map(day => <button type="button" data-focusable="true" class={day.start === dayStart ? 'live-pill active' : 'live-pill'} key={day.start} onClick={() => setDayStart(day.start)}>{day.label}</button>)}
-                </div>
-                <select class="live-filter" aria-label="Channel filter" value={filter} onChange={event => setFilter((event.target as HTMLSelectElement).value as LiveChannelFilter)}>
-                    <option value="all">All channels</option>
-                    <option value="favorites">Favorites</option>
-                    <option value="sports">Sports</option>
-                    <option value="news">News</option>
-                    <option value="movies">Movies</option>
-                    <option value="kids">Kids</option>
-                </select>
-            </div>
+            <GuideToolbar days={days} dayStart={dayStart} digits={digits} filter={filter} onDay={setDayStart} onFilter={setFilter} onFocusChannels={() => document.querySelector<HTMLElement>('.live-now-next-card')?.focus()} />
             {guideError && <p class="notice error" role="alert">{guideError}</p>}
             {guideLoading && !orderedGuide.length && <p class="live-empty">Loading channels…</p>}
             {!guideLoading && !orderedGuide.length && <p class="live-empty">No channels are available for this filter.</p>}
@@ -499,7 +524,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                             </span>
                         </button>
                         {open && <div class="live-day-schedule">
-                            {dayPrograms.map(item => <button type="button" class="live-day-item" data-focusable="true" key={item.Id} onClick={() => setSheet({ program: item, channel })}>
+                            {dayPrograms.map(item => <button type="button" class="live-day-item" data-focusable="true" key={item.Id} onClick={event => openSheet(item, channel, event.currentTarget)}>
                                 <span>{formatRange(item.StartDate, item.EndDate)}</span>
                                 <strong>{item.Name}</strong>
                             </button>)}
@@ -568,7 +593,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             </section>
         </div>}
 
-        {sheet && <div class="live-sheet-backdrop" onClick={() => setSheet(null)}>
+        {sheet && <div class="live-sheet-backdrop" onClick={event => { if (event.target === event.currentTarget) closeSheet(); }}>
             <aside class="live-sheet" role="dialog" aria-modal="true" aria-label={sheet.program.Name} ref={sheetRef} onClick={event => event.stopPropagation()}>
                 <ProgramSummary program={sheet.program} channel={sheet.channel} now={now} />
                 {actionError && <p class="notice error" role="alert">{actionError}</p>}
@@ -576,7 +601,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                     <button type="button" class="button primary" data-focusable="true" onClick={() => tune(sheet.channel, sheet.program)}>Watch Now</button>
                     <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void record(false)}>Record Episode</button>
                     <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void record(true)}>Record Series</button>
-                    <button type="button" class="button secondary" data-focusable="true" onClick={() => setSheet(null)}>Close</button>
+                    <button type="button" class="button secondary" data-focusable="true" onClick={closeSheet}>Close</button>
                 </div>
             </aside>
         </div>}
