@@ -3,6 +3,7 @@ import type { PlaybackReport } from './playback-report';
 import type { MediaStreamInfo, PlaybackChoice, TrickplayLevel } from './player-model';
 import { mapLibraryQuery } from './library-query';
 import type { LibraryItemsOptions } from './library-query';
+import { createSsoSession, SSO_HANDOFF_KEY, UI_NEXT_SIGNED_OUT_KEY, type SsoHandoff, type SsoHandoffAttempt } from './sso-session';
 
 const CLIENT_NAME = 'Jellyfin UI Next';
 const CLIENT_VERSION = '0.1.0';
@@ -398,8 +399,37 @@ export class JellyfinApi {
     static async beginSso(serverInput: string): Promise<void> {
         const server = normalizeServer(serverInput);
         try { localStorage.setItem('jellyfin-ui-next-server', server); } catch (_error) { /* Session screen remains available after callback. */ }
+        let previousAccessToken: string | null = null;
+        try {
+            previousAccessToken = localStorage.getItem('api_key');
+        } catch (_error) { /* A callback can still be parsed if there was no saved classic session. */ }
+        const attempt: SsoHandoffAttempt = {
+            server,
+            startedAt: Date.now(),
+            previousAccessToken
+        };
+        try {
+            localStorage.removeItem(UI_NEXT_SIGNED_OUT_KEY);
+            sessionStorage.setItem(SSO_HANDOFF_KEY, JSON.stringify(attempt));
+        } catch (_error) {
+            try { sessionStorage.removeItem(SSO_HANDOFF_KEY); } catch (_storageError) { /* No pending marker was saved. */ }
+            throw new Error('This browser cannot store the SSO sign-in handoff.');
+        }
         const query = queryString({ deviceId: deviceId() });
         window.location.assign(`${server}/sso/login?${query}`);
+    }
+
+    static async restoreSsoSession(handoff: SsoHandoff): Promise<Session> {
+        const server = normalizeServer(handoff.server);
+        const [ user, serverInfo ] = await Promise.all([
+            xhrRequest<unknown>(`${server}/Users/${encodeURIComponent(handoff.userId)}`, 'GET', {
+                'Authorization': authorization(handoff.token)
+            }),
+            xhrRequest<unknown>(`${server}/System/Info/Public`)
+        ]);
+        const session = createSsoSession({ ...handoff, server }, user, serverInfo);
+        if (!session) throw new Error('The Jellyfin server returned an incomplete SSO session.');
+        return session;
     }
 
     static async isQuickConnectEnabled(serverInput: string): Promise<boolean> {
