@@ -1,5 +1,5 @@
 import { h } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { JellyfinApi } from './api';
 import type { RememberedUser } from './remembered-users';
 import type { JellyfinUser, Session, TasteProfile, UserConfiguration } from './types';
@@ -28,6 +28,12 @@ export function ProfileScreen({ screen, api, session, isAdministrator, remembere
     const [ users, setUsers ] = useState<JellyfinUser[]>([]);
     const [ selectedUserId, setSelectedUserId ] = useState(session.user.Id);
     const [ taste, setTaste ] = useState<TasteProfile | null>(null);
+    const accountsRef = useRef<HTMLElement>(null);
+
+    useEffect(() => {
+        if (screen !== 'accounts' || loading) return;
+        accountsRef.current?.querySelector<HTMLElement>('[data-current-user="true"], .remembered-user')?.focus();
+    }, [ screen, loading ]);
 
     useEffect(() => {
         let active = true;
@@ -126,6 +132,24 @@ export function ProfileScreen({ screen, api, session, isAdministrator, remembere
         </section>
     </div>;
 
+    if (screen === 'accounts') return <section ref={accountsRef} class="account-picker" aria-labelledby="profile-page-title">
+        <div class="account-picker-content">
+            <button class="back-link account-picker-back" data-focusable="true" type="button" onClick={onBack} aria-label="Back to media">← <span>Back</span></button>
+            <h1 id="profile-page-title">Who's watching?</h1>
+            <p class="account-picker-hint">Choose a profile to continue watching.</p>
+            <div class="remembered-users" aria-label="Profiles">
+                {rememberedUsers.map(user => <button key={user.userId} data-focusable="true" data-current-user={user.userId === session.user.Id ? 'true' : undefined} class="remembered-user" type="button" onClick={() => onSelectRemembered?.(user)} aria-label={`${user.name}, ${user.session ? 'continue watching' : 'sign in'}${user.userId === session.user.Id ? ', current user' : ''}`}>
+                    <span class="remembered-user-avatar" style={{ background: profileColor(user.userId) }} aria-hidden="true">{user.name.slice(0, 1).toUpperCase()}</span>
+                    <span class="remembered-user-name">{user.name}</span>
+                    <span class="remembered-user-status">{user.userId === session.user.Id ? 'Current user' : user.session ? 'Continue watching' : 'Sign in required'}</span>
+                </button>)}
+                <button data-focusable="true" class="remembered-user remembered-user-add" type="button" onClick={onSignInAnother} aria-label="Sign in as another user">
+                    <span class="remembered-user-avatar" aria-hidden="true">+</span><span class="remembered-user-name">Another user</span><span class="remembered-user-status">Sign in</span>
+                </button>
+            </div>
+        </div>
+    </section>;
+
     return <section class="profile-page" aria-labelledby="profile-page-title">
         <div class="profile-page-heading">
             <button class="back-link" data-focusable="true" type="button" onClick={onBack}>← <span>Back</span></button>
@@ -135,9 +159,6 @@ export function ProfileScreen({ screen, api, session, isAdministrator, remembere
         {loading ? <p class="profile-status" role="status">Loading…</p> : <>
             {error && <p class="notice error" role="alert">{error}</p>}
             {saved && <p class="notice success" role="status">Preferences saved.</p>}
-            {screen === 'accounts' && <div class="remembered-users">{rememberedUsers.map(user => <button key={user.userId} data-focusable="true" class="remembered-user" type="button" onClick={() => onSelectRemembered?.(user)}>
-                <span class="remembered-user-avatar">{user.name.slice(0, 1).toUpperCase()}</span><span>{user.name}</span><span class="remembered-user-status">{user.session ? 'Continue' : 'Sign in'}</span>
-            </button>)}<button data-focusable="true" class="button secondary" type="button" onClick={onSignInAnother}>Sign in as another user</button></div>}
             {screen === 'playback' && <form class="profile-form" onSubmit={saveConfiguration}>
                 <label>Preferred audio language<input data-focusable="true" value={configuration.AudioLanguagePreference || ''} onInput={event => updateConfiguration('AudioLanguagePreference', (event.currentTarget as HTMLInputElement).value)} placeholder="Any language" /></label>
                 <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={configuration.PlayDefaultAudioTrack === true} onChange={event => updateConfiguration('PlayDefaultAudioTrack', (event.currentTarget as HTMLInputElement).checked)} /> Prefer default audio track</label>
@@ -164,6 +185,13 @@ export function ProfileScreen({ screen, api, session, isAdministrator, remembere
             {screen === 'taste' && <TasteProfileView profile={taste} />}
         </>}
     </section>;
+}
+
+function profileColor(userId: string): string {
+    const colors = [ '#2379b5', '#b43c52', '#267b79', '#7751b0', '#b2692c', '#477b35' ];
+    let hash = 0;
+    for (let index = 0; index < userId.length; index++) hash = (hash * 31 + userId.charCodeAt(index)) >>> 0;
+    return colors[hash % colors.length];
 }
 
 function TasteProfileView({ profile }: { profile: TasteProfile | null }) {

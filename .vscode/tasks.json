@@ -95,6 +95,14 @@
       "problemMatcher": []
     },
     {
+      "label": "start-ui-next-dev",
+      "type": "shell",
+      "command": "npm",
+      "args": ["run", "dev"],
+      "options": { "cwd": "${workspaceFolder}/ui-next" },
+      "problemMatcher": []
+    },
+    {
       "label": "test-backend",
       "type": "shell",
       "command": "sh",

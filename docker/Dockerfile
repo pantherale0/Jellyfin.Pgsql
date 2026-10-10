@@ -25,6 +25,23 @@ RUN chmod +x scripts/apply-patches.sh && \
     npm ci && \
     npm run build:production
 
+# UI Next build stage for the opt-in test image
+FROM node:24-alpine AS ui-next-build
+WORKDIR /src/ui-next
+
+ARG VITE_CLASSIC_WEB_AVAILABLE=false
+ENV VITE_CLASSIC_WEB_AVAILABLE=${VITE_CLASSIC_WEB_AVAILABLE}
+
+COPY ui-next/package.json ui-next/package-lock.json ./
+RUN npm ci
+
+COPY ui-next/index.html ./index.html
+COPY ui-next/tsconfig.json ./tsconfig.json
+COPY ui-next/vite.config.ts ./vite.config.ts
+COPY ui-next/src/ ./src/
+
+RUN npm run build
+
 # Build stage
 # Context hint: project root ../
 # sudo docker build -t ghcr.io/jpvenson/jellyfin.pgsql:10.11.0-1 -f ./Dockerfile ../
@@ -77,8 +94,8 @@ RUN dotnet ef migrations bundle \
     --force \
     -- --migration-provider Jellyfin-PgSql
 
-# Final stage - Jellyfin with plugin
-FROM jellyfin/jellyfin:${JELLYFIN_VERSION}
+# Shared runtime stage - Jellyfin server and plugins
+FROM jellyfin/jellyfin:${JELLYFIN_VERSION} AS runtime
 ARG YTDLP_VERSION
 ARG YTDLP_SHA256
 
@@ -95,14 +112,8 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy custom compiled Jellyfin web client
-COPY --from=web-build /src/jellyfin-web/dist/ /jellyfin/jellyfin-web/
-
 # Copy custom compiled Jellyfin server
 COPY --from=build /app/jellyfin-server/ /jellyfin/
-
-# Inject SSO script into index.html
-RUN sed -i 's|</body>|<script src="/sso/login-script.js"></script></body>|g' /jellyfin/jellyfin-web/index.html
 
 # Copy the published plugin and config files
 COPY --from=build /app/publish/ /jellyfin-pgsql/plugin/
@@ -117,3 +128,13 @@ COPY scripts/migrate-sqlite-to-postgres.sh /jellyfin-pgsql/migrate-sqlite-to-pos
 RUN chmod +x /entrypoint.sh /jellyfin-pgsql/migrate-sqlite-to-postgres.sh /jellyfin-pgsql/jellyfin.PgsqlMigrator
 
 ENTRYPOINT ["/entrypoint.sh"]
+
+# UI Next is opt-in and leaves the classic web directory in the base image intact.
+FROM runtime AS ui-next-test
+COPY --from=ui-next-build /src/ui-next/dist/ /jellyfin/ui-next/
+ENV JELLYFIN_WEB_DIR=/jellyfin/ui-next
+
+# The default Docker target remains the patched classic Jellyfin web client.
+FROM runtime AS classic
+COPY --from=web-build /src/jellyfin-web/dist/ /jellyfin/jellyfin-web/
+RUN sed -i 's|</body>|<script src="/sso/login-script.js"></script></body>|g' /jellyfin/jellyfin-web/index.html

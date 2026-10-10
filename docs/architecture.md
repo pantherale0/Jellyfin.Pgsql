@@ -8,7 +8,7 @@ How this repository builds a PostgreSQL-backed Jellyfin image without committing
 |---|---|
 | [`Jellyfin.Plugin.Pgsql/`](../Jellyfin.Plugin.Pgsql/) | PostgreSQL EF provider, migrations, query cache, fuzzy search, taste, Emby import, admin APIs, optional active-standby HA |
 | [`Jellyfin.Plugin.Seerr/`](../Jellyfin.Plugin.Seerr/) | Seerr/Jellyseerr client plugin (search, request, parental filtering) |
-| [`ui-next/`](../ui-next/) | Experimental standalone Preact/Vite web client; separate from the upstream web submodule and not yet included in the production image |
+| [`ui-next/`](../ui-next/) | Experimental Preact/Vite web client, built by the opt-in Docker `ui-next-test` target; independent of the upstream web submodule |
 | [`jellyfin/`](../jellyfin/), [`jellyfin-web/`](../jellyfin-web/) | Upstream git submodules — **patch targets only**; keep working trees clean of committed local edits |
 | [`patches/`](../patches/) | All server/web customizations as flat `*.patch` files |
 | [`scripts/apply-patches.sh`](../scripts/apply-patches.sh) | Routes and applies patches by filename |
@@ -61,7 +61,7 @@ The exporter snapshots changed **file contents** before rebuilding the dependenc
 
 ## Build composition
 
-`ui-next/` currently has its own npm build (`npm run build` in that directory) and emits a static site to `ui-next/dist/`. It is intentionally not part of the image build yet: server path routing, web-wrapper startup expectations, auth behavior, and TV playback must be validated before deployment wiring is added.
+`ui-next/` builds a static site into `ui-next/dist/`. The Dockerfile has two final targets. `classic` is the default and serves the patched `jellyfin-web` build. `ui-next-test` serves the UI Next bundle at `/web` by setting `JELLYFIN_WEB_DIR=/jellyfin/ui-next`. The manual Docker workflow can publish the test target without changing the normal Jellyfin-version or `latest` tags.
 
 ```mermaid
 flowchart LR
@@ -69,26 +69,32 @@ flowchart LR
   apply[apply-patches.sh]
   core[jellyfin submodule]
   web[jellyfin-web submodule]
+  ui[ui-next source]
   plugin[Jellyfin.Plugin.Pgsql]
   seerr[Jellyfin.Plugin.Seerr]
-  image[ghcr image]
+  classic[classic Docker target]
+  test[ui-next-test Docker target]
   patches --> apply
   apply --> core
   apply --> web
-  core --> image
-  web --> image
-  plugin --> image
-  seerr --> image
+  core --> classic
+  web --> classic
+  core --> test
+  ui --> test
+  plugin --> classic
+  plugin --> test
+  seerr --> classic
+  seerr --> test
 ```
 
 During `docker build` ([`docker/Dockerfile`](../docker/Dockerfile)):
 
-1. Submodules are checked out at the pinned Jellyfin tag (server and web stay on the **same** feature/release tag).
-2. `apply-patches.sh` runs for web (web-build stage) and for server (build stage).
-3. Patched sources are compiled; plugins are packaged into the image.
-4. Entrypoint wires `POSTGRES_*` / optional Redis / optional SSO env vars and can run SQLite→PG migration.
+1. Submodules are checked out at the pinned Jellyfin tag. Server and classic web stay on the **same** feature/release tag.
+2. Both targets compile the patched server and package the plugins.
+3. `classic` also applies and builds `jellyfin-web` patches, then injects the SSO login script. `ui-next-test` builds `ui-next` with Node and selects its output as `JELLYFIN_WEB_DIR`.
+4. The entrypoint wires `POSTGRES_*`, optional Redis, and optional SSO environment variables. It can also run SQLite-to-PostgreSQL migration.
 
-CI workflows (build, test, publish) apply jellyfin patches the same way.
+Push, release, scheduled, and default manual Docker workflow events build `classic` and publish the Jellyfin-version and `latest` tags. A manual `web_ui=ui-next` dispatch builds `ui-next-test` and publishes `ui-next-test` plus `ui-next-test-<JELLYFIN_VERSION>` only. It does not update stable tags. The plugin build and test workflows continue to apply server patches as before.
 
 **Migration sync and patches:** fork schema (playback activity, taste entities, people provider key, indexes, …) belongs in **dedicated** plugin migrations authored with the patch. Sync does **not** use `Update_*` to capture patch schema. On each version bump it rebases `patches/` onto the new tag, applies server patches, builds the solution (API surface check), optionally generates `Update_*` when core SQLite migrations advanced, then resets the submodule.
 

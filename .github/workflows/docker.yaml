@@ -20,6 +20,14 @@ on:
         description: 'Jellyfin version (leave empty for latest)'
         required: false
         default: ''
+      web_ui:
+        description: 'Web UI to package'
+        type: choice
+        options:
+          - classic
+          - ui-next
+        required: true
+        default: classic
 
 env:
   REGISTRY: ghcr.io
@@ -183,17 +191,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker image
+      - name: Build and push classic web UI image
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.web_ui != 'ui-next' }}
         uses: docker/build-push-action@v6.15.0
         with:
           context: .
           file: docker/Dockerfile
+          target: classic
           push: true
           build-args: |
             JELLYFIN_VERSION=${{ steps.image-tag.outputs.tag }}
           tags: |
             ${{ env.REGISTRY }}/${{ steps.image-tag.outputs.owner }}/${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.tag }}
             ${{ env.REGISTRY }}/${{ steps.image-tag.outputs.owner }}/${{ env.IMAGE_NAME }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=jellyfin-classic
+          cache-to: type=gha,scope=jellyfin-classic,mode=max
+          platforms: linux/amd64
+
+      - name: Build and push UI Next test image
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.web_ui == 'ui-next' }}
+        uses: docker/build-push-action@v6.15.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: ui-next-test
+          push: true
+          build-args: |
+            JELLYFIN_VERSION=${{ steps.image-tag.outputs.tag }}
+            VITE_CLASSIC_WEB_AVAILABLE=false
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.image-tag.outputs.owner }}/${{ env.IMAGE_NAME }}:ui-next-test
+            ${{ env.REGISTRY }}/${{ steps.image-tag.outputs.owner }}/${{ env.IMAGE_NAME }}:ui-next-test-${{ steps.image-tag.outputs.tag }}
+          cache-from: type=gha,scope=jellyfin-ui-next
+          cache-to: type=gha,scope=jellyfin-ui-next,mode=max
           platforms: linux/amd64

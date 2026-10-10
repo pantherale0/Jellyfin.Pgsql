@@ -32,6 +32,45 @@ export interface IndexRange {
     end: number;
 }
 
+export type GuideDirection = 'ArrowLeft' | 'ArrowRight' | 'ArrowUp' | 'ArrowDown';
+
+export type GuideToolbarControl = { kind: 'day'; index: number } | { kind: 'filter' };
+
+export type GuideToolbarMove =
+    | { kind: 'focus'; target: GuideToolbarControl }
+    | { kind: 'tabs' | 'channels' | 'native' | 'clamp' };
+
+export type GuideFocusTarget =
+    | { kind: 'channel'; channelId: string }
+    | { kind: 'favorite'; channelId: string }
+    | { kind: 'program'; channelId: string; programId: string; start: number; end: number };
+
+export interface GuideFocusProgram {
+    programId: string;
+    start: number;
+    end: number;
+}
+
+export interface GuideNavigationContext {
+    channels: readonly string[];
+    programsByChannel: Readonly<Record<string, readonly GuideFocusProgram[]>>;
+    visibleStart: number;
+    canExtendForward: boolean;
+}
+
+export type GuideFocusMove =
+    | { kind: 'focus'; target: GuideFocusTarget }
+    | { kind: 'toolbar'; control: 'filter' }
+    | { kind: 'extend'; direction: 'forward'; channelId: string; time: number }
+    | { kind: 'clamp' };
+
+export interface FocusRect {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+}
+
 export function channelOrderKey(userId: string): string {
     return `jellyfin-ui-next-channel-order:${userId}`;
 }
@@ -277,6 +316,103 @@ export function upNextByChannel(programs: MediaItem[], now: number): Record<stri
         if (!current || start < Date.parse(current.StartDate || '')) next[channelId] = program;
     });
     return next;
+}
+
+export function moveGuideFocus({ from, direction, context }: {
+    from: GuideFocusTarget;
+    direction: GuideDirection;
+    context: GuideNavigationContext;
+}): GuideFocusMove {
+    const channelIndex = context.channels.indexOf(from.channelId);
+    if (channelIndex < 0) return { kind: 'clamp' };
+
+    if (direction === 'ArrowUp' || direction === 'ArrowDown') {
+        const nextIndex = channelIndex + (direction === 'ArrowDown' ? 1 : -1);
+        const channelId = context.channels[nextIndex];
+        if (!channelId) return { kind: 'clamp' };
+        if (from.kind === 'channel') return { kind: 'focus', target: { kind: 'channel', channelId } };
+        if (from.kind === 'favorite') return { kind: 'focus', target: { kind: 'favorite', channelId } };
+        const programs = context.programsByChannel[channelId] || [];
+        const program = programs.find(item => from.start >= item.start && from.start < item.end)
+            || programs.find(item => item.start >= from.start);
+        return program
+            ? { kind: 'focus', target: { kind: 'program', channelId, ...program } }
+            : { kind: 'focus', target: { kind: 'channel', channelId } };
+    }
+
+    if (direction === 'ArrowRight') {
+        if (from.kind === 'channel') return { kind: 'focus', target: { kind: 'favorite', channelId: from.channelId } };
+        const programs = context.programsByChannel[from.channelId] || [];
+        if (from.kind === 'favorite') {
+            const first = programs.find(program => program.end > context.visibleStart);
+            return first
+                ? { kind: 'focus', target: { kind: 'program', channelId: from.channelId, ...first } }
+                : { kind: 'clamp' };
+        }
+        const programIndex = programs.findIndex(program => program.programId === from.programId);
+        const next = programIndex >= 0 ? programs[programIndex + 1] : undefined;
+        if (next) return { kind: 'focus', target: { kind: 'program', channelId: from.channelId, ...next } };
+        return context.canExtendForward
+            ? { kind: 'extend', direction: 'forward', channelId: from.channelId, time: from.end }
+            : { kind: 'clamp' };
+    }
+
+    if (from.kind === 'channel') return { kind: 'toolbar', control: 'filter' };
+    if (from.kind === 'favorite') return { kind: 'focus', target: { kind: 'channel', channelId: from.channelId } };
+    const programs = context.programsByChannel[from.channelId] || [];
+    const programIndex = programs.findIndex(program => program.programId === from.programId);
+    const previous = programIndex > 0 ? programs[programIndex - 1] : undefined;
+    if (previous) return { kind: 'focus', target: { kind: 'program', channelId: from.channelId, ...previous } };
+    return { kind: 'focus', target: { kind: 'favorite', channelId: from.channelId } };
+}
+
+export function directionalFocusIndex(rectangles: readonly FocusRect[], currentIndex: number, direction: GuideDirection): number | null {
+    const current = rectangles[currentIndex];
+    if (!current) return null;
+    const centerX = current.left + current.width / 2;
+    const centerY = current.top + current.height / 2;
+    const right = current.left + current.width;
+    const bottom = current.top + current.height;
+    let nearest: number | null = null;
+    let nearestScore = Number.POSITIVE_INFINITY;
+    for (let index = 0; index < rectangles.length; index++) {
+        if (index === currentIndex) continue;
+        const candidate = rectangles[index];
+        const dx = candidate.left + candidate.width / 2 - centerX;
+        const dy = candidate.top + candidate.height / 2 - centerY;
+        const horizontal = direction === 'ArrowLeft' || direction === 'ArrowRight';
+        const primary = horizontal ? dx * (direction === 'ArrowRight' ? 1 : -1) : dy * (direction === 'ArrowDown' ? 1 : -1);
+        if (primary <= 4) continue;
+        const cross = horizontal ? Math.abs(dy) : Math.abs(dx);
+        const overlap = horizontal
+            ? Math.min(candidate.top + candidate.height, bottom) - Math.max(candidate.top, current.top)
+            : Math.min(candidate.left + candidate.width, right) - Math.max(candidate.left, current.left);
+        const score = primary + cross * 2 + (overlap > 0 ? 0 : 1000);
+        if (score < nearestScore) {
+            nearest = index;
+            nearestScore = score;
+        }
+    }
+    return nearest;
+}
+
+export function moveGuideToolbar({ from, direction, dayCount }: {
+    from: GuideToolbarControl;
+    direction: GuideDirection;
+    dayCount: number;
+}): GuideToolbarMove {
+    if (from.kind === 'filter') {
+        if (direction === 'ArrowLeft') return dayCount > 0 ? { kind: 'focus', target: { kind: 'day', index: dayCount - 1 } } : { kind: 'clamp' };
+        if (direction === 'ArrowUp' || direction === 'ArrowDown') return { kind: 'native' };
+        return { kind: 'clamp' };
+    }
+    if (from.index < 0 || from.index >= dayCount) return { kind: 'clamp' };
+    if (direction === 'ArrowLeft') return from.index > 0 ? { kind: 'focus', target: { kind: 'day', index: from.index - 1 } } : { kind: 'clamp' };
+    if (direction === 'ArrowRight') {
+        if (from.index < dayCount - 1) return { kind: 'focus', target: { kind: 'day', index: from.index + 1 } };
+        return { kind: 'focus', target: { kind: 'filter' } };
+    }
+    return direction === 'ArrowUp' ? { kind: 'tabs' } : { kind: 'channels' };
 }
 
 export function mergePrograms(current: Record<string, MediaItem[]>, items: MediaItem[]): Record<string, MediaItem[]> {

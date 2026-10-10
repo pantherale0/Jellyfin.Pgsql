@@ -32,7 +32,6 @@ export function LibraryPage({ api, library, onBack, onSelect, onPlay }: {
     const [ scrubLetter, setScrubLetter ] = useState('');
     const [ scrubBubbleY, setScrubBubbleY ] = useState(0);
     const [ activeLetter, setActiveLetter ] = useState('#');
-    const [ tvAlphaOpen, setTvAlphaOpen ] = useState(false);
     const [ scrolling, setScrolling ] = useState(false);
     const [ scrollProgress, setScrollProgress ] = useState(0);
     const [ sortControl, setSortControl ] = useState(`${query.SortBy}:${query.SortOrder}`);
@@ -345,7 +344,7 @@ export function LibraryPage({ api, library, onBack, onSelect, onPlay }: {
             }
             if (!document.documentElement.classList.contains('tv-client')) return;
             if (event.key === 'ArrowUp' && target.closest('.library-toolbar')) {
-                setTvAlphaOpen(true);
+                document.querySelector<HTMLElement>('.alpha-scrubber button.active, .alpha-scrubber button')?.focus();
                 event.preventDefault();
                 event.stopImmediatePropagation();
                 return;
@@ -545,7 +544,7 @@ export function LibraryPage({ api, library, onBack, onSelect, onPlay }: {
         <header class="library-sticky">
             {rail}
         </header>
-        {titleSort && !document.documentElement.classList.contains('tv-client') && <nav class="alpha-scrubber" aria-label="Jump to title" data-focusable="scope" onPointerDown={startScrub} onPointerMove={moveScrub} onPointerUp={endScrub} onPointerCancel={cancelScrub}>
+        {titleSort && <nav class="alpha-scrubber" aria-label="Jump to title" data-focusable="scope" onPointerDown={startScrub} onPointerMove={moveScrub} onPointerUp={endScrub} onPointerCancel={cancelScrub}>
             {(query.SortOrder === 'Descending' ? LETTERS.slice().reverse() : LETTERS).map(letter => <button key={letter} data-letter={letter} data-focusable="true" class={activeLetter === letter ? 'active' : ''} aria-label={letter === '#' ? 'Numbers and symbols' : letter} onClick={event => clickScrubLetter(event, letter)}>{letter}</button>)}
         </nav>}
         {!titleSort && <div class={`library-scroll-progress${scrolling ? ' visible' : ''}`} aria-hidden="true"><i style={{ height: `${Math.max(4, scrollProgress * 100)}%` }} /></div>}
@@ -560,7 +559,6 @@ export function LibraryPage({ api, library, onBack, onSelect, onPlay }: {
         {items.length > 0 && <VirtualizedLibraryGrid gridRef={grid} items={items} startIndex={startIndex} total={total} api={api} view={view} onSelect={onSelect} onPlay={onPlay} onToggle={toggleUserData} busyId={busyId} />}
         {loading && <div class="home-section-status" role="status"><span class="mini-spinner" aria-hidden="true" />{items.length ? 'Loading titles…' : 'Loading library…'}</div>}
         {!loading && !items.length && !error && <div class="empty-state"><span aria-hidden="true">✳</span><h2>Nothing here yet</h2><p>This library does not contain any matching items.</p></div>}
-        {tvAlphaOpen && <div class="tv-alpha-layer" role="presentation" onClick={event => { if (event.target === event.currentTarget) setTvAlphaOpen(false); }}><section class="tv-alpha-dialog" role="dialog" aria-modal="true" aria-label="Jump to title"><div class="library-sheet-heading"><h2>Jump to title</h2><button data-focusable="true" aria-label="Close letters" onClick={() => setTvAlphaOpen(false)}>×</button></div><div class="tv-alpha-letters">{LETTERS.map(letter => <button key={letter} data-focusable="true" onClick={() => { setTvAlphaOpen(false); void jumpToLetter(letter); }}>{letter}</button>)}</div></section></div>}
     </section>;
 }
 
@@ -593,7 +591,7 @@ function rowHeight(element: HTMLElement, view: LibraryView): number {
     const gapX = parseFloat(style.columnGap || '0') || 0;
     const contentWidth = element.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
     const width = (contentWidth - gapX * (columns - 1)) / columns;
-    return width * 1.5 + (view === 'poster' ? 49 : 0) + gapY;
+    return width * 1.5 + gapY;
 }
 
 interface GridProps {
@@ -655,7 +653,10 @@ function LibraryCard({ api, item, view, onSelect, onPlay, onToggle, busy }: {
     onToggle: (item: MediaItem, field: 'favorite' | 'played') => void; busy: boolean;
 }) {
     const [ menu, setMenu ] = useState(false);
+    const [ menuPosition, setMenuPosition ] = useState({ left: 0, top: 0 });
     const cardRef = useRef<HTMLElement>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
+    const menuTriggerRef = useRef<HTMLButtonElement>(null);
     const [ director, setDirector ] = useState('');
     const pressTimer = useRef<number>();
     const longPressed = useRef(false);
@@ -697,23 +698,32 @@ function LibraryCard({ api, item, view, onSelect, onPlay, onToggle, busy }: {
         retainCachedImage(key);
         return () => { active = false; bag.cancel?.(); releaseCachedImage(key); };
     }, [ api, item.Id, key, view ]);
-    const openMenu = () => { setMenu(true); window.setTimeout(() => document.querySelector<HTMLElement>('.library-card-menu button')?.focus(), 0); };
+    const openMenu = () => {
+        const rect = menuTriggerRef.current?.getBoundingClientRect();
+        if (rect && !document.documentElement.classList.contains('tv-client') && window.innerWidth > 767) {
+            setMenuPosition({ left: Math.max(12, Math.min(window.innerWidth - 272, rect.right - 260)), top: Math.min(window.innerHeight - 380, rect.bottom + 8) });
+        }
+        setMenu(true);
+        window.setTimeout(() => menuRef.current?.querySelector<HTMLElement>('button')?.focus(), 0);
+    };
+    const closeMenu = () => { setMenu(false); window.requestAnimationFrame(() => menuTriggerRef.current?.focus()); };
     const onPointerDown = () => { longPressed.current = false; pressTimer.current = window.setTimeout(() => { longPressed.current = true; openMenu(); }, 550); };
     const clearPress = () => { if (pressTimer.current) window.clearTimeout(pressTimer.current); };
     const metadata = [ item.ProductionYear, formatRuntime(item.RunTimeTicks) ].filter(Boolean).join(' • ');
     const progress = item.UserData?.PlayedPercentage || 0;
     const unplayedCount = item.UserData?.UnplayedItemCount || 0;
     const showUnplayedDot = !unplayedCount && !item.UserData?.Played && !progress && item.Type !== 'Series';
+    const posterOverlay = <span class="library-card-overlay"><strong>{item.Name}</strong><small>{metadata}</small></span>;
     return <article ref={cardRef} class={`library-card library-card-${view}`} data-library-item-id={item.Id}>
         <button class="library-card-open" data-focusable="true" aria-label={`View ${item.Name}`} onClick={() => { if (longPressed.current) { longPressed.current = false; return; } onSelect(item); }} onTouchStart={onPointerDown} onTouchEnd={clearPress} onTouchMove={clearPress}>
             <span class="library-card-art"><img src={image || undefined} alt="" loading="lazy" />{!image && <span class="art-placeholder">{item.Name.slice(0, 1)}</span>}
-                {view !== 'list' && <>{unplayedCount > 0 && <span class="library-unplayed" aria-label={`${unplayedCount} unplayed`}>{unplayedCount}</span>}{showUnplayedDot && <span class="library-unplayed-dot" aria-label="Unplayed" />}{quality && <span class="library-quality" title={quality}>{quality}</span>}{progress > 0 && progress < 100 && <span class="library-progress"><i style={{ width: `${progress}%` }} /></span>}</>}
+                {view !== 'list' && <>{unplayedCount > 0 && <span class="library-unplayed" aria-label={`${unplayedCount} unplayed`}>{unplayedCount}</span>}{showUnplayedDot && <span class="library-unplayed-dot" aria-label="Unplayed" />}{quality && <span class="library-quality" title={quality}>{quality}</span>}{progress > 0 && progress < 100 && <span class="library-progress"><i style={{ width: `${progress}%` }} /></span>}{posterOverlay}</>}
             </span>
-            {view !== 'compact' && <span class="library-card-copy"><strong>{item.Name}</strong>{view === 'poster' ? <small>{metadata}</small> : <small>{item.ProductionYear || '—'} <span>·</span> {metadataRuntime(item.RunTimeTicks)} <span>·</span> {item.CommunityRating ? `★ ${item.CommunityRating.toFixed(1)}` : 'Unrated'} <span>·</span> {director || 'Director unknown'} <span>·</span> {[ video?.Codec, audio?.Codec ].filter(Boolean).join(' / ') || 'Codec unknown'}</small>}</span>}
+            {view === 'list' && <span class="library-card-copy"><strong>{item.Name}</strong><small>{item.ProductionYear || '—'} <span>·</span> {metadataRuntime(item.RunTimeTicks)} <span>·</span> {item.CommunityRating ? `★ ${item.CommunityRating.toFixed(1)}` : 'Unrated'} <span>·</span> {director || 'Director unknown'} <span>·</span> {[ video?.Codec, audio?.Codec ].filter(Boolean).join(' / ') || 'Codec unknown'}</small></span>}
         </button>
         {view === 'list' && <div class="library-list-actions"><button data-focusable="true" aria-label={`${item.UserData?.IsFavorite ? 'Remove' : 'Add'} ${item.Name} ${item.UserData?.IsFavorite ? 'from' : 'to'} favorites`} disabled={busy} onClick={() => onToggle(item, 'favorite')}>{item.UserData?.IsFavorite ? '★' : '☆'}</button></div>}
-        <div class="library-card-hover"><button class="library-play-overlay" data-focusable="true" aria-label={`Play ${item.Name}`} onClick={() => onPlay(item)}>▶</button><button class="library-card-favorite" data-focusable="true" aria-label="Toggle favorite" disabled={busy} onClick={() => onToggle(item, 'favorite')}>{item.UserData?.IsFavorite ? '★' : '☆'}</button><button class="library-card-more" data-focusable="true" aria-label="More actions" onClick={openMenu}>⋯</button></div>
-        {menu && <div class="library-menu-shade" onClick={() => setMenu(false)}><div class="library-card-menu" role="menu" onClick={e => e.stopPropagation()}><button data-focusable="true" role="menuitem" onClick={() => { setMenu(false); onPlay(item); }}>▶ Play</button><button data-focusable="true" role="menuitem" onClick={() => { onToggle(item, 'favorite'); setMenu(false); }}>{item.UserData?.IsFavorite ? 'Remove favorite' : 'Add favorite'}</button><button data-focusable="true" role="menuitem" onClick={() => { onToggle(item, 'played'); setMenu(false); }}>Mark {item.UserData?.Played ? 'unplayed' : 'played'}</button><button data-focusable="true" role="menuitem" onClick={() => { setMenu(false); onSelect(item); }}>Open details</button><button data-focusable="true" role="menuitem" onClick={() => setMenu(false)}>Close</button></div></div>}
+        <div class="library-card-hover"><button class="library-play-overlay" data-focusable="true" aria-label={`Play ${item.Name}`} onClick={() => onPlay(item)}>▶</button><button class="library-card-favorite" data-focusable="true" aria-label="Toggle favorite" disabled={busy} onClick={() => onToggle(item, 'favorite')}>{item.UserData?.IsFavorite ? '★' : '☆'}</button><button ref={menuTriggerRef} class="library-card-more" data-focusable="true" aria-label="More actions" onClick={openMenu}>⋯</button></div>
+        {menu && <div class="library-menu-shade" onClick={event => { if (event.target === event.currentTarget) closeMenu(); }}><div ref={menuRef} style={!document.documentElement.classList.contains('tv-client') && window.innerWidth > 767 ? { left: `${menuPosition.left}px`, top: `${menuPosition.top}px` } : undefined} class="library-card-menu" role="menu" aria-label={`Actions for ${item.Name}`} onClick={e => e.stopPropagation()} onKeyDown={event => { if (event.key === 'Escape' || event.key === 'Back' || event.key === 'GoBack' || event.keyCode === 461 || event.keyCode === 10009) { event.preventDefault(); event.stopPropagation(); closeMenu(); } }}><strong>{item.Name}</strong><button data-focusable="true" role="menuitem" onClick={() => { closeMenu(); onPlay(item); }}>▶ Play</button><button data-focusable="true" role="menuitem" onClick={() => { onToggle(item, 'favorite'); closeMenu(); }}>{item.UserData?.IsFavorite ? 'Remove favorite' : 'Add favorite'}</button><button data-focusable="true" role="menuitem" onClick={() => { onToggle(item, 'played'); closeMenu(); }}>Mark {item.UserData?.Played ? 'unplayed' : 'played'}</button><button data-focusable="true" role="menuitem" onClick={() => { closeMenu(); onSelect(item); }}>Open details</button><button data-focusable="true" role="menuitem" onClick={closeMenu}>Close</button></div></div>}
     </article>;
 }
 
