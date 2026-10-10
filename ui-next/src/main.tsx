@@ -10,6 +10,7 @@ import { ProfileScreen, type ProfileScreenName } from './profile';
 import { buildHomeFeedBlocks, HomeFeed } from './home-feed';
 import { clearRememberedToken, getRememberedUsers, rememberUser, type RememberedUser } from './remembered-users';
 import { episodeCode, formatClock, isAiring } from './live-model';
+import { canCommitSsoRestore, parseSsoHandoff, SSO_HANDOFF_KEY, UI_NEXT_SIGNED_OUT_KEY } from './sso-session';
 import type { PlaybackChoice } from './player-model';
 import type { LiveTab, MediaItem, RecommendationGroup, Session } from './types';
 import { enterShowSeason, moveShowFocus, type Context, type Direction, type EpisodeControl, type ShowBookmark, type ShowFocusResult, type ShowTarget } from './show-navigation';
@@ -19,7 +20,7 @@ const AdminDashboard = lazy(() => import('./admin/admin-dashboard').then(module 
 
 const SESSION_KEY = 'jellyfin-ui-next-session';
 const SAVED_SERVER_KEY = 'jellyfin-ui-next-server';
-const SIGNED_OUT_KEY = 'jellyfin-ui-next-signed-out';
+const SIGNED_OUT_KEY = UI_NEXT_SIGNED_OUT_KEY;
 const configuredServer = import.meta.env.VITE_JELLYFIN_SERVER_URL?.trim() || '';
 const classicWebLinksAvailable = classicWebAvailable(import.meta.env.VITE_CLASSIC_WEB_AVAILABLE);
 
@@ -188,6 +189,9 @@ function getSavedServer(): string {
 
 function App() {
     const [ session, setSession ] = useState<Session | null>(() => readSession());
+    const [ ssoHandoffAttempt, setSsoHandoffAttempt ] = useState<string | null>(() => {
+        try { return sessionStorage.getItem(SSO_HANDOFF_KEY); } catch (_error) { return null; }
+    });
     const [ view, setView ] = useState<'home' | 'library' | 'show' | 'search' | 'details' | 'player' | 'live' | 'profile' | 'admin'>(() => window.location.hash.startsWith('#admin/') ? 'admin' : 'home');
     const [ profileScreen, setProfileScreen ] = useState<ProfileScreenName>('playback');
     const [ profileMenuOpen, setProfileMenuOpen ] = useState(false);
@@ -766,6 +770,73 @@ function App() {
             }
         }
     }, [ session ]);
+
+    useEffect(() => {
+        if (session || !ssoHandoffAttempt) return;
+        let credentials: string | null = null;
+        let apiKey: string | null = null;
+        let userId: string | null = null;
+        let serverId: string | null = null;
+        try {
+            credentials = localStorage.getItem('jellyfin_credentials');
+            apiKey = localStorage.getItem('api_key');
+            userId = localStorage.getItem('userId');
+            serverId = localStorage.getItem('serverId');
+        } catch (_error) { /* The login screen remains available when storage is disabled. */ }
+        const handoff = parseSsoHandoff({
+            serverOrigin: window.location.origin,
+            credentials,
+            apiKey,
+            userId,
+            serverId,
+            attempt: ssoHandoffAttempt,
+            now: Date.now()
+        });
+        const clearHandoff = () => {
+            try { sessionStorage.removeItem(SSO_HANDOFF_KEY); } catch (_error) { /* Clearing the marker is best effort. */ }
+            setSsoHandoffAttempt(null);
+        };
+        if (!handoff) {
+            clearHandoff();
+            setError('SSO sign-in could not be restored. Please sign in again.');
+            return;
+        }
+        const signedOut = () => {
+            try { return localStorage.getItem(SIGNED_OUT_KEY) === 'true'; } catch (_error) { return true; }
+        };
+        if (!canCommitSsoRestore({ requestActive: true, signedOut: signedOut() })) {
+            clearHandoff();
+            return;
+        }
+        let active = true;
+        const onStorage = (event: StorageEvent) => {
+            if (event.key !== SIGNED_OUT_KEY || event.newValue !== 'true') return;
+            active = false;
+            clearHandoff();
+        };
+        window.addEventListener('storage', onStorage);
+        void JellyfinApi.restoreSsoSession(handoff).then(nextSession => {
+            if (!canCommitSsoRestore({ requestActive: active, signedOut: signedOut() })) {
+                active = false;
+                clearHandoff();
+                return;
+            }
+            try {
+                localStorage.removeItem(SIGNED_OUT_KEY);
+                sessionStorage.removeItem(SSO_HANDOFF_KEY);
+            } catch (_error) { /* The in-memory session can still continue. */ }
+            setSession(nextSession);
+            setSsoHandoffAttempt(null);
+        }).catch(() => {
+            if (!active) return;
+            clearHandoff();
+            setError('SSO sign-in could not be restored. Please sign in again.');
+        });
+        return () => {
+            active = false;
+            window.removeEventListener('storage', onStorage);
+        };
+    }, [ session, ssoHandoffAttempt ]);
 
     const login = async (event: Event) => {
         event.preventDefault();
@@ -1689,6 +1760,9 @@ function App() {
     }, [ session, localLogin, quickConnectSelected, view, profileScreen, selected, activeLibrary, isMobileNavOpen, closeMobileNav, recommendations.length, stepRecommendation, tvSeries, showSeasons ]);
 
     if (!session) {
+        if (ssoHandoffAttempt) {
+            return <main class="login-page"><section class="login-card"><div class="brand-mark">J</div><p class="eyebrow">SECURE SIGN-IN</p><h1>Completing SSO sign-in…</h1><p class="muted">Checking your Jellyfin session.</p></section></main>;
+        }
         if (!localLogin && (ssoEnabled === null || quickConnectEnabled === null)) {
             return <main class="login-page"><section class="login-card"><div class="brand-mark">J</div><p class="eyebrow">SECURE SIGN-IN</p><h1>Checking sign-in…</h1><p class="muted">Connecting to your Jellyfin server.</p></section></main>;
         }
@@ -1728,7 +1802,7 @@ function App() {
                     {ssoCheckFailed && <p class="notice error" role="status">Sign-in options could not be checked. Try reloading or sign in with your username and password.</p>}
                     {error && <p class="notice error" role="alert">{error}</p>}
                     {!localLogin && !quickConnectSelected && <>
-                        {!tvClient && ssoEnabled && <button data-focusable="true" class="button secondary full" type="button" onClick={() => void JellyfinApi.beginSso(server)}>Continue with SSO</button>}
+                        {!tvClient && ssoEnabled && <button data-focusable="true" class="button secondary full" type="button" onClick={() => { void JellyfinApi.beginSso(server).catch(() => setError('SSO sign-in could not be started. Please try again.')); }}>Continue with SSO</button>}
                         <button data-focusable="true" class="button primary full login-choice" type="button" disabled={!quickConnectEnabled} onClick={useQuickConnect}>Quick Connect<span class="login-choice-detail">Use your phone or computer</span></button>
                         {!quickConnectEnabled && <p class="security-note">Quick Connect is not enabled on this Jellyfin server.</p>}
                         <button data-focusable="true" class="button secondary full login-choice" type="button" onClick={useLocalLogin}>Username and password<span class="login-choice-detail">Sign in with your Jellyfin account</span></button>
