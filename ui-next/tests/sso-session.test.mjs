@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-const ssoSession = await import('../src/sso-session.ts').catch(() => ({}));
+import { runInNewContext } from 'node:vm';
+const ssoSession = await import('../src/sso-session.ts');
 
 const origin = 'https://jellyfin.example.test';
 const startedAt = 1791622800000;
@@ -111,6 +113,50 @@ test('creates a UI Next session only for the authenticated user and server', () 
     assert.equal(ssoSession.createSsoSession(handoff, { Id: 'other-user', Name: 'Other' }, { Id: serverId }), null);
     assert.equal(ssoSession.createSsoSession(handoff, { Id: 'user-id', Name: 'Jordan' }, { Id: 'other-server' }), null);
     assert.equal(ssoSession.createSsoSession(handoff, { Id: 'user-id' }, { Id: serverId }), null);
+});
+
+test('restores the patched callback with its hyphenated GUID and the API compact GUID', () => {
+    const patch = readFileSync(new URL('../../patches/jellyfin_sso.patch', import.meta.url), 'utf8');
+    const addedSource = patch.split('\n').filter(line => line.startsWith('+') && !line.startsWith('+++')).map(line => line.slice(1)).join('\n');
+    const script = addedSource.match(/<script>\n([\s\S]*?)<\/script>/)?.[1];
+    assert.ok(script, 'server callback must contain its credential handoff script');
+    const callbackUserId = 'aabbccdd-1122-3344-5566-778899aabbcc';
+    const storage = new Map();
+    const location = { origin, href: `${origin}/sso/callback` };
+    runInNewContext(script
+        .replaceAll('""', '"').replaceAll('{{', '{').replaceAll('}}', '}')
+        .replace('{authResult.AccessToken}', accessToken)
+        .replace('{authResult.User.Id.ToString()}', callbackUserId)
+        .replace('{authResult.ServerId}', serverId), {
+        localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
+        window: { location },
+        Date: { now: () => startedAt + 1000 }
+    });
+    assert.equal(location.href, '/web/index.html');
+    const handoff = parseHandoff(handoffInput({
+        credentials: storage.get('jellyfin_credentials'),
+        apiKey: storage.get('api_key'),
+        userId: storage.get('userId'),
+        serverId: storage.get('serverId')
+    }));
+    assert.ok(handoff, 'the actual callback storage must be accepted');
+    assert.deepEqual(ssoSession.createSsoSession(handoff, {
+        Id: 'aabbccdd112233445566778899aabbcc', Name: 'Jordan'
+    }, { Id: serverId }), {
+        server: origin, token: accessToken,
+        user: { Id: 'aabbccdd112233445566778899aabbcc', Name: 'Jordan' }, serverId
+    });
+});
+
+test('GUID format compatibility still rejects different or malformed user identities', () => {
+    const handoff = { server: origin, token: accessToken, userId: 'AABBCCDD-1122-3344-5566-778899AABBCC', serverId };
+    const user = { Id: 'aabbccdd112233445566778899aabbcc', Name: 'Jordan' };
+    assert.deepEqual(ssoSession.createSsoSession(handoff, user, { Id: serverId }), {
+        server: origin, token: accessToken, user, serverId
+    });
+    assert.equal(ssoSession.createSsoSession(handoff, { ...user, Id: 'aabbccdd112233445566778899aabbcd' }, { Id: serverId }), null);
+    assert.equal(ssoSession.createSsoSession({ ...handoff, userId: 'aabb-ccdd112233445566778899aabbcc' }, user, { Id: serverId }), null);
+    assert.equal(ssoSession.createSsoSession(handoff, user, { Id: 'other-server' }), null);
 });
 
 test('a stale SSO restore cannot commit after the request is cancelled or another tab signs out', () => {
