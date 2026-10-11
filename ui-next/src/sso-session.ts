@@ -97,12 +97,18 @@ export function parseSsoHandoff({ serverOrigin, credentials, apiKey, userId, ser
     return null;
 }
 
+function normalizeUserId(id: string): string {
+    return /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.test(id)
+        ? id.replace(/-/g, '').toLowerCase()
+        : id;
+}
+
 export function createSsoSession(handoff: SsoHandoff, response: unknown, serverInfo: unknown): Session | null {
     if (!isRecord(response)) return null;
     if (!isRecord(serverInfo) || serverInfo.Id !== handoff.serverId) return null;
     const id = response.Id;
     const name = response.Name;
-    if (typeof id !== 'string' || id !== handoff.userId || typeof name !== 'string' || !name) return null;
+    if (typeof id !== 'string' || normalizeUserId(id) !== normalizeUserId(handoff.userId) || typeof name !== 'string' || !name) return null;
     const user: JellyfinUser = { Id: id, Name: name };
     return { server: handoff.server, token: handoff.token, user, serverId: handoff.serverId };
 }
