@@ -1,3 +1,5 @@
+import type { LibraryOptions } from './library-options';
+
 export type AdminSection = 'overview' | 'users' | 'libraries' | 'playback' | 'live-tv' | 'recommendations' | 'infrastructure' | 'activity' | 'system';
 
 export type ServerHealth = 'healthy' | 'degraded' | 'critical';
@@ -19,15 +21,19 @@ export interface ServerActivityEntry {
 }
 
 export interface JellyfinSession {
-    Id: string; UserName?: string; Client?: string; DeviceName?: string; UserId?: string; RemoteEndPoint?: string;
-    UserPrimaryImageTag?: string; LastActivityDate?: string; PlayState?: { PositionTicks?: number; PlayMethod?: string | number; IsPaused?: boolean };
+    Id: string; UserName?: string; Client?: string; DeviceName?: string; UserId?: string; RemoteEndPoint?: string; SupportsRemoteControl?: boolean;
+    UserPrimaryImageTag?: string; LastActivityDate?: string; ApplicationVersion?: string; SupportedCommands?: string[];
+    PlayState?: { PositionTicks?: number; PlayMethod?: string | number; IsPaused?: boolean; IsMuted?: boolean; MediaSourceId?: string; AudioStreamIndex?: number; SubtitleStreamIndex?: number };
     NowPlayingItem?: { Name?: string; Type?: string; Id?: string; RunTimeTicks?: number; ProductionYear?: number };
-    TranscodingInfo?: { IsVideoDirect?: boolean; IsAudioDirect?: boolean; Container?: string; BitRate?: number; Width?: number; Height?: number; VideoCodec?: string; AudioCodec?: string };
+    TranscodingInfo?: { IsVideoDirect?: boolean; IsAudioDirect?: boolean; Container?: string; BitRate?: number; Width?: number; Height?: number; VideoCodec?: string; AudioCodec?: string;
+        AudioChannels?: number; Framerate?: number; CompletionPercentage?: number; HardwareAccelerationType?: string; TranscodeReasons?: string[] };
 }
 
 export interface ScheduledTask {
     Id: string; Key?: string; Name?: string; State?: string; CurrentProgressPercentage?: number;
-    LastExecutionResult?: { Status?: string; EndTimeUtc?: string; StartTimeUtc?: string };
+    Description?: string; Category?: string; IsHidden?: boolean;
+    Triggers?: import('./server-settings').TaskTrigger[];
+    LastExecutionResult?: { Status?: string; EndTimeUtc?: string; StartTimeUtc?: string; ErrorMessage?: string };
 }
 
 export interface JellyfinUserInfo {
@@ -46,10 +52,9 @@ export interface LibraryInfo {
 }
 
 export interface SystemInfo {
-    ServerName?: string; Version?: string; OperatingSystem?: string; RunTimeTicks?: number;
-    SystemUpdateLevel?: string; InternalHttpPort?: number; PublicHttpPort?: number; HttpsPort?: number;
-    WebSocketPort?: number; HasUpdateAvailable?: boolean; OperatingSystemDisplayName?: string;
-    WebSocketPortNumber?: number;
+    ServerName?: string; Version?: string; ProductName?: string; Id?: string;
+    HasUpdateAvailable?: boolean; HasPendingRestart?: boolean; IsShuttingDown?: boolean;
+    PackageName?: string; SystemArchitecture?: string; EncoderLocation?: string; SupportsLibraryMonitor?: boolean;
 }
 
 export interface PluginInfo {
@@ -70,7 +75,7 @@ export interface PlaybackStats {
 }
 
 export interface DeviceInfo {
-    Id?: string; Name?: string; LastUserId?: string; AppName?: string; AppVersion?: string;
+    Id?: string; Name?: string; CustomName?: string; LastUserId?: string; AppName?: string; AppVersion?: string;
     LastUserName?: string; DateLastActivity?: string;
 }
 
@@ -109,9 +114,51 @@ export interface VirtualFolder {
     ItemId?: string;
     RefreshProgress?: number;
     RefreshStatus?: string;
+    LibraryOptions?: LibraryOptions;
+}
+
+export interface TunerHostInfo {
+    [key: string]: unknown;
+    Id?: string; Url?: string; Type?: string; DeviceId?: string; FriendlyName?: string;
+    ImportFavoritesOnly?: boolean; AllowHWTranscoding?: boolean; AllowFmp4TranscodingContainer?: boolean; AllowStreamSharing?: boolean;
+    FallbackMaxStreamingBitrate?: number; EnableStreamLooping?: boolean; Source?: string; TunerCount?: number; UserAgent?: string;
+    IgnoreDts?: boolean; ReadAtNativeFramerate?: boolean;
+}
+
+export interface ListingsProviderInfo {
+    [key: string]: unknown;
+    Id?: string; Type?: string; Username?: string; Password?: string; ListingsId?: string; ZipCode?: string; Country?: string; Path?: string;
+    EnabledTuners?: string[]; EnableAllTuners?: boolean;
+    NewsCategories?: string[]; SportsCategories?: string[]; KidsCategories?: string[]; MovieCategories?: string[];
+    ChannelMappings?: Array<{ Name?: string; Value?: string }>; MoviePrefix?: string; PreferredLanguage?: string; UserAgent?: string;
+}
+
+export interface LiveTvConfiguration {
+    [key: string]: unknown;
+    TunerHosts?: TunerHostInfo[];
+    ListingProviders?: ListingsProviderInfo[];
+}
+
+export interface TunerChannelMapping { Id?: string; Name?: string; ProviderChannelId?: string; ProviderChannelName?: string }
+
+export interface ChannelMappingOptions {
+    TunerChannels?: TunerChannelMapping[];
+    ProviderChannels?: Array<{ Id?: string; Name?: string }>;
+    Mappings?: Array<{ Name?: string; Value?: string }>;
+    ProviderName?: string;
+}
+
+export interface TasteEvalRun {
+    Id?: string; CreatedAt?: string; TrainDurationMs?: number; PositiveCount?: number; NegativeCount?: number; HoldoutCount?: number; TrainCount?: number;
+    Accuracy?: number | null; Auc?: number | null; PrecisionAt10?: number | null; MeanPrecisionAt10?: number | null;
+    SplitType?: string | null; HoldoutFraction?: number | null; HoldoutWindowStart?: string | null; HoldoutWindowEnd?: string | null;
+    ForYouEngageRate?: number | null; ForYouEngageWindowDays?: number | null; ForYouImpressionCount?: number | null; ForYouEngageCount?: number | null;
+    Notes?: string | null; Succeeded?: boolean;
 }
 
 export interface TasteShadowEval {
-    Status?: { TasteEnabled?: boolean; ShadowTrainingEnabled?: boolean; NeuralServingEnabled?: boolean; NeuralModelLoaded?: boolean; ForYouEngageRate?: number };
-    Latest?: { CreatedAt?: string; PrecisionAt10?: number; MeanPrecisionAt10?: number; Succeeded?: boolean };
+    Status?: { TasteEnabled?: boolean; ShadowTrainingEnabled?: boolean; NeuralServingEnabled?: boolean; NeuralModelLoaded?: boolean; ForYouEngageRate?: number;
+        ForYouEngageWindowDays?: number; ForYouImpressionCount?: number; ForYouEngageCount?: number };
+    Latest?: TasteEvalRun;
+    Runs?: TasteEvalRun[];
 }

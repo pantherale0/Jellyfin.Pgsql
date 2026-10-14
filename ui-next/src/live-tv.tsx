@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { JellyfinApi } from './api';
+import { useDialogFocus } from './dialog-focus';
+import { userMessage } from './ui-errors';
 import { GuideToolbar, LiveGuide, LiveThumb, ProgramSummary } from './live-guide';
-import { CHANNEL_PAGE_SIZE, GUIDE_CHUNK_MS, airingProgress, categoryLabel, channelFromProgram, chunkStarts, directionalFocusIndex, formatClock, formatRange, formatRemaining, groupOnNow, guideDays, initialGuideRange, isoTime, matchChannelIndex, mergePrograms, moveChannel, orderChannels, readChannelOrder, startOfLocalDay, upNextByChannel, withFavorite, writeChannelOrder, type FocusRect, type GuideDay, type GuideDirection } from './live-model';
+import { CHANNEL_PAGE_SIZE, GUIDE_CHUNK_MS, airingProgress, categoryLabel, channelFromProgram, chunkStarts, currentProgramFor, directionalFocusIndex, formatClock, formatRange, formatRemaining, groupOnNow, guideDays, initialGuideRange, isAiring, isoTime, matchChannelIndex, mergePrograms, moveChannel, orderChannels, peekLiveView, programRecordingState, readChannelOrder, rememberLiveView, startOfLocalDay, timerDraft, timerInProgress, timerUpdatePayload, upNextByChannel, validateTimerDraft, withFavorite, withRecordingPending, writeChannelOrder, type FocusRect, type GuideDay, type GuideDirection, type TimerDraft } from './live-model';
 import type { LiveChannelFilter, LiveTab, LiveTimer, MediaItem } from './types';
 
 const TABS: Array<{ id: LiveTab; label: string }> = [
@@ -12,9 +14,8 @@ const TABS: Array<{ id: LiveTab; label: string }> = [
 ];
 
 function liveError(error: unknown, denied: string): string {
-    const message = error instanceof Error ? error.message : '';
-    if (message.indexOf('(403)') >= 0) return denied;
-    return message || 'Something went wrong. Please try again.';
+    if ((error as { status?: number } | null)?.status === 403) return denied;
+    return userMessage(error);
 }
 
 function useMaxWidth(max: number): boolean {
@@ -42,12 +43,16 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
     onPlay: (item: MediaItem) => void;
 }) {
     const compact = useMaxWidth(767);
+    const restored = useRef(peekLiveView(userId, Date.now())).current;
+    const restoreCount = useRef(restored?.channelCount || 0);
+    const skipRangeReset = useRef(Boolean(restored));
     const [ now, setNow ] = useState(() => Date.now());
     const [ order, setOrder ] = useState<string[]>(() => readChannelOrder(userId));
-    const [ filter, setFilter ] = useState<LiveChannelFilter>('all');
+    const [ filter, setFilter ] = useState<LiveChannelFilter>(restored?.filter || 'all');
     const [ days, setDays ] = useState<GuideDay[]>(() => guideDays(null, Date.now()));
-    const [ dayStart, setDayStart ] = useState(() => startOfLocalDay(Date.now()));
-    const [ range, setRange ] = useState(() => initialGuideRange(startOfLocalDay(Date.now()), Date.now()));
+    const [ dayStart, setDayStart ] = useState(() => restored?.dayStart ?? startOfLocalDay(Date.now()));
+    const [ range, setRange ] = useState(() => restored?.range ?? initialGuideRange(startOfLocalDay(Date.now()), Date.now()));
+    const [ editor, setEditor ] = useState<{ series: boolean; timer: LiveTimer; draft: TimerDraft; saving: boolean; error: string } | null>(null);
     const [ guideChannels, setGuideChannels ] = useState<MediaItem[]>([]);
     const [ guideTotal, setGuideTotal ] = useState(0);
     const [ guideLoading, setGuideLoading ] = useState(false);
@@ -64,6 +69,8 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
     const [ timers, setTimers ] = useState<LiveTimer[]>([]);
     const [ seriesTimers, setSeriesTimers ] = useState<LiveTimer[]>([]);
     const [ recordings, setRecordings ] = useState<MediaItem[]>([]);
+    const [ recordingsTotal, setRecordingsTotal ] = useState(0);
+    const [ recordingsMore, setRecordingsMore ] = useState(false);
     const [ dvrLoading, setDvrLoading ] = useState(false);
     const [ dvrError, setDvrError ] = useState('');
     const [ dvrTick, setDvrTick ] = useState(0);
@@ -72,7 +79,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
     const [ recordingBusy, setRecordingBusy ] = useState(false);
     const [ expandedId, setExpandedId ] = useState('');
     const [ dayPrograms, setDayPrograms ] = useState<MediaItem[]>([]);
-    const [ jump, setJump ] = useState({ id: '', nonce: 0 });
+    const [ jump, setJump ] = useState({ id: restored?.channelId || '', nonce: restored ? 1 : 0 });
     const [ digits, setDigits ] = useState('');
     const guideCount = useRef(0);
     const guideGeneration = useRef(0);
@@ -101,6 +108,9 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             if (origin.isConnected) origin.focus();
         });
     };
+    const editorRef = useRef<HTMLElement>(null);
+    useDialogFocus(sheetRef, Boolean(sheet), closeSheet, { initial: '[data-focusable="true"]' });
+    useDialogFocus(editorRef, Boolean(editor), () => setEditor(current => current?.saving ? current : null), { initial: 'input, select' });
 
     const orderedGuide = useMemo(() => orderChannels(guideChannels, order), [ guideChannels, order ]);
     const orderedDirectory = useMemo(() => orderChannels(directory, order), [ directory, order ]);
@@ -114,8 +124,12 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
         return upNextByChannel(merged, now);
     }, [ upcoming, programs, now ]);
 
+    const [ snapshotTick, setSnapshotTick ] = useState(0);
     useEffect(() => {
-        const timer = window.setInterval(() => setNow(Date.now()), 60000);
+        const timer = window.setInterval(() => {
+            setNow(Date.now());
+            setSnapshotTick(tick => tick + 1);
+        }, 60000);
         return () => {
             window.clearInterval(timer);
             if (programFrame.current) window.cancelAnimationFrame(programFrame.current);
@@ -138,6 +152,10 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
     }, [ api ]);
 
     useEffect(() => {
+        if (skipRangeReset.current) {
+            skipRangeReset.current = false;
+            return;
+        }
         setRange(initialGuideRange(dayStart, Date.now()));
         setExpandedId('');
     }, [ dayStart ]);
@@ -151,7 +169,9 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
         setGuideChannels([]);
         setGuideLoading(true);
         setGuideError('');
-        void api.getLiveChannels(0, CHANNEL_PAGE_SIZE, filter).then(response => {
+        const limit = Math.max(CHANNEL_PAGE_SIZE, restoreCount.current);
+        restoreCount.current = 0;
+        void api.getLiveChannels(0, limit, filter).then(response => {
             if (generation !== guideGeneration.current) return;
             const items = response.Items || [];
             guideCount.current = items.length;
@@ -216,6 +236,8 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
         }
     };
 
+    const [ airingTotal, setAiringTotal ] = useState(0);
+    const [ airingMore, setAiringMore ] = useState(false);
     useEffect(() => {
         if (tab !== 'now') return;
         let cancelled = false;
@@ -225,6 +247,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             if (cancelled) return;
             const items = response.Items || [];
             setAiring(items);
+            setAiringTotal(response.TotalRecordCount ?? items.length);
             const ids = Array.from(new Set(items.map(item => item.ChannelId).filter((id): id is string => Boolean(id))));
             if (!ids.length) {
                 setUpcoming([]);
@@ -239,7 +262,21 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             if (!cancelled) setNowLoading(false);
         });
         return () => { cancelled = true; };
-    }, [ api, tab ]);
+    }, [ api, tab, snapshotTick ]);
+
+    const loadMoreAiring = async () => {
+        if (airingMore || airing.length >= airingTotal) return;
+        setAiringMore(true);
+        try {
+            const response = await api.getAiringPrograms(80, airing.length);
+            setAiring(current => current.concat((response.Items || []).filter(item => !current.some(existing => existing.Id === item.Id))));
+            setAiringTotal(response.TotalRecordCount ?? airing.length);
+        } catch (error) {
+            setNowError(liveError(error, 'On Now could not load.'));
+        } finally {
+            setAiringMore(false);
+        }
+    };
 
     useEffect(() => {
         if (tab !== 'channels' || directory.length) return;
@@ -270,6 +307,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             setTimers(nextTimers);
             setSeriesTimers(nextSeries);
             setRecordings(nextRecordings.Items || []);
+            setRecordingsTotal(nextRecordings.TotalRecordCount ?? (nextRecordings.Items || []).length);
         }).catch(error => {
             if (!cancelled) setDvrError(liveError(error, 'Recordings could not load.'));
         }).finally(() => {
@@ -277,6 +315,15 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
         });
         return () => { cancelled = true; };
     }, [ api, tab, dvrTick ]);
+
+    useEffect(() => {
+        if (!compact || tab !== 'guide' || !restored?.channelId || !jump.id) return;
+        const target = document.getElementById(`live-mobile-${jump.id}`);
+        if (!target) return;
+        target.scrollIntoView({ block: 'center' });
+        target.focus();
+        setJump({ id: '', nonce: 0 });
+    }, [ compact, tab, orderedGuide ]);
 
     useEffect(() => {
         if (!compact || tab !== 'guide' || !orderedGuide.length) return;
@@ -374,6 +421,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
     };
 
     const tune = (channel: MediaItem, program?: MediaItem) => {
+        rememberLiveView({ userId, dayStart, filter, range, channelCount: guideCount.current, channelId: channel.Id, savedAt: Date.now() });
         onPlay({
             ...channel,
             Id: channel.Id,
@@ -383,22 +431,70 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
     };
 
     const record = async (series: boolean) => {
-        if (!sheet?.program.Id) return;
+        const programId = sheet?.program.Id;
+        if (!programId) return;
         setRecordingBusy(true);
         setActionError('');
         try {
-            await api.createLiveTimer(sheet.program.Id, series);
+            await api.createLiveTimer(programId, series);
             setDvrTick(value => value + 1);
-            setSheet(current => current ? {
-                ...current,
-                program: series ? { ...current.program, SeriesTimerId: current.program.SeriesTimerId || 'pending' } : { ...current.program, TimerId: current.program.TimerId || 'pending' }
-            } : current);
+            setSheet(current => withRecordingPending(current, programId, series));
         } catch (error) {
             setActionError(liveError(error, 'Recording is not available for this account.'));
         } finally {
             setRecordingBusy(false);
         }
     };
+
+    const updateSheetProgram = (change: Partial<MediaItem>) => setSheet(current => current ? { ...current, program: { ...current.program, ...change } } : current);
+
+    const runDvrAction = async (action: () => Promise<void>, after?: () => void) => {
+        setRecordingBusy(true);
+        setActionError('');
+        try {
+            await action();
+            after?.();
+            setDvrTick(value => value + 1);
+        } catch (error) {
+            setActionError(liveError(error, 'Recording is not available for this account.'));
+        } finally {
+            setRecordingBusy(false);
+        }
+    };
+
+    const openEditor = async (series: boolean, id: string) => {
+        setActionError('');
+        setDvrError('');
+        try {
+            const timer = series ? await api.getSeriesTimer(id) : await api.getLiveTimer(id);
+            closeSheet();
+            setEditor({ series, timer, draft: timerDraft(timer), saving: false, error: '' });
+        } catch (error) {
+            const message = liveError(error, 'Recording is not available for this account.');
+            if (sheet) setActionError(message);
+            else setDvrError(message);
+        }
+    };
+
+    const saveEditor = async () => {
+        if (!editor) return;
+        const problem = validateTimerDraft(editor.draft, editor.series);
+        if (problem) {
+            setEditor({ ...editor, error: problem });
+            return;
+        }
+        setEditor({ ...editor, saving: true, error: '' });
+        try {
+            const payload = timerUpdatePayload(editor.timer, editor.draft, editor.series);
+            await (editor.series ? api.updateSeriesTimer(payload) : api.updateLiveTimer(payload));
+            setEditor(null);
+            setDvrTick(value => value + 1);
+        } catch (error) {
+            setEditor(current => current ? { ...current, saving: false, error: liveError(error, 'Recording is not available for this account.') } : current);
+        }
+    };
+
+    const updateDraft = (change: Partial<TimerDraft>) => setEditor(current => current ? { ...current, draft: { ...current.draft, ...change }, error: '' } : current);
 
     const loadMoreDirectory = async () => {
         if (directoryLoading || directoryCount.current >= directoryTotal) return;
@@ -423,14 +519,27 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
         writeChannelOrder(userId, next);
     };
 
-    const currentProgram = (channel: MediaItem): MediaItem | undefined => {
-        if (channel.CurrentProgram?.Name) return channel.CurrentProgram;
-        return (programs[channel.Id] || []).find(program => {
-            const start = Date.parse(program.StartDate || '');
-            const end = Date.parse(program.EndDate || '');
-            return Number.isFinite(start) && Number.isFinite(end) && now >= start && now < end;
-        });
+    const recordingActions = (program: MediaItem) => {
+        const state = programRecordingState(program);
+        const airingNow = isAiring(program, now);
+        if (state.kind === 'none') return <>
+            <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void record(false)}>Record Episode</button>
+            {state.series && <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void record(true)}>Record Series</button>}
+        </>;
+        if (state.pending) return <span class="muted">Recording scheduled.</span>;
+        if (state.kind === 'episode') return <>
+            <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void openEditor(false, state.timerId)}>Edit recording</button>
+            <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void runDvrAction(() => api.cancelLiveTimer(state.timerId), () => updateSheetProgram({ TimerId: undefined }))}>{airingNow ? 'Stop recording' : 'Cancel recording'}</button>
+        </>;
+        return <>
+            <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void openEditor(true, state.seriesTimerId)}>Edit series rule</button>
+            {state.timerId && <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void runDvrAction(() => api.cancelLiveTimer(state.timerId || ''), () => updateSheetProgram({ TimerId: undefined }))}>{airingNow ? 'Stop this episode' : 'Skip this episode'}</button>}
+            <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void runDvrAction(() => api.cancelSeriesTimer(state.seriesTimerId), () => updateSheetProgram({ SeriesTimerId: undefined, TimerId: undefined }))}>Cancel series</button>
+        </>;
     };
+
+    const currentProgram = (channel: MediaItem): MediaItem | undefined =>
+        currentProgramFor(channel, programs, now);
 
     return <section class="live-page">
         <div class="live-tabs" role="tablist" aria-label="Live TV">
@@ -466,6 +575,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                     })}
                 </div>
             </section>)}
+            {airing.length < airingTotal && <button type="button" class="button secondary" data-focusable="true" onClick={() => void loadMoreAiring()}>{airingMore ? 'Loading…' : `Show more (${airingTotal - airing.length} remaining)`}</button>}
         </div>}
 
         {tab === 'guide' && !compact && <LiveGuide
@@ -538,6 +648,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
 
         {tab === 'channels' && <div class="live-directory">
             {directoryError && <p class="notice error" role="alert">{directoryError}</p>}
+            <p class="muted">Channel order is saved only in this browser on this device; other devices keep their own order. Favorites sync with your Jellyfin account. {order.length > 0 && <button type="button" class="button secondary live-reset-order" data-focusable="true" onClick={() => { setOrder([]); writeChannelOrder(userId, []); }}>Reset order</button>}</p>
             {directoryLoading && !orderedDirectory.length && <p class="live-empty">Loading channels…</p>}
             {!directoryLoading && !directoryError && !orderedDirectory.length && <p class="live-empty">No channels are available.</p>}
             <ul class="live-channel-list">
@@ -567,7 +678,10 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                 <ul class="live-dvr-list">
                     {timers.map(timer => <li key={timer.Id}>
                         <div><strong>{timer.Name || 'Recording'}</strong><span class="muted">{timer.ChannelName}{timer.StartDate ? ` · ${formatRange(timer.StartDate, timer.EndDate)}` : ''}{timer.Status ? ` · ${timer.Status}` : ''}</span></div>
-                        <button type="button" class="button secondary" data-focusable="true" onClick={() => void api.cancelLiveTimer(timer.Id).then(() => setDvrTick(value => value + 1)).catch(error => setDvrError(liveError(error, 'Recording is not available for this account.')))}>Cancel</button>
+                        <span class="live-dvr-actions">
+                            <button type="button" class="button secondary" data-focusable="true" onClick={() => void openEditor(false, timer.Id)}>Edit</button>
+                            <button type="button" class="button secondary" data-focusable="true" onClick={() => void api.cancelLiveTimer(timer.Id).then(() => setDvrTick(value => value + 1)).catch(error => setDvrError(liveError(error, 'Recording is not available for this account.')))}>{timerInProgress(timer, now) ? 'Stop recording' : 'Cancel'}</button>
+                        </span>
                     </li>)}
                 </ul>
             </section>
@@ -576,8 +690,11 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                 {!seriesTimers.length && !dvrLoading && <p class="muted">No series recording rules.</p>}
                 <ul class="live-dvr-list">
                     {seriesTimers.map(timer => <li key={timer.Id}>
-                        <div><strong>{timer.Name || 'Series recording'}</strong><span class="muted">{timer.ChannelName}</span></div>
-                        <button type="button" class="button secondary" data-focusable="true" onClick={() => void api.cancelSeriesTimer(timer.Id).then(() => setDvrTick(value => value + 1)).catch(error => setDvrError(liveError(error, 'Recording is not available for this account.')))}>Cancel series</button>
+                        <div><strong>{timer.Name || 'Series recording'}</strong><span class="muted">{timer.RecordAnyChannel ? 'Any channel' : timer.ChannelName}{timer.RecordNewOnly ? ' · New episodes only' : ''}{timer.KeepUpTo ? ` · Keep ${timer.KeepUpTo}` : ''}</span></div>
+                        <span class="live-dvr-actions">
+                            <button type="button" class="button secondary" data-focusable="true" onClick={() => void openEditor(true, timer.Id)}>Edit</button>
+                            <button type="button" class="button secondary" data-focusable="true" onClick={() => void api.cancelSeriesTimer(timer.Id).then(() => setDvrTick(value => value + 1)).catch(error => setDvrError(liveError(error, 'Recording is not available for this account.')))}>Cancel series</button>
+                        </span>
                     </li>)}
                 </ul>
             </section>
@@ -590,6 +707,19 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                         <button type="button" class="button secondary" data-focusable="true" onClick={() => void api.deleteRecording(item.Id).then(() => setDvrTick(value => value + 1)).catch(error => setDvrError(liveError(error, 'Recording is not available for this account.')))}>Delete</button>
                     </li>)}
                 </ul>
+                {recordings.length < recordingsTotal && <button type="button" class="button secondary" data-focusable="true" onClick={async () => {
+                    if (recordingsMore) return;
+                    setRecordingsMore(true);
+                    try {
+                        const page = await api.getRecordings(recordings.length);
+                        setRecordings(current => current.concat((page.Items || []).filter(item => !current.some(existing => existing.Id === item.Id))));
+                        setRecordingsTotal(page.TotalRecordCount ?? recordings.length);
+                    } catch (error) {
+                        setDvrError(liveError(error, 'Recordings could not load.'));
+                    } finally {
+                        setRecordingsMore(false);
+                    }
+                }}>{recordingsMore ? 'Loading…' : `Show more (${recordingsTotal - recordings.length} remaining)`}</button>}
             </section>
         </div>}
 
@@ -599,10 +729,30 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                 {actionError && <p class="notice error" role="alert">{actionError}</p>}
                 <div class="live-actions">
                     <button type="button" class="button primary" data-focusable="true" onClick={() => tune(sheet.channel, sheet.program)}>Watch Now</button>
-                    <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void record(false)}>Record Episode</button>
-                    <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void record(true)}>Record Series</button>
+                    {recordingActions(sheet.program)}
                     <button type="button" class="button secondary" data-focusable="true" onClick={closeSheet}>Close</button>
                 </div>
+            </aside>
+        </div>}
+
+        {editor && <div class="live-sheet-backdrop" onClick={event => { if (event.target === event.currentTarget && !editor.saving) setEditor(null); }}>
+            <aside ref={editorRef} class="live-sheet" role="dialog" aria-modal="true" aria-label={editor.series ? 'Edit series recording' : 'Edit recording'}>
+                <h2>{editor.series ? 'Series recording' : 'Recording'}: {editor.timer.Name || 'Untitled'}</h2>
+                {editor.error && <p class="notice error" role="alert">{editor.error}</p>}
+                <form class="profile-form live-timer-form" onSubmit={event => { event.preventDefault(); void saveEditor(); }}>
+                    <label>Start early (minutes)<input data-focusable="true" type="number" min="0" max="240" step="1" value={editor.draft.prePaddingMinutes} onInput={event => updateDraft({ prePaddingMinutes: Number((event.currentTarget as HTMLInputElement).value) })} /></label>
+                    <label>Stop late (minutes)<input data-focusable="true" type="number" min="0" max="240" step="1" value={editor.draft.postPaddingMinutes} onInput={event => updateDraft({ postPaddingMinutes: Number((event.currentTarget as HTMLInputElement).value) })} /></label>
+                    {editor.series && <>
+                        <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={editor.draft.recordNewOnly} onChange={event => updateDraft({ recordNewOnly: (event.currentTarget as HTMLInputElement).checked })} /> Record new episodes only</label>
+                        <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={editor.draft.recordAnyChannel} onChange={event => updateDraft({ recordAnyChannel: (event.currentTarget as HTMLInputElement).checked })} /> Record on any channel</label>
+                        <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={editor.draft.recordAnyTime} onChange={event => updateDraft({ recordAnyTime: (event.currentTarget as HTMLInputElement).checked })} /> Record at any time</label>
+                        <label>Keep up to (episodes, 0 keeps all)<input data-focusable="true" type="number" min="0" max="1000" step="1" value={editor.draft.keepUpTo} onInput={event => updateDraft({ keepUpTo: Number((event.currentTarget as HTMLInputElement).value) })} /></label>
+                    </>}
+                    <div class="live-actions">
+                        <button type="submit" class="button primary" data-focusable="true" disabled={editor.saving}>{editor.saving ? 'Saving…' : 'Save'}</button>
+                        <button type="button" class="button secondary" data-focusable="true" disabled={editor.saving} onClick={() => setEditor(null)}>Cancel</button>
+                    </div>
+                </form>
             </aside>
         </div>}
     </section>;

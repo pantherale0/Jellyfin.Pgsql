@@ -3,6 +3,7 @@ import { PluginPageShell } from '../plugin-shell';
 import { Card, InfoRow, StatusChip, Empty } from '../ui';
 import type { AdminApi } from '../admin-api';
 import type { PluginInfo } from '../types';
+import { canSavePluginDraft } from '../admin-state';
 
 export function AdminPluginSeerr({ adminApi: api, plugin, session }: {
     adminApi: AdminApi; plugin: PluginInfo; session: { server: string };
@@ -12,14 +13,21 @@ export function AdminPluginSeerr({ adminApi: api, plugin, session }: {
     const [connected, setConnected] = useState<boolean | null>(null);
     const [modified, setModified] = useState(false);
     const [message, setMessage] = useState('');
+    const [loadedId, setLoadedId] = useState('');
+    const [loadError, setLoadError] = useState('');
 
     const load = useCallback(async () => {
+        const id = plugin.Id || '';
         const [cfg, status] = await Promise.all([
-            plugin.Id ? api.raw<Record<string, any>>(`/Plugins/${plugin.Id}/Configuration`).catch(() => ({})) : {},
+            id ? api.raw<Record<string, any>>(`/Plugins/${id}/Configuration`).catch(() => null) : null,
             api.getSeerrStatus().catch(() => null),
         ]);
+        if (id !== plugin.Id) return;
+        setConnected(status?.enabled === true);
+        if (cfg === null) { setLoadError('The plugin configuration could not be loaded, so it cannot be saved.'); return; }
+        setLoadError('');
         setConfig(cfg); setDraft(JSON.parse(JSON.stringify(cfg)));
-        setConnected(status?.Enabled === true);
+        setLoadedId(id);
     }, [api, plugin.Id]);
 
     useEffect(() => { load(); }, [load]);
@@ -27,33 +35,51 @@ export function AdminPluginSeerr({ adminApi: api, plugin, session }: {
     const patch = (key: string, value: any) => { setDraft(o => ({ ...o, [key]: value })); setModified(true); };
     const save = async () => {
         if (!plugin.Id) return;
-        await api.putB(`/Plugins/${plugin.Id}/Configuration`, draft);
-        setModified(false); setMessage('Saved.');
+        if (!canSavePluginDraft(loadedId, plugin.Id)) throw new Error('Configuration is still loading. Wait for it to load before saving.');
+        await api.putB(`/Plugins/${plugin.Id}/Configuration`, draft, true);
+        setConfig(draft); setModified(false); setMessage('Saved.');
     };
+    const discard = () => { setDraft(JSON.parse(JSON.stringify(config))); setModified(false); };
     const testConnection = async () => {
         try {
-            const result = await api.raw<{ Status?: string }>('/Seerr/Status');
-            setConnected(result?.Status !== 'error');
-            setMessage(result?.Status === 'error' ? 'Connection test failed.' : 'Connected.');
-        } catch { setConnected(false); setMessage('Could not reach Seerr endpoint.'); }
+            const result = await api.testSeerrConnection();
+            setConnected(true);
+            setMessage(result?.Message || result?.message || (result?.Version ? `Connected to Seerr ${result.Version}.` : 'Connected.'));
+        } catch (e) { setConnected(false); setMessage(e instanceof Error ? e.message : 'Could not reach Seerr endpoint.'); }
     };
 
-    return <PluginPageShell name={plugin.Name || 'Seerr'} description="Request gateway and Beyond Your Library" status={plugin.Status} session={session} onSave={save} modified={modified}>
+    return <PluginPageShell name={plugin.Name || 'Seerr'} description="Request gateway and Beyond Your Library" status={plugin.Status} session={session} onSave={save} onDiscard={discard} modified={modified} loaded={canSavePluginDraft(loadedId, plugin.Id || '')} loadError={loadError}>
         <div class="ad-page-section">
-            {Object.keys(config).length === 0 ? <Card title="Connection"><Empty muted>Seerr configuration is not editable through this plugin. The gateway is configured via environment variables and plugin configuration JSON.</Empty></Card> : <>
+            {!canSavePluginDraft(loadedId, plugin.Id || '') ? <Card title="Connection"><Empty muted>Seerr configuration is not available.</Empty></Card> : <>
             <Card title="Connection" actions={<button class="ad-btn" onClick={testConnection}>Test connection</button>}>
                 <InfoRow k="Status" v={connected === null ? 'Unknown' : connected ? <StatusChip tone="green">Connected</StatusChip> : <StatusChip tone="red">Disconnected</StatusChip>} />
                 <InfoRow k="Plugin version" v={plugin.Version || '—'} />
+            </Card>
+            <Card title="Gateway">
+                <div class="ad-form-grid">
+                    <div class="ad-form-field">
+                        <label class="ad-form-label">Enabled</label>
+                        <label class="ad-toggle-row"><span>{draft.Enabled ? 'Enabled' : 'Disabled'}</span><input type="checkbox" checked={draft.Enabled === true} onChange={e => patch('Enabled', e.currentTarget.checked)} /></label>
+                    </div>
+                </div>
             </Card>
             <Card title="Beyond Your Library">
                 <div class="ad-form-grid">
                     <div class="ad-form-field">
                         <label class="ad-form-label">Seerr URL</label>
-                        <input class="ad-form-input" value={draft.SeerrUrl || draft.url || ''} onInput={e => { patch('SeerrUrl', e.currentTarget.value); }} />
+                        <input class="ad-form-input" value={draft.SeerrUrl ?? ''} onInput={e => { patch('SeerrUrl', e.currentTarget.value); }} />
                     </div>
                     <div class="ad-form-field">
                         <label class="ad-form-label">API key</label>
-                        <input type="password" class="ad-form-input" value={draft.ApiKey || draft.apiKey || ''} onInput={e => { patch('ApiKey', e.currentTarget.value); }} />
+                        <input type="password" autoComplete="off" class="ad-form-input" value={draft.ApiKey ?? ''} onInput={e => { patch('ApiKey', e.currentTarget.value); }} />
+                    </div>
+                    <div class="ad-form-field">
+                        <label class="ad-form-label">Hide titles already in the library</label>
+                        <label class="ad-toggle-row"><span>{draft.HideAvailable ? 'Enabled' : 'Disabled'}</span><input type="checkbox" checked={draft.HideAvailable === true} onChange={e => patch('HideAvailable', e.currentTarget.checked)} /></label>
+                    </div>
+                    <div class="ad-form-field">
+                        <label class="ad-form-label">Search result limit</label>
+                        <input type="number" min="1" class="ad-form-input" value={draft.SearchLimit ?? ''} onInput={e => patch('SearchLimit', e.currentTarget.value === '' ? '' : Number(e.currentTarget.value))} />
                     </div>
                 </div>
             </Card>

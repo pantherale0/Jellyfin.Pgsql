@@ -139,7 +139,7 @@ export function GuideToolbar({ days, dayStart, digits, filter, onDay, onFilter, 
 
     return <div class="live-toolbar" ref={root} onKeyDown={onKeyDown}>
         <div class="live-pills" role="group" aria-label="Guide day">
-            {days.map((day, index) => <button type="button" data-focusable="true" data-guide-day-index={index} class={day.start === dayStart ? 'live-pill active' : 'live-pill'} key={day.start} onClick={() => onDay(day.start)}>{day.label}</button>)}
+            {days.map((day, index) => <button type="button" data-focusable="true" data-guide-day-index={index} class={day.start === dayStart ? 'live-pill active' : 'live-pill'} aria-pressed={day.start === dayStart} key={day.start} onClick={() => onDay(day.start)}>{day.label}</button>)}
         </div>
         {digits && <p class="live-digits" aria-live="polite">Channel {digits}</p>}
         <select class="live-filter" data-focusable="true" data-guide-filter="true" aria-label="Channel filter" value={filter} onChange={event => {
@@ -415,11 +415,11 @@ export function LiveGuide(props: LiveGuideProps) {
             window.requestAnimationFrame(() => focusChannel(channel.Id));
         }} />
         {props.error && <p class="notice error" role="alert">{props.error}</p>}
-        <div class="live-guide-scroll" ref={scrollerRef} onScroll={publishScroll} onKeyDown={onKeyDown} role="grid" aria-label="Program guide" aria-rowcount={props.channels.length} aria-colcount={2}>
+        <div class="live-guide-scroll" ref={scrollerRef} onScroll={publishScroll} onKeyDown={onKeyDown} role="grid" aria-label="Program guide" aria-rowcount={props.channels.length + 1} aria-colcount={2}>
             <div class="live-guide-canvas" style={{ width: `${GUIDE_CHANNEL_WIDTH + width}px`, height: `${GUIDE_HEADER_HEIGHT + props.channels.length * GUIDE_ROW_HEIGHT}px` }}>
-                <div class="live-guide-head">
-                    <div class="live-ruler-corner">Channel</div>
-                    <div class="live-ruler" style={{ width: `${width}px` }}>
+                <div class="live-guide-head" role="row" aria-rowindex={1}>
+                    <div class="live-ruler-corner" role="columnheader" aria-colindex={1}>Channel</div>
+                    <div class="live-ruler" role="columnheader" aria-colindex={2} aria-label="Programs by time" style={{ width: `${width}px` }}>
                         {ticks.map(tick => <span class="live-tick" key={tick} style={{ left: `${((tick - props.windowStart) / 60000) * PIXELS_PER_MINUTE}px` }}>{formatClock(tick)}</span>)}
                     </div>
                 </div>
@@ -458,8 +458,8 @@ function GuideRow({ api, channel, index, segments, windowStart, now, onToggleFav
     onHide: () => void;
 }) {
     const favorite = Boolean(channel.UserData?.IsFavorite);
-    return <div class="live-row" role="row" style={{ top: `${GUIDE_HEADER_HEIGHT + index * GUIDE_ROW_HEIGHT}px` }}>
-        <div class="live-channel">
+    return <div class="live-row" role="row" aria-rowindex={index + 2} style={{ top: `${GUIDE_HEADER_HEIGHT + index * GUIDE_ROW_HEIGHT}px` }}>
+        <div class="live-channel" role="rowheader" aria-colindex={1}>
             <button type="button" class="live-channel-tune" data-focusable="true" data-rail="true" data-channel-id={channel.Id} id={`live-channel-${channel.Id}`} onClick={() => onTune(channel)}>
                 <span class="live-number">{channel.ChannelNumber || '—'}</span>
                 <span class="live-logo"><LiveThumb api={api} item={channel} width={96} /></span>
@@ -467,7 +467,7 @@ function GuideRow({ api, channel, index, segments, windowStart, now, onToggleFav
             </button>
             <button type="button" class={favorite ? 'live-star on' : 'live-star'} data-focusable="true" data-channel-id={channel.Id} aria-pressed={favorite ? 'true' : 'false'} aria-label={favorite ? `Remove ${channel.Name} from favorites` : `Add ${channel.Name} to favorites`} onClick={event => { event.stopPropagation(); onToggleFavorite(channel); }}>{favorite ? '★' : '☆'}</button>
         </div>
-        <div class="live-track">
+        <div class="live-track" role="gridcell" aria-colindex={2}>
             {segments.map(segment => {
                 const box = segmentBox(segment.start, segment.end, windowStart);
                 if (!segment.program) {
@@ -485,6 +485,7 @@ function GuideRow({ api, channel, index, segments, windowStart, now, onToggleFav
                     data-start={String(Date.parse(program.StartDate || '') || segment.start)}
                     data-end={String(Date.parse(program.EndDate || '') || segment.end)}
                     key={segment.key}
+                    aria-label={programLabel(program, channel, segment.start, segment.end, airing)}
                     style={{ left: `${box.left}px`, width: `${box.width}px`, ['--elapsed']: `${Math.round(stop * 100)}%` }}
                     onClick={event => onOpenProgram(program, channel, event.currentTarget)}
                     onMouseEnter={event => onHover(program, channel, event.currentTarget as HTMLElement)}
@@ -496,6 +497,12 @@ function GuideRow({ api, channel, index, segments, windowStart, now, onToggleFav
             })}
         </div>
     </div>;
+}
+
+export function programLabel(program: MediaItem, channel: MediaItem, start: number, end: number, airing: boolean): string {
+    const from = Date.parse(program.StartDate || '') || start;
+    const to = Date.parse(program.EndDate || '') || end;
+    return `${program.Name || 'Program'}, ${channel.Name || 'channel'}, ${formatClock(from)} to ${formatClock(to)}${airing ? ', on now' : ''}`;
 }
 
 export function ProgramSummary({ program, channel, now }: { program: MediaItem; channel: MediaItem; now: number }) {

@@ -104,10 +104,18 @@ test('rejects malformed or incomplete SSO callback storage', () => {
 test('creates a UI Next session only for the authenticated user and server', () => {
     assert.equal(typeof ssoSession.createSsoSession, 'function', 'SSO session builder must exist');
     const handoff = { server: origin, token: accessToken, userId: 'user-id', serverId };
-    assert.deepEqual(ssoSession.createSsoSession(handoff, { Id: 'user-id', Name: 'Jordan' }, { Id: serverId }), {
+    assert.deepEqual(ssoSession.createSsoSession(handoff, {
+        Id: 'user-id', Name: 'Jordan',
+        Policy: { IsAdministrator: true, EnableCollectionManagement: true, IsDisabled: false },
+        Configuration: { EnableNextEpisodeAutoPlay: false }
+    }, { Id: serverId }), {
         server: origin,
         token: accessToken,
-        user: { Id: 'user-id', Name: 'Jordan' },
+        user: {
+            Id: 'user-id', Name: 'Jordan',
+            Policy: { IsAdministrator: true, IsDisabled: false, EnableCollectionManagement: true },
+            Configuration: { EnableNextEpisodeAutoPlay: false }
+        },
         serverId
     });
     assert.equal(ssoSession.createSsoSession(handoff, { Id: 'other-user', Name: 'Other' }, { Id: serverId }), null);

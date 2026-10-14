@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
+import { isMergePreviewCurrent, type MergePreviewIdentity } from '../merge-preview';
+import { canDeleteAdminUser, embyImportMapping, sameEmbyImportMapping, validateNewPassword, type EmbyImportMapping } from '../admin-state';
 import type { AdminApi } from '../admin-api';
 import type { JellyfinUserInfo } from '../types';
 import type { DeviceInfo } from '../types';
 import type { TasteProfile } from '../../types';
-import { PageShell, Card, StatusChip, SearchInput, FilterPills, Empty, Tabs, timeAgo, InfoRow, ConfirmButton, DataTable } from '../ui';
+import { PageShell, Card, StatusChip, SearchInput, FilterPills, Empty, Tabs, timeAgo, InfoRow, ConfirmButton, DataTable, SettingsFields } from '../ui';
+import { POLICY_FIELDS, RBAC_PERMISSIONS, SCHEDULE_DAYS, UNRATED_ITEM_KINDS, validateSchedule, type AccessSchedule } from '../server-settings';
 
 export function AdminUsers({ adminApi: api, session }: { adminApi: AdminApi; session: { user: { Id: string } } }) {
     const [tab, setTab] = useState('Users');
@@ -21,9 +24,17 @@ export function AdminUsers({ adminApi: api, session }: { adminApi: AdminApi; ses
     const [newName, setNewName] = useState('');
     const [newPassword, setNewPassword] = useState('');
     const [mergeTarget, setMergeTarget] = useState('');
+    const [mergeMode, setMergeMode] = useState<'merge' | 'move'>('merge');
     const [mergePreview, setMergePreview] = useState<{ counts: Record<string, number>; warning?: string } | null>(null);
+    const [mergePreviewIdentity, setMergePreviewIdentity] = useState<MergePreviewIdentity | null>(null);
+    const mergeRequest = useRef(0);
     const [allLibraries, setAllLibraries] = useState<Array<{ ItemId?: string; Name?: string }>>([]);
     const [userDevices, setUserDevices] = useState<DeviceInfo[]>([]);
+    const [allDevices, setAllDevices] = useState<DeviceInfo[]>([]);
+    const [contentChannels, setContentChannels] = useState<Array<{ Id: string; Name?: string }>>([]);
+    const [providers, setProviders] = useState<{ auth: Array<[string, string]>; reset: Array<[string, string]> }>({ auth: [], reset: [] });
+    const [renameDraft, setRenameDraft] = useState('');
+    const [schedule, setSchedule] = useState<AccessSchedule>({ DayOfWeek: 'Everyday', StartHour: 0, EndHour: 24 });
     const [taste, setTaste] = useState<TasteProfile | null>(null);
     const [history, setHistory] = useState<Array<{ MediaType: string; TotalTicks: number; PlayCount: number }> | null>(null);
     const [checkedUsers, setCheckedUsers] = useState<string[]>([]);
@@ -41,17 +52,34 @@ export function AdminUsers({ adminApi: api, session }: { adminApi: AdminApi; ses
     const [importError, setImportError] = useState('');
     const [importPreview, setImportPreview] = useState<any>(null);
     const [importResult, setImportResult] = useState<any>(null);
+    const [importMapping, setImportMapping] = useState<EmbyImportMapping | null>(null);
+    const [newUserPassword, setNewUserPassword] = useState('');
+    const [confirmUserPassword, setConfirmUserPassword] = useState('');
+
+    const resetImportMapping = () => {
+        setEmbyUsers([]);
+        setSelectedEmbyUsers([]);
+        setTargetUserId('');
+        setImportPreview(null);
+        setImportResult(null);
+        setImportMapping(null);
+    };
 
     const load = useCallback(async () => { try { setUsers(await api.getUsers()); } catch (e) { setUserError(e instanceof Error ? e.message : 'Could not load users.'); } }, [api]);
     useEffect(() => { load(); }, [load]);
-    useEffect(() => { api.getLibraries().then(setAllLibraries).catch(() => undefined); }, [api]);
+    useEffect(() => {
+        if (selected) return;
+        mergeRequest.current += 1;
+        setMergePreview(null); setMergePreviewIdentity(null);
+    }, [selected === null]);
+    useEffect(() => { api.getLibraries().then(setAllLibraries).catch(() => undefined); api.getContentChannels().then(setContentChannels).catch(() => undefined); api.getAuthProviders().then(setProviders).catch(() => undefined); }, [api]);
     useEffect(() => {
         setUserDevices([]); setTaste(null); setHistory(null);
         if (!selected) return;
         let active = true;
         const id = encodeURIComponent(selected.Id);
         void Promise.all([
-            api.getDevices().then(r => (r.Items || []).filter(d => d.LastUserId?.replace(/-/g, '') === selected.Id.replace(/-/g, ''))).catch(() => []),
+            api.getDevices().then(r => { if (active) setAllDevices(r.Items || []); return (r.Items || []).filter(d => d.LastUserId?.replace(/-/g, '') === selected.Id.replace(/-/g, '')); }).catch(() => []),
             api.raw<TasteProfile>(`/Pgsql/Taste/Users/${id}`).catch(() => null),
             api.raw<Array<{ MediaType: string; TotalTicks: number; PlayCount: number }>>(`/Users/${id}/PlaybackStats?startDate=${new Date(Date.now() - 28 * 86400000).toISOString().slice(0,10)}`).catch(() => null),
         ]).then(([devices, t, h]) => { if (active) { setUserDevices(devices); setTaste(t); setHistory(h); } });
@@ -85,7 +113,8 @@ export function AdminUsers({ adminApi: api, session }: { adminApi: AdminApi; ses
     });
 
     const openUser = (u: JellyfinUserInfo) => {
-        setSelected(u); setSelectedPolicy(u.Policy || {}); setUserError(''); setMergeTarget(''); setMergePreview(null);
+        mergeRequest.current += 1;
+        setSelected(u); setSelectedPolicy(u.Policy || {}); setRenameDraft(u.Name); setUserError(''); setNewUserPassword(''); setConfirmUserPassword(''); setMergeTarget(''); setMergePreview(null); setMergePreviewIdentity(null);
     };
     const userColumns = [
         { key: 'Select', label: '', value: (u: JellyfinUserInfo) => <input type="checkbox" aria-label={`Select ${u.Name}`} disabled={userBusy || u.Id === session.user.Id} checked={checkedUsers.includes(u.Id)} onChange={e => { const checked = e.currentTarget.checked; setCheckedUsers(old => checked ? [...old, u.Id] : old.filter(id => id !== u.Id)); }} /> },
@@ -145,6 +174,7 @@ export function AdminUsers({ adminApi: api, session }: { adminApi: AdminApi; ses
                 <button class="ad-btn" disabled={!libraryFile || !usersFile || importBusy} onClick={async () => {
                     if (!libraryFile || !usersFile) return;
                     setImportBusy(true); setImportError('');
+                    resetImportMapping();
                     const abort = new AbortController(); uploadAbort.current = abort;
                     try {
                         if (uploadSession.current) await api.discardEmbyImport(uploadSession.current);
@@ -155,7 +185,7 @@ export function AdminUsers({ adminApi: api, session }: { adminApi: AdminApi; ses
                         await api.uploadEmbyChunks(init.sessionId, 'usersDb', usersFile, init.chunkSizeBytes, p => setImportProgress(50 + Math.round(p * .5)), abort.signal);
                         const complete = await api.completeEmbyUpload(init.sessionId);
                         setEmbyUsers(complete.users); setImportStep('select');
-                    } catch (e) { setImportError(e instanceof Error ? e.message : 'Upload failed.'); if (uploadSession.current) { await api.discardEmbyImport(uploadSession.current).catch(() => undefined); uploadSession.current = ''; } }
+                    } catch (e) { setImportError(e instanceof Error ? e.message : 'Upload failed.'); resetImportMapping(); if (uploadSession.current) { await api.discardEmbyImport(uploadSession.current).catch(() => undefined); uploadSession.current = ''; } }
                     finally { setImportBusy(false); }
                 }}>{importBusy ? `Uploading ${importProgress}%` : 'Upload databases'}</button>
                 {importBusy && <button class="ad-btn" onClick={() => uploadAbort.current?.abort()}>Cancel upload</button>}
@@ -163,13 +193,21 @@ export function AdminUsers({ adminApi: api, session }: { adminApi: AdminApi; ses
             {importStep === 'select' && <div class="ad-import-step">
                 <div class="ad-grid2"><label class="ad-field">Target Jellyfin user<select value={targetUserId} onChange={e => setTargetUserId((e.currentTarget as HTMLSelectElement).value)}><option value="">Choose a user</option>{users.map(u => <option value={u.Id}>{u.Name}</option>)}</select></label>
                     <div class="ad-user-options">{embyUsers.map(u => <label key={u.id}><input type="checkbox" checked={selectedEmbyUsers.includes(u.id)} onChange={e => setSelectedEmbyUsers(old => (e.currentTarget as HTMLInputElement).checked ? [...old, u.id] : old.filter(x => x !== u.id))} /> {u.name} · {u.userDataCount} entries</label>)}</div></div>
-                <div class="ad-flex"><button class="ad-btn" disabled={!targetUserId || selectedEmbyUsers.length === 0 || importBusy} onClick={async () => { setImportBusy(true); try { const p = await api.previewEmbyImport(importSession, selectedEmbyUsers, targetUserId); setImportPreview(p); setImportStep('preview'); } catch (e) { setImportError(e instanceof Error ? e.message : 'Preview failed.'); } finally { setImportBusy(false); } }}>Preview import</button><button class="ad-btn" disabled={importBusy} onClick={async () => { await api.discardEmbyImport(importSession).catch(() => undefined); uploadSession.current = ''; setImportStep('upload'); }}>Discard</button></div>
+                <div class="ad-flex"><button class="ad-btn" disabled={!targetUserId || selectedEmbyUsers.length === 0 || importBusy} onClick={async () => {
+                    const mapping = embyImportMapping(importSession, selectedEmbyUsers, embyUsers, targetUserId);
+                    if (!mapping) { setImportError('Select at least one user from the current upload.'); return; }
+                    setImportBusy(true); try { const p = await api.previewEmbyImport(mapping.sessionId, mapping.sourceUserIds, mapping.targetUserId); setSelectedEmbyUsers(mapping.sourceUserIds); setImportMapping(mapping); setImportPreview(p); setImportStep('preview'); } catch (e) { setImportError(e instanceof Error ? e.message : 'Preview failed.'); } finally { setImportBusy(false); }
+                }}>Preview import</button><button class="ad-btn" disabled={importBusy} onClick={async () => { await api.discardEmbyImport(importSession).catch(() => undefined); uploadSession.current = ''; resetImportMapping(); setImportStep('upload'); }}>Discard</button></div>
             </div>}
             {importStep === 'preview' && <div class="ad-import-step"><p class="ad-note">Review the preview counts before applying userdata.</p>
                 {importPreview?.counts && Object.entries(importPreview.counts).map(([k, v]) => <InfoRow key={k} k={k} v={String(v)} />)}
-                <div class="ad-danger"><p>Import selected users into {users.find(u => u.Id === targetUserId)?.Name || 'target user'}?</p><ConfirmButton label="Import UserData" tone="danger" onConfirm={async () => { setImportBusy(true); try { setImportResult(await api.executeEmbyImport(importSession, selectedEmbyUsers, targetUserId)); uploadSession.current = ''; setImportStep('done'); } catch (e) { setImportError(e instanceof Error ? e.message : 'Import failed.'); } finally { setImportBusy(false); } }} busy={importBusy} /><button class="ad-btn" disabled={importBusy} onClick={() => setImportStep('select')}>Back to mapping</button></div>
+                <div class="ad-danger"><p>Import selected users into {users.find(u => u.Id === targetUserId)?.Name || 'target user'}?</p><ConfirmButton label="Import UserData" tone="danger" onConfirm={async () => {
+                    const mapping = embyImportMapping(importSession, selectedEmbyUsers, embyUsers, targetUserId);
+                    if (!importMapping || !sameEmbyImportMapping(mapping, importMapping)) throw new Error('The mapping changed after the preview. Preview the import again.');
+                    setImportBusy(true); try { setImportResult(await api.executeEmbyImport(importMapping.sessionId, importMapping.sourceUserIds, importMapping.targetUserId)); uploadSession.current = ''; resetImportMapping(); setEmbyUsers([]); setImportStep('done'); } catch (e) { setImportError(e instanceof Error ? e.message : 'Import failed.'); } finally { setImportBusy(false); }
+                }} busy={importBusy} /><button class="ad-btn" disabled={importBusy} onClick={() => { setImportPreview(null); setImportMapping(null); setImportStep('select'); }}>Back to mapping</button></div>
             </div>}
-            {importStep === 'done' && <div class="ad-import-step"><StatusChip tone="green">Import complete</StatusChip>{importResult?.counts && Object.entries(importResult.counts).map(([k, v]) => <InfoRow key={k} k={k} v={String(v)} />)}{importResult?.warning && <p class="ad-note">{importResult.warning}</p>}<button class="ad-btn" onClick={() => { setImportStep('upload'); setImportProgress(0); setLibraryFile(null); setUsersFile(null); }}>Start another import</button></div>}
+            {importStep === 'done' && <div class="ad-import-step"><StatusChip tone="green">Import complete</StatusChip>{importResult?.counts && Object.entries(importResult.counts).map(([k, v]) => <InfoRow key={k} k={k} v={String(v)} />)}{importResult?.warning && <p class="ad-note">{importResult.warning}</p>}<button class="ad-btn" onClick={() => { setImportStep('upload'); setImportProgress(0); setLibraryFile(null); setUsersFile(null); resetImportMapping(); }}>Start another import</button></div>}
         </Card>}
         {selected && <div class="ad-drawer-backdrop" onClick={() => setSelected(null)}><aside ref={drawerRef} class="ad-drawer" role="dialog" aria-modal="true" aria-labelledby="admin-user-detail-title" onClick={e => e.stopPropagation()}>
             <button class="ad-drawer-close" onClick={() => setSelected(null)} aria-label="Close details">×</button>
@@ -178,6 +216,18 @@ export function AdminUsers({ adminApi: api, session }: { adminApi: AdminApi; ses
             <InfoRow k="Status" v={selected.IsDisabled ? 'Disabled' : 'Active'} />
             <InfoRow k="Last seen" v={timeAgo(selected.LastActivityDate || selected.LastLoginDate)} />
             {userError && <p class="ad-error" role="alert">{userError}</p>}
+            <h3 class="ad-drawer-section-title">Profile</h3>
+            <div class="ad-flex"><label class="ad-field">Username<input value={renameDraft} maxLength={100} autoComplete="off" onInput={e => setRenameDraft(e.currentTarget.value)} /></label>
+                <ConfirmButton label="Rename" onConfirm={async () => {
+                    const name = renameDraft.trim();
+                    if (!name) throw new Error('A username is required.');
+                    if (name === selected.Name) return;
+                    if (users.some(u => u.Id !== selected.Id && u.Name.toLowerCase() === name.toLowerCase())) throw new Error('Another user already has that name.');
+                    await api.renameUser(selected.Id, name);
+                    setSelected({ ...selected, Name: name });
+                    setUserMessage(`Renamed to ${name}.`);
+                    await load();
+                }} /></div>
             {selected.Policy && <><h3 class="ad-drawer-section-title">Permissions &amp; access</h3>
                 {(['IsAdministrator', 'IsDisabled', 'EnableLiveTvAccess', 'EnableLiveTvManagement', 'EnableRemoteAccess', 'EnableMediaPlayback'] as const).map(key => <label class="ad-policy-row" key={key}><span>{policyLabel(key)}</span><input type="checkbox" checked={selectedPolicy[key] === true} disabled={userBusy || key === 'IsDisabled' && selected.IsAdministrator} onChange={e => setSelectedPolicy(old => ({ ...old, [key]: (e.currentTarget as HTMLInputElement).checked }))} /></label>)}
                 {'EnableLiveTvMultiview' in selectedPolicy && <label class="ad-policy-row"><span>Live TV Multiview</span><input type="checkbox" checked={selectedPolicy.EnableLiveTvMultiview === true} onChange={e => setSelectedPolicy(old => ({ ...old, EnableLiveTvMultiview: e.currentTarget.checked }))} /></label>}
@@ -187,14 +237,81 @@ export function AdminUsers({ adminApi: api, session }: { adminApi: AdminApi; ses
                 <h3 class="ad-drawer-section-title">Parental controls</h3>
                 <label class="ad-field">Maximum parental rating (empty means unrestricted)<input type="number" min="0" value={selectedPolicy.MaxParentalRating ?? ''} onInput={e => setSelectedPolicy(old => ({ ...old, MaxParentalRating: e.currentTarget.value === '' ? null : Number(e.currentTarget.value) }))} /></label>
                 <label class="ad-field">Blocked tags (comma-separated)<input value={(selectedPolicy.BlockedTags || []).join(', ')} onInput={e => setSelectedPolicy(old => ({ ...old, BlockedTags: e.currentTarget.value.split(',').map(t => t.trim()).filter(Boolean) }))} /></label>
+                <fieldset class="ad-fieldset"><legend>Block items with no rating</legend>{UNRATED_ITEM_KINDS.map(([kind, label]) => <label class="ad-policy-row" key={kind}><span>{label}</span><input type="checkbox" checked={(selectedPolicy.BlockUnratedItems || []).includes(kind)} onChange={e => { const checked = e.currentTarget.checked; setSelectedPolicy(old => ({ ...old, BlockUnratedItems: checked ? [ ...(old.BlockUnratedItems || []), kind ] : (old.BlockUnratedItems || []).filter((value: string) => value !== kind) })); }} /></label>)}</fieldset>
+                <h3 class="ad-drawer-section-title">Access schedule</h3>
+                {(selectedPolicy.AccessSchedules || []).length === 0 ? <p class="ad-note">No schedule: access is allowed at any time.</p> : (selectedPolicy.AccessSchedules as AccessSchedule[]).map((entry, index) => <div class="ad-info" key={index}><span class="ad-info-k">{entry.DayOfWeek} · {entry.StartHour}:00–{entry.EndHour}:00</span><button class="ad-btn" onClick={() => setSelectedPolicy(old => ({ ...old, AccessSchedules: (old.AccessSchedules || []).filter((_: AccessSchedule, i: number) => i !== index) }))}>Remove</button></div>)}
+                <div class="ad-flex"><label class="ad-field">Day<select value={schedule.DayOfWeek} onChange={e => setSchedule(old => ({ ...old, DayOfWeek: e.currentTarget.value }))}>{SCHEDULE_DAYS.map(day => <option key={day} value={day}>{day}</option>)}</select></label>
+                    <label class="ad-field">From hour<input type="number" min="0" max="23" value={schedule.StartHour} onInput={e => setSchedule(old => ({ ...old, StartHour: Number(e.currentTarget.value) }))} /></label>
+                    <label class="ad-field">To hour<input type="number" min="1" max="24" value={schedule.EndHour} onInput={e => setSchedule(old => ({ ...old, EndHour: Number(e.currentTarget.value) }))} /></label>
+                    <button class="ad-btn" onClick={() => { const problem = validateSchedule(schedule); if (problem) { setUserError(problem); return; } setUserError(''); setSelectedPolicy(old => ({ ...old, AccessSchedules: [ ...(old.AccessSchedules || []), schedule ] })); }}>Add window</button></div>
+                <h3 class="ad-drawer-section-title">Channel access</h3>
+                <label class="ad-policy-row"><span>All channels</span><input type="checkbox" checked={selectedPolicy.EnableAllChannels !== false} onChange={e => setSelectedPolicy(old => ({ ...old, EnableAllChannels: e.currentTarget.checked }))} /></label>
+                {selectedPolicy.EnableAllChannels === false && (contentChannels.length ? contentChannels.map(c => <label class="ad-policy-row" key={c.Id}><span>{c.Name || c.Id}</span><input type="checkbox" checked={(selectedPolicy.EnabledChannels || []).includes(c.Id)} onChange={e => { const checked = e.currentTarget.checked; setSelectedPolicy(old => ({ ...old, EnabledChannels: checked ? [ ...(old.EnabledChannels || []), c.Id ] : (old.EnabledChannels || []).filter((id: string) => id !== c.Id) })); }} /></label>) : <p class="ad-note">No content channels are installed.</p>)}
+                <h3 class="ad-drawer-section-title">Device access</h3>
+                <label class="ad-policy-row"><span>All devices</span><input type="checkbox" checked={selectedPolicy.EnableAllDevices !== false} onChange={e => setSelectedPolicy(old => ({ ...old, EnableAllDevices: e.currentTarget.checked }))} /></label>
+                {selectedPolicy.EnableAllDevices === false && (allDevices.length ? allDevices.filter(d => d.Id).map(d => <label class="ad-policy-row" key={d.Id}><span>{d.CustomName || d.Name} · {d.AppName}</span><input type="checkbox" checked={(selectedPolicy.EnabledDevices || []).includes(d.Id)} onChange={e => { const checked = e.currentTarget.checked; setSelectedPolicy(old => ({ ...old, EnabledDevices: checked ? [ ...(old.EnabledDevices || []), d.Id ] : (old.EnabledDevices || []).filter((id: string) => id !== d.Id) })); }} /></label>) : <p class="ad-note">No devices are registered.</p>)}
+                <h3 class="ad-drawer-section-title">Playback and features</h3>
+                <SettingsFields key={selected.Id} fields={POLICY_FIELDS} draft={selectedPolicy} onChange={setSelectedPolicy} options={{ AuthenticationProviderId: providers.auth, PasswordResetProviderId: providers.reset }} />
                 <div class="ad-drawer-actions"><ConfirmButton label="Save policy" busy={userBusy} onConfirm={async () => { setUserBusy(true); setUserError(''); try { await api.updateUserPolicy(selected.Id, selectedPolicy); setSelected({ ...selected, Policy: selectedPolicy, IsAdministrator: selectedPolicy.IsAdministrator, IsDisabled: selectedPolicy.IsDisabled }); await load(); } catch (e) { setUserError(e instanceof Error ? e.message : 'Policy update failed.'); } finally { setUserBusy(false); } }} />
-                    <ConfirmButton label="Delete user" tone="danger" onConfirm={async () => { setUserBusy(true); try { await api.deleteUser(selected.Id); setSelected(null); await load(); } catch (e) { setUserError(e instanceof Error ? e.message : 'Delete failed.'); } finally { setUserBusy(false); } }} busy={userBusy} />
+                    {canDeleteAdminUser(selected, session.user.Id, users)
+                        ? <ConfirmButton label="Delete user" tone="danger" onConfirm={async () => {
+                            setUserBusy(true);
+                            try {
+                                const currentUsers = await api.getUsers();
+                                const currentTarget = currentUsers.find(user => user.Id === selected.Id);
+                                if (!currentTarget) throw new Error('This user no longer exists. Refresh the user list and try again.');
+                                if (!canDeleteAdminUser(currentTarget, session.user.Id, currentUsers)) throw new Error('You cannot delete your own account or the last enabled administrator.');
+                                await api.deleteUser(currentTarget.Id);
+                                setSelected(null);
+                                await load();
+                            } catch (e) { setUserError(e instanceof Error ? e.message : 'Delete failed.'); }
+                            finally { setUserBusy(false); }
+                        }} busy={userBusy} />
+                        : <p class="ad-note">{selected.Id === session.user.Id ? 'You cannot delete your own account here.' : 'The last enabled administrator cannot be deleted.'}</p>}
                 </div>
-                <div class="ad-drawer-actions"><ConfirmButton label="Reset password" tone="danger" onConfirm={async () => { await api.resetUserPassword(selected.Id); setUserMessage('Password reset completed.'); }} /></div>
+                {selected.Id !== session.user.Id && <form class="ad-password-form" onSubmit={e => e.preventDefault()}>
+                    <h3 class="ad-drawer-section-title">Set password</h3>
+                    <div class="ad-grid2"><label class="ad-field">New password<input type="password" autoComplete="new-password" value={newUserPassword} onInput={e => setNewUserPassword(e.currentTarget.value)} /></label>
+                        <label class="ad-field">Confirm password<input type="password" autoComplete="new-password" value={confirmUserPassword} onInput={e => setConfirmUserPassword(e.currentTarget.value)} /></label></div>
+                    <ConfirmButton label="Set password" onConfirm={async () => {
+                        const problem = validateNewPassword(newUserPassword, confirmUserPassword);
+                        if (problem) throw new Error(problem);
+                        await api.setUserPassword(selected.Id, newUserPassword);
+                        setNewUserPassword(''); setConfirmUserPassword('');
+                        setUserMessage(`Password updated for ${selected.Name}. Their other sessions were signed out.`);
+                    }} />
+                </form>}
+                <div class="ad-drawer-actions">{selected.IsAdministrator
+                    ? <p class="ad-note">Clearing the password is unavailable for administrators; set a new password instead.</p>
+                    : <ConfirmButton label="Clear password" tone="danger" onConfirm={async () => { await api.resetUserPassword(selected.Id); setUserMessage('Password cleared. The user can sign in without a password until one is set.'); }} />}</div>
                 <h3 class="ad-drawer-section-title">Merge userdata and account</h3>
-                <label class="ad-field">Merge into<select value={mergeTarget} onChange={e => { setMergeTarget(e.currentTarget.value); setMergePreview(null); }}><option value="">Select target</option>{users.filter(u => u.Id !== selected.Id).map(u => <option value={u.Id} key={u.Id}>{u.Name}</option>)}</select></label>
-                {selected.Id !== session.user.Id && <button class="ad-btn" disabled={!mergeTarget} onClick={async () => { try { setMergePreview(await api.mergeUsers(selected.Id, mergeTarget)); } catch (e) { setUserError(e instanceof Error ? e.message : 'Merge preview failed.'); } }}>Preview merge</button>}
-                {mergePreview && <><div class="ad-note">The source account will be deleted after merging.</div>{Object.entries(mergePreview.counts).map(([k, v]) => <InfoRow key={k} k={k} v={v} />)}<ConfirmButton label="Merge and delete source" tone="danger" onConfirm={async () => { const result = await api.mergeUsers(selected.Id, mergeTarget, false); setUserMessage(result.warning || 'Accounts merged.'); setSelected(null); await load(); }} /></>}
+                <label class="ad-field">Merge into<select value={mergeTarget} onChange={e => { mergeRequest.current += 1; setMergeTarget(e.currentTarget.value); setMergePreview(null); setMergePreviewIdentity(null); }}><option value="">Select target</option>{users.filter(u => u.Id !== selected.Id).map(u => <option value={u.Id} key={u.Id}>{u.Name}</option>)}</select></label>
+                <div class="ad-flex" role="group" aria-label="Transfer mode">
+                    {([['merge', 'Full merge'], ['move', 'Userdata only']] as const).map(([mode, label]) => <button key={mode} type="button" class={`ad-btn${mergeMode === mode ? ' active' : ''}`} aria-pressed={mergeMode === mode} onClick={() => { mergeRequest.current += 1; setMergeMode(mode); setMergePreview(null); setMergePreviewIdentity(null); }}>{label}</button>)}
+                </div>
+                {mergeMode === 'move' && <p class="ad-note">Moves watch history and favorites without deleting the source account.</p>}
+                {selected.Id !== session.user.Id && <button class="ad-btn" disabled={!mergeTarget} onClick={async () => {
+                    const sourceId = selected.Id, targetId = mergeTarget, mode = mergeMode;
+                    const requestId = ++mergeRequest.current;
+                    try {
+                        const preview = mode === 'move' ? await api.moveUserData(sourceId, targetId) : await api.mergeUsers(sourceId, targetId);
+                        if (mergeRequest.current !== requestId) return;
+                        setMergePreview(preview);
+                        setMergePreviewIdentity({ sourceId, targetId, requestId, mode });
+                    } catch (e) { if (mergeRequest.current === requestId) setUserError(e instanceof Error ? e.message : 'Merge preview failed.'); }
+                }}>Preview merge</button>}
+                {mergePreview && mergePreviewIdentity && isMergePreviewCurrent(mergePreviewIdentity, selected.Id, mergeTarget, mergeRequest.current, mergeMode) && <><div class="ad-note">{mergePreviewIdentity.mode === 'move' ? 'The source account is kept.' : 'The source account will be deleted after merging.'}</div>{Object.entries(mergePreview.counts).map(([k, v]) => <InfoRow key={k} k={k} v={v} />)}<ConfirmButton key={`${mergePreviewIdentity.sourceId}:${mergePreviewIdentity.targetId}:${mergePreviewIdentity.requestId}:${mergePreviewIdentity.mode}`} label={mergePreviewIdentity.mode === 'move' ? 'Move userdata' : 'Merge and delete source'} tone="danger" onConfirm={async () => {
+                    if (!isMergePreviewCurrent(mergePreviewIdentity, selected.Id, mergeTarget, mergeRequest.current, mergeMode)) throw new Error('This preview is for a different user pair. Preview the current pair before merging.');
+                    const move = mergePreviewIdentity.mode === 'move';
+                    const result = move
+                        ? await api.moveUserData(mergePreviewIdentity.sourceId, mergePreviewIdentity.targetId, false)
+                        : await api.mergeUsers(mergePreviewIdentity.sourceId, mergePreviewIdentity.targetId, false);
+                    mergeRequest.current += 1;
+                    setMergePreview(null); setMergePreviewIdentity(null);
+                    setUserMessage(result.warning || (move ? 'Userdata moved.' : 'Accounts merged.'));
+                    if (!move) setSelected(null);
+                    await load();
+                }} /></>}
             </>}
             {!selected.Policy && <p class="ad-note">User policy is not available from the response.</p>}
             <h3 class="ad-drawer-section-title">Devices last used by this user</h3>
@@ -232,11 +349,11 @@ function SsoPanel({ api }: { api: AdminApi }) {
             {editingRbac && <>
                 <div class="ad-rbac-list">{draft.map((m, index) => <fieldset class="ad-mapping-form" key={index}><legend>Group {index + 1}</legend>
                     <label class="ad-field">IdP group<input value={m.oidcGroup || ''} onInput={e => updateMapping(index, { oidcGroup: e.currentTarget.value })} /></label>
-                    <div class="ad-grid2">{['IsAdministrator', 'EnableLiveTvAccess', 'EnableLiveTvManagement', 'EnableLiveTvMultiview', 'EnableRemoteAccess', 'EnableMediaPlayback'].map(key => <label key={key} class="ad-policy-row"><span>{policyLabel(key)}</span><input type="checkbox" checked={m.permissions?.[key] === true} onChange={e => updateMapping(index, { permissions: { ...m.permissions, [key]: e.currentTarget.checked } })} /></label>)}</div>
+                    <div class="ad-grid2">{RBAC_PERMISSIONS.map(([key, label]) => <label key={key} class="ad-policy-row"><span>{label}</span><input type="checkbox" checked={m.permissions?.[key] === true} onChange={e => updateMapping(index, { permissions: { ...m.permissions, [key]: e.currentTarget.checked } })} /></label>)}</div>
                     <label class="ad-policy-row"><span>All libraries</span><input type="checkbox" checked={m.enableAllFolders === true} onChange={e => updateMapping(index, { enableAllFolders: e.currentTarget.checked })} /></label>
                     {!m.enableAllFolders && <label class="ad-field">Allowed libraries<select multiple size={Math.min(5, libraries.length || 1)} value={m.enabledFolders || []} onChange={e => updateMapping(index, { enabledFolders: Array.from(e.currentTarget.selectedOptions).map(o => o.value) })}>{libraries.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</select></label>}
                     <div class="ad-grid2"><label class="ad-field">Blocked tags (comma-separated)<input value={(m.blockedTags || []).join(', ')} onInput={e => updateMapping(index, { blockedTags: e.currentTarget.value.split(',').map(t => t.trim()).filter(Boolean) })} /></label><label class="ad-field">Allowed tags (comma-separated)<input value={(m.allowedTags || []).join(', ')} onInput={e => updateMapping(index, { allowedTags: e.currentTarget.value.split(',').map(t => t.trim()).filter(Boolean) })} /></label></div>
-                    <div class="ad-grid2">{['Movie', 'Series', 'Music', 'Book', 'Trailer', 'LiveTvChannel'].map(kind => <label key={kind} class="ad-policy-row"><span>Block unrated {kind}</span><input type="checkbox" checked={(m.blockUnratedItems || []).includes(kind)} onChange={e => updateMapping(index, { blockUnratedItems: e.currentTarget.checked ? [...(m.blockUnratedItems || []), kind] : (m.blockUnratedItems || []).filter((value: string) => value !== kind) })} /></label>)}</div>
+                    <div class="ad-grid2">{UNRATED_ITEM_KINDS.map(([kind, label]) => <label key={kind} class="ad-policy-row"><span>Block unrated {label}</span><input type="checkbox" checked={(m.blockUnratedItems || []).includes(kind)} onChange={e => updateMapping(index, { blockUnratedItems: e.currentTarget.checked ? [...(m.blockUnratedItems || []), kind] : (m.blockUnratedItems || []).filter((value: string) => value !== kind) })} /></label>)}</div>
                     <div class="ad-grid2"><label class="ad-field">Live TV allowlisted categories<select multiple size={4} value={m.allowedLiveTvCategories || []} onChange={e => updateMapping(index, { allowedLiveTvCategories: Array.from(e.currentTarget.selectedOptions).map(o => o.value) })}>{categories.map(c => <option key={c} value={c}>{c}</option>)}</select></label><label class="ad-field">Live TV allowlisted channels<select multiple size={4} value={m.allowedLiveTvChannels || []} onChange={e => updateMapping(index, { allowedLiveTvChannels: Array.from(e.currentTarget.selectedOptions).map(o => o.value) })}>{channels.map(c => <option key={c.id} value={c.id}>{c.number ? `${c.number} · ` : ''}{c.name}</option>)}</select></label></div>
                     <ConfirmButton label="Remove draft group" tone="danger" onConfirm={() => setRbacText(JSON.stringify(draft.filter((_, i) => i !== index), null, 2))} />
                 </fieldset>)}</div>

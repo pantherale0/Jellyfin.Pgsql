@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 import { defineConfig, loadEnv } from 'vite';
 import legacy from '@vitejs/plugin-legacy';
 import preact from '@preact/preset-vite';
+import { devProbeAllowed, devProbeOrigins } from './src/auth-state';
 
 export default defineConfig(({ command, mode }) => {
     const input: Record<string, string> = { app: resolve(__dirname, 'index.html') };
@@ -9,6 +10,8 @@ export default defineConfig(({ command, mode }) => {
 
     const env = loadEnv(mode, process.cwd(), '');
     const backend = env.JELLYFIN_BACKEND_URL || env.VITE_JELLYFIN_SERVER_URL || 'http://localhost:8096';
+    const probeOrigins = devProbeOrigins(backend, env.UI_NEXT_PROBE_ALLOWED_ORIGINS || '');
+    const allowLanProbe = env.UI_NEXT_DEV_LAN === 'true';
 
     return ({
     plugins: [
@@ -25,6 +28,13 @@ export default defineConfig(({ command, mode }) => {
                         if ((target.protocol !== 'http:' && target.protocol !== 'https:')
                             || target.username || target.password || target.search || target.hash) {
                             throw new Error('Invalid server address.');
+                        }
+                        if (!devProbeAllowed(target, probeOrigins, request.socket.remoteAddress, allowLanProbe)) {
+                            response.statusCode = 403;
+                            response.setHeader('Content-Type', 'application/json; charset=utf-8');
+                            response.setHeader('Cache-Control', 'no-store');
+                            response.end(JSON.stringify({ error: 'This development server only checks its configured backend.' }));
+                            return;
                         }
                         target.pathname = target.pathname.replace(/\/(web|web\/index\.html)\/?$/i, '').replace(/\/$/, '');
                         const abort = new AbortController();
@@ -52,16 +62,32 @@ export default defineConfig(({ command, mode }) => {
                 });
             }
         },
+        {
+            name: 'ui-next-build-identity',
+            apply: 'build',
+            generateBundle() {
+                this.emitFile({
+                    type: 'asset',
+                    fileName: 'build.json',
+                    source: JSON.stringify({ revision: process.env.UI_NEXT_BUILD || 'unknown', builtAt: new Date().toISOString() })
+                });
+            }
+        },
         legacy({
             targets: [ 'chrome >= 38', 'safari >= 10', 'firefox >= 45' ],
             modernTargets: [ 'chrome >= 64', 'safari >= 12', 'firefox >= 67' ],
             renderLegacyChunks: true,
-            modernPolyfills: false,
-            polyfills: [ 'es.promise', 'es.array.iterator', 'es.object.to-string', 'web.dom-collections.iterator' ]
+            // Usage-detected polyfills for both bundles: older "modern" targets (Chrome 64,
+            // Safari 12) lack Promise.prototype.finally / Array.prototype.flatMap and friends.
+            modernPolyfills: true,
+            polyfills: true
         })
     ],
     base: './',
     publicDir: 'public',
+    define: {
+        __UI_NEXT_BUILD__: JSON.stringify(process.env.UI_NEXT_BUILD || 'dev')
+    },
     build: {
         cssCodeSplit: false,
         sourcemap: false,

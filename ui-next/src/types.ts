@@ -3,7 +3,7 @@ export interface JellyfinUser {
     Name: string;
     PrimaryImageTag?: string;
     HasPassword?: boolean;
-    Policy?: { IsAdministrator?: boolean; IsDisabled?: boolean };
+    Policy?: { IsAdministrator?: boolean; IsDisabled?: boolean; EnableCollectionManagement?: boolean; EnableContentDeletion?: boolean; EnableContentDownloading?: boolean };
     Configuration?: UserConfiguration;
 }
 
@@ -48,6 +48,7 @@ export interface MediaItem {
     Id: string;
     Name: string;
     Type?: string;
+    MediaType?: string;
     SortName?: string;
     CollectionType?: string;
     SeriesId?: string;
@@ -65,13 +66,36 @@ export interface MediaItem {
     RunTimeTicks?: number;
     CommunityRating?: number;
     RecommendationType?: number;
+    /** Pgsql taste match tier (`high` or `mid`) for For You items. */
+    TasteTier?: string;
     BaselineItemName?: string;
-    People?: Array<{ Name?: string; Type?: string }>;
+    People?: Array<{ Name?: string; Type?: string; Id?: string; Role?: string; PrimaryImageTag?: string }>;
+    OfficialRating?: string;
+    CriticRating?: number;
+    Taglines?: string[];
+    ExternalUrls?: Array<{ Name?: string; Url?: string }>;
+    Genres?: string[];
+    GenreItems?: Array<{ Name?: string; Id?: string }>;
+    Studios?: Array<{ Name?: string; Id?: string }>;
+    Tags?: string[];
+    AlbumArtists?: Array<{ Name?: string; Id?: string }>;
+    ArtistItems?: Array<{ Name?: string; Id?: string }>;
+    Album?: string;
+    AlbumId?: string;
+    PlaylistItemId?: string;
+    CanDelete?: boolean;
+    CanDownload?: boolean;
+    LocalTrailerCount?: number;
+    SpecialFeatureCount?: number;
+    PartCount?: number;
+    ExtraType?: string;
+    Status?: string;
+    PlayCount?: number;
     ImageTags?: { [key: string]: string };
     BackdropImageTags?: string[];
     UserData?: { PlayedPercentage?: number; Played?: boolean; PlaybackPositionTicks?: number; PlayedItemCount?: number; UnplayedItemCount?: number; IsFavorite?: boolean };
-    MediaSources?: Array<{ Id: string; SupportsDirectPlay?: boolean; TranscodingUrl?: string }>;
-    MediaStreams?: Array<{ Type?: string | number; Codec?: string; DisplayTitle?: string; Profile?: string; Channels?: number; Width?: number; Height?: number; VideoRange?: string; VideoRangeType?: string; IsDefault?: boolean }>;
+    MediaSources?: Array<{ Id: string; Name?: string; Container?: string; Size?: number; Bitrate?: number; SupportsDirectPlay?: boolean; TranscodingUrl?: string; MediaStreams?: MediaItem['MediaStreams'] }>;
+    MediaStreams?: Array<{ Type?: string | number; Codec?: string; DisplayTitle?: string; Profile?: string; Channels?: number; Width?: number; Height?: number; VideoRange?: string; VideoRangeType?: string; IsDefault?: boolean; Language?: string; BitRate?: number }>;
     ChannelId?: string;
     ChannelName?: string;
     ChannelNumber?: string;
@@ -131,4 +155,13 @@ export interface LiveTimer {
     EndDate?: string;
     Status?: string;
     SeriesTimerId?: string;
+    PrePaddingSeconds?: number;
+    PostPaddingSeconds?: number;
+    IsPrePaddingRequired?: boolean;
+    IsPostPaddingRequired?: boolean;
+    RecordNewOnly?: boolean;
+    RecordAnyChannel?: boolean;
+    RecordAnyTime?: boolean;
+    KeepUpTo?: number;
+    [key: string]: unknown;
 }

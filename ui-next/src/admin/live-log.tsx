@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import type { AdminApi } from './admin-api';
+import { appendLogText, parseLogLine, type LogTailState } from './admin-state';
 
 export function LiveLogViewer({ api, logName, onNameChange }: {
     api: AdminApi; logName: string; onNameChange: (name: string) => void;
@@ -11,72 +12,92 @@ export function LiveLogViewer({ api, logName, onNameChange }: {
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
     const [totalBytes, setTotalBytes] = useState(0);
-    const pollTimer = useRef<number>();
-    const previousLength = useRef(0);
+    const [copied, setCopied] = useState('');
+    const rawText = useRef('');
+    const tail = useRef<LogTailState>({ lines: [], length: 0 });
+    const generation = useRef(0);
     const containerRef = useRef<HTMLDivElement>(null);
     const [autoScroll, setAutoScroll] = useState(true);
+    const autoScrollRef = useRef(autoScroll);
+    autoScrollRef.current = autoScroll;
 
-    // Load log file list
     useEffect(() => {
         api.getLogs().then(rows => {
             setLogs(rows);
             if (!logName && rows[0]?.Name) onNameChange(rows[0].Name);
-        }).catch(() => undefined);
+        }).catch(e => setError(e instanceof Error ? e.message : 'Could not list log files.'));
     }, [api]);
 
-    // Poll the active log file
-    const loadLog = useCallback(async () => {
-        if (!logName || paused) return;
-        setLoading(true); setError('');
+    const loadLog = useCallback(async (reset = false) => {
+        if (!logName) return;
+        const request = reset ? ++generation.current : generation.current;
+        if (reset) tail.current = { lines: [], length: 0 };
+        setLoading(true);
         try {
             const text = await api.getLogText(logName);
-            const bytes = new Blob([text]).size;
-            setTotalBytes(bytes);
-            const allLines = text.split('\n');
-            const isNew = previousLength.current === 0 || !lines.length;
-            const newChunk = isNew ? allLines : allLines.slice(previousLength.current ? lines.length : 0);
-            previousLength.current = allLines.length;
-
-            if (newChunk.length === 0 && isNew) {
-                setLines([]);
-                setLoading(false);
-                return;
-            }
-
-            const parsed = (isNew ? allLines : newChunk).map(parseLine);
-            setLines(prev => isNew ? parsed : [...prev, ...parsed].slice(-2000));
-            if (autoScroll && containerRef.current) {
+            if (request !== generation.current) return;
+            rawText.current = text;
+            setError('');
+            const next = appendLogText(tail.current, text);
+            if (next === tail.current) return;
+            tail.current = next;
+            setTotalBytes(new Blob([text]).size);
+            setLines(next.lines.map(parseLogLine));
+            if (autoScrollRef.current && containerRef.current) {
                 containerRef.current.scrollTop = containerRef.current.scrollHeight;
             }
         } catch (e) {
-            setError(e instanceof Error ? e.message : 'Could not load log.');
+            if (request === generation.current) setError(e instanceof Error ? e.message : 'Could not load log.');
+        } finally {
+            if (request === generation.current) setLoading(false);
         }
-        setLoading(false);
-    }, [api, logName, paused, autoScroll, lines.length]);
+    }, [api, logName]);
 
     useEffect(() => {
-        previousLength.current = 0;
         setLines([]);
         setTotalBytes(0);
         if (!logName) return;
-        void loadLog();
-        pollTimer.current = window.setInterval(loadLog, 3000);
-        return () => window.clearInterval(pollTimer.current);
-    }, [logName, paused]);
+        void loadLog(true);
+        return () => { generation.current += 1; };
+    }, [logName, loadLog]);
+
+    useEffect(() => {
+        if (!logName || paused) return;
+        const timer = window.setInterval(() => { if (!document.hidden) void loadLog(); }, 3000);
+        return () => window.clearInterval(timer);
+    }, [logName, paused, loadLog]);
 
     const filtered = search.trim()
         ? lines.filter(l => l.text.toLowerCase().includes(search.toLowerCase()))
         : lines;
     const visible = filtered.slice(-500);
+    const download = () => {
+        const url = URL.createObjectURL(new Blob([rawText.current], { type: 'text/plain;charset=utf-8' }));
+        const link = document.createElement('a');
+        link.href = url; link.download = logName || 'jellyfin.log'; link.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    };
+    const copy = async () => {
+        const text = filtered.map(line => line.text).join('\n');
+        try {
+            await navigator.clipboard.writeText(text);
+            setCopied(`Copied ${filtered.length} lines.`);
+        } catch {
+            setCopied('Copy failed. Download the log instead.');
+        }
+        window.setTimeout(() => setCopied(''), 3000);
+    };
 
     return <div class="llv">
         <div class="ad-toolbar">
             <select class="ad-select" value={logName} onChange={e => onNameChange(e.currentTarget.value)} aria-label="Choose log file">
                 {logs.map(l => <option key={l.Name} value={l.Name}>{l.Name} · {fmtSize(l.Size || 0)}</option>)}
             </select>
-            <button class="ad-btn" onClick={() => { previousLength.current = 0; setLines([]); void loadLog(); }}>
+            <button class="ad-btn" onClick={() => void loadLog(true)}>
                 {loading ? 'Loading…' : '⟳ Reload'}
             </button>
+            <button class="ad-btn" disabled={!rawText.current} onClick={download}>Download</button>
+            <button class="ad-btn" disabled={filtered.length === 0} onClick={() => void copy()}>{search.trim() ? 'Copy matching lines' : 'Copy lines'}</button>
             <button class={`ad-btn${paused ? ' danger' : ''}`} onClick={() => setPaused(v => !v)}>
                 {paused ? '▶ Resume' : '⏸ Pause'}
             </button>
@@ -91,6 +112,7 @@ export function LiveLogViewer({ api, logName, onNameChange }: {
             <button class={`ad-btn${autoScroll ? ' active' : ''}`} onClick={() => setAutoScroll(v => !v)}>{autoScroll ? 'Auto-scroll on' : 'Auto-scroll off'}</button>
         </div>
         {error && <p class="ad-error" role="alert">{error}</p>}
+        {copied && <p class="ad-note" role="status">{copied}</p>}
         {lines.length === 0 && !error && <p class="ad-empty muted">Waiting for log content…</p>}
         <div ref={containerRef} class="llv-log" onScroll={() => {
             if (!containerRef.current) return;
@@ -104,14 +126,6 @@ export function LiveLogViewer({ api, logName, onNameChange }: {
             </div>)}
         </div>
     </div>;
-}
-
-function parseLine(text: string): { text: string; severity: string; ts: string; rest: string } {
-    const severity = text.match(/\b(TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\b/)?.[1] || 'INFO';
-    const tsMatch = text.match(/^(\d{4}[-\d]+\s[\d:,.]+)/);
-    const ts = tsMatch?.[1] || '';
-    const rest = tsMatch ? text.slice(tsMatch[0].length).trim() : text;
-    return { text, severity, ts, rest };
 }
 
 function highlight(query: string, text: string): any {

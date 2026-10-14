@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
+import { registerHooks } from 'node:module';
+import { extname } from 'node:path';
 import { test } from 'node:test';
-import * as liveModel from '../src/live-model.ts';
+
+registerHooks({
+    resolve(specifier, context, nextResolve) {
+        return nextResolve(specifier.startsWith('.') && !extname(specifier) ? `${specifier}.ts` : specifier, context);
+    }
+});
+
+const liveModel = await import('../src/live-model.ts');
 
 const channel = channelId => ({ kind: 'channel', channelId });
 const favorite = channelId => ({ kind: 'favorite', channelId });

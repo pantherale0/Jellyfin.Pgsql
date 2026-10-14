@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import type { AdminApi } from '../admin-api';
 import type { ServerActivityEntry, JellyfinSession, ScheduledTask, HealthIssue, ServerHealth, ForkStatus, SystemStorage } from '../types';
-import { ConfirmButton, CollapsibleSection, useRelativeClock, playbackMethod } from '../ui';
+import { isErrorSeverity, settle } from '../admin-state';
+import { ConfirmButton, CollapsibleSection, useRelativeClock, playbackMethod, SessionControls } from '../ui';
 
 interface OverviewProps { adminApi: AdminApi; session: { user: { Id: string; Name: string } }; onNavigate: (section: string) => void }
 
@@ -11,7 +12,7 @@ export function AdminOverview({ adminApi: api, session, onNavigate }: OverviewPr
     const [loading, setLoading] = useState(true);
     const [issues, setIssues] = useState<HealthIssue[]>([]);
     const [dismissed, setDismissed] = useState(false);
-    const [sys, setSys] = useState<{ ServerName?: string; Version?: string; RunTimeTicks?: number } | null>(null);
+    const [sys, setSys] = useState<{ ServerName?: string; Version?: string } | null>(null);
     const [sessions, setSessions] = useState<JellyfinSession[]>([]);
     const [tasks, setTasks] = useState<ScheduledTask[]>([]);
     const [stats, setStats] = useState<{
@@ -36,28 +37,35 @@ export function AdminOverview({ adminApi: api, session, onNavigate }: OverviewPr
 
     const load = useCallback(async () => {
         try {
-            const [s, sess, t, st, act, lib, disk, daily, taste, seerr, sso] = await Promise.all([
-                api.getSystemInfo().catch(() => null),
-                api.getSessions().catch(() => []),
-                api.getScheduledTasks().catch(() => []),
+            const [sR, sessR, tR, st, actR, libR, disk, daily, taste, seerr, sso] = await Promise.all([
+                settle(api.getSystemInfo(), 'Server information is unreachable'),
+                settle(api.getSessions(), 'Sessions could not be loaded'),
+                settle(api.getScheduledTasks(), 'Scheduled tasks could not be loaded'),
                 api.getPgsqlStats().catch(() => null),
-                api.getActivityLog(0, 50).catch(() => ({ Items: [] })),
-                api.getLibraryTotals().catch(() => ({ Movies: 0, Episodes: 0, Series: 0, Collections: 0 })),
+                settle(api.getActivityLog(0, 50), 'Activity could not be loaded'),
+                settle(api.getLibraryTotals(), 'Library totals could not be loaded'),
                 api.getSystemStorage().catch(() => null),
                 api.getPlaybackDimensions('Method', new Date().toISOString().slice(0,10), new Date().toISOString().slice(0,10)).catch(() => null),
                 api.getTasteShadowEval().catch(() => null),
-                api.getSeerrStatus().catch(() => ({ Enabled: false })),
+                api.getSeerrStatus().catch(() => ({ enabled: false })),
                 api.getSsoStatus().catch(() => null),
             ]);
+            const s = sR.ok ? sR.value : null;
+            const sess = sessR.ok ? sessR.value : [];
+            const t = tR.ok ? tR.value : [];
             setSys(s); setSessions(sess); setTasks(t); setStats(st);
-            setActivity(act.Items || []); setLibrary(lib);
+            setActivity(actR.ok ? actR.value.Items || [] : []); if (libR.ok) setLibrary(libR.value);
             const cacheSamples = st ? st.BrowseCacheHits + st.LatestCacheHits + st.BrowseCacheMisses + st.LatestCacheMisses : 0;
             setFork({ cache: st ? { backend: st.CacheBackend, status: !st.CacheActive ? 'Disabled' : st.CacheBackend === 'Memory' ? 'Ready' : st.RedisAvailability, hitRate: cacheSamples ? `${((st.BrowseCacheHits + st.LatestCacheHits) / cacheSamples * 100).toFixed(1)}%` : undefined } : undefined });
             setStorage(disk); setPlaybackStats(daily); setTasteEval(taste);
-            setSeerrEnabled(seerr?.Enabled === true); setSsoConfigured(sso?.enabled === true);
+            setSeerrEnabled(seerr?.enabled === true); setSsoConfigured(sso?.enabled === true);
             const i: HealthIssue[] = [];
             if (!s) i.push({ severity: 'critical', message: 'Server information is unreachable', link: 'system' });
             if (!st) i.push({ severity: 'degraded', message: 'Pgsql runtime telemetry is unavailable', link: 'infrastructure' });
+            if (!sessR.ok) i.push({ severity: 'degraded', message: sessR.error, link: 'playback' });
+            if (!tR.ok) i.push({ severity: 'degraded', message: tR.error, link: 'infrastructure' });
+            if (!actR.ok) i.push({ severity: 'degraded', message: actR.error, link: 'activity' });
+            if (!libR.ok) i.push({ severity: 'degraded', message: libR.error, link: 'libraries' });
             t.filter(x => x.LastExecutionResult?.Status === 'Failed' && x.LastExecutionResult.EndTimeUtc && Date.now() - Date.parse(x.LastExecutionResult.EndTimeUtc) < 86400000).forEach(x => { if (x.Name) i.push({ severity: 'degraded', message: `Task "${x.Name}" failed`, link: 'activity' }); });
             if (t.some(x => x.State === 'Faulted')) i.push({ severity: 'critical', message: 'A task has faulted', link: 'activity' });
             if (st && st.CacheActive && st.CacheBackend === 'Redis' && st.RedisAvailability !== 'Ready') i.push({ severity: 'degraded', message: `Redis ${st.RedisAvailability} · memory fallback`, link: 'infrastructure' });
@@ -227,7 +235,6 @@ function SessionBox({ sessions, playing, idle, showAll, onToggle, api }: {
     sessions: JellyfinSession[]; playing: JellyfinSession[]; idle: JellyfinSession[];
     showAll: boolean; onToggle: () => void; api: AdminApi;
 }) {
-    const [kicking, setKicking] = useState('');
     if (sessions.length === 0) return <section class="ao-section"><h2>Sessions</h2><p class="ao-empty">No active sessions</p></section>;
     const max = showAll ? 50 : 4;
     const visible = [...playing, ...idle].slice(0, max);
@@ -236,7 +243,6 @@ function SessionBox({ sessions, playing, idle, showAll, onToggle, api }: {
         {visible.map(s => {
             const p = !!s.NowPlayingItem;
             const pi = s.TranscodingInfo;
-            const doKick = async () => { setKicking(s.Id); try { await api.stopPlayback(s.Id); } catch {} setKicking(''); };
             return <div class={`ao-sess${p ? ' playing' : ''}`} key={s.Id}>
                 <span class="ao-sess-av">{s.UserName?.[0] || '?'}</span>
                 <div class="ao-sess-body">
@@ -246,7 +252,7 @@ function SessionBox({ sessions, playing, idle, showAll, onToggle, api }: {
                     {p && s.NowPlayingItem?.RunTimeTicks && s.PlayState?.PositionTicks && <div class="ao-progress"><i style={{ width: `${Math.min(100, (s.PlayState.PositionTicks / s.NowPlayingItem.RunTimeTicks) * 100)}%` }} /></div>}
                 </div>
                 <span class={`ao-status ${p ? playbackMethod(s) === 'Transcode' ? 'amber' : 'green' : 'muted'}`}>{p ? s.PlayState?.IsPaused ? 'Paused' : playbackMethod(s) === 'Unknown' ? 'Playing' : playbackMethod(s) : 'Idle'}</span>
-                {p && <ConfirmButton label="Stop playback" tone="danger" busy={kicking === s.Id} onConfirm={doKick} />}
+                {p && <SessionControls session={s} api={api} />}
             </div>;
         })}
         {sessions.length > max && <button class="ao-expand" onClick={onToggle}>{showAll ? 'Less' : `Show ${sessions.length} sessions`}</button>}
@@ -276,7 +282,7 @@ function ActivityFeed({ activity, filter, onFilter, showAll, onToggle, api }: {
 
     if (activity.length === 0) return null;
     return <section class="ao-section">
-        <div class="ao-section-head"><h2>Recent activity</h2><div class="ao-chips">{filters.map(f => <button key={f} class={`ao-chip${filter === f ? ' active' : ''}`} onClick={() => onFilter(f)}>{f}</button>)}</div></div>
+        <div class="ao-section-head"><h2>Recent activity</h2><div class="ao-chips">{filters.map(f => <button key={f} class={`ao-chip${filter === f ? ' active' : ''}`} aria-pressed={filter === f} onClick={() => onFilter(f)}>{f}</button>)}</div></div>
         {filtered.length === 0 && <p class="ao-empty">No matching events</p>}
         {filtered.length > 0 && <div class="ao-act-table">
             <div class="ao-act-head"><span>Event</span><span>User</span><span>Description</span><span>When</span></div>
@@ -335,11 +341,11 @@ function BackgroundWork({ tasks, showAll, onToggle }: { tasks: ScheduledTask[]; 
 }
 
 function SystemAlertsAndFork({ activity, fork, tasteEval, seerrEnabled, ssoConfigured }: { activity: ServerActivityEntry[]; fork: ForkStatus | null; tasteEval: any; seerrEnabled: boolean; ssoConfigured: boolean }) {
-    const alerts = activity.filter(a => a.Severity === 'Error' || a.Severity === 'Fatal' || a.Severity === 'Warning');
+    const alerts = activity.filter(a => isErrorSeverity(a.Severity) || a.Severity === 'Warning');
     const hasForkSignals = Boolean(fork?.cache || tasteEval || seerrEnabled || ssoConfigured);
     return <section class="ao-section">
         <h2>System health</h2>
-        {alerts.length > 0 && alerts.slice(0, 4).map(a => <div class="ao-alert" key={a.Id}><span class={`ao-alert-dot ${a.Severity === 'Error' || a.Severity === 'Fatal' ? 'err' : 'warn'}`} /><div class="ao-alert-body"><p>{a.Name || a.Overview || a.ShortOverview || '—'}</p><span class="ao-alert-ts">{fmtAbs(a.Date)}</span></div></div>)}
+        {alerts.length > 0 && alerts.slice(0, 4).map(a => <div class="ao-alert" key={a.Id}><span class={`ao-alert-dot ${isErrorSeverity(a.Severity) ? 'err' : 'warn'}`} /><div class="ao-alert-body"><p>{a.Name || a.Overview || a.ShortOverview || '—'}</p><span class="ao-alert-ts">{fmtAbs(a.Date)}</span></div></div>)}
         {alerts.length === 0 && !hasForkSignals && <p class="ao-empty"><span class="ao-check">✓</span> No active alerts</p>}
         {hasForkSignals && <div class="ao-fork">
             {fork?.cache && <div class="ao-fork-row"><span class="ao-dot" style={{ background: fork.cache.status === 'Ready' ? '#22c55e' : fork.cache.status === 'Disabled' ? '#9AA3AE' : '#f59e0b' }} />Query cache <span class="ao-fork-val">{fork.cache.backend} · {fork.cache.status}{fork.cache.hitRate ? ` · hit ${fork.cache.hitRate}` : ''}</span></div>}

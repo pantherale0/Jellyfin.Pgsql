@@ -1,26 +1,30 @@
 import { useCallback, useEffect, useState } from 'preact/hooks';
 import type { AdminApi } from '../admin-api';
 import type { PluginInfo } from '../types';
+import { pluginSection } from '../admin-state';
 import { PageShell, Card, StatusChip, SearchInput, FilterPills, Empty, DataTable, ConfirmButton } from '../ui';
 
-export function AdminAllPlugins({ adminApi: api, onNavigate }: { adminApi: AdminApi; onNavigate: (section: string) => void }) {
+export function AdminAllPlugins({ adminApi: api, onNavigate, configurablePluginIds }: { adminApi: AdminApi; onNavigate: (section: string) => void; configurablePluginIds: string[] }) {
     const [plugins, setPlugins] = useState<PluginInfo[]>([]);
     const [search, setSearch] = useState('');
     const [filter, setFilter] = useState('All');
     const [busy, setBusy] = useState('');
 
-    const load = useCallback(() => { api.getPlugins().then(setPlugins).catch(() => undefined); }, [api]);
-    useEffect(() => { load(); }, [load]);
+    const [loadError, setLoadError] = useState('');
+    const [message, setMessage] = useState('');
+    const load = useCallback(async () => { setLoadError(''); try { setPlugins(await api.getPlugins()); } catch (e) { setLoadError(e instanceof Error ? e.message : 'Plugin list failed.'); } }, [api]);
+    useEffect(() => { void load(); }, [load]);
 
     const toggle = async (p: PluginInfo, enable: boolean) => {
-        setBusy(p.Id || p.Name || '');
+        setBusy(p.Id || p.Name || ''); setMessage('');
         try {
             const version = String(p.Version);
             if (enable) await api.enablePlugin(p.Id!, version);
             else await api.disablePlugin(p.Id!, version);
             await load();
-        } catch {
-            // The plugin manager may need a restart to apply the change.
+            setMessage(`${p.Name || 'Plugin'} ${enable ? 'enabled' : 'disabled'}. Restart the server for the change to take effect.`);
+        } catch (e) {
+            setLoadError(e instanceof Error ? e.message : 'Plugin change failed.');
         }
         setBusy('');
     };
@@ -32,20 +36,15 @@ export function AdminAllPlugins({ adminApi: api, onNavigate }: { adminApi: Admin
         return true;
     });
 
-    const firstClass = (name?: string) => {
-        const lower = (name || '').toLowerCase();
-        return lower.includes('postgresql database') || lower.includes('seerr');
-    };
-
     const columns = [
         { key: 'Name', label: 'Plugin', value: (p: PluginInfo) => <><strong>{p.Name}</strong><div class="ad-cell-sub">{p.Version || '—'}</div></>, searchValue: (p: PluginInfo) => `${p.Name || ''} ${p.Description || ''}` },
         { key: 'Description', label: 'Description', value: (p: PluginInfo) => p.Description || '—', searchValue: (p: PluginInfo) => p.Description || '' },
         { key: 'Status', label: 'Status', value: (p: PluginInfo) => <StatusChip tone={p.Status === 'Active' ? 'green' : p.Status === 'Malfunctioned' ? 'red' : 'muted'}>{p.Status || 'Unknown'}</StatusChip> },
         { key: 'Actions', label: '', value: (p: PluginInfo) => {
             const isBusy = busy === p.Id || busy === p.Name;
-            const pageName = firstClass(p.Name) ? `plugin-${encodeURIComponent(firstClassPage(p.Name || ''))}` : `plugin-${encodeURIComponent(p.Name || '')}`;
+            const configurable = Boolean(p.Id) && configurablePluginIds.includes(p.Id!);
             return <div class="ad-flex" style="gap:6px;flex-wrap:wrap">
-                <button class="ad-btn" disabled={isBusy} onClick={() => onNavigate(pageName)}>Configure</button>
+                {configurable && <button class="ad-btn" disabled={isBusy} onClick={() => onNavigate(pluginSection(p.Id!))}>Configure</button>}
                 {p.Status === 'Active'
                     ? <ConfirmButton label="Disable" tone="danger" busy={isBusy} onConfirm={() => toggle(p, false)} />
                     : <ConfirmButton label="Enable" busy={isBusy} onConfirm={() => toggle(p, true)} />}
@@ -53,7 +52,9 @@ export function AdminAllPlugins({ adminApi: api, onNavigate }: { adminApi: Admin
         } },
     ];
 
-    return <PageShell title="All plugins" subtitle="Enable, disable and configure installed plugins" actions={<button class="ad-btn" onClick={load}>Refresh</button>}>
+    return <PageShell title="All plugins" subtitle="Enable, disable and configure installed plugins" actions={<button class="ad-btn" onClick={() => void load()}>Refresh</button>}>
+        {loadError && <p role="alert" class="ad-error">{loadError}</p>}
+        {message && <p role="status" class="ad-note">{message}</p>}
         <Card title="Installed plugins">
             <div class="ad-toolbar">
                 <SearchInput value={search} onInput={setSearch} placeholder="Search plugins…" />
@@ -64,12 +65,4 @@ export function AdminAllPlugins({ adminApi: api, onNavigate }: { adminApi: Admin
             <p class="ad-note">Enable/disable changes take effect after a server restart. Uninstalled plugins remain in the list until restart.</p>
         </Card>
     </PageShell>;
-}
-
-function firstClassPage(rawName: string): string {
-    const name = rawName.toLowerCase();
-    if (name.includes('postgresql database')) return 'PostgreSQL%20Database';
-    if (name.includes('seerr')) return 'Seerr';
-    if (name.includes('tmdb')) return 'TMDb';
-    return encodeURIComponent(rawName);
 }

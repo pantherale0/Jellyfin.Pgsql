@@ -10,17 +10,192 @@ export interface MediaStreamInfo {
     IsDefault?: boolean;
     IsForced?: boolean;
     IsTextSubtitleStream?: boolean;
+    IsExternal?: boolean;
+    DeliveryMethod?: 'Encode' | 'Embed' | 'External' | 'Hls' | 'Drop' | string;
     AspectRatio?: string;
+    Height?: number;
 }
+
+export type PlayMethod = 'DirectPlay' | 'DirectStream' | 'Transcode';
 
 export interface PlaybackChoice {
     url: string;
     direct: boolean;
+    method: PlayMethod;
     mediaSourceId: string;
     playSessionId?: string;
     bitrate?: number;
     streams: MediaStreamInfo[];
-    transcodeReasons?: number | string;
+    transcodeReasons?: number | string | string[];
+    /** Where the element should start, in media time. */
+    startSeconds: number;
+    /** Added to element time when the stream itself starts at StartTimeTicks (progressive transcodes). */
+    offsetSeconds: number;
+    audioStreamIndex: number | null;
+    subtitleStreamIndex: number | null;
+    liveStreamId?: string;
+    isLive: boolean;
+    maxBitrate?: number;
+    versions?: MediaVersion[];
+}
+
+export interface PlaybackOptions {
+    startTicks?: number;
+    audioStreamIndex?: number | null;
+    subtitleStreamIndex?: number | null;
+    maxBitrate?: number;
+    mediaSourceId?: string;
+    forceTranscode?: boolean;
+    liveStreamId?: string;
+}
+
+export type PlayIntent = 'resume' | 'beginning';
+
+export function resumeStartTicks(item: Pick<MediaItem, 'UserData' | 'RunTimeTicks' | 'Type'> | null, intent: PlayIntent = 'resume'): number {
+    if (!item || intent === 'beginning' || item.Type === 'TvChannel') return 0;
+    const ticks = item.UserData?.PlaybackPositionTicks || 0;
+    if (ticks <= 0 || item.UserData?.Played) return 0;
+    if (item.RunTimeTicks && ticks >= item.RunTimeTicks) return 0;
+    return ticks;
+}
+
+export function canResume(item: Pick<MediaItem, 'UserData' | 'RunTimeTicks' | 'Type'> | null): boolean {
+    return resumeStartTicks(item, 'resume') > 0;
+}
+
+function urlParam(url: string, name: string): string | null {
+    try {
+        const parsed = new URL(url, 'http://placeholder.invalid');
+        for (const [ key, value ] of parsed.searchParams) if (key.toLowerCase() === name.toLowerCase()) return value;
+    } catch (_error) { /* Malformed URLs carry no diagnostics. */ }
+    return null;
+}
+
+export function transcodeReasonsFromUrl(url: string): string[] {
+    const value = urlParam(url, 'TranscodeReasons');
+    return value ? value.split(',').map(reason => reason.trim()).filter(Boolean) : [];
+}
+
+/** Progressive (non-HLS) transcodes begin at StartTimeTicks, so element time 0 is that offset. */
+export function startPlan(url: string, direct: boolean, hls: boolean, startTicks: number): { startSeconds: number; offsetSeconds: number } {
+    const start = Math.max(0, startTicks) / 10_000_000;
+    if (direct || hls || urlParam(url, 'CopyTimestamps')?.toLowerCase() === 'true') return { startSeconds: start, offsetSeconds: 0 };
+    const encoded = Number(urlParam(url, 'StartTimeTicks') || 0) / 10_000_000;
+    return encoded > 0 ? { startSeconds: 0, offsetSeconds: encoded } : { startSeconds: start, offsetSeconds: 0 };
+}
+
+export function itemPosition(mediaSeconds: number, offsetSeconds: number): number {
+    return Math.max(0, mediaSeconds + offsetSeconds);
+}
+
+export function mediaPosition(itemSeconds: number, offsetSeconds: number): number {
+    return Math.max(0, itemSeconds - offsetSeconds);
+}
+
+export function burnedSubtitleIndex(url: string): number | null {
+    const method = urlParam(url, 'SubtitleMethod');
+    const index = urlParam(url, 'SubtitleStreamIndex');
+    if (!method || method.toLowerCase() !== 'encode' || index === null) return null;
+    const value = Number(index);
+    return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+export function subtitleIsExternal(stream: MediaStreamInfo): boolean {
+    if (stream.DeliveryMethod) return stream.DeliveryMethod === 'External';
+    return Boolean(stream.IsTextSubtitleStream);
+}
+
+export type SubtitlePlan =
+    | { action: 'none' }
+    | { action: 'track'; index: number }
+    | { action: 'embedded'; index: number }
+    | { action: 'off' }
+    | { action: 'renegotiate'; subtitleStreamIndex: number };
+
+/** Burned-in captions can only be removed or replaced by asking the server for a new stream. */
+export function planSubtitleSelection(target: number | null, streams: MediaStreamInfo[], url: string): SubtitlePlan {
+    const burned = burnedSubtitleIndex(url);
+    if (target === null) return burned === null ? { action: 'off' } : { action: 'renegotiate', subtitleStreamIndex: -1 };
+    if (burned === target) return { action: 'none' };
+    const stream = streams.find(candidate => candidate.Index === target && streamKind(candidate.Type) === 'subtitle');
+    if (!stream) return { action: 'none' };
+    if (stream.DeliveryMethod === 'Embed' && burned === null && !/\.m3u8(?:\?|$)/i.test(url)) return { action: 'embedded', index: target };
+    if (subtitleIsExternal(stream) && burned === null) return { action: 'track', index: target };
+    return { action: 'renegotiate', subtitleStreamIndex: target };
+}
+
+export function initialSubtitleIndex(choice: Pick<PlaybackChoice, 'subtitleStreamIndex' | 'streams' | 'url'>): number | null {
+    const burned = burnedSubtitleIndex(choice.url);
+    if (burned !== null) return burned;
+    const index = choice.subtitleStreamIndex;
+    if (index === null || index < 0) return null;
+    const stream = choice.streams.find(candidate => candidate.Index === index && streamKind(candidate.Type) === 'subtitle');
+    return stream && (subtitleIsExternal(stream) || stream.DeliveryMethod === 'Embed') ? index : null;
+}
+
+export function initialAudioIndex(choice: Pick<PlaybackChoice, 'audioStreamIndex' | 'streams'>): number | null {
+    const audio = choice.streams.filter(stream => streamKind(stream.Type) === 'audio');
+    if (choice.audioStreamIndex !== null && audio.some(stream => stream.Index === choice.audioStreamIndex)) return choice.audioStreamIndex;
+    return audio.find(stream => stream.IsDefault)?.Index ?? audio[0]?.Index ?? null;
+}
+
+export type AudioPlan = { action: 'none' } | { action: 'switch'; trackPosition: number } | { action: 'renegotiate'; audioStreamIndex: number };
+
+/** Only a direct-play element exposing every audio track can switch locally; anything else is a new stream. */
+export function planAudioSelection(target: number, current: number | null, streams: MediaStreamInfo[], browserTrackCount: number, method: PlayMethod): AudioPlan {
+    if (target === current) return { action: 'none' };
+    const audio = streams.filter(stream => streamKind(stream.Type) === 'audio');
+    const position = audio.findIndex(stream => stream.Index === target);
+    if (position < 0) return { action: 'none' };
+    if (method === 'DirectPlay' && browserTrackCount === audio.length && position < browserTrackCount) return { action: 'switch', trackPosition: position };
+    return { action: 'renegotiate', audioStreamIndex: target };
+}
+
+export interface SeekBounds { start: number; end: number; live: boolean; seekable: boolean }
+
+export function seekBounds(duration: number, ranges: Array<[number, number]>): SeekBounds {
+    if (Number.isFinite(duration) && duration > 0) return { start: 0, end: duration, live: false, seekable: true };
+    if (!ranges.length) return { start: 0, end: 0, live: true, seekable: false };
+    const start = ranges[0][0];
+    const end = ranges[ranges.length - 1][1];
+    return { start, end, live: true, seekable: end - start > 1 };
+}
+
+export function clampSeek(target: number, bounds: SeekBounds): number {
+    if (!bounds.seekable) return bounds.end;
+    return Math.min(Math.max(bounds.start, target), bounds.end);
+}
+
+export function rangesOf(ranges: TimeRanges | null | undefined): Array<[number, number]> {
+    const list: Array<[number, number]> = [];
+    if (!ranges) return list;
+    for (let index = 0; index < ranges.length; index++) list.push([ ranges.start(index), ranges.end(index) ]);
+    return list;
+}
+
+export interface SessionTranscodingInfo {
+    IsVideoDirect?: boolean;
+    IsAudioDirect?: boolean;
+    VideoCodec?: string;
+    AudioCodec?: string;
+    Container?: string;
+    Bitrate?: number;
+    HardwareAccelerationType?: string;
+    TranscodeReasons?: string[] | string | number;
+}
+
+export function sessionPlayMethod(choice: Pick<PlaybackChoice, 'method'>, info: SessionTranscodingInfo | null | undefined): PlayMethod {
+    if (choice.method === 'DirectPlay' || !info) return choice.method;
+    return info.IsVideoDirect && info.IsAudioDirect ? 'DirectStream' : 'Transcode';
+}
+
+export function describePlayMethod(method: PlayMethod, info?: SessionTranscodingInfo | null): string {
+    if (method === 'DirectPlay') return 'Direct play';
+    if (method === 'DirectStream') return 'Remux (video and audio copied)';
+    if (!info) return 'Transcoded stream';
+    const parts = [ info.IsVideoDirect ? 'video copied' : `video → ${info.VideoCodec || 'converted'}`, info.IsAudioDirect ? 'audio copied' : `audio → ${info.AudioCodec || 'converted'}` ];
+    if (info.HardwareAccelerationType && info.HardwareAccelerationType !== 'none') parts.push(`${info.HardwareAccelerationType} acceleration`);
+    return `Transcode (${parts.join(', ')})`;
 }
 
 export interface TrickplayLevel {
@@ -42,8 +217,11 @@ export interface TrickplayFrame {
     sheetHeight: number;
 }
 
+export type SegmentKind = 'intro' | 'credits' | 'recap' | 'preview' | 'commercial';
+export type SegmentAction = 'ask' | 'skip' | 'ignore';
+
 export interface TimelineCue {
-    kind: 'intro' | 'credits';
+    kind: SegmentKind;
     label: string;
     start: number;
     end: number;
@@ -111,14 +289,30 @@ export function formatBitrate(bits?: number): string {
     return `${bits} bps`;
 }
 
-export function describeTranscode(reasons: number | string | undefined, direct: boolean): string {
+const TRANSCODE_REASON_NAMES = [
+    'ContainerNotSupported', 'VideoCodecNotSupported', 'AudioCodecNotSupported', 'SubtitleCodecNotSupported', 'AudioIsExternal',
+    'SecondaryAudioNotSupported', 'VideoProfileNotSupported', 'VideoLevelNotSupported', 'VideoResolutionNotSupported', 'VideoBitDepthNotSupported',
+    'VideoFramerateNotSupported', 'RefFramesNotSupported', 'AnamorphicVideoNotSupported', 'InterlacedVideoNotSupported', 'AudioChannelsNotSupported',
+    'AudioProfileNotSupported', 'AudioSampleRateNotSupported', 'AudioBitDepthNotSupported', 'ContainerBitrateExceedsLimit', 'VideoBitrateNotSupported',
+    'AudioBitrateNotSupported', 'UnknownVideoStreamInfo', 'UnknownAudioStreamInfo', 'DirectPlayError', 'VideoRangeTypeNotSupported',
+    'VideoCodecTagNotSupported', 'StreamCountExceedsLimit', 'VideoRotationNotSupported'
+];
+
+function reasonLabel(name: string): string {
+    const index = TRANSCODE_REASON_NAMES.findIndex(candidate => candidate.toLowerCase() === name.trim().toLowerCase());
+    return index >= 0 ? TRANSCODE_REASONS[index][1] : name.trim();
+}
+
+export function describeTranscode(reasons: number | string | string[] | undefined, direct: boolean): string {
     if (typeof reasons === 'number' && reasons > 0) {
         const labels = TRANSCODE_REASONS.filter(([ bit ]) => (reasons & bit) === bit).map(([, label ]) => label);
         if (labels.length) return labels.join('. ') + '.';
     }
-    if (typeof reasons === 'string' && reasons.trim() && reasons !== '0') return reasons;
+    const list = Array.isArray(reasons) ? reasons : typeof reasons === 'string' && reasons.trim() && reasons !== '0' ? reasons.split(',') : [];
+    const labels = list.map(reasonLabel).filter(Boolean);
+    if (labels.length) return labels.join('. ') + '.';
     if (direct) return 'None. This file is playing directly.';
-    return 'The server opened a transcoded stream and did not include a reason list.';
+    return 'The server did not report a reason for this stream.';
 }
 
 export function timelineCues(items: Array<{ Type?: string | number; StartTicks?: number; EndTicks?: number }>): TimelineCue[] {
@@ -127,13 +321,111 @@ export function timelineCues(items: Array<{ Type?: string | number; StartTicks?:
         const start = (item.StartTicks || 0) / 10000000;
         const end = (item.EndTicks || 0) / 10000000;
         if (end <= start) return;
-        const type = item.Type;
-        const intro = type === 'Intro' || type === 5 || type === '5';
-        const credits = type === 'Outro' || type === 4 || type === '4';
-        if (intro) cues.push({ kind: 'intro', label: 'Skip intro', start, end });
-        if (credits) cues.push({ kind: 'credits', label: 'Skip credits', start, end });
+        const kind = SEGMENT_TYPES[String(item.Type)];
+        if (kind) cues.push({ kind, label: `Skip ${SEGMENT_LABELS[kind].toLowerCase()}`, start, end });
     });
-    return cues;
+    return cues.sort((left, right) => left.start - right.start);
+}
+
+const SEGMENT_TYPES: Record<string, SegmentKind> = {
+    Commercial: 'commercial', 1: 'commercial', Preview: 'preview', 2: 'preview', Recap: 'recap', 3: 'recap', Outro: 'credits', 4: 'credits', Intro: 'intro', 5: 'intro'
+};
+
+export const SEGMENT_LABELS: Record<SegmentKind, string> = { intro: 'Intro', credits: 'Credits', recap: 'Recap', preview: 'Preview', commercial: 'Commercial' };
+export const SEGMENT_KINDS = Object.keys(SEGMENT_LABELS) as SegmentKind[];
+const SEGMENT_PREFERENCES_KEY = 'ui-next-segment-actions';
+const DEFAULT_SEGMENT_ACTIONS: Record<SegmentKind, SegmentAction> = { intro: 'ask', credits: 'ask', recap: 'ask', preview: 'ask', commercial: 'ask' };
+
+export function normalizeSegmentActions(raw: unknown): Record<SegmentKind, SegmentAction> {
+    const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+    const actions = { ...DEFAULT_SEGMENT_ACTIONS };
+    SEGMENT_KINDS.forEach(kind => {
+        const action = value[kind];
+        if (action === 'ask' || action === 'skip' || action === 'ignore') actions[kind] = action;
+    });
+    return actions;
+}
+
+export function loadSegmentActions(): Record<SegmentKind, SegmentAction> {
+    try {
+        return normalizeSegmentActions(JSON.parse(localStorage.getItem(SEGMENT_PREFERENCES_KEY) || '{}'));
+    } catch (_error) {
+        return { ...DEFAULT_SEGMENT_ACTIONS };
+    }
+}
+
+export function saveSegmentAction(kind: SegmentKind, action: SegmentAction): Record<SegmentKind, SegmentAction> {
+    const next = normalizeSegmentActions({ ...loadSegmentActions(), [kind]: action });
+    try { localStorage.setItem(SEGMENT_PREFERENCES_KEY, JSON.stringify(next)); } catch (_error) { /* Private mode keeps the in-memory value. */ }
+    return next;
+}
+
+export function cueKey(cue: TimelineCue): string {
+    return `${cue.kind}:${cue.start.toFixed(1)}`;
+}
+
+/** What to do for the active segment: auto-skip once per segment, otherwise prompt unless the type is ignored. */
+export function segmentDecision(cue: TimelineCue | null, actions: Record<SegmentKind, SegmentAction>, skipped: ReadonlySet<string>): 'none' | 'prompt' | 'skip' {
+    if (!cue) return 'none';
+    const action = actions[cue.kind];
+    if (action === 'ignore') return 'none';
+    if (action === 'skip' && !skipped.has(cueKey(cue))) return 'skip';
+    return 'prompt';
+}
+
+export const SKIP_PROMPT_SECONDS = 8;
+
+/** The skip prompt shows outside the OSD for the first few seconds after a segment is entered. */
+export function skipPromptVisible(enteredAt: number | null, time: number, osdOpen: boolean): boolean {
+    if (osdOpen) return true;
+    return enteredAt !== null && time >= enteredAt && time - enteredAt < SKIP_PROMPT_SECONDS;
+}
+
+export interface Chapter { index: number; name: string; start: number; imageTag?: string }
+
+export function chapterList(raw: Array<{ StartPositionTicks?: number; Name?: string; ImageTag?: string }> | undefined, duration = 0): Chapter[] {
+    if (!Array.isArray(raw)) return [];
+    const chapters = raw.map((chapter, index) => ({ index, name: chapter.Name?.trim() || `Chapter ${index + 1}`, start: Math.max(0, (chapter.StartPositionTicks || 0) / 10_000_000), imageTag: chapter.ImageTag || undefined }))
+        .filter(chapter => Number.isFinite(chapter.start) && (!duration || chapter.start < duration))
+        .sort((left, right) => left.start - right.start);
+    return chapters.length > 1 ? chapters : [];
+}
+
+export function currentChapterIndex(chapters: Chapter[], time: number): number {
+    let current = -1;
+    chapters.forEach((chapter, position) => { if (time >= chapter.start) current = position; });
+    return current;
+}
+
+/** Previous goes to the start of the current chapter unless playback is within its first few seconds. */
+export function adjacentChapterStart(chapters: Chapter[], time: number, direction: 1 | -1): number | null {
+    const current = currentChapterIndex(chapters, time);
+    if (direction === 1) return chapters[current + 1]?.start ?? null;
+    if (current >= 0 && time - chapters[current].start > 3) return chapters[current].start;
+    return current > 0 ? chapters[current - 1].start : null;
+}
+
+export interface MediaVersion { id: string; name: string }
+
+export function mediaVersions(sources: Array<{ Id?: string; Name?: string; Container?: string; Bitrate?: number; MediaStreams?: MediaStreamInfo[] }> | undefined): MediaVersion[] {
+    if (!Array.isArray(sources)) return [];
+    return sources.filter(source => source.Id).map((source, index) => {
+        const height = source.MediaStreams?.find(stream => streamKind(stream.Type) === 'video')?.Height;
+        const detail = [ height ? `${height}p` : '', source.Container?.toUpperCase(), source.Bitrate ? formatBitrate(source.Bitrate) : '' ].filter(Boolean).join(' · ');
+        return { id: source.Id as string, name: source.Name?.trim() || detail || `Version ${index + 1}` };
+    });
+}
+
+const rememberedVersions = new Map<string, string>();
+
+/** Keeps the chosen version name per series so the next episode plays the matching cut/encode. */
+export function rememberVersion(seriesId: string | undefined, name: string): void {
+    if (seriesId && name) rememberedVersions.set(seriesId, name);
+}
+
+export function preferredVersionId(seriesId: string | undefined, versions: MediaVersion[]): string | undefined {
+    const name = seriesId ? rememberedVersions.get(seriesId) : undefined;
+    return name ? versions.find(version => version.name === name)?.id : undefined;
 }
 
 export function cueBox(cue: TimelineCue, duration: number): { left: string; width: string } | null {
@@ -144,14 +436,20 @@ export function cueBox(cue: TimelineCue, duration: number): { left: string; widt
     return { left: `${left}%`, width: `${width}%` };
 }
 
-export function pickTrickplay(manifest: Record<string, Record<string, TrickplayLevel>> | undefined, mediaSourceId?: string): TrickplayLevel | null {
+export interface TrickplayPreview {
+    level: TrickplayLevel;
+    sourceId: string;
+}
+
+export function pickTrickplay(manifest: Record<string, Record<string, TrickplayLevel>> | undefined, mediaSourceId?: string): TrickplayPreview | null {
     if (!manifest) return null;
-    const source = (mediaSourceId && manifest[mediaSourceId]) || manifest[Object.keys(manifest)[0]];
+    const sourceId = (mediaSourceId && manifest[mediaSourceId] ? mediaSourceId : Object.keys(manifest)[0]);
+    const source = sourceId ? manifest[sourceId] : undefined;
     if (!source) return null;
     const levels = Object.keys(source).map(key => source[key]).filter(level => level && level.Width && level.Interval && level.ThumbnailCount);
     if (!levels.length) return null;
     levels.sort((left, right) => Math.abs(left.Width - 320) - Math.abs(right.Width - 320));
-    return levels[0];
+    return { level: levels[0], sourceId };
 }
 
 export function trickplayFrame(info: TrickplayLevel, timeSeconds: number): TrickplayFrame | null {
@@ -182,4 +480,15 @@ export function seasonLabel(number: number | undefined): string {
     if (number === 0) return 'Specials';
     if (number === undefined) return 'Episodes';
     return `Season ${number}`;
+}
+
+export type PlayerKeyAction = 'toggle' | 'play' | 'pause' | 'stop' | 'select';
+
+export function classifyPlayerKey(key: string, keyCode?: number): PlayerKeyAction | null {
+    if (key === 'MediaPlayPause' || keyCode === 10252) return 'toggle';
+    if (key === 'MediaPlay' || keyCode === 415) return 'play';
+    if (key === 'MediaPause' || key === 'Pause') return 'pause';
+    if (key === 'MediaStop' || keyCode === 413) return 'stop';
+    if (key === 'Enter' || key === 'Select') return 'select';
+    return null;
 }
