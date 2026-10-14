@@ -1,4 +1,5 @@
-import { useState, useMemo, useCallback, useEffect } from 'preact/hooks';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'preact/hooks';
+import { useDialogFocus } from '../dialog-focus';
 import type { JellyfinApi } from '../api';
 import { createAdminApi, type AdminApi } from './admin-api';
 import type { AdminSection, SystemInfo } from './types';
@@ -18,6 +19,7 @@ import { AdminPluginTmdb } from './pages/admin-plugin-tmdb';
 import { AdminPluginGeneric } from './pages/admin-plugin-generic';
 import { ConfirmButton } from './ui';
 import type { PluginInfo } from './types';
+import { adminRouteHash, confirmLeave, parseAdminRoute, pluginSection } from './admin-state';
 
 interface AdminDashboardProps {
     api: JellyfinApi;
@@ -49,24 +51,33 @@ const FIRST_CLASS = new Set(['postgresql database', 'seerr', 'tmdb']);
 export function AdminDashboard({ api, session, onBack }: AdminDashboardProps) {
     const [section, setSection] = useState<AdminSection | string>('overview');
     const [sidebarOpen, setSidebarOpen] = useState(true);
+    const [sidebarOverlay, setSidebarOverlay] = useState(() => window.innerWidth < 1400);
+    const sidebarRef = useRef<HTMLElement>(null);
+    useDialogFocus(sidebarRef, sidebarOpen && sidebarOverlay, () => setSidebarOpen(false), {
+        initial: '.admin-nav.active, .admin-nav',
+        fallback: () => document.querySelector<HTMLElement>('.admin-menu-btn')
+    });
     const [sys, setSys] = useState<SystemInfo | null>(null);
     const [actionMessage, setActionMessage] = useState('');
     const [pluginPages, setPluginPages] = useState<PluginConfigPage[]>([]);
     const [pluginNavId, setPluginNavId] = useState('');
     const adminApi = useMemo(() => createAdminApi(api), [api]);
     const navigate = useCallback((s: string) => {
+        if (!confirmLeave(message => window.confirm(message))) return;
         setSection(s);
         const url = new URL(window.location.href);
-        url.hash = `admin/${s}`;
+        url.hash = adminRouteHash(s);
         if (window.location.hash !== url.hash) window.history.pushState(null, '', url.toString());
         setSidebarOpen(window.innerWidth >= 1400);
         window.scrollTo(0, 0);
     }, []);
 
+    const leaveAdmin = useCallback(() => { if (confirmLeave(message => window.confirm(message))) onBack(); }, [onBack]);
+
     useEffect(() => {
         const route = () => {
-            const match = window.location.hash.match(/^#admin\/([a-z0-9._-]+)$/i);
-            if (match) setSection(match[1]);
+            const next = parseAdminRoute(window.location.hash);
+            if (next) setSection(next);
         };
         route(); window.addEventListener('popstate', route); window.addEventListener('hashchange', route);
         return () => { window.removeEventListener('popstate', route); window.removeEventListener('hashchange', route); };
@@ -75,19 +86,19 @@ export function AdminDashboard({ api, session, onBack }: AdminDashboardProps) {
     useEffect(() => { adminApi.getSystemInfo().then(setSys).catch(() => undefined); }, [adminApi]);
     useEffect(() => {
         const media = window.matchMedia('(min-width: 1400px)');
-        const h = () => setSidebarOpen(media.matches);
+        const h = () => { setSidebarOpen(media.matches); setSidebarOverlay(!media.matches); };
         h(); media.addEventListener('change', h); return () => media.removeEventListener('change', h);
     }, []);
 
     useEffect(() => {
         adminApi.raw<PluginConfigPage[]>('/web/ConfigurationPages').then(pages => {
             setPluginPages(pages || []);
-            if (pages?.length && !pluginNavId) setPluginNavId(`plugin-${pages[0].Name}`);
+            if (pages?.length && !pluginNavId) setPluginNavId(pluginSection(pages[0].PluginId));
         }).catch(() => undefined);
     }, [adminApi]);
 
     const isPlugin = (id: string) => id.startsWith('plugin-') || id === 'plugins';
-    const activePlugin = isPlugin(section) && section !== 'plugins' ? pluginPages.find(p => section === `plugin-${p.Name}`) : null;
+    const activePlugin = isPlugin(section) && section !== 'plugins' ? pluginPages.find(p => section === pluginSection(p.PluginId)) : null;
 
     const doScan = useCallback(async () => {
         setActionMessage('');
@@ -97,13 +108,11 @@ export function AdminDashboard({ api, session, onBack }: AdminDashboardProps) {
     const doRestart = useCallback(async () => { await adminApi.restartServer(); setActionMessage('Restart requested.'); }, [adminApi]);
     const doShutdown = useCallback(async () => { await adminApi.shutdownServer(); setActionMessage('Shutdown requested.'); }, [adminApi]);
 
-    const uptime = sys?.RunTimeTicks ? Math.floor(sys.RunTimeTicks / 600000000 / 60) : 0;
-
     return <div class="admin-workspace">
         {!sidebarOpen && <button class="admin-menu-btn" onClick={() => setSidebarOpen(true)} aria-label="Open navigation">☰</button>}
-        <nav class={`admin-sidebar${sidebarOpen ? ' open' : ''}`} aria-label="Admin" aria-hidden={!sidebarOpen} inert={!sidebarOpen}>
+        <nav ref={sidebarRef} class={`admin-sidebar${sidebarOpen ? ' open' : ''}`} aria-label="Admin" aria-hidden={!sidebarOpen} inert={!sidebarOpen} role={sidebarOverlay && sidebarOpen ? 'dialog' : undefined} aria-modal={sidebarOverlay && sidebarOpen ? true : undefined}>
             <div class="admin-sidebar-head">
-                <button class="admin-back-link" onClick={onBack}>← Media</button>
+                <button class="admin-back-link" onClick={leaveAdmin}>← Media</button>
                 <span class="admin-sidebar-label">Server</span>
             </div>
             <div class="admin-sidebar-body">
@@ -116,19 +125,19 @@ export function AdminDashboard({ api, session, onBack }: AdminDashboardProps) {
                     {pluginPages.filter(page => {
                         const lower = (page.Name || '').toLowerCase();
                         return !FIRST_CLASS.has(lower);
-                    }).slice(0, 20).map(p => <button key={p.Name} class={`admin-nav${section === `plugin-${p.Name}` ? ' active' : ''}`}
-                        aria-current={section === `plugin-${p.Name}` ? 'page' : undefined} onClick={() => navigate(`plugin-${p.Name}`)}>{p.DisplayName || p.Name}</button>)}
+                    }).slice(0, 20).map(p => <button key={p.PluginId} class={`admin-nav${section === `plugin-${p.PluginId}` ? ' active' : ''}`}
+                        aria-current={section === `plugin-${p.PluginId}` ? 'page' : undefined} onClick={() => navigate(`plugin-${p.PluginId}`)}>{p.DisplayName || p.Name}</button>)}
                 </>}
             </div>
-            {window.innerWidth < 1400 && <div class="admin-sidebar-foot"><button class="admin-nav" onClick={() => setSidebarOpen(false)}>✕ Close</button></div>}
+            {sidebarOverlay && <div class="admin-sidebar-foot"><button class="admin-nav" onClick={() => setSidebarOpen(false)}>✕ Close</button></div>}
         </nav>
-        {sidebarOpen && window.innerWidth < 1400 && <div class="admin-overlay" onClick={() => setSidebarOpen(false)} />}
+        {sidebarOpen && sidebarOverlay && <div class="admin-overlay" data-dialog-backdrop onClick={() => setSidebarOpen(false)} />}
         <main class="admin-content">
             <header class="admin-topbar">
                 <div class="admin-topbar-left">
-                    {!sidebarOpen && <button class="admin-back-link" onClick={onBack}>← Media</button>}
+                    {!sidebarOpen && <button class="admin-back-link" onClick={leaveAdmin}>← Media</button>}
                     <span class="admin-topbar-name">{sys?.ServerName || 'Jellyfin'} {sys?.Version && <span class="admin-topbar-version">{sys.Version}</span>}</span>
-                    {uptime > 0 && <span class="admin-topbar-uptime">Up {Math.floor(uptime / 24)}d {uptime % 24}h</span>}
+                    {sys?.HasPendingRestart && <span class="admin-topbar-uptime">Restart pending</span>}
                 </div>
                 <div class="admin-topbar-right">
                     <button class="admin-btn" onClick={doScan}>Scan</button>
@@ -147,9 +156,9 @@ export function AdminDashboard({ api, session, onBack }: AdminDashboardProps) {
             {section === 'live-tv' && <AdminLiveTv adminApi={adminApi} onNavigate={navigate} />}
             {section === 'recommendations' && <AdminRecommendations adminApi={adminApi} />}
             {section === 'system' && <AdminSystem adminApi={adminApi} />}
-            {section === 'plugins' && <AdminAllPlugins adminApi={adminApi} onNavigate={navigate} />}
+            {section === 'plugins' && <AdminAllPlugins adminApi={adminApi} onNavigate={navigate} configurablePluginIds={pluginPages.map(p => p.PluginId)} />}
             {isPlugin(section) && activePlugin && <PluginRouter name={activePlugin.Name || ''} displayName={activePlugin.DisplayName || activePlugin.Name || 'Plugin'} pluginId={activePlugin.PluginId} adminApi={adminApi} session={session} />}
-            {isPlugin(section) && !activePlugin && pluginPages.length > 0 && <div class="ad-page"><h1 class="ad-page-title">Plugin not found</h1><p class="ad-note">The plugin configuration page could not be loaded. It may have been disabled or removed.</p></div>}
+            {isPlugin(section) && section !== 'plugins' && !activePlugin && pluginPages.length > 0 && <div class="ad-page"><h1 class="ad-page-title">Plugin not found</h1><p class="ad-note">The plugin configuration page could not be loaded. It may have been disabled or removed.</p></div>}
             {(!section || !CORE_NAV.some(n => n.id === section) && !isPlugin(section)) && <div class="ad-page"><h1 class="ad-page-title">Unknown section</h1><p class="ad-note">The requested admin section could not be found.</p></div>}
         </main>
     </div>;
@@ -160,12 +169,15 @@ function PluginRouter({ name, displayName, pluginId, adminApi, session }: {
 }) {
     const [plugin, setPlugin] = useState<PluginInfo | null>(null);
     useEffect(() => {
-        adminApi.raw<PluginInfo[]>(`/Plugins`).then(list => setPlugin(list.find(p => p.Id === pluginId) || null)).catch(() => undefined);
-    }, [pluginId]);
+        let active = true;
+        setPlugin(null);
+        adminApi.getPlugins().then(list => { if (active) setPlugin(list.find(p => p.Id === pluginId) || null); }).catch(() => undefined);
+        return () => { active = false; };
+    }, [adminApi, pluginId]);
 
     const lower = name.toLowerCase();
-    if (lower.includes('postgresql database')) return <AdminPluginPostgres adminApi={adminApi} plugin={plugin || { Name: name, Id: pluginId } as PluginInfo} session={session} />;
-    if (lower.includes('seerr')) return <AdminPluginSeerr adminApi={adminApi} plugin={plugin || { Name: name, Id: pluginId } as PluginInfo} session={session} />;
-    if (lower.includes('tmdb')) return <AdminPluginTmdb adminApi={adminApi} plugin={plugin || { Name: name, Id: pluginId } as PluginInfo} session={session} />;
-    return <AdminPluginGeneric adminApi={adminApi} plugin={plugin || { Name: name, DisplayName: displayName, Id: pluginId } as PluginInfo} session={session} />;
+    if (lower.includes('postgresql database')) return <AdminPluginPostgres key={pluginId} adminApi={adminApi} plugin={plugin || { Name: name, Id: pluginId } as PluginInfo} session={session} />;
+    if (lower.includes('seerr')) return <AdminPluginSeerr key={pluginId} adminApi={adminApi} plugin={plugin || { Name: name, Id: pluginId } as PluginInfo} session={session} />;
+    if (lower.includes('tmdb')) return <AdminPluginTmdb key={pluginId} adminApi={adminApi} plugin={plugin || { Name: name, DisplayName: displayName, Id: pluginId } as PluginInfo} session={session} />;
+    return <AdminPluginGeneric key={pluginId} adminApi={adminApi} plugin={plugin || { Name: name, DisplayName: displayName, Id: pluginId } as PluginInfo} session={session} />;
 }

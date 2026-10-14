@@ -1,4 +1,5 @@
-import type { GuideInfo, LiveChannelFilter, MediaItem } from './types';
+import { loadControlPreferences } from './controls';
+import type { GuideInfo, LiveChannelFilter, LiveTimer, MediaItem } from './types';
 
 export const PIXELS_PER_MINUTE = 8;
 export const GUIDE_ROW_HEIGHT = 68;
@@ -136,18 +137,133 @@ export function floorTo(ms: number, step: number): number {
     return Math.floor(ms / step) * step;
 }
 
+export function addLocalDays(dayStart: number, days: number): number {
+    const date = new Date(dayStart);
+    date.setDate(date.getDate() + days);
+    return date.getTime();
+}
+
+export function currentProgramFor(channel: MediaItem, programsByChannel: Record<string, MediaItem[]>, now: number): MediaItem | undefined {
+    if (channel.CurrentProgram?.Name && isAiring(channel.CurrentProgram, now)) return channel.CurrentProgram;
+    return (programsByChannel[channel.Id] || []).find(program => isAiring(program, now));
+}
+
+export const MAX_GUIDE_DAYS = 14;
+
+function guideDayLabel(start: number, today: number): string {
+    if (start === today) return 'Today';
+    if (start === addLocalDays(today, 1)) return 'Tomorrow';
+    return new Date(start).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
+}
+
+/** Offers every local day the server has guide data for (from today), falling back to three days when unknown. */
 export function guideDays(info: GuideInfo | null, now: number): GuideDay[] {
     const today = startOfLocalDay(now);
-    const days: GuideDay[] = [
-        { label: 'Today', start: today },
-        { label: 'Tomorrow', start: today + 86400000 },
-        { label: '+2d', start: today + 2 * 86400000 }
-    ];
     const guideStart = Date.parse(info?.StartDate || '');
     const guideEnd = Date.parse(info?.EndDate || '');
-    if (!Number.isFinite(guideStart) || !Number.isFinite(guideEnd)) return days;
-    const available = days.filter(day => day.start < guideEnd && day.start + 86400000 > guideStart);
-    return available.length ? available : days.slice(0, 1);
+    if (!Number.isFinite(guideStart) || !Number.isFinite(guideEnd) || guideEnd <= guideStart) {
+        return [ 0, 1, 2 ].map(offset => addLocalDays(today, offset)).map(start => ({ label: guideDayLabel(start, today), start }));
+    }
+    const days: GuideDay[] = [];
+    for (let start = Math.max(today, startOfLocalDay(guideStart)); start < guideEnd && days.length < MAX_GUIDE_DAYS; start = addLocalDays(start, 1)) {
+        if (start + 86400000 > guideStart) days.push({ label: guideDayLabel(start, today), start });
+    }
+    return days.length ? days : [ { label: 'Today', start: today } ];
+}
+
+export interface LiveViewBookmark {
+    userId: string;
+    dayStart: number;
+    filter: LiveChannelFilter;
+    range: { start: number; end: number };
+    channelCount: number;
+    channelId: string;
+    savedAt: number;
+}
+
+export const LIVE_BOOKMARK_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+export const MAX_RESTORED_CHANNELS = 500;
+let liveViewBookmark: LiveViewBookmark | null = null;
+
+/** Kept at module scope so the guide survives the player unmounting it. */
+export function rememberLiveView(bookmark: LiveViewBookmark): void {
+    liveViewBookmark = { ...bookmark, channelCount: Math.min(MAX_RESTORED_CHANNELS, Math.max(0, bookmark.channelCount)) };
+}
+
+export function peekLiveView(userId: string, now: number): LiveViewBookmark | null {
+    const bookmark = liveViewBookmark;
+    if (!bookmark || bookmark.userId !== userId || now - bookmark.savedAt > LIVE_BOOKMARK_MAX_AGE_MS) return null;
+    if (bookmark.dayStart + 86400000 <= startOfLocalDay(now)) return null;
+    return bookmark;
+}
+
+export function clearLiveView(): void {
+    liveViewBookmark = null;
+}
+
+export interface TimerDraft {
+    prePaddingMinutes: number;
+    postPaddingMinutes: number;
+    recordNewOnly: boolean;
+    recordAnyChannel: boolean;
+    recordAnyTime: boolean;
+    keepUpTo: number;
+}
+
+export function timerDraft(timer: LiveTimer): TimerDraft {
+    return {
+        prePaddingMinutes: Math.round((timer.PrePaddingSeconds || 0) / 60),
+        postPaddingMinutes: Math.round((timer.PostPaddingSeconds || 0) / 60),
+        recordNewOnly: timer.RecordNewOnly === true,
+        recordAnyChannel: timer.RecordAnyChannel === true,
+        recordAnyTime: timer.RecordAnyTime === true,
+        keepUpTo: timer.KeepUpTo || 0
+    };
+}
+
+export function validateTimerDraft(draft: TimerDraft, series: boolean): string {
+    const minutes = (value: number) => Number.isInteger(value) && value >= 0 && value <= 240;
+    if (!minutes(draft.prePaddingMinutes) || !minutes(draft.postPaddingMinutes)) return 'Padding must be a whole number of minutes between 0 and 240.';
+    if (series && (!Number.isInteger(draft.keepUpTo) || draft.keepUpTo < 0 || draft.keepUpTo > 1000)) return 'Keep up to must be between 0 (keep all) and 1000 episodes.';
+    return '';
+}
+
+/** Starts from the server's own timer object so fields the editor does not show survive the update. */
+export function timerUpdatePayload(timer: LiveTimer, draft: TimerDraft, series: boolean): LiveTimer {
+    const payload: LiveTimer = {
+        ...timer,
+        PrePaddingSeconds: draft.prePaddingMinutes * 60,
+        PostPaddingSeconds: draft.postPaddingMinutes * 60,
+        IsPrePaddingRequired: draft.prePaddingMinutes > 0,
+        IsPostPaddingRequired: draft.postPaddingMinutes > 0
+    };
+    if (series) {
+        payload.RecordNewOnly = draft.recordNewOnly;
+        payload.RecordAnyChannel = draft.recordAnyChannel;
+        payload.RecordAnyTime = draft.recordAnyTime;
+        payload.KeepUpTo = draft.keepUpTo;
+    }
+    return payload;
+}
+
+export function timerInProgress(timer: Pick<LiveTimer, 'Status' | 'StartDate' | 'EndDate'>, now: number): boolean {
+    if (timer.Status === 'InProgress') return true;
+    if (timer.Status && timer.Status !== 'New' && timer.Status !== 'Scheduled') return false;
+    const start = Date.parse(timer.StartDate || '');
+    const end = Date.parse(timer.EndDate || '');
+    return Number.isFinite(start) && Number.isFinite(end) && start <= now && now < end;
+}
+
+export function canRecordSeries(program: Pick<MediaItem, 'IsSeries' | 'SeriesId'>): boolean {
+    return program.IsSeries === true || Boolean(program.SeriesId);
+}
+
+export type ProgramRecordingState = { kind: 'none'; series: boolean } | { kind: 'episode'; timerId: string; pending: boolean } | { kind: 'series'; seriesTimerId: string; timerId?: string; pending: boolean };
+
+export function programRecordingState(program: Pick<MediaItem, 'TimerId' | 'SeriesTimerId' | 'IsSeries' | 'SeriesId'>): ProgramRecordingState {
+    if (program.SeriesTimerId) return { kind: 'series', seriesTimerId: program.SeriesTimerId, timerId: program.TimerId || undefined, pending: program.SeriesTimerId === 'pending' };
+    if (program.TimerId) return { kind: 'episode', timerId: program.TimerId, pending: program.TimerId === 'pending' };
+    return { kind: 'none', series: canRecordSeries(program) };
 }
 
 export function initialGuideRange(dayStart: number, now: number): { start: number; end: number } {
@@ -252,9 +368,24 @@ export function isAiring(program: MediaItem, now: number): boolean {
     return Number.isFinite(start) && Number.isFinite(end) && now >= start && now < end;
 }
 
+export interface ProgramSheet {
+    program: MediaItem;
+    channel: MediaItem;
+}
+
+export function withRecordingPending(sheet: ProgramSheet | null, programId: string, series: boolean): ProgramSheet | null {
+    if (!sheet || sheet.program.Id !== programId) return sheet;
+    return {
+        ...sheet,
+        program: series
+            ? { ...sheet.program, SeriesTimerId: sheet.program.SeriesTimerId || 'pending' }
+            : { ...sheet.program, TimerId: sheet.program.TimerId || 'pending' }
+    };
+}
+
 export function programBadges(program: MediaItem, now: number): Array<'live' | 'new' | 'rec'> {
     const badges: Array<'live' | 'new' | 'rec'> = [];
-    if (isAiring(program, now)) badges.push('live');
+    if (program.IsLive === true && isAiring(program, now)) badges.push('live');
     if (program.IsPremiere || program.IsRepeat === false) badges.push('new');
     if (program.TimerId || program.SeriesTimerId) badges.push('rec');
     return badges;
@@ -438,6 +569,16 @@ export function matchChannelIndex(channels: MediaItem[], digits: string): number
     return channels.findIndex(channel => channelDigits(channel.ChannelNumber).startsWith(digits));
 }
 
+export function preferredScrollBehavior(): ScrollBehavior {
+    const choice = loadControlPreferences().smoothScroll;
+    if (choice !== 'auto') return choice === 'on' ? 'smooth' : 'auto';
+    try {
+        if (typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+            && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return 'auto';
+    } catch (_error) { /* Smooth scrolling remains the default when the preference is unreadable. */ }
+    return 'smooth';
+}
+
 export function formatClock(ms: number): string {
     const date = new Date(ms);
     const hours = date.getHours();
@@ -472,6 +613,12 @@ export function channelFromProgram(program: MediaItem): MediaItem {
         ChannelNumber: program.ChannelNumber,
         ImageTags: program.ImageTags
     };
+}
+
+export function resolvePlaybackItem(item: MediaItem): MediaItem {
+    if (item.Type !== 'Program') return item;
+    if (!item.ChannelId) throw new Error('This program is missing its channel. Choose the channel from Live TV instead.');
+    return channelFromProgram(item);
 }
 
 export function artType(item: MediaItem): string {

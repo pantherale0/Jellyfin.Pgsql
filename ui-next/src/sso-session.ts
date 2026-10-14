@@ -2,7 +2,8 @@ import type { JellyfinUser, Session } from './types';
 
 export const SSO_HANDOFF_KEY = 'jellyfin-ui-next-sso-pending';
 export const UI_NEXT_SIGNED_OUT_KEY = 'jellyfin-ui-next-signed-out';
-export const SSO_HANDOFF_MAX_AGE_MS = 15 * 60 * 1000;
+/** Matches the server's OIDC state lifetime in `jellyfin_sso.patch`. */
+export const SSO_HANDOFF_MAX_AGE_MS = 10 * 60 * 1000;
 
 export interface SsoHandoffAttempt {
     server: string;
@@ -97,7 +98,7 @@ export function parseSsoHandoff({ serverOrigin, credentials, apiKey, userId, ser
     return null;
 }
 
-function normalizeUserId(id: string): string {
+export function normalizeUserId(id: string): string {
     return /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.test(id)
         ? id.replace(/-/g, '').toLowerCase()
         : id;
@@ -110,6 +111,18 @@ export function createSsoSession(handoff: SsoHandoff, response: unknown, serverI
     const name = response.Name;
     if (typeof id !== 'string' || normalizeUserId(id) !== normalizeUserId(handoff.userId) || typeof name !== 'string' || !name) return null;
     const user: JellyfinUser = { Id: id, Name: name };
+    if (isRecord(response.Policy)) {
+        const policy: NonNullable<JellyfinUser['Policy']> = {};
+        if (typeof response.Policy.IsAdministrator === 'boolean') policy.IsAdministrator = response.Policy.IsAdministrator;
+        if (typeof response.Policy.IsDisabled === 'boolean') policy.IsDisabled = response.Policy.IsDisabled;
+        if (typeof response.Policy.EnableCollectionManagement === 'boolean') policy.EnableCollectionManagement = response.Policy.EnableCollectionManagement;
+        if (typeof response.Policy.EnableContentDeletion === 'boolean') policy.EnableContentDeletion = response.Policy.EnableContentDeletion;
+        if (typeof response.Policy.EnableContentDownloading === 'boolean') policy.EnableContentDownloading = response.Policy.EnableContentDownloading;
+        if (Object.keys(policy).length) user.Policy = policy;
+    }
+    if (isRecord(response.Configuration) && typeof response.Configuration.EnableNextEpisodeAutoPlay === 'boolean') {
+        user.Configuration = { EnableNextEpisodeAutoPlay: response.Configuration.EnableNextEpisodeAutoPlay };
+    }
     return { server: handoff.server, token: handoff.token, user, serverId: handoff.serverId };
 }
 

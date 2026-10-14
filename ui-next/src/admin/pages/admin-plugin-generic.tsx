@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'preact/hooks';
 import { PluginPageShell } from '../plugin-shell';
-import { Card, Empty, InfoRow } from '../ui';
+import { inferFields, labelify, type FieldDef } from '../plugin-fields';
+import { Card, Empty } from '../ui';
 import type { AdminApi } from '../admin-api';
 import type { PluginInfo } from '../types';
+import { canSavePluginDraft } from '../admin-state';
 
 export function AdminPluginGeneric({ adminApi: api, plugin, session }: {
     adminApi: AdminApi; plugin: PluginInfo; session: { server: string };
@@ -12,16 +14,20 @@ export function AdminPluginGeneric({ adminApi: api, plugin, session }: {
     const [modified, setModified] = useState(false);
     const [fields, setFields] = useState<FieldDef[]>([]);
     const [error, setError] = useState('');
+    const [loadedId, setLoadedId] = useState('');
 
     const load = useCallback(async () => {
         if (!plugin.Id) return;
+        const id = plugin.Id;
         try {
-            const cfg = await api.raw<Record<string, any>>(`/Plugins/${plugin.Id}/Configuration`);
+            const cfg = await api.raw<Record<string, any>>(`/Plugins/${id}/Configuration`);
+            if (id !== plugin.Id) return;
             setConfig(cfg);
             setDraft(JSON.parse(JSON.stringify(cfg)));
             setFields(inferFields(cfg));
+            setLoadedId(id);
             setModified(false);
-        } catch { setError('Configuration is unavailable for this plugin.'); }
+        } catch { if (id === plugin.Id) setError('Configuration is unavailable for this plugin.'); }
     }, [api, plugin.Id]);
 
     useEffect(() => { load(); }, [load]);
@@ -33,15 +39,12 @@ export function AdminPluginGeneric({ adminApi: api, plugin, session }: {
 
     const save = async () => {
         if (!plugin.Id) return;
-        await api.putB(`/Plugins/${plugin.Id}/Configuration`, draft);
+        if (!canSavePluginDraft(loadedId, plugin.Id)) throw new Error('Configuration is still loading. Wait for it to load before saving.');
+        await api.putB(`/Plugins/${plugin.Id}/Configuration`, draft, true);
+        setConfig(draft);
         setModified(false);
     };
-
-    const group = (key: string) => {
-        if (/[Pp]assword|[Tt]oken|[Ss]ecret|[Aa]pi[Kk]ey/i.test(key)) return 'secret';
-        if (/[Ee]nable|[Ee]nabled|[Dd]isable|[Dd]isabled|[Uu]se[Pp]re|allow|Allow/.test(key)) return 'bool';
-        return 'plain';
-    };
+    const discard = () => { if (config) setDraft(JSON.parse(JSON.stringify(config))); setModified(false); };
 
     if (error) return <div class="admin-plugin-config"><div class="admin-plugin-body"><h1>{plugin.Name || 'Plugin'}</h1><Empty muted>{error}</Empty>
         <PluginEmbedLegacy api={api} plugin={plugin} session={session} />
@@ -49,14 +52,14 @@ export function AdminPluginGeneric({ adminApi: api, plugin, session }: {
 
     if (!config) return <div class="admin-plugin-config"><div class="admin-plugin-body"><h1>{plugin.Name || 'Plugin'}</h1><Empty muted>Loading configuration…</Empty></div></div>;
 
-    return <PluginPageShell name={plugin.Name || 'Plugin'} status={plugin.Status} session={session} onSave={save} modified={modified}>
+    return <PluginPageShell name={plugin.Name || 'Plugin'} status={plugin.Status} session={session} onSave={save} onDiscard={discard} modified={modified} loaded={canSavePluginDraft(loadedId, plugin.Id || '')}>
         <div class="ad-page-section"><Card title="Configuration">
             <div class="ad-form-grid">
                 {fields.map(f => <div key={f.key} class="ad-form-field">
                     <label class="ad-form-label">{labelify(f.key)}</label>
                     {f.type === 'bool' ? <label class="ad-toggle-row"><span>{draft[f.key] ? 'Enabled' : 'Disabled'}</span><input type="checkbox" checked={draft[f.key]} onChange={e => patch(f.key, e.currentTarget.checked)} /></label>
                     : f.type === 'number' ? <input type="number" class="ad-form-input" value={draft[f.key] ?? ''} onInput={e => patch(f.key, e.currentTarget.value === '' ? '' : Number(e.currentTarget.value))} />
-                    : f.type === 'secret' ? <input type="password" class="ad-form-input" value={draft[f.key] ?? ''} onInput={e => patch(f.key, e.currentTarget.value)} />
+                    : f.type === 'secret' ? <input type="password" autoComplete="off" class="ad-form-input" value={draft[f.key] ?? ''} onInput={e => patch(f.key, e.currentTarget.value)} />
                     : <input class="ad-form-input" value={draft[f.key] ?? ''} onInput={e => patch(f.key, e.currentTarget.value)} />}
                 </div>)}
             </div>
@@ -68,19 +71,4 @@ function PluginEmbedLegacy({ api, plugin, session }: { api: AdminApi; plugin: Pl
     return <Card title="Classic config page">
         <iframe src={`${session.server}/web/ConfigurationPage?name=${encodeURIComponent(plugin.Name || '')}`} class="ad-legacy-iframe" title={plugin.Name || 'Plugin'} sandbox="allow-scripts allow-same-origin allow-forms" />
     </Card>;
-}
-
-function labelify(key: string): string {
-    return key.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase()).replace(/\./g, ' · ');
-}
-
-interface FieldDef { key: string; type: 'string' | 'number' | 'bool' | 'secret' }
-
-function inferFields(obj: Record<string, any>): FieldDef[] {
-    return Object.entries(obj)
-        .filter(([, v]) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')
-        .map(([key, value]) => ({
-            key,
-            type: typeof value as 'string' | 'number' | 'bool',
-        }));
 }
