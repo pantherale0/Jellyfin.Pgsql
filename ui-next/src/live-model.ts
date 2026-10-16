@@ -1,5 +1,7 @@
 import { loadControlPreferences } from './controls';
+import { prefersReducedMotion } from './display-settings';
 import type { GuideInfo, LiveChannelFilter, LiveTimer, MediaItem } from './types';
+import { t } from './i18n';
 
 export const PIXELS_PER_MINUTE = 8;
 export const GUIDE_ROW_HEIGHT = 68;
@@ -168,7 +170,7 @@ export function guideDays(info: GuideInfo | null, now: number): GuideDay[] {
     for (let start = Math.max(today, startOfLocalDay(guideStart)); start < guideEnd && days.length < MAX_GUIDE_DAYS; start = addLocalDays(start, 1)) {
         if (start + 86400000 > guideStart) days.push({ label: guideDayLabel(start, today), start });
     }
-    return days.length ? days : [ { label: 'Today', start: today } ];
+    return days.length ? days : [ { label: t('Today'), start: today } ];
 }
 
 export interface LiveViewBookmark {
@@ -223,8 +225,8 @@ export function timerDraft(timer: LiveTimer): TimerDraft {
 
 export function validateTimerDraft(draft: TimerDraft, series: boolean): string {
     const minutes = (value: number) => Number.isInteger(value) && value >= 0 && value <= 240;
-    if (!minutes(draft.prePaddingMinutes) || !minutes(draft.postPaddingMinutes)) return 'Padding must be a whole number of minutes between 0 and 240.';
-    if (series && (!Number.isInteger(draft.keepUpTo) || draft.keepUpTo < 0 || draft.keepUpTo > 1000)) return 'Keep up to must be between 0 (keep all) and 1000 episodes.';
+    if (!minutes(draft.prePaddingMinutes) || !minutes(draft.postPaddingMinutes)) return t('Padding must be a whole number of minutes between 0 and 240.');
+    if (series && (!Number.isInteger(draft.keepUpTo) || draft.keepUpTo < 0 || draft.keepUpTo > 1000)) return t('Keep up to must be between 0 (keep all) and 1000 episodes.');
     return '';
 }
 
@@ -420,11 +422,11 @@ export function categoryLabel(item: MediaItem): string {
 
 export function groupOnNow(programs: MediaItem[]): OnNowGroup[] {
     const groups: OnNowGroup[] = [
-        { id: 'sports', title: 'Sports', items: [] },
-        { id: 'news', title: 'News', items: [] },
-        { id: 'movies', title: 'Movies', items: [] },
-        { id: 'kids', title: 'Kids', items: [] },
-        { id: 'other', title: 'More on now', items: [] }
+        { id: 'sports', title: t('Sports'), items: [] },
+        { id: 'news', title: t('News'), items: [] },
+        { id: 'movies', title: t('Movies'), items: [] },
+        { id: 'kids', title: t('Kids'), items: [] },
+        { id: 'other', title: t('More on now'), items: [] }
     ];
     programs.forEach(program => {
         const group = program.IsSports ? groups[0]
@@ -572,11 +574,7 @@ export function matchChannelIndex(channels: MediaItem[], digits: string): number
 export function preferredScrollBehavior(): ScrollBehavior {
     const choice = loadControlPreferences().smoothScroll;
     if (choice !== 'auto') return choice === 'on' ? 'smooth' : 'auto';
-    try {
-        if (typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-            && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return 'auto';
-    } catch (_error) { /* Smooth scrolling remains the default when the preference is unreadable. */ }
-    return 'smooth';
+    return prefersReducedMotion() ? 'auto' : 'smooth';
 }
 
 export function formatClock(ms: number): string {
@@ -617,7 +615,7 @@ export function channelFromProgram(program: MediaItem): MediaItem {
 
 export function resolvePlaybackItem(item: MediaItem): MediaItem {
     if (item.Type !== 'Program') return item;
-    if (!item.ChannelId) throw new Error('This program is missing its channel. Choose the channel from Live TV instead.');
+    if (!item.ChannelId) throw new Error(t('This program is missing its channel. Choose the channel from Live TV instead.'));
     return channelFromProgram(item);
 }
 
@@ -638,7 +636,7 @@ export function filterLabel(filter: LiveChannelFilter): string {
     if (filter === 'news') return 'News';
     if (filter === 'movies') return 'Movies';
     if (filter === 'kids') return 'Kids';
-    return 'All channels';
+    return t('All channels');
 }
 
 export function isoTime(ms: number): string {

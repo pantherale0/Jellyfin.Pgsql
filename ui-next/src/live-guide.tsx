@@ -2,14 +2,15 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { JellyfinApi, peekCachedImage, releaseCachedImage, retainCachedImage } from './api';
 import { GUIDE_CHANNEL_WIDTH, GUIDE_HEADER_HEIGHT, GUIDE_ROW_HEIGHT, PIXELS_PER_MINUTE, artType, directionalFocusIndex, elapsedStop, episodeCode, formatClock, formatRange, guideSegments, isAiring, mediaTags, moveGuideFocus, moveGuideToolbar, programBadges, rulerTicks, segmentBox, timelineWidth, timeRenderPadding, visibleIndexRange, visibleTimeRange, type GuideDay, type GuideDirection, type GuideFocusProgram, type GuideFocusTarget, type GuideNavigationContext, type GuideSegment, type GuideToolbarControl } from './live-model';
 import type { LiveChannelFilter, MediaItem } from './types';
+import { t } from './i18n';
 
 const FILTERS: Array<{ id: LiveChannelFilter; label: string }> = [
-    { id: 'all', label: 'All channels' },
-    { id: 'favorites', label: 'Favorites' },
-    { id: 'sports', label: 'Sports' },
-    { id: 'news', label: 'News' },
-    { id: 'movies', label: 'Movies' },
-    { id: 'kids', label: 'Kids' }
+    { id: 'all', label: t('All channels') },
+    { id: 'favorites', label: t('Favorites') },
+    { id: 'sports', label: t('Sports') },
+    { id: 'news', label: t('News') },
+    { id: 'movies', label: t('Movies') },
+    { id: 'kids', label: t('Kids') }
 ];
 
 function isLiveChannelFilter(value: string): value is LiveChannelFilter {
@@ -138,15 +139,15 @@ export function GuideToolbar({ days, dayStart, digits, filter, onDay, onFilter, 
     };
 
     return <div class="live-toolbar" ref={root} onKeyDown={onKeyDown}>
-        <div class="live-pills" role="group" aria-label="Guide day">
-            {days.map((day, index) => <button type="button" data-focusable="true" data-guide-day-index={index} class={day.start === dayStart ? 'live-pill active' : 'live-pill'} aria-pressed={day.start === dayStart} key={day.start} onClick={() => onDay(day.start)}>{day.label}</button>)}
+        <div class="live-pills" role="group" aria-label={t('Guide day')}>
+            {days.map((day, index) => <button type="button" data-focusable="true" data-guide-day-index={index} class={day.start === dayStart ? 'live-pill active' : 'live-pill'} aria-pressed={day.start === dayStart} key={day.start} onClick={() => onDay(day.start)}>{t(day.label)}</button>)}
         </div>
-        {digits && <p class="live-digits" aria-live="polite">Channel {digits}</p>}
-        <select class="live-filter" data-focusable="true" data-guide-filter="true" aria-label="Channel filter" value={filter} onChange={event => {
+        {digits && <p class="live-digits" aria-live="polite">{t('Channel {0}', digits)}</p>}
+        <select class="live-filter" data-focusable="true" data-guide-filter="true" aria-label={t('Channel filter')} value={filter} onChange={event => {
             const value = event.currentTarget.value;
             if (isLiveChannelFilter(value)) onFilter(value);
         }}>
-            {FILTERS.map(option => <option value={option.id} key={option.id}>{option.label}</option>)}
+            {FILTERS.map(option => <option value={option.id} key={option.id}>{t(option.label)}</option>)}
         </select>
     </div>;
 }
@@ -415,11 +416,11 @@ export function LiveGuide(props: LiveGuideProps) {
             window.requestAnimationFrame(() => focusChannel(channel.Id));
         }} />
         {props.error && <p class="notice error" role="alert">{props.error}</p>}
-        <div class="live-guide-scroll" ref={scrollerRef} onScroll={publishScroll} onKeyDown={onKeyDown} role="grid" aria-label="Program guide" aria-rowcount={props.channels.length + 1} aria-colcount={2}>
+        <div class="live-guide-scroll" ref={scrollerRef} onScroll={publishScroll} onKeyDown={onKeyDown} role="grid" aria-label={t('Program guide')} aria-rowcount={props.channels.length + 1} aria-colcount={2}>
             <div class="live-guide-canvas" style={{ width: `${GUIDE_CHANNEL_WIDTH + width}px`, height: `${GUIDE_HEADER_HEIGHT + props.channels.length * GUIDE_ROW_HEIGHT}px` }}>
                 <div class="live-guide-head" role="row" aria-rowindex={1}>
-                    <div class="live-ruler-corner" role="columnheader" aria-colindex={1}>Channel</div>
-                    <div class="live-ruler" role="columnheader" aria-colindex={2} aria-label="Programs by time" style={{ width: `${width}px` }}>
+                    <div class="live-ruler-corner" role="columnheader" aria-colindex={1}>{t('Channel')}</div>
+                    <div class="live-ruler" role="columnheader" aria-colindex={2} aria-label={t('Programs by time')} style={{ width: `${width}px` }}>
                         {ticks.map(tick => <span class="live-tick" key={tick} style={{ left: `${((tick - props.windowStart) / 60000) * PIXELS_PER_MINUTE}px` }}>{formatClock(tick)}</span>)}
                     </div>
                 </div>
@@ -430,15 +431,15 @@ export function LiveGuide(props: LiveGuideProps) {
                         .filter(segment => segment.end > renderStart && segment.start < renderEnd);
                     return <GuideRow key={channel.Id} api={props.api} channel={channel} index={index} segments={segments} windowStart={props.windowStart} now={props.now} onToggleFavorite={props.onToggleFavorite} onOpenProgram={props.onOpenProgram} onTune={props.onTune} onHover={showHover} onHide={hideHover} />;
                 })}
-                {!props.loading && !props.channels.length && <p class="live-empty">No channels are available for this filter.</p>}
-                {props.loading && !props.channels.length && <p class="live-empty">Loading the guide…</p>}
+                {!props.loading && !props.channels.length && <p class="live-empty">{t('No channels are available for this filter.')}</p>}
+                {props.loading && !props.channels.length && <p class="live-empty">{t('Loading the guide…')}</p>}
             </div>
         </div>
         {hover && <div class="live-popover" style={{ top: `${hover.top}px`, left: `${hover.left}px` }} onMouseEnter={() => { if (hoverTimer.current) window.clearTimeout(hoverTimer.current); }} onMouseLeave={hideHover}>
             <ProgramSummary program={hover.program} channel={hover.channel} now={props.now} />
             <div class="live-actions">
-                <button type="button" class="button primary" onClick={() => props.onTune(hover.channel)}>Watch Now</button>
-                <button type="button" class="button secondary" onClick={event => props.onOpenProgram(hover.program, hover.channel, event.currentTarget)}>Details</button>
+                <button type="button" class="button primary" onClick={() => props.onTune(hover.channel)}>{t('Watch Now')}</button>
+                <button type="button" class="button secondary" onClick={event => props.onOpenProgram(hover.program, hover.channel, event.currentTarget)}>{t('Details')}</button>
             </div>
         </div>}
     </div>;
@@ -465,13 +466,13 @@ function GuideRow({ api, channel, index, segments, windowStart, now, onToggleFav
                 <span class="live-logo"><LiveThumb api={api} item={channel} width={96} /></span>
                 <span class="live-channel-name">{channel.Name}</span>
             </button>
-            <button type="button" class={favorite ? 'live-star on' : 'live-star'} data-focusable="true" data-channel-id={channel.Id} aria-pressed={favorite ? 'true' : 'false'} aria-label={favorite ? `Remove ${channel.Name} from favorites` : `Add ${channel.Name} to favorites`} onClick={event => { event.stopPropagation(); onToggleFavorite(channel); }}>{favorite ? '★' : '☆'}</button>
+            <button type="button" class={favorite ? 'live-star on' : 'live-star'} data-focusable="true" data-channel-id={channel.Id} aria-pressed={favorite ? 'true' : 'false'} aria-label={favorite ? t('Remove {0} from favorites', channel.Name) : t('Add {0} to favorites', channel.Name)} onClick={event => { event.stopPropagation(); onToggleFavorite(channel); }}>{favorite ? '★' : '☆'}</button>
         </div>
         <div class="live-track" role="gridcell" aria-colindex={2}>
             {segments.map(segment => {
                 const box = segmentBox(segment.start, segment.end, windowStart);
                 if (!segment.program) {
-                    return <div class="live-gap" key={segment.key} title="No program data available" style={{ left: `${box.left}px`, width: `${box.width}px` }}>{box.width >= 188 ? 'No program data available' : ''}</div>;
+                    return <div class="live-gap" key={segment.key} title={t('No program data available')} style={{ left: `${box.left}px`, width: `${box.width}px` }}>{box.width >= 188 ? t('No program data available') : ''}</div>;
                 }
                 const program = segment.program;
                 const airing = isAiring(program, now);
@@ -512,7 +513,7 @@ export function ProgramSummary({ program, channel, now }: { program: MediaItem; 
         <p class="eyebrow">{channel.ChannelNumber ? `${channel.ChannelNumber} · ` : ''}{channel.Name}{code ? ` · ${code}` : ''}</p>
         <h3>{program.Name}</h3>
         <p class="muted">{formatRange(program.StartDate, program.EndDate) || ''}</p>
-        <p class="live-overview">{program.Overview || 'No synopsis is available for this broadcast.'}</p>
+        <p class="live-overview">{program.Overview || t('No synopsis is available for this broadcast.')}</p>
         {tags.length > 0 && <p class="live-tags">{tags.join(' · ')}</p>}
     </div>;
 }

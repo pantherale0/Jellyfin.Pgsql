@@ -1,6 +1,6 @@
 import type { LibraryOptions } from './library-options';
 
-export type AdminSection = 'overview' | 'users' | 'libraries' | 'playback' | 'live-tv' | 'recommendations' | 'infrastructure' | 'activity' | 'system';
+export type AdminSection = 'overview' | 'users' | 'libraries' | 'playback' | 'live-tv' | 'metadata' | 'recommendations' | 'infrastructure' | 'activity' | 'system';
 
 export type ServerHealth = 'healthy' | 'degraded' | 'critical';
 
@@ -13,6 +13,9 @@ export interface PgsqlStatsSnapshot {
     BrowseTtlSeconds: number; LatestTtlSeconds: number; ResumeTtlSeconds: number; NextUpTtlSeconds: number;
     OptimizeMoviesLatest: boolean; OptimizeTvLatest: boolean; OptimizeMusicLatest: boolean; OptimizeNextUp: boolean;
     OptimizedLatestRuns: number; OptimizedLatestFailures: number; OptimizedNextUpRuns: number; OptimizedNextUpFailures: number;
+    /** Older plugin builds omit the HA block. */
+    StartedAtUtc?: string; HaEnabled?: boolean; HaRole?: string; LeaderEpoch?: number; LeaderSinceUtc?: string | null;
+    HaHeartbeatSeconds?: number | null; InstanceName?: string;
 }
 
 export interface ServerActivityEntry {
@@ -59,7 +62,23 @@ export interface SystemInfo {
 
 export interface PluginInfo {
     Name?: string; Version?: string; Guid?: string; ConfigurationFileName?: string; Description?: string;
-    Id?: string; Status?: string; CanUninstall?: boolean;
+    Id?: string; Status?: string; CanUninstall?: boolean; HasImage?: boolean;
+}
+
+/** One release of a catalog package (`/Packages` is always camelCase). */
+export interface PackageVersion {
+    version: string; changelog?: string; targetAbi?: string; timestamp?: string; repositoryName: string; repositoryUrl: string;
+}
+
+export interface PackageInfo {
+    guid: string; name: string; description?: string; overview?: string; owner?: string; category?: string; imageUrl?: string;
+    /** Newest first. */
+    versions: PackageVersion[];
+}
+
+/** `/Repositories` uses Jellyfin's default PascalCase. */
+export interface RepositoryInfo {
+    Name: string; Url: string; Enabled: boolean;
 }
 
 export interface ForkStatus {
@@ -97,13 +116,13 @@ export interface FolderStorage {
 }
 
 export interface SystemStorage {
-    ProgramDataFolder: FolderStorage;
-    WebFolder: FolderStorage;
-    ImageCacheFolder: FolderStorage;
-    CacheFolder: FolderStorage;
-    LogFolder: FolderStorage;
-    InternalMetadataFolder: FolderStorage;
-    TranscodingTempFolder: FolderStorage;
+    ProgramDataFolder?: FolderStorage;
+    WebFolder?: FolderStorage;
+    ImageCacheFolder?: FolderStorage;
+    CacheFolder?: FolderStorage;
+    LogFolder?: FolderStorage;
+    InternalMetadataFolder?: FolderStorage;
+    TranscodingTempFolder?: FolderStorage;
     Libraries: Array<{ Id: string; Name: string; Folders: FolderStorage[] }>;
 }
 

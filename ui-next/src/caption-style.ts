@@ -1,3 +1,4 @@
+import { t } from './i18n';
 export interface CaptionStyle {
     size: 'small' | 'normal' | 'large' | 'xlarge';
     font: 'sans' | 'serif' | 'mono' | 'casual';
@@ -20,7 +21,7 @@ export const CAPTION_CHOICES = {
 } as const;
 
 const SIZES = { small: '1.6vw', normal: '2.2vw', large: '2.9vw', xlarge: '3.6vw' };
-const FONTS = { sans: 'system-ui, "Segoe UI", Roboto, Arial, sans-serif', serif: 'Georgia, "Times New Roman", serif', mono: '"DejaVu Sans Mono", Menlo, Consolas, monospace', casual: '"Comic Neue", "Comic Sans MS", "Trebuchet MS", sans-serif' };
+const FONTS = { sans: 'system-ui, "Segoe UI", Roboto, Arial, sans-serif', serif: t('Georgia, "Times New Roman", serif'), mono: '"DejaVu Sans Mono", Menlo, Consolas, monospace', casual: '"Comic Neue", "Comic Sans MS", "Trebuchet MS", sans-serif' };
 const COLORS = { white: '#ffffff', yellow: '#ffe14d', cyan: '#6ff3ff', green: '#9bf07a' };
 const EDGES = {
     shadow: { shadow: '0 2px 4px rgba(0,0,0,.95), 0 0 2px #000', background: 'transparent' },
@@ -76,4 +77,4 @@ export function primaryCueLine(style: CaptionStyle): number | 'auto' {
     return style.position > 0 ? -1 - style.position : 'auto';
 }
 
-export const SECONDARY_TRACK_LABEL = 'Secondary subtitles';
+export const SECONDARY_TRACK_LABEL = t('Secondary subtitles');

@@ -1,5 +1,6 @@
 import type { LibrarySource } from './library-query';
 import type { MediaItem } from './types';
+import { t } from './i18n';
 
 export interface LibraryMode {
     id: string;
@@ -21,40 +22,40 @@ export interface LibraryMode {
 
 /** Views offered per library type, mirroring Jellyfin Web's library tabs. The first entry is the default. */
 export function libraryModes(library: Pick<MediaItem, 'Type' | 'CollectionType'>): LibraryMode[] {
-    if (library.Type !== 'CollectionFolder' && library.Type !== 'UserView') return [ { id: 'all', label: 'All', noun: 'titles' } ];
+    if (library.Type !== 'CollectionFolder' && library.Type !== 'UserView') return [ { id: 'all', label: t('All'), noun: 'titles' } ];
     switch ((library.CollectionType || '').toLowerCase()) {
     case 'movies': return [
-        { id: 'movies', label: 'Movies', noun: 'titles' },
-        { id: 'suggestions', label: 'Suggestions', suggestions: true, noun: 'titles' },
+        { id: 'movies', label: t('Movies'), noun: 'titles' },
+        { id: 'suggestions', label: t('Suggestions'), suggestions: true, noun: 'titles' },
     ];
     case 'tvshows': return [
-        { id: 'shows', label: 'Shows', itemTypes: [ 'Series' ], recursive: false, noun: 'shows' },
-        { id: 'suggestions', label: 'Suggestions', suggestions: true, noun: 'shows' },
-        { id: 'upcoming', label: 'Upcoming', source: 'upcoming', fixedOrder: true, noun: 'episodes' },
-        { id: 'episodes', label: 'Episodes', itemTypes: [ 'Episode' ], recursive: true, noun: 'episodes' },
+        { id: 'shows', label: t('Shows'), itemTypes: [ 'Series' ], recursive: false, noun: 'shows' },
+        { id: 'suggestions', label: t('Suggestions'), suggestions: true, noun: 'shows' },
+        { id: 'upcoming', label: t('Upcoming'), source: 'upcoming', fixedOrder: true, noun: 'episodes' },
+        { id: 'episodes', label: t('Episodes'), itemTypes: [ 'Episode' ], recursive: true, noun: 'episodes' },
     ];
     case 'music': return [
-        { id: 'albums', label: 'Albums', itemTypes: [ 'MusicAlbum' ], recursive: true, square: true, noun: 'albums' },
-        { id: 'suggestions', label: 'Suggestions', suggestions: true, square: true, noun: 'albums' },
-        { id: 'albumartists', label: 'Album artists', source: 'albumArtists', square: true, noun: 'artists' },
-        { id: 'artists', label: 'Artists', source: 'artists', square: true, noun: 'artists' },
-        { id: 'songs', label: 'Songs', itemTypes: [ 'Audio' ], recursive: true, square: true, noun: 'songs' },
+        { id: 'albums', label: t('Albums'), itemTypes: [ 'MusicAlbum' ], recursive: true, square: true, noun: 'albums' },
+        { id: 'suggestions', label: t('Suggestions'), suggestions: true, square: true, noun: 'albums' },
+        { id: 'albumartists', label: t('Album artists'), source: 'albumArtists', square: true, noun: 'artists' },
+        { id: 'artists', label: t('Artists'), source: 'artists', square: true, noun: 'artists' },
+        { id: 'songs', label: t('Songs'), itemTypes: [ 'Audio' ], recursive: true, square: true, noun: 'songs' },
     ];
     case 'books': return [
-        { id: 'books', label: 'Books', itemTypes: [ 'Book' ], recursive: true, noun: 'books' },
-        { id: 'folders', label: 'Folders', recursive: false, noun: 'items' },
+        { id: 'books', label: t('Books'), itemTypes: [ 'Book' ], recursive: true, noun: 'books' },
+        { id: 'folders', label: t('Folders'), recursive: false, noun: 'items' },
     ];
     case 'homevideos':
     case 'photos': return [
-        { id: 'folders', label: 'Folders', recursive: false, square: true, noun: 'items' },
-        { id: 'photos', label: 'Photos', itemTypes: [ 'Photo' ], recursive: true, square: true, noun: 'photos' },
-        { id: 'videos', label: 'Videos', itemTypes: [ 'Video' ], recursive: true, noun: 'videos' },
+        { id: 'folders', label: t('Folders'), recursive: false, square: true, noun: 'items' },
+        { id: 'photos', label: t('Photos'), itemTypes: [ 'Photo' ], recursive: true, square: true, noun: 'photos' },
+        { id: 'videos', label: t('Videos'), itemTypes: [ 'Video' ], recursive: true, noun: 'videos' },
     ];
     case 'musicvideos': return [
-        { id: 'videos', label: 'Music videos', itemTypes: [ 'MusicVideo' ], recursive: true, noun: 'videos' },
-        { id: 'folders', label: 'Folders', recursive: false, noun: 'items' },
+        { id: 'videos', label: t('Music videos'), itemTypes: [ 'MusicVideo' ], recursive: true, noun: 'videos' },
+        { id: 'folders', label: t('Folders'), recursive: false, noun: 'items' },
     ];
-    default: return [ { id: 'all', label: 'All', noun: 'titles' } ];
+    default: return [ { id: 'all', label: t('All'), noun: 'titles' } ];
     }
 }
 

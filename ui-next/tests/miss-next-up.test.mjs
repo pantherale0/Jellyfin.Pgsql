@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { extname } from 'node:path';
 import { beforeEach, test } from 'node:test';
+import { readSource } from './source.mjs';
 
 registerHooks({
     resolve(specifier, context, nextResolve) {
@@ -96,7 +97,7 @@ test('MISS-01 an empty Next Up response leaves no rail', async () => {
 });
 
 test('MISS-01 home wiring owns Next Up lifecycle and account isolation', () => {
-    const source = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8');
+    const source = readSource(new URL('../src/main.tsx', import.meta.url), 'utf8');
 
     assert.ok(source.includes('const [ nextUpItems, setNextUpItems ] = useState<MediaItem[]>([]);'));
     assert.ok(source.includes('void api.getNextUpItems()'));

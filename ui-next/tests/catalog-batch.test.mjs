@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { extname } from 'node:path';
 import { beforeEach, test } from 'node:test';
+import { readSource } from './source.mjs';
 
 registerHooks({
     resolve(specifier, context, nextResolve) {
@@ -32,7 +33,7 @@ globalThis.XMLHttpRequest = class {
 };
 
 const session = { server: 'https://jellyfin.example.test', token: 'token', user: { Id: 'user-id', Name: 'Viewer' }, serverId: 'server-id' };
-const source = file => readFileSync(new URL(`../src/${file}`, import.meta.url), 'utf8');
+const source = file => readSource(new URL(`../src/${file}`, import.meta.url), 'utf8');
 const model = () => import('../src/catalog-model.ts');
 const page = (from, count) => Array.from({ length: count }, (_, index) => ({ Id: `item-${from + index}`, Name: `Item ${from + index}` }));
 
@@ -208,7 +209,7 @@ test('CAT-13 actions follow item capabilities', async () => {
     assert.equal(itemCapabilities({ Type: 'Movie' }).canMarkPlayed, true);
     assert.equal(itemCapabilities({ Type: 'CollectionFolder' }).canFavorite, false);
     const main = source('main.tsx');
-    assert.match(main, /\{capabilities\.playable && \(canResume\(item\)/, 'detail Play is capability-gated');
+    assert.match(main, /capabilities\.playable && \(canResume\(item\)/, 'detail Play is capability-gated');
     assert.match(source('library.tsx'), /itemCapabilities\(/, 'library cards gate quick actions');
 });
 

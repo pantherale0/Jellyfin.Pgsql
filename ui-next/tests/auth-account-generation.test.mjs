@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { readSource } from './source.mjs';
 
 const { AccountGeneration } = await import('../src/account-generation.ts');
 
@@ -40,7 +41,7 @@ test('AUTH-01 a restarted account gets a fresh current generation', () => {
 });
 
 test('AUTH-01 App identity transitions advance or retire the account generation', () => {
-    const source = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8');
+    const source = readSource(new URL('../src/main.tsx', import.meta.url), 'utf8');
 
     assert.ok(source.includes("import { AccountGeneration } from './account-generation'"));
     assert.ok(source.includes('accountGeneration.invalidate();'));
@@ -48,7 +49,7 @@ test('AUTH-01 App identity transitions advance or retire the account generation'
 });
 
 test('AUTH-01 home, search, detail, and playback loaders use the account generation', () => {
-    const source = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8');
+    const source = readSource(new URL('../src/main.tsx', import.meta.url), 'utf8');
 
     assert.ok(source.includes('const account = accountGeneration.current();'));
     for (const loader of ['loadHome', 'runSearch', 'openSeries', 'openItem', 'play', 'applyReportedPlayback']) {

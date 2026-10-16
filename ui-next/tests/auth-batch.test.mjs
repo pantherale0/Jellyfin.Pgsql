@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { extname } from 'node:path';
 import { test } from 'node:test';
+import { readSource } from './source.mjs';
 
 registerHooks({
     resolve(specifier, context, nextResolve) {
@@ -20,8 +21,8 @@ globalThis.localStorage = {
 const auth = await import('../src/auth-state.ts');
 const remembered = await import('../src/remembered-users.ts');
 const { SSO_HANDOFF_MAX_AGE_MS } = await import('../src/sso-session.ts');
-const source = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
-const repo = path => readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
+const source = path => readSource(new URL(`../${path}`, import.meta.url), 'utf8');
+const repo = path => readSource(new URL(`../../${path}`, import.meta.url), 'utf8');
 
 const policy = { configuredServer: '', pageOrigin: 'https://media.example.test', allowInsecureHttp: false };
 const session = (token, server = 'https://media.example.test', id = 'u1') => ({ server, token, user: { Id: id, Name: 'Ann' }, serverId: 'srv' });

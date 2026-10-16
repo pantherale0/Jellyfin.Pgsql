@@ -1,6 +1,7 @@
 export type AppRoute =
     | { view: 'home' }
     | { view: 'favorites' }
+    | { view: 'nowplaying' }
     | { view: 'library'; libraryId: string }
     | { view: 'search'; term: string }
     | { view: 'details'; itemId: string }
@@ -26,6 +27,7 @@ export function routeFor(input: RouteInputs): AppRoute | null {
     switch (input.view) {
     case 'home': return { view: 'home' };
     case 'favorites': return { view: 'favorites' };
+    case 'nowplaying': return { view: 'nowplaying' };
     case 'library': return input.libraryId ? { view: 'library', libraryId: input.libraryId } : null;
     case 'search': return { view: 'search', term: input.search || '' };
     case 'details': return input.itemId ? { view: 'details', itemId: input.itemId } : null;
@@ -64,6 +66,20 @@ export function routeFromState(state: unknown): AppRoute | null {
         playerItemId: (route as { itemId?: string }).itemId
     });
     return candidate;
+}
+
+/**
+ * The route to reopen after a reload: the one stored in this history entry, unless the URL carries
+ * a deep link that already decides the view (admin hash, `?show=`, `?live=`, `?item=`). A stored player route
+ * reopens the item's details instead of resuming playback; home needs no restore.
+ */
+export function initialRoute(state: unknown, hash: string, search: string): AppRoute | null {
+    if (hash.startsWith('#admin/')) return null;
+    const query = new URLSearchParams(search);
+    if (query.has('show') || query.has('live') || query.has('item')) return null;
+    const route = routeFromState(state);
+    if (!route || route.view === 'home') return null;
+    return route.view === 'player' ? { view: 'details', itemId: route.itemId } : route;
 }
 
 export type HistoryAction = 'none' | 'push' | 'replace';

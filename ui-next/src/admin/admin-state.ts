@@ -1,4 +1,5 @@
 import type { JellyfinSession, JellyfinUserInfo, LibraryInfo } from './types';
+import { t } from '../i18n';
 
 export function adminRouteHash(section: string): string {
     return `#admin/${encodeURIComponent(section)}`;
@@ -33,13 +34,23 @@ export function hasUnsavedChanges(): boolean {
 
 export function confirmLeave(confirm: (message: string) => boolean): boolean {
     if (!hasUnsavedChanges()) return true;
-    if (!confirm('You have unsaved changes. Discard them and leave this page?')) return false;
+    if (!confirm(t('You have unsaved changes. Discard them and leave this page?'))) return false;
     unsavedGuard = null;
     return true;
 }
 
 export function canSavePluginDraft(loadedId: string | null | undefined, pluginId: string): boolean {
     return Boolean(loadedId) && loadedId === pluginId;
+}
+
+export const LAST_ADMINISTRATOR_MESSAGE = t('There must be at least one administrator.');
+
+/** User delete/policy failures: the server answers 403 when the change would leave no enabled administrator (or disable one). */
+export function userChangeError(error: unknown, kind: 'delete' | 'policy', fallback: string): string {
+    if ((error as { status?: unknown } | null)?.status === 403) {
+        return kind === 'delete' ? LAST_ADMINISTRATOR_MESSAGE : t('{0} Administrators cannot be disabled, and at least one user must stay enabled.', LAST_ADMINISTRATOR_MESSAGE);
+    }
+    return error instanceof Error ? error.message : fallback;
 }
 
 export function canDeleteAdminUser(target: JellyfinUserInfo, actorId: string, users: JellyfinUserInfo[]): boolean {
@@ -121,9 +132,9 @@ function splitLog(text: string): string[] {
 export function libraryStatusLabel(library: Pick<LibraryInfo, 'RefreshStatus' | 'RefreshProgress'>): { text: string; tone: 'red' | 'blue' | 'green' } {
     const status = library.RefreshStatus || '';
     if (status.toLowerCase().includes('error') || status.toLowerCase().includes('fail')) return { text: status, tone: 'red' };
-    if (library.RefreshProgress != null) return { text: `Scanning ${Math.round(library.RefreshProgress)}%`, tone: 'blue' };
+    if (library.RefreshProgress != null) return { text: t('Scanning {0}%', Math.round(library.RefreshProgress)), tone: 'blue' };
     if (status && status !== 'Idle') return { text: status, tone: 'blue' };
-    return { text: 'Idle', tone: 'green' };
+    return { text: t('Idle'), tone: 'green' };
 }
 
 export function isLibraryScanning(libraries: Array<Pick<LibraryInfo, 'RefreshStatus' | 'RefreshProgress'>>): boolean {
@@ -155,8 +166,8 @@ export function sameEmbyImportMapping(a: EmbyImportMapping | null, b: EmbyImport
 }
 
 export function sessionControls(session: Pick<JellyfinSession, 'SupportsRemoteControl' | 'NowPlayingItem' | 'PlayState'>): { canControl: boolean; isPaused: boolean; reason: string } {
-    if (!session.NowPlayingItem) return { canControl: false, isPaused: false, reason: 'Nothing is playing' };
-    if (session.SupportsRemoteControl === false) return { canControl: false, isPaused: false, reason: 'This client does not accept remote control' };
+    if (!session.NowPlayingItem) return { canControl: false, isPaused: false, reason: t('Nothing is playing') };
+    if (session.SupportsRemoteControl === false) return { canControl: false, isPaused: false, reason: t('This client does not accept remote control') };
     return { canControl: true, isPaused: session.PlayState?.IsPaused === true, reason: '' };
 }
 
@@ -202,7 +213,7 @@ export function tasteRuntimeOverrides(saved: Record<string, unknown>, status: Re
 }
 
 export function validateNewPassword(password: string, confirm: string): string {
-    if (!password) return 'Enter a new password.';
-    if (password !== confirm) return 'The passwords do not match.';
+    if (!password) return t('Enter a new password.');
+    if (password !== confirm) return t('The passwords do not match.');
     return '';
 }

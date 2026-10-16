@@ -1,5 +1,5 @@
 using System;
-using Jellyfin.Data.Entities;
+using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Plugin.Pgsql.Query;
 using MediaBrowser.Controller.Entities;
 using Xunit;

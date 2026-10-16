@@ -1,6 +1,7 @@
-import { canManageCollections } from './detail-model';
+import { canAddToPlaylist, canManageCollections } from './detail-model';
 import { itemCapabilities } from './catalog-model';
 import type { JellyfinUser, MediaItem } from './types';
+import { t } from './i18n';
 
 export type BulkAction = 'played' | 'unplayed' | 'favorite' | 'unfavorite' | 'delete';
 
@@ -24,7 +25,7 @@ export function selectAll(selection: Map<string, MediaItem>, items: MediaItem[])
     return next;
 }
 
-export interface BulkCapabilities { played: boolean; favorite: boolean; collection: boolean; deletable: number }
+export interface BulkCapabilities { played: boolean; favorite: boolean; collection: boolean; playlist: boolean; deletable: number }
 
 /** What the current selection allows; delete applies only to items the server marks deletable. */
 export function bulkCapabilities(items: MediaItem[], user: Pick<JellyfinUser, 'Policy'> | undefined): BulkCapabilities {
@@ -34,6 +35,7 @@ export function bulkCapabilities(items: MediaItem[], user: Pick<JellyfinUser, 'P
         played: real.length > 0 && caps.some(cap => cap.canMarkPlayed),
         favorite: real.length > 0 && caps.some(cap => cap.canFavorite),
         collection: real.length > 0 && Boolean(user && canManageCollections(user)) && real.every(item => !itemCapabilities(item).entity && item.Type !== 'BoxSet'),
+        playlist: real.length > 0 && real.every(canAddToPlaylist),
         deletable: real.filter(item => item.CanDelete === true).length,
     };
 }
@@ -61,12 +63,12 @@ export async function runBatch<T>(items: MediaItem[], worker: (item: MediaItem) 
     return result;
 }
 
-const ACTION_VERBS: Record<BulkAction, string> = { played: 'Marked played', unplayed: 'Marked unplayed', favorite: 'Added to favorites', unfavorite: 'Removed from favorites', delete: 'Deleted' };
+const ACTION_VERBS: Record<BulkAction, string> = { played: t('Marked played'), unplayed: t('Marked unplayed'), favorite: t('Added to favorites'), unfavorite: t('Removed from favorites'), delete: 'Deleted' };
 
 export function batchMessage(action: BulkAction, succeeded: number, failed: number, skipped = 0): { text: string; error: boolean } {
     const noun = (count: number) => `${count} ${count === 1 ? 'item' : 'items'}`;
     const parts = [ succeeded ? `${ACTION_VERBS[action]}: ${noun(succeeded)}.` : '' ];
     if (failed) parts.push(`${noun(failed)} failed.`);
-    if (skipped) parts.push(`${noun(skipped)} skipped (not allowed).`);
-    return { text: parts.filter(Boolean).join(' ') || 'Nothing to change.', error: failed > 0 };
+    if (skipped) parts.push(t('{0} skipped (not allowed).', noun(skipped)));
+    return { text: parts.filter(Boolean).join(' ') || t('Nothing to change.'), error: failed > 0 };
 }

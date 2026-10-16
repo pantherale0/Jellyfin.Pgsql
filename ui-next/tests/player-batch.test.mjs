@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { extname } from 'node:path';
 import { beforeEach, test } from 'node:test';
+import { readSource } from './source.mjs';
 
 registerHooks({
     resolve(specifier, context, nextResolve) {
@@ -35,7 +36,7 @@ const captions = await import('../src/caption-style.ts');
 const { buildDeviceProfile, normalizePlaybackPreferences } = await import('../src/device-profile.ts');
 const { JellyfinApi } = await import('../src/api.ts');
 const session = { server: 'https://jellyfin.example.test', token: 'token', user: { Id: 'user-id', Name: 'Viewer' }, serverId: 'server-id' };
-const source = file => readFileSync(new URL(`../src/${file}`, import.meta.url), 'utf8');
+const source = file => readSource(new URL(`../src/${file}`, import.meta.url), 'utf8');
 const CHROME = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36';
 const everything = { canPlay: () => true, hdrDisplay: false, audioTrackSwitching: false, userAgent: CHROME };
 const TICKS = 10_000_000;

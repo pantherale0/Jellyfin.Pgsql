@@ -1,4 +1,5 @@
 import type { MediaItem } from './types';
+import { t } from './i18n';
 
 export interface MediaStreamInfo {
     Index: number;
@@ -191,7 +192,7 @@ export function sessionPlayMethod(choice: Pick<PlaybackChoice, 'method'>, info: 
 
 export function describePlayMethod(method: PlayMethod, info?: SessionTranscodingInfo | null): string {
     if (method === 'DirectPlay') return 'Direct play';
-    if (method === 'DirectStream') return 'Remux (video and audio copied)';
+    if (method === 'DirectStream') return t('Remux (video and audio copied)');
     if (!info) return 'Transcoded stream';
     const parts = [ info.IsVideoDirect ? 'video copied' : `video → ${info.VideoCodec || 'converted'}`, info.IsAudioDirect ? 'audio copied' : `audio → ${info.AudioCodec || 'converted'}` ];
     if (info.HardwareAccelerationType && info.HardwareAccelerationType !== 'none') parts.push(`${info.HardwareAccelerationType} acceleration`);
@@ -312,7 +313,7 @@ export function describeTranscode(reasons: number | string | string[] | undefine
     const labels = list.map(reasonLabel).filter(Boolean);
     if (labels.length) return labels.join('. ') + '.';
     if (direct) return 'None. This file is playing directly.';
-    return 'The server did not report a reason for this stream.';
+    return t('The server did not report a reason for this stream.');
 }
 
 export function timelineCues(items: Array<{ Type?: string | number; StartTicks?: number; EndTicks?: number }>): TimelineCue[] {
@@ -322,7 +323,7 @@ export function timelineCues(items: Array<{ Type?: string | number; StartTicks?:
         const end = (item.EndTicks || 0) / 10000000;
         if (end <= start) return;
         const kind = SEGMENT_TYPES[String(item.Type)];
-        if (kind) cues.push({ kind, label: `Skip ${SEGMENT_LABELS[kind].toLowerCase()}`, start, end });
+        if (kind) cues.push({ kind, label: t('Skip {0}', SEGMENT_LABELS[kind].toLowerCase()), start, end });
     });
     return cues.sort((left, right) => left.start - right.start);
 }

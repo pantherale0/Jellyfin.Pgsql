@@ -9,6 +9,7 @@ Guides for the [pantherale0/Jellyfin.Pgsql](https://github.com/pantherale0/Jelly
 | [Features](features.md) | Operators | Feature → config → patch/plugin map |
 | [Patches](patches.md) | Maintainers | Full **what / why / where / how** catalog (all `patches/*.patch` files) + issue links |
 | [Known issues](known-issues.md) | Everyone | Fork tracker, operational caveats, inherited upstream issues |
+| [UI Next review](../UI_NEXT_REVIEW.md) | Maintainers and operators | Prioritized UI Next design, implementation, and standard-web feature-parity review |
 
 Quick start, env vars, SSO setup, SQLite migration, and release flow remain in the root [README](../README.md).
 

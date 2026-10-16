@@ -63,6 +63,14 @@ The exporter snapshots changed **file contents** before rebuilding the dependenc
 
 `ui-next/` builds a static site into `ui-next/dist/`. The Dockerfile has two final targets. `classic` is the default and serves the patched `jellyfin-web` build. `ui-next-test` serves the UI Next bundle at `/web` by setting `JELLYFIN_WEB_DIR=/jellyfin/ui-next`. The manual Docker workflow can publish the test target without changing the normal Jellyfin-version or `latest` tags.
 
+At runtime, UI Next routes supported Android video playback to the official Jellyfin Android app's injected `window.NativePlayer` bridge before starting its own PlaybackInfo negotiation or session tracker. The bridge verifies the requested server and user against Jellyfin before updating the app's `ApiClient`, then returns a readiness event. Jellyfin Android opens its native ExoPlayer screen and owns playback reporting; the WebView remains underneath and becomes visible again when the native player closes. Hosts without an enabled bridge or a matching account use UI Next's HTML player. webOS also uses the HTML player path, relying on the platform media pipeline through `<video>` with Hls.js fallback when native HLS is unavailable.
+
+The `syncSession` readiness method is supplied by the companion Jellyfin Android change. Older app releases do not expose it, so UI Next stays on browser playback.
+
+## UI Next end-to-end tests
+
+`ui-next/e2e/` runs Playwright Chromium against UI Next and a local fake Jellyfin HTTP server. The browser sends API requests to the app origin, and Vite forwards the configured Jellyfin paths to the fake server. The server generates deterministic PascalCase fixtures, serves the checked-in WebM and placeholder image, and records sanitized API requests. It writes only the method, path, and error type to stderr on internal failures. Vite 6 uses `server.proxy` as the default `preview.proxy`, so local dev and CI preview use the same proxy map. CI builds the static bundle, serves it with `vite preview`, and runs the same login, browse, details, detail-actions (More menu and `?item=` deep link), and playback-report tests. A second Playwright project emulates a webOS user agent at 1920×1080 to exercise the TV layout and D-pad focus paths. The suite does not start Docker or PostgreSQL.
+
 ```mermaid
 flowchart LR
   patches[patches/*.patch]

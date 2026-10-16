@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { extname } from 'node:path';
 import { beforeEach, test } from 'node:test';
+import { readSource } from './source.mjs';
 
 registerHooks({
     resolve(specifier, context, nextResolve) {
@@ -39,8 +40,8 @@ const session = {
     user: { Id: 'user-id', Name: 'Admin' }, serverId: 'server-id'
 };
 const adminApi = () => createAdminApi(new JellyfinApi(session));
-const source = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
-const repo = path => readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
+const source = path => readSource(new URL(`../${path}`, import.meta.url), 'utf8');
+const repo = path => readSource(new URL(`../../${path}`, import.meta.url), 'utf8');
 const csharpProperties = text => new Set([...text.matchAll(/public\s+[\w<>\[\]?,\s]+?\s+(\w+)\s*\{\s*get;\s*set;/g)].map(m => m[1]));
 const draftKeys = text => new Set([
     ...[...text.matchAll(/patch\('(\w+)'/g)].map(m => m[1]),
@@ -120,7 +121,7 @@ test('ADMIN-12/14: failed reads reject instead of becoming empty inventory', asy
     assert.match(source('src/admin/pages/admin-libraries.tsx'), /setLoadError\(/);
     assert.match(source('src/admin/pages/admin-playback.tsx'), /setSessionsError\(/);
     assert.match(source('src/admin/pages/admin-livetv.tsx'), /resourceErrors\(/);
-    assert.match(source('src/admin/pages/admin-all-plugins.tsx'), /await load\(\);\s*setMessage/);
+    assert.match(source('src/admin/pages/admin-all-plugins.tsx'), /await loadPlugins\(\);\s*setMessage/);
 });
 
 test('ADMIN-13: task actions report failures and refresh state on both task views', async () => {
@@ -131,8 +132,8 @@ test('ADMIN-13: task actions report failures and refresh state on both task view
     assert.match(requests[0].url, /\/ScheduledTasks\/Running\/task-1$/);
     for (const page of ['admin-system', 'admin-infrastructure']) {
         const text = source(`src/admin/pages/${page}.tsx`);
-        assert.match(text, /await api\.startTask\(t\.Id\); await load\(\); \} catch \(e\) \{ setTaskError/, page);
-        assert.match(text, /await api\.stopTask\(t\.Id\); await load\(\); \} catch \(e\) \{ setTaskError/, page);
+        assert.match(text, /await api\.startTask\(task\.Id\); await load\(\); \} catch \(e\) \{ setTaskError/, page);
+        assert.match(text, /await api\.stopTask\(task\.Id\); await load\(\); \} catch \(e\) \{ setTaskError/, page);
     }
 });
 
@@ -321,4 +322,24 @@ test('ADMIN-09 follow-up: Seerr controls map to the Seerr plugin configuration',
     const keys = draftKeys(source('src/admin/pages/admin-plugin-seerr.tsx'));
     for (const key of keys) assert.ok(schema.has(key), `Seerr page edits unknown property ${key}`);
     for (const key of schema) assert.ok(keys.has(key), `Seerr page does not expose ${key}`);
+});
+
+test('a 403 on user delete or policy save reports the last-administrator rule', () => {
+    const forbidden = Object.assign(new Error('Forbidden'), { status: 403 });
+    assert.equal(state.userChangeError(forbidden, 'delete', 'Delete failed.'), 'There must be at least one administrator.');
+    assert.match(state.userChangeError(forbidden, 'policy', 'Policy update failed.'), /^There must be at least one administrator\. Administrators cannot be disabled/);
+    assert.equal(state.userChangeError(Object.assign(new Error('Server error'), { status: 500 }), 'delete', 'Delete failed.'), 'Server error');
+    assert.equal(state.userChangeError('weird', 'delete', 'Delete failed.'), 'Delete failed.');
+    const page = readSource(new URL('../src/admin/pages/admin-users.tsx', import.meta.url), 'utf8');
+    assert.equal((page.match(/userChangeError\(e, /g) || []).length, 3);
+});
+
+test('last-admin core patch guards delete and demotion under one lock with a database recount', () => {
+    const patch = readFileSync(new URL('../../patches/jellyfin_zz_last_admin_invariant.patch', import.meta.url), 'utf8');
+    assert.match(patch, /private static readonly SemaphoreSlim _administratorLock/);
+    assert.match(patch, /EnsureAnotherAdministratorAsync\(dbContext, user\.Id\)/);
+    assert.match(patch, /throw new LastAdministratorException\(\)/);
+    assert.match(patch, /DeleteUserAsync\(userId, async \(\) =>\n\+\s+\{\n\+\s+await _sessionManager\.RevokeUserTokens/);
+    assert.match(patch, /-\s+await _sessionManager\.RevokeUserTokens\(user\.Id, null\)\.ConfigureAwait\(false\);\n-\s+await _playlistManager\.RemovePlaylistsAsync/);
+    assert.equal((patch.match(/catch \(LastAdministratorException ex\)/g) || []).length, 2);
 });

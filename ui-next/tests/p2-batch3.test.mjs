@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { extname } from 'node:path';
 import { test } from 'node:test';
@@ -39,4 +40,9 @@ test('PLAY-11 and PLAY-13 media and select keys classify to explicit player acti
     assert.equal(classifyPlayerKey('MediaPause', 0), 'pause');
     assert.equal(classifyPlayerKey('Enter', 13), 'select');
     assert.equal(classifyPlayerKey('ArrowLeft', 37), null);
+
+    const player = readFileSync(new URL('../src/player.tsx', import.meta.url), 'utf8');
+    assert.match(player, /\[ 'stop', \(\) => \{ rememberPosition\(video\); onBackRef\.current\(\); \} \]/, 'OS Stop remembers the current position before leaving');
+    assert.match(player, /actions\.forEach\(\(\[ action \]\) => setHandler\(action, null\)\)/, 'video MediaSession handlers are cleared on exit');
+    assert.match(player, /if \(action === 'stop'\) \{\s+withVideo\(rememberPosition\);\s+onBackRef\.current\(\);/, 'MediaStop key follows the same position-preserving leave path');
 });

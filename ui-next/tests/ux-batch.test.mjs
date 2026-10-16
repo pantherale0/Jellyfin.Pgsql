@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { extname } from 'node:path';
 import { test } from 'node:test';
+import { readSource } from './source.mjs';
 
 registerHooks({
     resolve(specifier, context, nextResolve) {
@@ -29,7 +30,7 @@ class FakeElement {
 }
 globalThis.HTMLElement = FakeElement;
 
-const source = file => readFileSync(new URL(`../src/${file}`, import.meta.url), 'utf8');
+const source = file => readSource(new URL(`../src/${file}`, import.meta.url), 'utf8');
 const focus = () => import('../src/dialog-focus.ts');
 
 test('UX-01/02/10 dialog lifecycle: Tab wraps inside, Back keys close, background goes inert', async () => {
@@ -96,6 +97,25 @@ test('UX-03 consumer views form a browser history with push for pages and replac
     assert.match(main, /window\.addEventListener\('popstate', onPopState\)/);
     assert.match(main, /if \(action === 'push' && previous\?\.view === 'player'\) \{[\s\S]*?window\.history\.back\(\);/, 'leaving the player steps back instead of duplicating the origin');
     assert.match(main, /window\.history\.replaceState\(window\.history\.state, ''/, 'query updates keep the recorded route');
+});
+
+test('UX-03 a reload reopens the page recorded in this history entry', async () => {
+    const { initialRoute, withRoute } = await import('../src/app-routes.ts');
+    const details = withRoute(null, { view: 'details', itemId: 'movie' });
+    assert.deepEqual(initialRoute(details, '', ''), { view: 'details', itemId: 'movie' });
+    assert.deepEqual(initialRoute(withRoute(null, { view: 'library', libraryId: 'lib' }), '', '?x=1'), { view: 'library', libraryId: 'lib' });
+    assert.deepEqual(initialRoute(withRoute(null, { view: 'player', itemId: 'ep' }), '', ''), { view: 'details', itemId: 'ep' }, 'a reload never resumes playback by itself');
+    assert.equal(initialRoute(withRoute(null, { view: 'home' }), '', ''), null);
+    assert.equal(initialRoute(details, '#admin/overview', ''), null, 'admin deep links win');
+    assert.equal(initialRoute(details, '', '?show=s'), null, 'show deep links win');
+    assert.equal(initialRoute(details, '', '?item=m'), null, 'item deep links win');
+    assert.equal(initialRoute(details, '', '?live=guide'), null, 'Live TV deep links win');
+    assert.equal(initialRoute(null, '', ''), null);
+    assert.equal(initialRoute({ uiNext: { view: 'details' } }, '', ''), null);
+    const main = source('main.tsx');
+    assert.match(main, /pendingRestore\.current = session \? initialRoute\(window\.history\.state, window\.location\.hash, window\.location\.search\) : null/);
+    assert.match(main, /if \(!currentRoute \|\| view === 'admin' \|\| pendingRestore\.current\) return;/, 'the landing page must not overwrite the recorded route before it is restored');
+    assert.match(main, /pendingRestore\.current = null;\s*historyRestoring\.current = \{ until: Date\.now\(\) \+ 8000 \};\s*routeNavigator\.current\(route\);/);
 });
 
 test('UX-04 the player keeps keyboard focus on visible controls', () => {
@@ -169,7 +189,7 @@ test('UX-12 selected states are exposed to assistive technology', () => {
     assert.match(source('live-guide.tsx'), /aria-pressed=\{day\.start === dayStart\}/);
     const ui = source('admin/ui.tsx');
     assert.match(ui, /aria-pressed=\{value === o\}/);
-    assert.match(ui, /aria-pressed=\{value === t\}/);
+    assert.match(ui, /aria-pressed=\{value === tab\}/);
 });
 
 test('UX-14 spotlight favorite names its state and keeps failures visible', () => {

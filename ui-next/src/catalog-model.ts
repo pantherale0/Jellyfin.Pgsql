@@ -1,12 +1,13 @@
 import type { LibraryQuery } from './library-query';
 import type { MediaItem } from './types';
+import { t } from './i18n';
 
 export type UserData = NonNullable<MediaItem['UserData']>;
 
 export const SEARCH_PAGE_SIZE = 40;
 
 export function searchSummary(loaded: number, total: number): string {
-    if (!loaded) return 'No titles';
+    if (!loaded) return t('No titles');
     if (total > loaded) return `Showing ${loaded.toLocaleString()} of ${total.toLocaleString()} titles`;
     return `${loaded.toLocaleString()} ${loaded === 1 ? 'title' : 'titles'}`;
 }
@@ -19,6 +20,13 @@ export function hasMoreResults(loaded: number, total: number): boolean {
 export function appendPage(current: MediaItem[], page: MediaItem[]): MediaItem[] {
     const seen = new Set(current.map(item => item.Id));
     return current.concat(page.filter(item => item.Id && !seen.has(item.Id)));
+}
+
+/** Appends playlist entries by entry id, so the same title added twice stays twice. */
+export function appendEntries(current: MediaItem[], page: MediaItem[]): MediaItem[] {
+    const key = (item: MediaItem) => item.PlaylistItemId || item.Id;
+    const seen = new Set(current.map(key));
+    return current.concat(page.filter(item => item.Id && !seen.has(key(item))));
 }
 
 export type LibraryView = 'poster' | 'compact' | 'list' | 'thumb' | 'banner';
@@ -100,7 +108,7 @@ export function playedUserData(current: UserData | undefined, played: boolean, r
     return { ...current, Played: played, PlaybackPositionTicks: played ? 0 : current?.PlaybackPositionTicks, PlayedPercentage: played ? undefined : current?.PlayedPercentage, UnplayedItemCount: played ? 0 : current?.UnplayedItemCount };
 }
 
-const PLAYABLE_TYPES = [ 'Movie', 'Episode', 'Video', 'MusicVideo', 'Trailer', 'TvChannel', 'Program', 'Recording' ];
+const PLAYABLE_TYPES = [ 'Movie', 'Episode', 'Video', 'MusicVideo', 'Trailer', 'TvChannel', 'Program', 'Recording', 'Audio' ];
 const ENTITY_TYPES = [ 'Person', 'Genre', 'MusicGenre', 'Studio', 'MusicArtist', 'Tag' ];
 const UNPLAYED_STATE_TYPES = [ ...ENTITY_TYPES, 'Photo', 'PhotoAlbum', 'TvChannel', 'Program', 'Folder', 'CollectionFolder', 'UserView', 'Playlist' ];
 

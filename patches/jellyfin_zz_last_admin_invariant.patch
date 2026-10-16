@@ -1,0 +1,477 @@
+diff --git a/Jellyfin.Api/Controllers/UserController.cs b/Jellyfin.Api/Controllers/UserController.cs
+index 657bda4d15..f6b44c14f4 100644
+--- a/Jellyfin.Api/Controllers/UserController.cs
++++ b/Jellyfin.Api/Controllers/UserController.cs
+@@ -146,11 +146,13 @@ public class UserController : BaseJellyfinApiController
+     /// </summary>
+     /// <param name="userId">The user id.</param>
+     /// <response code="204">User deleted.</response>
++    /// <response code="403">The user is the last enabled administrator.</response>
+     /// <response code="404">User not found.</response>
+     /// <returns>A <see cref="NoContentResult"/> indicating success or a <see cref="NotFoundResult"/> if the user was not found.</returns>
+     [HttpDelete("{userId}")]
+     [Authorize(Policy = Policies.RequiresElevation)]
+     [ProducesResponseType(StatusCodes.Status204NoContent)]
++    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+     [ProducesResponseType(StatusCodes.Status404NotFound)]
+     public async Task<ActionResult> DeleteUser([FromRoute, Required] Guid userId)
+     {
+@@ -160,9 +162,19 @@ public class UserController : BaseJellyfinApiController
+             return NotFound();
+         }
+ 
+-        await _sessionManager.RevokeUserTokens(user.Id, null).ConfigureAwait(false);
+-        await _playlistManager.RemovePlaylistsAsync(userId).ConfigureAwait(false);
+-        await _userManager.DeleteUserAsync(userId).ConfigureAwait(false);
++        try
++        {
++            await _userManager.DeleteUserAsync(userId, async () =>
++            {
++                await _sessionManager.RevokeUserTokens(user.Id, null).ConfigureAwait(false);
++                await _playlistManager.RemovePlaylistsAsync(userId).ConfigureAwait(false);
++            }).ConfigureAwait(false);
++        }
++        catch (LastAdministratorException ex)
++        {
++            return StatusCode(StatusCodes.Status403Forbidden, ex.Message);
++        }
++
+         return NoContent();
+     }
+ 
+@@ -451,7 +463,14 @@ public class UserController : BaseJellyfinApiController
+             await _sessionManager.RevokeUserTokens(user.Id, currentToken).ConfigureAwait(false);
+         }
+ 
+-        await _userManager.UpdatePolicyAsync(userId, newPolicy).ConfigureAwait(false);
++        try
++        {
++            await _userManager.UpdatePolicyAsync(userId, newPolicy).ConfigureAwait(false);
++        }
++        catch (LastAdministratorException ex)
++        {
++            return StatusCode(StatusCodes.Status403Forbidden, ex.Message);
++        }
+ 
+         return NoContent();
+     }
+diff --git a/Jellyfin.Server.Implementations/Users/UserManager.cs b/Jellyfin.Server.Implementations/Users/UserManager.cs
+index a5de6cea8f..76b7607ddb 100644
+--- a/Jellyfin.Server.Implementations/Users/UserManager.cs
++++ b/Jellyfin.Server.Implementations/Users/UserManager.cs
+@@ -53,6 +53,12 @@ namespace Jellyfin.Server.Implementations.Users
+ 
+         private readonly LockHelper _userLock = new();
+ 
++        /// <summary>
++        /// Serializes every change that can remove an administrator so the database recount and the write are atomic.
++        /// Always taken after the per-user lock, and nothing inside it takes another user's lock.
++        /// </summary>
++        private static readonly SemaphoreSlim _administratorLock = new(1, 1);
++
+         /// <summary>
+         /// Initializes a new instance of the <see cref="UserManager"/> class.
+         /// </summary>
+@@ -368,11 +374,15 @@ namespace Jellyfin.Server.Implementations.Users
+         }
+ 
+         /// <inheritdoc/>
+-        public async Task DeleteUserAsync(Guid userId)
++        public Task DeleteUserAsync(Guid userId) => DeleteUserAsync(userId, null);
++
++        /// <inheritdoc/>
++        public async Task DeleteUserAsync(Guid userId, Func<Task>? beforeDelete)
+         {
+             User? user;
+             using (await _userLock.LockAsync(userId).ConfigureAwait(false))
+             {
++                using var administratorGuard = await EnterAdministratorLockAsync().ConfigureAwait(false);
+                 var dbContext = await _dbProvider.CreateDbContextAsync().ConfigureAwait(false);
+                 await using (dbContext.ConfigureAwait(false))
+                 {
+@@ -394,17 +404,14 @@ namespace Jellyfin.Server.Implementations.Users
+                             user.Username));
+                     }
+ 
+-                    if (user.HasPermission(PermissionKind.IsAdministrator)
+-                        && await dbContext.Users
+-                            .CountAsync(i => i.Permissions.Any(p => p.Kind == PermissionKind.IsAdministrator && p.Value))
+-                            .ConfigureAwait(false) == 1)
++                    if (user.HasPermission(PermissionKind.IsAdministrator))
++                    {
++                        await EnsureAnotherAdministratorAsync(dbContext, user.Id).ConfigureAwait(false);
++                    }
++
++                    if (beforeDelete is not null)
+                     {
+-                        throw new ArgumentException(
+-                            string.Format(
+-                                CultureInfo.InvariantCulture,
+-                                "The user '{0}' cannot be deleted because there must be at least one admin user in the system.",
+-                                user.Username),
+-                            nameof(userId));
++                        await beforeDelete().ConfigureAwait(false);
+                     }
+ 
+                     dbContext.Users.Remove(user);
+@@ -851,6 +858,9 @@ namespace Jellyfin.Server.Implementations.Users
+             User user;
+             using (await _userLock.LockAsync(userId).ConfigureAwait(false))
+             {
++                using var administratorGuard = policy.IsAdministrator && !policy.IsDisabled
++                    ? null
++                    : await EnterAdministratorLockAsync().ConfigureAwait(false);
+                 var dbContext = await _dbProvider.CreateDbContextAsync().ConfigureAwait(false);
+                 await using (dbContext.ConfigureAwait(false))
+                 {
+@@ -860,6 +870,13 @@ namespace Jellyfin.Server.Implementations.Users
+                         .ConfigureAwait(false)
+                         ?? throw new ArgumentException("No user exists with given Id!");
+ 
++                    if (administratorGuard is not null
++                        && user.HasPermission(PermissionKind.IsAdministrator)
++                        && !user.HasPermission(PermissionKind.IsDisabled))
++                    {
++                        await EnsureAnotherAdministratorAsync(dbContext, user.Id).ConfigureAwait(false);
++                    }
++
+                     // The default number of login attempts is 3, but for some god forsaken reason it's sent to the server as "0"
+                     int? maxLoginAttempts = policy.LoginAttemptsBeforeLockout switch
+                     {
+@@ -1137,6 +1154,41 @@ namespace Jellyfin.Server.Implementations.Users
+             }
+         }
+ 
++        private static async Task<IDisposable> EnterAdministratorLockAsync()
++        {
++            await _administratorLock.WaitAsync().ConfigureAwait(false);
++            return new AdministratorLockRelease();
++        }
++
++        /// <summary>
++        /// Recounts enabled administrators from the database (not the user cache) while the administrator lock is held.
++        /// </summary>
++        private static async Task EnsureAnotherAdministratorAsync(JellyfinDbContext dbContext, Guid userId)
++        {
++            var others = await dbContext.Users
++                .CountAsync(u => !u.Id.Equals(userId)
++                    && u.Permissions.Any(p => p.Kind == PermissionKind.IsAdministrator && p.Value)
++                    && !u.Permissions.Any(p => p.Kind == PermissionKind.IsDisabled && p.Value))
++                .ConfigureAwait(false);
++            if (others == 0)
++            {
++                throw new LastAdministratorException();
++            }
++        }
++
++        private sealed class AdministratorLockRelease : IDisposable
++        {
++            private int _released;
++
++            public void Dispose()
++            {
++                if (Interlocked.Exchange(ref _released, 1) == 0)
++                {
++                    _administratorLock.Release();
++                }
++            }
++        }
++
+         internal sealed class LockHelper : IDisposable
+         {
+             private readonly AsyncKeyedLocker<Guid> _userLock = new();
+diff --git a/MediaBrowser.Controller/Library/IUserManager.cs b/MediaBrowser.Controller/Library/IUserManager.cs
+index e2b54ea7a7..4397c09445 100644
+--- a/MediaBrowser.Controller/Library/IUserManager.cs
++++ b/MediaBrowser.Controller/Library/IUserManager.cs
+@@ -96,6 +96,17 @@ namespace MediaBrowser.Controller.Library
+         /// <returns>A task representing the deletion of the user.</returns>
+         Task DeleteUserAsync(Guid userId);
+ 
++        /// <summary>
++        /// Deletes the specified user. The last-user and last-administrator checks, <paramref name="beforeDelete"/>
++        /// and the removal run under one server-wide lock, so <paramref name="beforeDelete"/> only runs for a user
++        /// that is about to be removed and concurrent deletes or demotions cannot remove every administrator.
++        /// </summary>
++        /// <param name="userId">The id of the user to be deleted.</param>
++        /// <param name="beforeDelete">Cleanup that needs the user to still exist (tokens, owned playlists).</param>
++        /// <returns>A task representing the deletion of the user.</returns>
++        /// <exception cref="LastAdministratorException">The user is the last enabled administrator.</exception>
++        Task DeleteUserAsync(Guid userId, Func<Task>? beforeDelete);
++
+         /// <summary>
+         /// Resets the password.
+         /// </summary>
+diff --git a/MediaBrowser.Controller/Library/LastAdministratorException.cs b/MediaBrowser.Controller/Library/LastAdministratorException.cs
+new file mode 100644
+index 0000000000..c7748d7de2
+--- /dev/null
++++ b/MediaBrowser.Controller/Library/LastAdministratorException.cs
+@@ -0,0 +1,37 @@
++using System;
++
++namespace MediaBrowser.Controller.Library
++{
++    /// <summary>
++    /// Thrown when a user change would leave the server without an enabled administrator.
++    /// </summary>
++    public class LastAdministratorException : InvalidOperationException
++    {
++        /// <summary>
++        /// Initializes a new instance of the <see cref="LastAdministratorException" /> class.
++        /// </summary>
++        public LastAdministratorException()
++            : base("There must be at least one user in the system with administrative access.")
++        {
++        }
++
++        /// <summary>
++        /// Initializes a new instance of the <see cref="LastAdministratorException" /> class.
++        /// </summary>
++        /// <param name="message">The message.</param>
++        public LastAdministratorException(string message)
++            : base(message)
++        {
++        }
++
++        /// <summary>
++        /// Initializes a new instance of the <see cref="LastAdministratorException" /> class.
++        /// </summary>
++        /// <param name="message">The message.</param>
++        /// <param name="innerException">The inner exception.</param>
++        public LastAdministratorException(string message, Exception innerException)
++            : base(message, innerException)
++        {
++        }
++    }
++}
+diff --git a/tests/Jellyfin.Server.Implementations.Tests/Users/UserManagerLastAdministratorTests.cs b/tests/Jellyfin.Server.Implementations.Tests/Users/UserManagerLastAdministratorTests.cs
+new file mode 100644
+index 0000000000..9c88d14502
+--- /dev/null
++++ b/tests/Jellyfin.Server.Implementations.Tests/Users/UserManagerLastAdministratorTests.cs
+@@ -0,0 +1,223 @@
++using System;
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
++using System.Threading;
++using System.Threading.Tasks;
++using Jellyfin.Data;
++using Jellyfin.Database.Implementations;
++using Jellyfin.Database.Implementations.Entities;
++using Jellyfin.Database.Implementations.Enums;
++using Jellyfin.Database.Implementations.Locking;
++using Jellyfin.Database.Providers.Sqlite;
++using Jellyfin.Server.Implementations.Users;
++using MediaBrowser.Common;
++using MediaBrowser.Common.Net;
++using MediaBrowser.Controller;
++using MediaBrowser.Controller.Configuration;
++using MediaBrowser.Controller.Drawing;
++using MediaBrowser.Controller.Events;
++using MediaBrowser.Controller.Library;
++using MediaBrowser.Model.Cryptography;
++using MediaBrowser.Model.Users;
++using Microsoft.Data.Sqlite;
++using Microsoft.EntityFrameworkCore;
++using Microsoft.Extensions.Logging.Abstractions;
++using Moq;
++using Xunit;
++
++namespace Jellyfin.Server.Implementations.Tests.Users;
++
++public sealed class UserManagerLastAdministratorTests : IDisposable
++{
++    private readonly SqliteConnection _connection;
++    private readonly DbContextOptions<JellyfinDbContext> _dbOptions;
++    private readonly UserManager _userManager;
++
++    public UserManagerLastAdministratorTests()
++    {
++        _connection = new SqliteConnection("Data Source=:memory:");
++        _connection.Open();
++
++        _dbOptions = new DbContextOptionsBuilder<JellyfinDbContext>()
++            .UseSqlite(_connection)
++            .Options;
++
++        // Create the schema
++        using var ctx = CreateDbContext();
++        ctx.Database.EnsureCreated();
++
++        var factory = new Mock<IDbContextFactory<JellyfinDbContext>>();
++        factory.Setup(f => f.CreateDbContext()).Returns(CreateDbContext);
++        factory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
++            .ReturnsAsync(CreateDbContext);
++
++        var cryptoProvider = new Mock<ICryptoProvider>();
++        var configManager = new Mock<IServerConfigurationManager>();
++        var appPaths = new Mock<IServerApplicationPaths>();
++        appPaths.Setup(x => x.ProgramDataPath).Returns(Path.GetTempPath());
++        configManager.Setup(x => x.ApplicationPaths).Returns(appPaths.Object);
++
++        var appHost = new Mock<IApplicationHost>();
++
++        var defaultAuthProvider = new DefaultAuthenticationProvider(
++            NullLogger<DefaultAuthenticationProvider>.Instance,
++            cryptoProvider.Object);
++        var invalidAuthProvider = new InvalidAuthProvider();
++        var defaultPasswordResetProvider = new DefaultPasswordResetProvider(
++            configManager.Object,
++            appHost.Object);
++
++        _userManager = new UserManager(
++            factory.Object,
++            new NoopEventManager(),
++            new Mock<INetworkManager>().Object,
++            appHost.Object,
++            new Mock<IImageProcessor>().Object,
++            NullLogger<UserManager>.Instance,
++            configManager.Object,
++            [defaultPasswordResetProvider],
++            [defaultAuthProvider, invalidAuthProvider]);
++    }
++
++    public void Dispose()
++    {
++        _userManager.Dispose();
++        _connection.Dispose();
++    }
++
++    [Fact]
++    public async Task DeleteUserAsync_LastAdministrator_ThrowsAndSkipsCleanup()
++    {
++        var admin = await CreateAdministratorAsync("soleadmin");
++        await _userManager.CreateUserAsync("viewer");
++        var cleanedUp = false;
++
++        await Assert.ThrowsAsync<LastAdministratorException>(() => _userManager.DeleteUserAsync(admin.Id, () =>
++        {
++            cleanedUp = true;
++            return Task.CompletedTask;
++        }));
++
++        Assert.False(cleanedUp);
++        Assert.NotNull(_userManager.GetUserById(admin.Id));
++    }
++
++    [Fact]
++    public async Task DeleteUserAsync_WithAnotherAdministrator_RunsCleanupThenDeletes()
++    {
++        var admin = await CreateAdministratorAsync("firstadmin");
++        await CreateAdministratorAsync("secondadmin");
++        var userExistedDuringCleanup = false;
++
++        await _userManager.DeleteUserAsync(admin.Id, () =>
++        {
++            userExistedDuringCleanup = _userManager.GetUserById(admin.Id) is not null;
++            return Task.CompletedTask;
++        });
++
++        Assert.True(userExistedDuringCleanup);
++        Assert.Null(_userManager.GetUserById(admin.Id));
++    }
++
++    [Fact]
++    public async Task DeleteUserAsync_DisabledAdministratorDoesNotCount()
++    {
++        var admin = await CreateAdministratorAsync("activeadmin");
++        var disabled = await CreateAdministratorAsync("disabledadmin");
++        disabled.SetPermission(PermissionKind.IsDisabled, true);
++        await _userManager.UpdateUserAsync(disabled);
++
++        await Assert.ThrowsAsync<LastAdministratorException>(() => _userManager.DeleteUserAsync(admin.Id));
++    }
++
++    [Fact]
++    public async Task UpdatePolicyAsync_DemotingLastAdministrator_Throws()
++    {
++        var admin = await CreateAdministratorAsync("demoteadmin");
++        await _userManager.CreateUserAsync("viewer");
++
++        await Assert.ThrowsAsync<LastAdministratorException>(() => _userManager.UpdatePolicyAsync(admin.Id, Policy(admin, isAdministrator: false)));
++
++        Assert.True(_userManager.GetUserById(admin.Id)!.HasPermission(PermissionKind.IsAdministrator));
++    }
++
++    [Fact]
++    public async Task ConcurrentDeletesOfTwoAdministrators_LeaveOneAdministrator()
++    {
++        var first = await CreateAdministratorAsync("racefirst");
++        var second = await CreateAdministratorAsync("racesecond");
++        await _userManager.CreateUserAsync("viewer");
++
++        var results = await Task.WhenAll(
++            Attempt(() => _userManager.DeleteUserAsync(first.Id, () => Task.Delay(50))),
++            Attempt(() => _userManager.DeleteUserAsync(second.Id, () => Task.Delay(50))));
++
++        Assert.Single(results, ok => ok);
++        Assert.Single(_userManager.GetUsers(), user => user.HasPermission(PermissionKind.IsAdministrator));
++    }
++
++    [Fact]
++    public async Task ConcurrentDeleteAndDemotion_LeaveOneAdministrator()
++    {
++        var first = await CreateAdministratorAsync("mixfirst");
++        var second = await CreateAdministratorAsync("mixsecond");
++
++        var results = await Task.WhenAll(
++            Attempt(() => _userManager.DeleteUserAsync(first.Id, () => Task.Delay(50))),
++            Attempt(() => _userManager.UpdatePolicyAsync(second.Id, Policy(second, isAdministrator: false))));
++
++        Assert.Single(results, ok => ok);
++        Assert.Single(_userManager.GetUsers(), user => user.HasPermission(PermissionKind.IsAdministrator));
++    }
++
++    private static async Task<bool> Attempt(Func<Task> action)
++    {
++        await Task.Yield();
++        try
++        {
++            await action();
++            return true;
++        }
++        catch (LastAdministratorException)
++        {
++            return false;
++        }
++    }
++
++    private static UserPolicy Policy(User user, bool isAdministrator) => new()
++    {
++        IsAdministrator = isAdministrator,
++        AuthenticationProviderId = user.AuthenticationProviderId,
++        PasswordResetProviderId = user.PasswordResetProviderId
++    };
++
++    private async Task<User> CreateAdministratorAsync(string name)
++    {
++        var user = await _userManager.CreateUserAsync(name);
++        user.SetPermission(PermissionKind.IsAdministrator, true);
++        await _userManager.UpdateUserAsync(user);
++        return _userManager.GetUserById(user.Id)!;
++    }
++
++    private JellyfinDbContext CreateDbContext()
++    {
++        return new JellyfinDbContext(
++            _dbOptions,
++            NullLogger<JellyfinDbContext>.Instance,
++            new SqliteDatabaseProvider(null!, NullLogger<SqliteDatabaseProvider>.Instance),
++            new NoLockBehavior(NullLogger<NoLockBehavior>.Instance));
++    }
++
++    private sealed class NoopEventManager : IEventManager
++    {
++        public void Publish<T>(T eventArgs)
++            where T : EventArgs
++        {
++        }
++
++        public Task PublishAsync<T>(T eventArgs)
++            where T : EventArgs
++            => Task.CompletedTask;
++    }
++}
+

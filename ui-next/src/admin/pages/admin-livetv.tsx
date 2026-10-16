@@ -6,6 +6,7 @@ import { DVR_FIELDS } from '../server-settings';
 import { AdminLiveTvTuners } from './admin-livetv-tuners';
 import { AdminLiveTvGuide } from './admin-livetv-guide';
 import { resourceErrors, settle } from '../admin-state';
+import { t } from '../../i18n';
 
 interface Channel { Id?: string; Name?: string; Number?: string; Type?: string }
 
@@ -64,27 +65,27 @@ export function AdminLiveTv({ adminApi: api, onNavigate }: { adminApi: AdminApi;
     }, [tab, loadDvr, load]);
 
     const channelColumns = [
-        { key: 'Number', label: 'Number', value: (c: Channel) => c.Number || '—' },
-        { key: 'Name', label: 'Channel', value: (c: Channel) => c.Name || '—' },
-        { key: 'Type', label: 'Type', value: (c: Channel) => c.Type || '—' },
-        { key: 'Allowlist', label: 'RBAC', value: (_c: Channel) => <span class="ad-cell-sub">Configured in SSO mappings</span> },
+        { key: 'Number', label: t('Number'), value: (c: Channel) => c.Number || '—' },
+        { key: 'Name', label: t('Channel'), value: (c: Channel) => c.Name || '—' },
+        { key: 'Type', label: t('Type'), value: (c: Channel) => c.Type || '—' },
+        { key: 'Allowlist', label: 'RBAC', value: (_c: Channel) => <span class="ad-cell-sub">{t('Configured in SSO mappings')}</span> },
     ];
 
     const hasLiveTv = info?.IsEnabled === true || tuners.length > 0 || channels.length > 0;
-    return <PageShell title="Live TV" subtitle="Tuners, guide, channels, Multiview and RBAC allowlists">
+    return <PageShell title={t('Live TV')} subtitle={t('Tuners, guide, channels, Multiview and RBAC allowlists')}>
         <Tabs tabs={['Overview', 'Tuners', 'Guide', 'Channels', 'Sessions', 'Recordings', 'DVR settings']} value={tab} onPick={setTab} />
-        {loadErrors.length > 0 && <p role="alert" class="ad-error">Some Live TV data could not be loaded. {loadErrors.join('; ')}</p>}
-        {tab === 'DVR settings' && <ConfigSection api={api} path="/System/Configuration/livetv" title="Recording settings" fields={DVR_FIELDS} note="Jellyfin has no global retention limit; per-series rules keep a set number of episodes." />}
-        {!hasLiveTv && tab !== 'Tuners' && tab !== 'Guide' && tab !== 'DVR settings' && <Card title="Live TV"><Empty muted>{loadErrors.length ? 'Live TV status is unavailable' : 'Live TV is not configured on this server'}</Empty><button class="ad-btn" onClick={() => setTab('Tuners')}>Add tuner</button></Card>}
+        {loadErrors.length > 0 && <p role="alert" class="ad-error">{t('Some Live TV data could not be loaded. {0}', loadErrors.join('; '))}</p>}
+        {tab === 'DVR settings' && <ConfigSection api={api} path="/System/Configuration/livetv" title={t('Recording settings')} fields={DVR_FIELDS} note={t('Jellyfin has no global retention limit; per-series rules keep a set number of episodes.')} />}
+        {!hasLiveTv && tab !== 'Tuners' && tab !== 'Guide' && tab !== 'DVR settings' && <Card title={t('Live TV')}><Empty muted>{loadErrors.length ? t('Live TV status is unavailable') : t('Live TV is not configured on this server')}</Empty><button class="ad-btn" onClick={() => setTab('Tuners')}>{t('Add tuner')}</button></Card>}
         {tab === 'Tuners' && <AdminLiveTvTuners api={api} tuners={tuners} types={types} onChanged={load} />}
         {tab === 'Guide' && <AdminLiveTvGuide api={api} providers={providers} tuners={tuners} onChanged={load} />}
         {hasLiveTv && tab === 'Overview' && <div class="ad-grid2">
-            <Card title="Configured tuners" actions={<button class="ad-btn" onClick={() => setTab('Tuners')}>Manage tuners</button>}>{tuners.length ? tuners.map((t, index) => <div class="ad-info" key={t.Id || index}><span class="ad-info-k">{t.FriendlyName || t.Type || 'Tuner'}</span><StatusChip tone="blue">Configured</StatusChip></div>) : <Empty muted>No tuners configured</Empty>}{types.length > 0 && <p class="ad-note">Supported tuner types: {types.map(t => t.Name || t.Id).filter(Boolean).join(', ')}</p>}</Card>
-            <Card title="Guide health" actions={<button class="ad-btn" onClick={() => setTab('Guide')}>Manage guide</button>}><div class="ad-info"><span class="ad-info-k">Guide providers</span><span class="ad-info-v">{providers.length}</span></div>{guide ? <><div class="ad-info"><span class="ad-info-k">Start</span><span class="ad-info-v">{guide.StartDate ? new Date(guide.StartDate).toLocaleString() : '—'}</span></div><div class="ad-info"><span class="ad-info-k">End</span><span class="ad-info-v">{guide.EndDate ? new Date(guide.EndDate).toLocaleString() : '—'}</span></div><div class="ad-info"><span class="ad-info-k">Channels</span><span class="ad-info-v">{channels.length}</span></div></> : <Empty muted>Guide data is unavailable</Empty>}</Card>
-            {multiviewReported && <Card title="Multiview permissions"><p class="ad-note">{multiviewUsers.length ? `${multiviewUsers.join(', ')} can use Multiview.` : 'No users have Multiview permission.'}</p><button class="ad-btn" onClick={() => onNavigate('users')}>Manage permissions</button><p class="ad-note">The experimental viewing preference is per client. Active Multiview tiles are not reported by the server.</p></Card>}
-            <Card title="RBAC allowlists" actions={<button class="ad-btn" onClick={() => onNavigate('users')}>Users & access</button>}><div class="ad-note">Live TV channel/category allowlists are defined by SSO group mappings.</div></Card>
+            <Card title={t('Configured tuners')} actions={<button class="ad-btn" onClick={() => setTab('Tuners')}>{t('Manage tuners')}</button>}>{tuners.length ? tuners.map((tuner, index) => <div class="ad-info" key={tuner.Id || index}><span class="ad-info-k">{tuner.FriendlyName || tuner.Type || t('Tuner')}</span><StatusChip tone="blue">{t('Configured')}</StatusChip></div>) : <Empty muted>{t('No tuners configured')}</Empty>}{types.length > 0 && <p class="ad-note">{t('Supported tuner types: {0}', types.map(tuner => tuner.Name || tuner.Id).filter(Boolean).join(', '))}</p>}</Card>
+            <Card title={t('Guide health')} actions={<button class="ad-btn" onClick={() => setTab('Guide')}>{t('Manage guide')}</button>}><div class="ad-info"><span class="ad-info-k">{t('Guide providers')}</span><span class="ad-info-v">{providers.length}</span></div>{guide ? <><div class="ad-info"><span class="ad-info-k">{t('Start')}</span><span class="ad-info-v">{guide.StartDate ? new Date(guide.StartDate).toLocaleString() : '—'}</span></div><div class="ad-info"><span class="ad-info-k">{t('End')}</span><span class="ad-info-v">{guide.EndDate ? new Date(guide.EndDate).toLocaleString() : '—'}</span></div><div class="ad-info"><span class="ad-info-k">{t('Channels')}</span><span class="ad-info-v">{channels.length}</span></div></> : <Empty muted>{t('Guide data is unavailable')}</Empty>}</Card>
+            {multiviewReported && <Card title={t('Multiview permissions')}><p class="ad-note">{multiviewUsers.length ? t('{0} can use Multiview.', multiviewUsers.join(', ')) : t('No users have Multiview permission.')}</p><button class="ad-btn" onClick={() => onNavigate('users')}>{t('Manage permissions')}</button><p class="ad-note">{t('The experimental viewing preference is per client. Active Multiview tiles are not reported by the server.')}</p></Card>}
+            <Card title={t('RBAC allowlists')} actions={<button class="ad-btn" onClick={() => onNavigate('users')}>{t('Users & access')}</button>}><div class="ad-note">{t('Live TV channel/category allowlists are defined by SSO group mappings.')}</div></Card>
         </div>}
-        {hasLiveTv && tab === 'Channels' && <Card title="Channels"><DataTable rows={channels} columns={channelColumns} getKey={c => c.Id || c.Number || c.Name || ''} empty="No channels" />{channels.length < channelsTotal && <button class="ad-btn" disabled={channelsMore} onClick={async () => {
+        {hasLiveTv && tab === 'Channels' && <Card title={t('Channels')}><DataTable rows={channels} columns={channelColumns} getKey={c => c.Id || c.Number || c.Name || ''} empty={t('No channels')} />{channels.length < channelsTotal && <button class="ad-btn" disabled={channelsMore} onClick={async () => {
             if (channelsMore) return;
             setChannelsMore(true);
             try {
@@ -94,29 +95,29 @@ export function AdminLiveTv({ adminApi: api, onNavigate }: { adminApi: AdminApi;
             } catch (e) {
                 setLoadErrors([`Channels: ${e instanceof Error ? e.message : 'request failed'}`]);
             } finally { setChannelsMore(false); }
-        }}>{channelsMore ? 'Loading…' : `Show more (${channelsTotal - channels.length} remaining)`}</button>}</Card>}
-        {hasLiveTv && tab === 'Sessions' && <Card title="Live TV sessions">{sessions.length === 0 ? <Empty muted>No active Live TV sessions</Empty> : sessions.map(s => <div class="ad-info" key={s.Id}><span class="ad-info-k">{s.UserName} · {s.Client}</span><span class="ad-info-v">{s.NowPlayingItem?.Name}</span></div>)}</Card>}
+        }}>{channelsMore ? t('Loading…') : t('Show more ({0} remaining)', channelsTotal - channels.length)}</button>}</Card>}
+        {hasLiveTv && tab === 'Sessions' && <Card title={t('Live TV sessions')}>{sessions.length === 0 ? <Empty muted>{t('No active Live TV sessions')}</Empty> : sessions.map(s => <div class="ad-info" key={s.Id}><span class="ad-info-k">{s.UserName} · {s.Client}</span><span class="ad-info-v">{s.NowPlayingItem?.Name}</span></div>)}</Card>}
         {hasLiveTv && tab === 'Recordings' && <>
-            {dvrError && <p role="alert" class="ad-error">Some DVR data could not be loaded. {dvrError}</p>}
-            <p class="ad-note" role="status">Recording lists refresh every 30 seconds while this tab is open.</p>
-            <Card title={`Recording now · ${active.length}`}>{active.length === 0 ? <Empty muted>Nothing is recording</Empty> : active.map(r => <div class="ad-info" key={r.Id}><span class="ad-info-k">{r.Name || 'Untitled'}{r.ChannelName ? ` · ${r.ChannelName}` : ''}</span><span class="ad-info-v">{r.EndDate ? `until ${new Date(r.EndDate).toLocaleTimeString()}` : 'In progress'}</span></div>)}</Card>
-            <Card title="Series rules"><DataTable rows={seriesTimers} getKey={t => t.Id} empty="No series recording rules" columns={[
-                { key: 'Name', label: 'Series', value: (t: typeof seriesTimers[number]) => t.Name || 'Untitled' },
-                { key: 'Channel', label: 'Channel', value: (t: typeof seriesTimers[number]) => t.RecordAnyChannel ? 'Any channel' : t.ChannelName || '—' },
-                { key: 'Rule', label: 'Rule', value: (t: typeof seriesTimers[number]) => [ t.RecordNewOnly ? 'New episodes' : 'All episodes', t.RecordAnyTime ? 'any time' : 'original time', t.KeepUpTo ? `keep ${t.KeepUpTo}` : 'keep all' ].join(' · ') },
-                { key: 'Action', label: '', value: (t: typeof seriesTimers[number]) => <ConfirmButton label="Cancel series" tone="danger" onConfirm={async () => { await api.cancelSeriesTimer(t.Id); await loadDvr(); await load(); }} /> },
+            {dvrError && <p role="alert" class="ad-error">{t('Some DVR data could not be loaded. {0}', dvrError)}</p>}
+            <p class="ad-note" role="status">{t('Recording lists refresh every 30 seconds while this tab is open.')}</p>
+            <Card title={t('Recording now · {0}', active.length)}>{active.length === 0 ? <Empty muted>{t('Nothing is recording')}</Empty> : active.map(r => <div class="ad-info" key={r.Id}><span class="ad-info-k">{r.Name || t('Untitled')}{r.ChannelName ? ` · ${r.ChannelName}` : ''}</span><span class="ad-info-v">{r.EndDate ? t('until {0}', new Date(r.EndDate).toLocaleTimeString()) : t('In progress')}</span></div>)}</Card>
+            <Card title={t('Series rules')}><DataTable rows={seriesTimers} getKey={timer => timer.Id} empty={t('No series recording rules')} columns={[
+                { key: 'Name', label: t('Series'), value: (timer: typeof seriesTimers[number]) => timer.Name || 'Untitled' },
+                { key: 'Channel', label: t('Channel'), value: (timer: typeof seriesTimers[number]) => timer.RecordAnyChannel ? 'Any channel' : timer.ChannelName || '—' },
+                { key: 'Rule', label: t('Rule'), value: (timer: typeof seriesTimers[number]) => [ timer.RecordNewOnly ? 'New episodes' : 'All episodes', timer.RecordAnyTime ? 'any time' : 'original time', timer.KeepUpTo ? `keep ${timer.KeepUpTo}` : 'keep all' ].join(' · ') },
+                { key: 'Action', label: '', value: (timer: typeof seriesTimers[number]) => <ConfirmButton label={t('Cancel series')} tone="danger" onConfirm={async () => { await api.cancelSeriesTimer(timer.Id); await loadDvr(); await load(); }} /> },
             ]} /></Card>
-            <Card title="Upcoming recordings"><DataTable rows={timers} columns={[
-                { key: 'Name', label: 'Programme', value: (t: typeof timers[number]) => t.Name || 'Untitled' },
-                { key: 'Start', label: 'Starts', value: (t: typeof timers[number]) => t.StartDate ? new Date(t.StartDate).toLocaleString() : 'Not reported' },
-                { key: 'State', label: 'State', value: (t: typeof timers[number]) => t.Status || 'Scheduled' },
-                { key: 'Action', label: '', value: (t: typeof timers[number]) => <ConfirmButton label="Cancel recording" tone="danger" onConfirm={async () => { await api.cancelTimer(t.Id); await load(); }} /> },
-            ]} getKey={t => t.Id} empty="No upcoming recordings" /></Card>
-            <Card title="Recent recordings"><DataTable rows={recordings} columns={[
-                { key: 'Name', label: 'Recording', value: (r: typeof recordings[number]) => r.Name || 'Untitled' },
-                { key: 'Year', label: 'Year', value: (r: typeof recordings[number]) => r.ProductionYear || 'Not reported' },
-                { key: 'Action', label: '', value: (r: typeof recordings[number]) => <ConfirmButton label="Delete recording" tone="danger" onConfirm={async () => { await api.deleteItem(r.Id); setRecordings(current => current.filter(x => x.Id !== r.Id)); setRecordingsTotal(total => Math.max(0, total - 1)); }} /> },
-            ]} getKey={r => r.Id} empty="No recordings" />{recordings.length < recordingsTotal && <button class="ad-btn" disabled={recordingsMore} onClick={async () => {
+            <Card title={t('Upcoming recordings')}><DataTable rows={timers} columns={[
+                { key: 'Name', label: t('Programme'), value: (timer: typeof timers[number]) => timer.Name || 'Untitled' },
+                { key: 'Start', label: t('Starts'), value: (timer: typeof timers[number]) => timer.StartDate ? new Date(timer.StartDate).toLocaleString() : 'Not reported' },
+                { key: 'State', label: t('State'), value: (timer: typeof timers[number]) => timer.Status || 'Scheduled' },
+                { key: 'Action', label: '', value: (timer: typeof timers[number]) => <ConfirmButton label={t('Cancel recording')} tone="danger" onConfirm={async () => { await api.cancelTimer(timer.Id); await load(); }} /> },
+            ]} getKey={timer => timer.Id} empty={t('No upcoming recordings')} /></Card>
+            <Card title={t('Recent recordings')}><DataTable rows={recordings} columns={[
+                { key: 'Name', label: t('Recording'), value: (r: typeof recordings[number]) => r.Name || 'Untitled' },
+                { key: 'Year', label: t('Year'), value: (r: typeof recordings[number]) => r.ProductionYear || 'Not reported' },
+                { key: 'Action', label: '', value: (r: typeof recordings[number]) => <ConfirmButton label={t('Delete recording')} tone="danger" onConfirm={async () => { await api.deleteItem(r.Id); setRecordings(current => current.filter(x => x.Id !== r.Id)); setRecordingsTotal(total => Math.max(0, total - 1)); }} /> },
+            ]} getKey={r => r.Id} empty={t('No recordings')} />{recordings.length < recordingsTotal && <button class="ad-btn" disabled={recordingsMore} onClick={async () => {
                 if (recordingsMore) return;
                 setRecordingsMore(true);
                 try {
@@ -124,7 +125,7 @@ export function AdminLiveTv({ adminApi: api, onNavigate }: { adminApi: AdminApi;
                     setRecordings(current => current.concat((page.Items || []).filter(r => !current.some(existing => existing.Id === r.Id))));
                     setRecordingsTotal(page.TotalRecordCount ?? recordings.length);
                 } finally { setRecordingsMore(false); }
-            }}>{recordingsMore ? 'Loading…' : `Show more (${recordingsTotal - recordings.length} remaining)`}</button>}</Card>
+            }}>{recordingsMore ? t('Loading…') : t('Show more ({0} remaining)', recordingsTotal - recordings.length)}</button>}</Card>
         </>}
     </PageShell>;
 }

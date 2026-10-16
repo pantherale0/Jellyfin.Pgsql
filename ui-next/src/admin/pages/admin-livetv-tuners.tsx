@@ -6,13 +6,14 @@ import {
     ProvisioningLoadTracker, buildTunerPayload, canSaveProvisioningDraft, tunerDraftFrom, tunerFieldVisibility, validateTunerDraft,
     type ProvisioningDraftStatus, type TunerDraft,
 } from '../livetv-provisioning';
+import { t } from '../../i18n';
 
 export function errorText(e: unknown, fallback: string): string {
     return e instanceof Error && e.message ? e.message : fallback;
 }
 
 export function tunerTypeName(type: string | undefined, types: Array<{ Id?: string; Name?: string }>): string {
-    return types.find(t => t.Id === type)?.Name || (type === 'm3u' ? 'M3U tuner' : type === 'hdhomerun' ? 'HDHomeRun' : type || 'Tuner');
+    return types.find(timer => timer.Id === type)?.Name || (type === 'm3u' ? 'M3U tuner' : type === 'hdhomerun' ? 'HDHomeRun' : type || 'Tuner');
 }
 
 export function ProvisioningDrawer({ title, subtitle, closeLabel, busy, onClose, children }: { title: string; subtitle?: any; closeLabel: string; busy?: boolean; onClose: () => void; children: any }) {
@@ -69,12 +70,12 @@ function TunerEditor({ api, target, types, onClose, onSaved }: { api: AdminApi; 
         setStatus('loading'); setDraftKey(undefined);
         api.getLiveTvConfig().then(config => {
             if (!tracker.current.isCurrent(token, key)) return;
-            const stored = (config.TunerHosts || []).find(t => t.Id === target.id);
-            if (!stored) { setStatus('error'); setError('This tuner no longer exists.'); return; }
+            const stored = (config.TunerHosts || []).find(tuner => tuner.Id === target.id);
+            if (!stored) { setStatus('error'); setError(t('This tuner no longer exists.')); return; }
             setDraft(tunerDraftFrom(stored)); setDraftKey(key); setStatus('ready');
         }).catch(e => {
             if (!tracker.current.isCurrent(token, key)) return;
-            setStatus('error'); setError(errorText(e, 'Tuner settings could not be loaded.'));
+            setStatus('error'); setError(errorText(e, t('Tuner settings could not be loaded.')));
         });
         return () => tracker.current.cancel();
     }, [api, key]);
@@ -97,37 +98,37 @@ function TunerEditor({ api, target, types, onClose, onSaved }: { api: AdminApi; 
         try {
             let stored: TunerHostInfo | undefined = target.mode === 'new' ? target.prefill : undefined;
             if (target.mode === 'edit') {
-                stored = (await api.getLiveTvConfig()).TunerHosts?.find(t => t.Id === target.id);
-                if (!stored) throw new Error('This tuner no longer exists.');
+                stored = (await api.getLiveTvConfig()).TunerHosts?.find(tuner => tuner.Id === target.id);
+                if (!stored) throw new Error(t('This tuner no longer exists.'));
             }
             const payload = buildTunerPayload(stored, draft);
             if (target.mode === 'edit') payload.Id = target.id;
             else delete payload.Id;
             await api.saveTunerHost(payload);
             if (!tracker.current.isCurrent(token, key)) return;
-            onSaved(target.mode === 'edit' ? 'Tuner saved.' : 'Tuner added. Refresh the guide to load its channels.');
+            onSaved(target.mode === 'edit' ? t('Tuner saved.') : t('Tuner added. Refresh the guide to load its channels.'));
         } catch (e) {
-            if (tracker.current.isCurrent(token, key)) setError(errorText(e, 'The tuner could not be saved. Check the address and that the server can reach it.'));
+            if (tracker.current.isCurrent(token, key)) setError(errorText(e, t('The tuner could not be saved. Check the address and that the server can reach it.')));
         } finally {
             if (tracker.current.isCurrent(token, key)) setBusy(false);
         }
     };
 
-    const close = () => { if (!dirty || window.confirm('Discard unsaved tuner changes?')) onClose(); };
+    const close = () => { if (!dirty || window.confirm(t('Discard unsaved tuner changes?'))) onClose(); };
 
-    return <ProvisioningDrawer title={target.mode === 'edit' ? (draft.FriendlyName || 'Edit tuner') : 'Add tuner'} closeLabel="Close tuner editor" busy={status === 'loading' || busy} onClose={close}
+    return <ProvisioningDrawer title={target.mode === 'edit' ? (draft.FriendlyName || t('Edit tuner')) : t('Add tuner')} closeLabel={t('Close tuner editor')} busy={status === 'loading' || busy} onClose={close}
         subtitle={<StatusChip tone="muted">{tunerTypeName(draft.Type, types)}</StatusChip>}>
         {error && <p role="alert" class="ad-error">{error}</p>}
-        {status === 'loading' && <Empty muted>Loading tuner settings…</Empty>}
+        {status === 'loading' && <Empty muted>{t('Loading tuner settings…')}</Empty>}
         {ready && <form onSubmit={e => { e.preventDefault(); void save(); }}>
-            {target.mode === 'new' && <label class="ad-field">Tuner type<select value={draft.Type} disabled={busy} onChange={e => update({ Type: e.currentTarget.value })}>
-                {(types.length ? types : [{ Id: 'm3u', Name: 'M3U tuner' }, { Id: 'hdhomerun', Name: 'HDHomeRun' }]).filter(t => t.Id === 'm3u' || t.Id === 'hdhomerun').map(t => <option key={t.Id} value={t.Id}>{t.Name || t.Id}</option>)}
+            {target.mode === 'new' && <label class="ad-field">{t('Tuner type')}<select value={draft.Type} disabled={busy} onChange={e => update({ Type: e.currentTarget.value })}>
+                {(types.length ? types : [{ Id: 'm3u', Name: 'M3U tuner' }, { Id: 'hdhomerun', Name: 'HDHomeRun' }]).filter(timer => timer.Id === 'm3u' || timer.Id === 'hdhomerun').map(timer => <option key={timer.Id} value={timer.Id}>{timer.Name || timer.Id}</option>)}
             </select></label>}
-            <label class="ad-field">{draft.Type === 'm3u' ? 'File or URL' : 'Tuner IP address or URL'}<input required value={draft.Url} disabled={busy} placeholder={draft.Type === 'm3u' ? 'http://example/playlist.m3u or /path/playlist.m3u' : '192.168.1.50'} onInput={e => update({ Url: e.currentTarget.value })} /></label>
-            <label class="ad-field">Friendly name<input value={draft.FriendlyName} disabled={busy} onInput={e => update({ FriendlyName: e.currentTarget.value })} /></label>
-            {visible.tunerCount && <label class="ad-field">Simultaneous stream limit (0 means unlimited)<input type="number" min="0" step="1" value={String(draft.TunerCount)} disabled={busy} onInput={e => update({ TunerCount: Number(e.currentTarget.value) })} /></label>}
-            {visible.userAgent && <label class="ad-field">User agent<input value={draft.UserAgent} disabled={busy} onInput={e => update({ UserAgent: e.currentTarget.value })} /></label>}
-            {visible.fallbackBitrate && <label class="ad-field">Fallback maximum streaming bitrate (Mbps)<input type="number" min="0.1" step="0.1" value={String(draft.FallbackMaxStreamingBitrateMbps)} disabled={busy} onInput={e => update({ FallbackMaxStreamingBitrateMbps: Number(e.currentTarget.value) })} /></label>}
+            <label class="ad-field">{draft.Type === 'm3u' ? t('File or URL') : t('Tuner IP address or URL')}<input required value={draft.Url} disabled={busy} placeholder={draft.Type === 'm3u' ? t('http://example/playlist.m3u or /path/playlist.m3u') : '192.168.1.50'} onInput={e => update({ Url: e.currentTarget.value })} /></label>
+            <label class="ad-field">{t('Friendly name')}<input value={draft.FriendlyName} disabled={busy} onInput={e => update({ FriendlyName: e.currentTarget.value })} /></label>
+            {visible.tunerCount && <label class="ad-field">{t('Simultaneous stream limit (0 means unlimited)')}<input type="number" min="0" step="1" value={String(draft.TunerCount)} disabled={busy} onInput={e => update({ TunerCount: Number(e.currentTarget.value) })} /></label>}
+            {visible.userAgent && <label class="ad-field">{t('User agent')}<input value={draft.UserAgent} disabled={busy} onInput={e => update({ UserAgent: e.currentTarget.value })} /></label>}
+            {visible.fallbackBitrate && <label class="ad-field">{t('Fallback maximum streaming bitrate (Mbps)')}<input type="number" min="0.1" step="0.1" value={String(draft.FallbackMaxStreamingBitrateMbps)} disabled={busy} onInput={e => update({ FallbackMaxStreamingBitrateMbps: Number(e.currentTarget.value) })} /></label>}
             {visible.favoritesOnly && toggle('ImportFavoritesOnly', 'Import favourite channels only')}
             {visible.hwTranscoding && toggle('AllowHWTranscoding', 'Allow the tuner to transcode streams')}
             {visible.fmp4Container && toggle('AllowFmp4TranscodingContainer', 'Allow fMP4 transcoding container')}
@@ -136,8 +137,8 @@ function TunerEditor({ api, target, types, onClose, onSaved }: { api: AdminApi; 
             {visible.ignoreDts && toggle('IgnoreDts', 'Ignore DTS (decoding timestamp)')}
             {visible.nativeFramerate && toggle('ReadAtNativeFramerate', 'Read input at native frame rate')}
             <div class="ad-drawer-actions">
-                <button class="ad-btn" type="submit" disabled={!canSave}>{busy ? 'Saving…' : target.mode === 'edit' ? 'Save tuner' : 'Add tuner'}</button>
-                <button class="ad-btn" type="button" disabled={busy} onClick={close}>Cancel</button>
+                <button class="ad-btn" type="submit" disabled={!canSave}>{busy ? t('Saving…') : target.mode === 'edit' ? t('Save tuner') : t('Add tuner')}</button>
+                <button class="ad-btn" type="button" disabled={busy} onClick={close}>{t('Cancel')}</button>
             </div>
         </form>}
     </ProvisioningDrawer>;
@@ -158,33 +159,33 @@ export function AdminLiveTvTuners({ api, tuners, types, onChanged }: { api: Admi
             const rows = await api.discoverTuners(true);
             if (request === discoverRequest.current) setDiscovered(rows);
         } catch (e) {
-            if (request === discoverRequest.current) setError(errorText(e, 'Tuner discovery failed.'));
+            if (request === discoverRequest.current) setError(errorText(e, t('Tuner discovery failed.')));
         } finally {
             if (request === discoverRequest.current) setDiscovering(false);
         }
     };
 
     const columns = [
-        { key: 'Name', label: 'Tuner', value: (t: TunerHostInfo) => <><strong>{t.FriendlyName || tunerTypeName(t.Type, types)}</strong><div class="ad-cell-sub">{tunerTypeName(t.Type, types)}{t.Source && t.Source !== t.Type ? ` · ${t.Source}` : ''}</div></>, searchValue: (t: TunerHostInfo) => `${t.FriendlyName || ''} ${t.Type || ''}` },
-        { key: 'Url', label: 'Address', value: (t: TunerHostInfo) => <span class="ad-path">{t.Url || '—'}</span>, searchValue: (t: TunerHostInfo) => t.Url || '' },
-        { key: 'Count', label: 'Streams', value: (t: TunerHostInfo) => t.Type === 'm3u' ? (t.TunerCount ? String(t.TunerCount) : 'Unlimited') : 'Device reported' },
-        { key: 'Actions', label: '', value: (t: TunerHostInfo) => <div class="ad-flex">
-            <button class="ad-btn" disabled={!t.Id} aria-label={`Edit ${t.FriendlyName || 'tuner'}`} onClick={() => setTarget({ mode: 'edit', id: t.Id! })}>Edit</button>
-            {t.Id && <ConfirmButton label="Delete" tone="danger" onConfirm={async () => { await api.deleteTunerHost(t.Id!); setMessage('Tuner deleted.'); await onChanged(); }} />}
+        { key: 'Name', label: t('Tuner'), value: (tuner: TunerHostInfo) => <><strong>{tuner.FriendlyName || tunerTypeName(tuner.Type, types)}</strong><div class="ad-cell-sub">{tunerTypeName(tuner.Type, types)}{tuner.Source && tuner.Source !== tuner.Type ? ` · ${tuner.Source}` : ''}</div></>, searchValue: (tuner: TunerHostInfo) => `${tuner.FriendlyName || ''} ${tuner.Type || ''}` },
+        { key: 'Url', label: t('Address'), value: (tuner: TunerHostInfo) => <span class="ad-path">{tuner.Url || '—'}</span>, searchValue: (tuner: TunerHostInfo) => tuner.Url || '' },
+        { key: 'Count', label: t('Streams'), value: (tuner: TunerHostInfo) => tuner.Type === 'm3u' ? (tuner.TunerCount ? String(tuner.TunerCount) : 'Unlimited') : 'Device reported' },
+        { key: 'Actions', label: '', value: (tuner: TunerHostInfo) => <div class="ad-flex">
+            <button class="ad-btn" disabled={!tuner.Id} aria-label={`Edit ${tuner.FriendlyName || t('tuner')}`} onClick={() => setTarget({ mode: 'edit', id: tuner.Id! })}>{t('Edit')}</button>
+            {tuner.Id && <ConfirmButton label={t('Delete')} tone="danger" onConfirm={async () => { await api.deleteTunerHost(tuner.Id!); setMessage(t('Tuner deleted.')); await onChanged(); }} />}
         </div> },
     ];
 
     return <>
-        <Card title="Tuners" actions={<><button class="ad-btn" onClick={() => setTarget({ mode: 'new', type: 'm3u' })}>Add tuner</button><button class="ad-btn" disabled={discovering} onClick={() => void discover()}>{discovering ? 'Discovering…' : 'Discover devices'}</button></>}>
+        <Card title={t('Tuners')} actions={<><button class="ad-btn" onClick={() => setTarget({ mode: 'new', type: 'm3u' })}>{t('Add tuner')}</button><button class="ad-btn" disabled={discovering} onClick={() => void discover()}>{discovering ? t('Discovering…') : t('Discover devices')}</button></>}>
             {error && <p role="alert" class="ad-error">{error}</p>}
             {message && <p role="status" class="ad-note">{message}</p>}
-            {tuners.length ? <DataTable rows={tuners} columns={columns} getKey={t => t.Id || t.Url || ''} empty="No tuners match" /> : <Empty muted>No tuners configured. Add an M3U playlist or HDHomeRun device to get started.</Empty>}
+            {tuners.length ? <DataTable rows={tuners} columns={columns} getKey={tuner => tuner.Id || tuner.Url || ''} empty={t('No tuners match')} /> : <Empty muted>{t('No tuners configured. Add an M3U playlist or HDHomeRun device to get started.')}</Empty>}
         </Card>
-        {discovered && <Card title="Discovered devices" actions={<button class="ad-btn" onClick={() => setDiscovered(null)}>Dismiss</button>}>
+        {discovered && <Card title={t('Discovered devices')} actions={<button class="ad-btn" onClick={() => setDiscovered(null)}>{t('Dismiss')}</button>}>
             {discovered.length ? discovered.map((device, index) => <div class="ad-info" key={device.DeviceId || device.Url || index}>
                 <span class="ad-info-k">{device.FriendlyName || tunerTypeName(device.Type, types)}<span class="ad-cell-sub">{device.Url}</span></span>
-                <button class="ad-btn" onClick={() => setTarget({ mode: 'new', prefill: device, type: device.Type || 'hdhomerun' })}>Add</button>
-            </div>) : <Empty muted>No new devices were found on the server's network.</Empty>}
+                <button class="ad-btn" onClick={() => setTarget({ mode: 'new', prefill: device, type: device.Type || 'hdhomerun' })}>{t('Add')}</button>
+            </div>) : <Empty muted>{t('No new devices were found on the server\'s network.')}</Empty>}
         </Card>}
         {target && <TunerEditor key={target.mode === 'edit' ? target.id : `new-${target.prefill?.DeviceId || target.type}`} api={api} target={target} types={types} onClose={() => setTarget(null)}
             onSaved={async text => { setTarget(null); setDiscovered(null); setMessage(text); await onChanged(); }} />}

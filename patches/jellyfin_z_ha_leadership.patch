@@ -572,14 +572,15 @@ index acbb4877d4..a68544c96b 100644
              _ => StatusCodes.Status500InternalServerError
 diff --git a/Jellyfin.Api/Middleware/LeaderEpochMiddleware.cs b/Jellyfin.Api/Middleware/LeaderEpochMiddleware.cs
 new file mode 100644
-index 0000000000..39eeaed162
+index 0000000000..56c3756991
 --- /dev/null
 +++ b/Jellyfin.Api/Middleware/LeaderEpochMiddleware.cs
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,60 @@
 +using System.Globalization;
 +using System.Threading.Tasks;
 +using MediaBrowser.Controller;
 +using Microsoft.AspNetCore.Http;
++using Microsoft.Net.Http.Headers;
 +
 +namespace Jellyfin.Api.Middleware;
 +
@@ -588,6 +589,10 @@ index 0000000000..39eeaed162
 +/// </summary>
 +public class LeaderEpochMiddleware
 +{
++    private const string EpochHeader = "X-Jellyfin-Leader-Epoch";
++    private const string RoleHeader = "X-Jellyfin-Ha-Role";
++    private const string ExposedHeaders = EpochHeader + ", " + RoleHeader;
++
 +    private readonly RequestDelegate _next;
 +
 +    /// <summary>
@@ -613,9 +618,18 @@ index 0000000000..39eeaed162
 +                ? "single"
 +                : leadership.IsLeader ? "leader" : "standby";
 +
-+            context.Response.Headers["X-Jellyfin-Leader-Epoch"] =
++            context.Response.Headers[EpochHeader] =
 +                leadership.Epoch.ToString(CultureInfo.InvariantCulture);
-+            context.Response.Headers["X-Jellyfin-Ha-Role"] = role;
++            context.Response.Headers[RoleHeader] = role;
++
++            // Cross-origin clients (for example a separately hosted web UI) can only read these when exposed.
++            if (context.Request.Headers.ContainsKey(HeaderNames.Origin))
++            {
++                var exposed = context.Response.Headers[HeaderNames.AccessControlExposeHeaders].ToString();
++                context.Response.Headers[HeaderNames.AccessControlExposeHeaders] =
++                    string.IsNullOrEmpty(exposed) ? ExposedHeaders : exposed + ", " + ExposedHeaders;
++            }
++
 +            return Task.CompletedTask;
 +        });
 +

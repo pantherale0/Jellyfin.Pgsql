@@ -16,7 +16,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **What** | Adds OIDC/OAuth2 SSO endpoints and login integration, including group RBAC apply (libraries, permissions, block-unrated, Allowed/Blocked tags, Live TV allowlists) and `GET /sso/rbac/livetv` for the dashboard picker. |
 | **Why** | Stock Jellyfin has no built-in IdP login; this fork needs forced SSO + RBAC for shared deployments. |
 | **Where** | `Jellyfin.Api/Controllers/SSOController.cs`, `Jellyfin.Api/Models/SsoDtos/*` |
-| **How** | New controller handles authorize/callback/session flows driven by `JELLYFIN_SSO_OIDC_*` env configuration; matching `sso_rbac.json` groups merge preferences additively on login (blocking Live TV unrated also blocks `LiveTvProgram`). |
+| **How** | New controller handles authorize/callback/session flows driven by `JELLYFIN_SSO_OIDC_*` env configuration; matching `sso_rbac.json` groups merge preferences additively on login (blocking Live TV unrated also blocks `LiveTvProgram`). Each OIDC `state` is random, bound to the initiating browser by an HttpOnly SameSite=Lax `jellyfin_sso_state` cookie (constant-time compared on callback), rejected after 10 minutes even if not yet pruned, and capped at 1,000 pending sign-ins (pruning runs at most every 30 seconds; a full store returns 503). The classic callback returns to `<BaseUrl>/web/index.html`. For UI addresses allowlisted in `JELLYFIN_SSO_UI_RETURN_URLS`, `GET /sso/login?returnUrl=&challenge=` stores the return address and a base64url SHA-256 challenge with the state; the callback then redirects to `returnUrl#sso_code=<code>` (32 random bytes, single use, 60 seconds, at most 1,000 pending) and `POST /sso/exchange {code, verifier}` (anonymous, `no-store`) returns `accessToken`, `userId` and `serverId` only when the verifier hashes to the challenge; every failure gives the same 400. `GET /sso/config?returnUrl=` reports `codeExchange` for allowlisted addresses. |
 | **Related** | Companion web: `jellyfin_web_rbac`, `jellyfin_web_tv_quickconnect_login`. Enforcement/persist: `jellyfin_z_livetv_rbac_allowlist`. README SSO section. Fork [pantherale0#5](https://github.com/pantherale0/Jellyfin.Pgsql/issues/5) (SSO mappings UI auth). |
 
 ### `jellyfin_startup_secret_redaction.patch`
@@ -84,6 +84,19 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Where** | `ItemsController.cs`, `RequestHelpers.cs`, tests |
 | **How** | Optional `HttpRequest` coalesces userId; treats API keys like administrators for cross-user access checks. |
 | **Related** | AGENTS.md IDOR guidance. No public issue. |
+
+---
+
+### `jellyfin_zz_last_admin_invariant.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Makes "at least one enabled administrator" atomic for user deletes and policy demotions, and answers violations with 403. |
+| **Why** | Upstream counts administrators under a per-user lock (and the policy route uses the in-memory list), so two concurrent deletes or demotions can remove every administrator. Upstream also revokes tokens and removes the user's playlists *before* the guarded delete, so a refused delete still destroys data. |
+| **Where** | `UserManager.cs`, `IUserManager.cs`, new `LastAdministratorException.cs`, `UserController.cs`, `UserManagerLastAdministratorTests.cs` |
+| **How** | A process-wide `SemaphoreSlim` (taken after the per-user lock) wraps `DeleteUserAsync` and any `UpdatePolicyAsync` that removes admin or disables. Inside it the database recounts *other enabled* administrators and throws `LastAdministratorException` when none remain. New `DeleteUserAsync(userId, beforeDelete)` runs token revocation and playlist removal only after the checks pass (the user must still exist for playlist ownership transfer). `DELETE /Users/{id}` and `POST /Users/{id}/Policy` map the exception to 403. |
+| **Related** | Apply order: after `jellyfin_livetv_multiview_rbac.patch` and `jellyfin_library_image_parental.patch` (both edit `UserManager.UpdatePolicyAsync`). UI Next maps the 403 to "There must be at least one administrator." No public issue. |
 
 ---
 
@@ -435,8 +448,8 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **What** | Active-standby HA contracts and wiring: `IInstanceLeadership`, leader-only library monitor / scheduled tasks / recordings / background media work, `/health/ready`, leadership response headers, Live TV `LiveStreamFenced` 503, migration advisory-lock hook, `JELLYFIN_SERVER_ID`, coalesced progress flush, optional progress cache overlay. |
 | **Why** | Jellyfin is a single-writer process; two Ready replicas split-brain the library. A Postgres lock plus Ready-only-leader lets a warm standby take traffic after failover. |
 | **Where** | `IInstanceLeadership`, `LibraryMonitor`, `TaskManager` / `ScheduledTaskWorker`, `RecordingsHost`, `BackgroundMediaWorkGate`, `Startup`, `ExceptionMiddleware`, `StreamingHelpers`, `SessionManager`, `DeviceId`, `IJellyfinDatabaseProvider` |
-| **How** | Default always-leader (HA off). Plugin supplies Postgres advisory lock when `Pgsql_HA_ENABLED=true`. Fail-closed until the lock is held. Applies after unprefixed playback/Live TV patches (`z_` layer). |
-| **Related** | Plugin `Jellyfin.Plugin.Pgsql/Ha/`. Progress overlay extends `jellyfin_playback_progress_coalesce`. `LiveStreamFenced` middleware unified by [`jellyfin_zzz_playback_errors`](patches.md#jellyfin_zzz_playback_errorspatch). No public issue. |
+| **How** | Default always-leader (HA off). Plugin supplies Postgres advisory lock when `Pgsql_HA_ENABLED=true`. Fail-closed until the lock is held. `LeaderEpochMiddleware` sets `X-Jellyfin-Ha-Role` (`single` / `leader` / `standby`) and `X-Jellyfin-Leader-Epoch` on every response and, when the request carries an `Origin`, appends both to `Access-Control-Expose-Headers` (keeping any existing value) so separately hosted web clients can read them. Applies after unprefixed playback/Live TV patches (`z_` layer). |
+| **Related** | Plugin `Jellyfin.Plugin.Pgsql/Ha/`; admin-only HA block in `/Pgsql/Stats` (role, epoch, instance, leader-since, heartbeat). UI Next admin diagnostics consume both ([features](features.md#active-standby-ha-opt-in)). Progress overlay extends `jellyfin_playback_progress_coalesce`. `LiveStreamFenced` middleware unified by [`jellyfin_zzz_playback_errors`](patches.md#jellyfin_zzz_playback_errorspatch). No public issue. |
 
 ### `jellyfin_livetv_stream.patch`
 
@@ -763,10 +776,10 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | | |
 |---|---|
 | **Target** | `jellyfin-web` |
-| **What** | User merge / transfer admin UI. |
+| **What** | User merge / transfer admin UI. It can still preview a transfer, but the plugin now requires UI Next's server-signed preview token before execution. The classic dashboard does not send that token, so its execute request returns HTTP 400; use UI Next Admin → Users. |
 | **Why** | Consolidate duplicate accounts (for example after SSO cutover). |
 | **Where** | `userAdmin/**`, `users/merge.tsx`, users index |
-| **How** | Dashboard pages calling plugin `UserAdminController`. |
+| **How** | Dashboard pages calling plugin `UserAdminController`. Retained temporarily and expected to be removed with the classic dashboard. |
 | **Related** | No public issue. |
 
 ### `jellyfin_web_zz_emby_userdata_import.patch`

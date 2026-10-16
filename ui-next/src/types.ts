@@ -3,7 +3,7 @@ export interface JellyfinUser {
     Name: string;
     PrimaryImageTag?: string;
     HasPassword?: boolean;
-    Policy?: { IsAdministrator?: boolean; IsDisabled?: boolean; EnableCollectionManagement?: boolean; EnableContentDeletion?: boolean; EnableContentDownloading?: boolean };
+    Policy?: { IsAdministrator?: boolean; IsDisabled?: boolean; EnableCollectionManagement?: boolean; EnableContentDeletion?: boolean; EnableContentDownloading?: boolean; EnableSubtitleManagement?: boolean; EnableLyricManagement?: boolean };
     Configuration?: UserConfiguration;
 }
 
@@ -42,6 +42,7 @@ export interface TasteProfile {
     Studios?: TasteWeight[];
     People?: Array<{ Name?: string; Role?: string }>;
     RatingMean?: number;
+    RatingP25?: number | null;
 }
 
 export interface MediaItem {
@@ -79,9 +80,14 @@ export interface MediaItem {
     Studios?: Array<{ Name?: string; Id?: string }>;
     Tags?: string[];
     AlbumArtists?: Array<{ Name?: string; Id?: string }>;
+    AlbumArtist?: string;
     ArtistItems?: Array<{ Name?: string; Id?: string }>;
+    Artists?: string[];
     Album?: string;
     AlbumId?: string;
+    AlbumPrimaryImageTag?: string;
+    /** LUFS-scan gain in dB (negative attenuates); albums carry their own album-level value. */
+    NormalizationGain?: number;
     PlaylistItemId?: string;
     CanDelete?: boolean;
     CanDownload?: boolean;
@@ -95,7 +101,7 @@ export interface MediaItem {
     BackdropImageTags?: string[];
     UserData?: { PlayedPercentage?: number; Played?: boolean; PlaybackPositionTicks?: number; PlayedItemCount?: number; UnplayedItemCount?: number; IsFavorite?: boolean };
     MediaSources?: Array<{ Id: string; Name?: string; Container?: string; Size?: number; Bitrate?: number; SupportsDirectPlay?: boolean; TranscodingUrl?: string; MediaStreams?: MediaItem['MediaStreams'] }>;
-    MediaStreams?: Array<{ Type?: string | number; Codec?: string; DisplayTitle?: string; Profile?: string; Channels?: number; Width?: number; Height?: number; VideoRange?: string; VideoRangeType?: string; IsDefault?: boolean; Language?: string; BitRate?: number }>;
+    MediaStreams?: Array<{ Type?: string | number; Codec?: string; DisplayTitle?: string; Profile?: string; Channels?: number; Width?: number; Height?: number; VideoRange?: string; VideoRangeType?: string; IsDefault?: boolean; Language?: string; BitRate?: number; Index?: number; IsExternal?: boolean; IsForced?: boolean; IsHearingImpaired?: boolean; Title?: string }>;
     ChannelId?: string;
     ChannelName?: string;
     ChannelNumber?: string;
@@ -113,6 +119,24 @@ export interface MediaItem {
     TimerId?: string;
     SeriesTimerId?: string;
     CurrentProgram?: MediaItem;
+    Path?: string;
+    IsFolder?: boolean;
+    OriginalTitle?: string;
+    ForcedSortName?: string;
+    CustomRating?: string;
+    ProviderIds?: Record<string, string>;
+    LockData?: boolean;
+    LockedFields?: string[];
+    PreferredMetadataLanguage?: string;
+    PreferredMetadataCountryCode?: string;
+    AirsBeforeSeasonNumber?: number;
+    AirsAfterSeasonNumber?: number;
+    AirsBeforeEpisodeNumber?: number;
+    AirDays?: string[];
+    AirTime?: string;
+    DisplayOrder?: string;
+    Video3DFormat?: string;
+    AspectRatio?: string;
 }
 
 export interface ItemResponse {

@@ -31,11 +31,11 @@ const { JellyfinApi, JellyfinRequestError } = await import('../src/api.ts');
 
 test('AUTH-13 SSO probe separates unavailable from disabled', async () => {
     responses.push({ status: 200, body: JSON.stringify({ enabled: true }) });
-    assert.deepEqual(await JellyfinApi.getSsoConfig('https://jellyfin.example.test'), { enabled: true, checked: true });
+    assert.deepEqual(await JellyfinApi.getSsoConfig('https://jellyfin.example.test'), { enabled: true, checked: true, codeExchange: false });
     responses.push({ status: 200, body: JSON.stringify({ enabled: false }) });
-    assert.deepEqual(await JellyfinApi.getSsoConfig('https://jellyfin.example.test'), { enabled: false, checked: true });
+    assert.deepEqual(await JellyfinApi.getSsoConfig('https://jellyfin.example.test'), { enabled: false, checked: true, codeExchange: false });
     responses.push({ status: 500, body: 'proxy failure' });
-    assert.deepEqual(await JellyfinApi.getSsoConfig('https://jellyfin.example.test'), { enabled: false, checked: false });
+    assert.deepEqual(await JellyfinApi.getSsoConfig('https://jellyfin.example.test'), { enabled: false, checked: false, codeExchange: false });
 });
 
 test('AUTH-14 password login preserves typed status for credential failures', async () => {

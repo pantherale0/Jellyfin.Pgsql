@@ -1,14 +1,14 @@
 import './legacy-shims';
-import { h, render } from 'preact';
+import { h, render, type ComponentChildren } from 'preact';
 import { memo, lazy, Suspense } from 'preact/compat';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { JellyfinApi, JellyfinRequestError, clearImageCache, peekCachedImage, releaseCachedImage, retainCachedImage } from './api';
 import { classicWebAvailable } from './build-features';
 import { LiveTvPage } from './live-tv';
 import { nativeControlOwnsKey, tabbableWithin, useDialogFocus, virtualTabTarget } from './dialog-focus';
-import { errorDiagnostic, userMessage } from './ui-errors';
+import { errorDiagnostic, signInMessage, userMessage } from './ui-errors';
 import { isTvLayout } from './layout-mode';
-import { historyAction, routeFor, routeFromState, routeIdentity, withRoute, type AppRoute } from './app-routes';
+import { historyAction, initialRoute, routeFor, routeFromState, routeIdentity, withRoute, type AppRoute } from './app-routes';
 import { LibraryPage } from './library';
 import { Player } from './player';
 import { ProfileScreen, type ProfileScreenName } from './profile';
@@ -16,6 +16,8 @@ import { buildHomeFeedBlocks, type HomeFeedExtras } from './home-feed-blocks';
 import { defaultHomePreferences, latestLibraries, loadHomePreferences } from './discovery';
 import { EntitySearchRows, FavoritesPage } from './discovery-views';
 import { HomeFeed } from './home-feed';
+import { discoverVisible, searchVisible, seerrKey, seerrPersonalization, type SeerrItem } from './seerr';
+import { SeerrRequestSheet, SeerrSearchResults, withRequested } from './seerr-views';
 import { AccountGeneration } from './account-generation';
 import { NavigationOwner } from './navigation-owner';
 import { clearRememberedToken, getRememberedUsers, rememberUser, type RememberedUser } from './remembered-users';
@@ -23,6 +25,9 @@ import { preferredScrollBehavior, resolvePlaybackItem } from './live-model';
 import { AuthAttemptTracker, clearLoginMarkers } from './login-markers';
 import { PlaybackSessionTracker } from './playback-session';
 import { playQueue } from './play-queue';
+import { haTracker } from './ha-status';
+import { DEFAULT_MAX_BITRATE, loadPlaybackPreferences } from './device-profile';
+import { buildAndroidNativePlayOptions, buildAndroidNativePlayerPreferences, canHandOffToAndroidNativePlayer, dispatchAndroidNativePlayback, exitHostApp, hostSupports, initHostIdentity, listenForNativePlayerReturn, notifySignedIn, notifySignedOut, openHostClientSettings, openHostDownloadManager, synchronizeAndroidNativePlayerSession } from './native-host';
 import { describeCard, mediaKind } from './media-labels';
 import { buildRevision, fetchServedBuild, isStaleBundle } from './build';
 import { brandingAssets, NO_BRANDING, type Branding } from './branding';
@@ -30,17 +35,22 @@ import { loadControlPreferences, startGamepadBridge } from './controls';
 import { DetailChildren, DetailExtras, DetailFactsView, ItemActionsBar, LinkedMetadataView, LyricsView, PhotoViewer, RelatedRows, UserDataActions } from './detail-sections';
 import { forgotPasswordOutcome, pinRedeemMessage, userImageUrl, type PublicUser } from './account';
 import { queryParameter as parseQueryParameter } from './query-params';
-import { canCommitSsoRestore, parseSsoHandoff, SSO_HANDOFF_KEY, UI_NEXT_SIGNED_OUT_KEY } from './sso-session';
+import { canCommitSsoRestore, parseSsoCodeAttempt, parseSsoCodeFragment, parseSsoHandoff, SSO_HANDOFF_KEY, UI_NEXT_SIGNED_OUT_KEY, type SsoHandoff } from './sso-session';
 import { canHandOffToClassic, classicCredentialsWithSession, comparableServer, quickConnectPollOutcome, sharedSessionChange, shouldRemoveStoredSession, usableRememberedSession, validStoredSession, type SessionPolicy } from './auth-state';
 import { canResume, resumeStartTicks, type PlaybackChoice, type PlaybackOptions, type PlayIntent } from './player-model';
 import { adjacentEpisodes, appendPage, clearLibraryBookmark, entityQuery, hasMoreResults, isContainer, itemCapabilities, markEpisodesPlayed, mergeUserData, playedUserData, popTrail, pushTrail, searchSummary, SEARCH_PAGE_SIZE } from './catalog-model';
 import type { JellyfinUser, LiveTab, MediaItem, RecommendationGroup, Session } from './types';
 import { enterShowSeason, moveShowFocus, type Context, type Direction, type EpisodeControl, type ShowBookmark, type ShowFocusResult, type ShowTarget } from './show-navigation';
+import { currentLanguage, inlineSign, readStoredLanguage, resolveLanguage, t } from './i18n';
+import { localeLoaders } from './i18n/loaders';
+import { isMusicTarget } from './music-model';
+import { MiniPlayer, MusicActions, musicEngine, NowPlaying, useMusicPlayer } from './music-player';
 import './style.css';
 
 const AdminDashboard = lazy(() => import('./admin/admin-dashboard').then(module => ({ default: module.AdminDashboard })));
 
 const SESSION_KEY = 'jellyfin-ui-next-session';
+const LANGUAGE_RELOAD_KEY = 'ui-next-language-reload';
 const SAVED_SERVER_KEY = 'jellyfin-ui-next-server';
 const SIGNED_OUT_KEY = UI_NEXT_SIGNED_OUT_KEY;
 const configuredServer = import.meta.env.VITE_JELLYFIN_SERVER_URL?.trim() || '';
@@ -69,12 +79,12 @@ type PlaybackOrigin = ContentOrigin | { kind: 'details'; item: MediaItem; parent
 
 function originLabel(origin: ContentOrigin | null | undefined, fallback: string): string {
     switch (origin?.kind) {
-        case 'show': return 'Back to show';
-        case 'search': return 'Back to search';
-        case 'library': return 'Back to library';
-        case 'live': return 'Back to Live TV';
-        case 'favorites': return 'Back to favorites';
-        case 'home': return 'Back to home';
+        case 'show': return t('Back to show');
+        case 'search': return t('Back to search');
+        case 'library': return t('Back to library');
+        case 'live': return t('Back to Live TV');
+        case 'favorites': return t('Back to favorites');
+        case 'home': return t('Back to home');
         default: return fallback;
     }
 }
@@ -207,10 +217,15 @@ function getSavedServer(): string {
 
 function App() {
     const [ session, setSession ] = useState<Session | null>(() => readSession());
+    const [ ssoCode, setSsoCode ] = useState<string | null>(() => {
+        const code = parseSsoCodeFragment(window.location.hash);
+        if (code) window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`);
+        return code;
+    });
     const [ ssoHandoffAttempt, setSsoHandoffAttempt ] = useState<string | null>(() => {
         try { return sessionStorage.getItem(SSO_HANDOFF_KEY); } catch (_error) { return null; }
     });
-    const [ view, setView ] = useState<'home' | 'library' | 'show' | 'search' | 'details' | 'player' | 'live' | 'profile' | 'admin' | 'favorites'>(() => window.location.hash.startsWith('#admin/') ? 'admin' : 'home');
+    const [ view, setView ] = useState<'home' | 'library' | 'show' | 'search' | 'details' | 'player' | 'live' | 'profile' | 'admin' | 'favorites' | 'nowplaying'>(() => window.location.hash.startsWith('#admin/') ? 'admin' : 'home');
     const [ profileScreen, setProfileScreen ] = useState<ProfileScreenName>('playback');
     const [ profileMenuOpen, setProfileMenuOpen ] = useState(false);
     const [ rememberedUsers, setRememberedUsers ] = useState<RememberedUser[]>([]);
@@ -258,6 +273,8 @@ function App() {
     const [ detailRestore, setDetailRestore ] = useState<{ itemId: string; scrollY: number } | null>(null);
     const detailOrigin = useRef<ContentOrigin | null>(null);
     const playbackOrigin = useRef<PlaybackOrigin | null>(null);
+    const nativeHandoffItemId = useRef<string | null>(null);
+    const nativeReturnRefresh = useRef<(itemId: string) => void>(() => undefined);
     const detailRequest = useRef(0);
     const renderedView = useRef(view);
     renderedView.current = view;
@@ -270,6 +287,11 @@ function App() {
     const [ searchTotal, setSearchTotal ] = useState(0);
     const [ searchLoadingMore, setSearchLoadingMore ] = useState(false);
     const [ searchMoreError, setSearchMoreError ] = useState('');
+    const [ seerrEnabled, setSeerrEnabled ] = useState(false);
+    const [ seerrSearch, setSeerrSearch ] = useState<{ items: SeerrItem[]; loading: boolean; error: string }>({ items: [], loading: false, error: '' });
+    const [ seerrRequested, setSeerrRequested ] = useState<Record<string, SeerrItem>>({});
+    const [ seerrSheet, setSeerrSheet ] = useState<SeerrItem | null>(null);
+    const seerrSearchReq = useRef(0);
     const seriesOrigin = useRef<ContentOrigin | null>(null);
     const libraryTrail = useRef<MediaItem[]>([]);
     const [ libraryRestore, setLibraryRestore ] = useState(false);
@@ -287,7 +309,9 @@ function App() {
     const [ isMobileNavOpen, setIsMobileNavOpen ] = useState(false);
     const [ persistentSession, setPersistentSession ] = useState(true);
     const [ ssoEnabled, setSsoEnabled ] = useState<boolean | null>(null);
+    const [ ssoCodeExchange, setSsoCodeExchange ] = useState(false);
     const [ ssoCheckFailed, setSsoCheckFailed ] = useState(false);
+    const [ ssoProbe, setSsoProbe ] = useState(0);
     const [ quickConnectEnabled, setQuickConnectEnabled ] = useState<boolean | null>(null);
     const [ quickConnectCode, setQuickConnectCode ] = useState('');
     const [ quickConnectError, setQuickConnectError ] = useState('');
@@ -298,7 +322,7 @@ function App() {
     const [ quickConnectSelected, setQuickConnectSelected ] = useState(() => queryParameter('local') !== 'true' && isTvClient());
     const mobileNavRef = useRef<HTMLElement>(null);
     const profileMenuRef = useRef<HTMLDivElement>(null);
-    const profileReturnView = useRef<'home' | 'library' | 'show' | 'search' | 'details' | 'live' | 'admin' | 'favorites'>('home');
+    const profileReturnView = useRef<'home' | 'library' | 'show' | 'search' | 'details' | 'live' | 'admin' | 'favorites' | 'nowplaying'>('home');
     const hamburgerRef = useRef<HTMLButtonElement>(null);
     const recommendationPaginationRef = useRef<HTMLDivElement>(null);
     const seasonNodes = useRef<Record<string, HTMLElement | null>>({});
@@ -323,6 +347,18 @@ function App() {
     const activeSession = useRef(session);
     activeSession.current = session;
     useEffect(() => playQueue.clear(), [ session?.server, session?.user.Id ]);
+    useEffect(() => musicEngine.stop(), [ session?.server, session?.user.Id ]);
+    useEffect(() => haTracker.reset(), [ session?.server, session?.user.Id ]);
+    const hostSignedIn = useRef<string | null>(null);
+    useEffect(() => {
+        if (session?.token) {
+            hostSignedIn.current = session.serverId;
+            notifySignedIn({ ...session.user, ServerId: session.serverId }, session.token);
+        } else if (hostSignedIn.current !== null) {
+            notifySignedOut({ serverId: hostSignedIn.current });
+            hostSignedIn.current = null;
+        }
+    }, [ session?.server, session?.user.Id, session?.token ]);
     const api = useMemo(() => session ? new JellyfinApi(session, () => {
         if (activeSession.current !== session) return;
         activeSession.current = null;
@@ -332,14 +368,27 @@ function App() {
         try { sessionStorage.removeItem(SSO_HANDOFF_KEY); } catch (_error) { /* Storage can be disabled. */ }
         setSsoHandoffAttempt(null);
         clearSignedInState();
-        setError('Your session expired. Sign in again.');
+        setError(t('Your session expired. Sign in again.'));
     }) : null, [ session ]);
+    const music = useMusicPlayer(api);
     const tvClient = isTvClient();
     const switchReturnSession = useRef<Session | null>(null);
     const authAttempt = useRef(new AuthAttemptTracker()).current;
     const accountGeneration = useRef(new AccountGeneration()).current;
     const navigation = useRef(new NavigationOwner(accountGeneration)).current;
     const playbackSessions = useRef(new PlaybackSessionTracker(accountGeneration, navigation)).current;
+    useEffect(() => listenForNativePlayerReturn(() => {
+        const itemId = nativeHandoffItemId.current;
+        if (!itemId) return;
+        nativeHandoffItemId.current = null;
+        nativeReturnRefresh.current(itemId);
+    }), []);
+    /** Every successful sign-in commits through here: clears the signed-out marker and transient server query, then starts a new account generation. */
+    const commitSignIn = (nextSession: Session) => {
+        clearLoginMarkers();
+        accountGeneration.begin();
+        setSession(nextSession);
+    };
 
     useEffect(() => {
         if (session) {
@@ -440,9 +489,10 @@ function App() {
         setSsoCheckFailed(false);
         setQuickConnectEnabled(null);
         if (!server) return () => { active = false; };
-        void JellyfinApi.getSsoConfig(server).then(({ enabled, checked }) => {
+        void JellyfinApi.getSsoConfig(server).then(({ enabled, checked, codeExchange }) => {
             if (!active) return;
             setSsoEnabled(enabled);
+            setSsoCodeExchange(codeExchange);
             setSsoCheckFailed(!checked);
         }).catch(() => {
             if (active) {
@@ -456,7 +506,7 @@ function App() {
             if (active) setQuickConnectEnabled(false);
         });
         return () => { active = false; };
-    }, [ server, tvClient ]);
+    }, [ server, tvClient, ssoProbe ]);
 
     const [ gamepadEnabled, setGamepadEnabled ] = useState(() => loadControlPreferences().gamepad);
     useEffect(() => {
@@ -506,7 +556,7 @@ function App() {
             timer = window.setTimeout(() => {
                 if (cancelled) return;
                 if (quickConnectPollOutcome(undefined, 0, startedAt, Date.now()) === 'expired') {
-                    endCode('This code expired. Request a new code to continue.');
+                    endCode(t('This code expired. Request a new code to continue.'));
                     return;
                 }
                 void JellyfinApi.isQuickConnectAuthenticated(server, secret).then(authenticated => {
@@ -517,19 +567,20 @@ function App() {
                         return;
                     }
                     void JellyfinApi.loginWithQuickConnect(server, secret).then(result => {
-                        if (cancelled || !authAttempt.isCurrent(attempt)) return;
-                        clearLoginMarkers();
-                        accountGeneration.begin();
-                        setSession(result);
+                        if (cancelled || !authAttempt.isCurrent(attempt)) {
+                            void new JellyfinApi(result).logout().catch(() => undefined);
+                            return;
+                        }
+                        commitSignIn(result);
                     }).catch(e => {
-                        if (!cancelled) endCode(`${messageOf(e)} Request a new code to try again.`);
+                        if (!cancelled) endCode(t('{0} Request a new code to try again.', messageOf(e)));
                     });
                 }).catch(e => {
                     if (cancelled) return;
                     failures += 1;
                     const outcome = quickConnectPollOutcome(e instanceof JellyfinRequestError ? e.status : undefined, failures, startedAt, Date.now());
                     if (outcome === 'retry') { schedule(secret); return; }
-                    endCode(outcome === 'expired' ? 'This code expired. Request a new code to continue.' : `${messageOf(e)} Request a new code to try again.`);
+                    endCode(outcome === 'expired' ? t('This code expired. Request a new code to continue.') : t('{0} Request a new code to try again.', messageOf(e)));
                 });
             }, 5000);
         };
@@ -597,12 +648,17 @@ function App() {
             // Overlays and menus manage their own focus. Recover only inside
             // virtualized content (and the remounting hero copy) where
             // unmounts happen under focus.
-            if (!lost.closest?.('.home-feed-blocks, .library-grid-items, .virtualized-poster-grid, .live-guide-canvas, .recommendation-hero')) return;
+            const scope = lost.closest?.('.home-feed-blocks, .library-grid-items, .virtualized-poster-grid, .live-guide-canvas, .recommendation-hero') ?? null;
+            if (!scope) return;
             // Removal fires focusout while the node is still connected, then
             // detaches it. Defer the check a frame: deliberate moves land
             // somewhere synchronously, only a removal strands focus on body.
             window.requestAnimationFrame(() => {
                 if (lost.isConnected) return;
+                // A view navigation unmounts the whole scope. Let the incoming
+                // view place focus instead of grabbing a control that happens
+                // to sit near the departed one.
+                if (!scope.isConnected) return;
                 if (document.activeElement && document.activeElement !== document.body) return;
                 const origin = lastFocusRect.current;
                 if (!origin) return;
@@ -610,7 +666,7 @@ function App() {
                 const cy = origin.top + origin.height / 2;
                 let best: HTMLElement | null = null;
                 let bestScore = Number.POSITIVE_INFINITY;
-                for (const entry of collectFocusEntries(document)) {
+                for (const entry of collectFocusEntries(scope)) {
                     const dx = entry.left + entry.width / 2 - cx;
                     const dy = entry.top + entry.height / 2 - cy;
                     const score = Math.sqrt(dx * dx + dy * dy);
@@ -789,13 +845,25 @@ function App() {
         setRecommendationsLoading(true);
         setHomeNotice('');
         const noteDiscoveryFailure = () => {
-            if (isAccountCurrent()) setHomeNotice(current => current || 'Some discovery rows could not load.');
+            if (isAccountCurrent()) setHomeNotice(current => current || t('Some discovery rows could not load.'));
         };
         setHomeExtras({});
         const saveExtra = <K extends keyof HomeFeedExtras>(key: K) => (value: HomeFeedExtras[K]) => {
             if (isAccountCurrent()) setHomeExtras(current => ({ ...current, [key]: value }));
             return value;
         };
+        void api.getSeerrStatus().then(async enabled => {
+            if (!isAccountCurrent()) return;
+            setSeerrEnabled(enabled);
+            if (!enabled) return;
+            const personal = seerrPersonalization(await api.getTasteProfile().catch(() => null));
+            if (!isAccountCurrent()) return;
+            const limit = window.innerWidth >= 1400 ? 24 : 16;
+            await Promise.all([
+                api.discoverSeerr({ mediaType: 'movie', ...personal, limit }).then(items => saveExtra('beyondMovies')(discoverVisible(items))).catch(() => undefined),
+                api.discoverSeerr({ mediaType: 'tv', ...personal, limit }).then(items => saveExtra('beyondShows')(discoverVisible(items))).catch(() => undefined)
+            ]);
+        }).catch(() => { if (isAccountCurrent()) setSeerrEnabled(false); });
         void api.getResumeItems('Audio').then(saveExtra('audioResume')).catch(noteDiscoveryFailure);
         void api.getResumeItems('Book').then(saveExtra('bookResume')).catch(noteDiscoveryFailure);
         const recommendationSources = Promise.all([
@@ -891,7 +959,12 @@ function App() {
             .then(latestByLibrary => { if (accountGeneration.isCurrent(account)) setHomeExtras(current => ({ ...current, latestByLibrary })); });
     }, [ api, latestLibraryKey ]);
 
-    const homeFeedBlocks = useMemo(() => buildHomeFeedBlocks(resumeItems, latestItems, recommendationGroups, homeCollections, homeOnNow, homeVaultCandidates, homeExploreItems, nextUpItems, { ...homeExtras, preferences: homePrefs }), [ resumeItems, latestItems, recommendationGroups, homeCollections, homeOnNow, homeVaultCandidates, homeExploreItems, nextUpItems, homeExtras, homePrefs ]);
+    const homeFeedBlocks = useMemo(() => buildHomeFeedBlocks(resumeItems, latestItems, recommendationGroups, homeCollections, homeOnNow, homeVaultCandidates, homeExploreItems, nextUpItems, {
+        ...homeExtras,
+        beyondMovies: homeExtras.beyondMovies && withRequested(homeExtras.beyondMovies, seerrRequested),
+        beyondShows: homeExtras.beyondShows && withRequested(homeExtras.beyondShows, seerrRequested),
+        preferences: homePrefs
+    }), [ resumeItems, latestItems, recommendationGroups, homeCollections, homeOnNow, homeVaultCandidates, homeExploreItems, nextUpItems, homeExtras, homePrefs, seerrRequested ]);
 
     const loadMoreHomeFeed = useCallback((retry = false) => {
         if (!api || loadingHomeExplore || homeExploreStart >= homeExploreTotal || view !== 'home') return;
@@ -955,11 +1028,22 @@ function App() {
             } catch (_error) {
                 setPersistentSession(false);
             }
+            const wanted = resolveLanguage(readStoredLanguage(session.user.Id), Object.keys(localeLoaders));
+            if (wanted !== currentLanguage()) {
+                // Strings are fixed when modules load, so another user's language needs a reload; the flag stops a loop when that table cannot load.
+                try {
+                    if (sessionStorage.getItem(LANGUAGE_RELOAD_KEY) !== wanted) {
+                        sessionStorage.setItem(LANGUAGE_RELOAD_KEY, wanted);
+                        window.location.reload();
+                    }
+                } catch (_error) { /* Without session storage the language applies on the next visit. */ }
+            }
         }
     }, [ session ]);
 
     useEffect(() => {
         if (session || !ssoHandoffAttempt) return;
+        const codeAttempt = parseSsoCodeAttempt(ssoHandoffAttempt, Date.now());
         let credentials: string | null = null;
         let apiKey: string | null = null;
         let userId: string | null = null;
@@ -970,7 +1054,7 @@ function App() {
             userId = localStorage.getItem('userId');
             serverId = localStorage.getItem('serverId');
         } catch (_error) { /* The login screen remains available when storage is disabled. */ }
-        const handoff = parseSsoHandoff({
+        const handoff = codeAttempt ? null : parseSsoHandoff({
             serverOrigin: window.location.origin,
             credentials,
             apiKey,
@@ -982,10 +1066,14 @@ function App() {
         const clearHandoff = () => {
             try { sessionStorage.removeItem(SSO_HANDOFF_KEY); } catch (_error) { /* Clearing the marker is best effort. */ }
             setSsoHandoffAttempt(null);
+            setSsoCode(null);
         };
-        if (!handoff) {
+        const resolveHandoff: (() => Promise<SsoHandoff>) | null = codeAttempt
+            ? (ssoCode ? () => JellyfinApi.exchangeSsoCode(codeAttempt.server, ssoCode, codeAttempt.verifier) : null)
+            : (handoff ? () => Promise.resolve(handoff) : null);
+        if (!resolveHandoff) {
             clearHandoff();
-            setError('SSO sign-in could not be restored. Please sign in again.');
+            setError(t('SSO sign-in could not be restored. Please sign in again.'));
             return;
         }
         const signedOut = () => {
@@ -1002,29 +1090,26 @@ function App() {
             clearHandoff();
         };
         window.addEventListener('storage', onStorage);
-        void JellyfinApi.restoreSsoSession(handoff).then(nextSession => {
+        void resolveHandoff().then(resolved => JellyfinApi.restoreSsoSession(resolved)).then(nextSession => {
             if (!canCommitSsoRestore({ requestActive: active, signedOut: signedOut() })) {
                 active = false;
                 clearHandoff();
                 return;
             }
-            try {
-                localStorage.removeItem(SIGNED_OUT_KEY);
-                sessionStorage.removeItem(SSO_HANDOFF_KEY);
-            } catch (_error) { /* The in-memory session can still continue. */ }
-            accountGeneration.begin();
-            setSession(nextSession);
+            try { sessionStorage.removeItem(SSO_HANDOFF_KEY); } catch (_error) { /* The in-memory session can still continue. */ }
+            commitSignIn(nextSession);
             setSsoHandoffAttempt(null);
+            setSsoCode(null);
         }).catch(() => {
             if (!active) return;
             clearHandoff();
-            setError('SSO sign-in could not be restored. Please sign in again.');
+            setError(t('SSO sign-in could not be restored. Please sign in again.'));
         });
         return () => {
             active = false;
             window.removeEventListener('storage', onStorage);
         };
-    }, [ session, ssoHandoffAttempt ]);
+    }, [ session, ssoHandoffAttempt, ssoCode ]);
 
     const [ publicUserList, setPublicUserList ] = useState<PublicUser[]>([]);
     const [ recovery, setRecovery ] = useState<{ stage: 'request' | 'pin' | 'done'; username: string; pin: string; message: string; busy: boolean } | null>(null);
@@ -1081,17 +1166,13 @@ function App() {
                 void new JellyfinApi(nextSession).logout().catch(() => undefined);
                 return;
             }
-            clearLoginMarkers();
-            accountGeneration.begin();
-            setSession(nextSession);
+            commitSignIn(nextSession);
             setPassword('');
             setView('home');
         } catch (e) {
-            const message = messageOf(e);
-            const denied = e instanceof JellyfinRequestError
-                ? e.status === 401 || e.status === 403
-                : message.indexOf('(401)') >= 0 || message.indexOf('(403)') >= 0;
-            setError(denied ? 'Sign-in failed. Check your server address and credentials.' : message);
+            if (!authAttempt.isCurrent(attempt)) return;
+            if (import.meta.env.DEV) console.warn('[ui-next]', errorDiagnostic(e));
+            setError(signInMessage(e));
         } finally {
             setBusy(false);
         }
@@ -1135,6 +1216,7 @@ function App() {
         episodeRequests.current = {};
         detailRequest.current++;
         playbackSessions.retire();
+        musicEngine.stop();
         setPlaybackLoading(false);
         detailOrigin.current = null;
         playbackOrigin.current = null;
@@ -1147,6 +1229,11 @@ function App() {
         try { if (shouldRemoveStoredSession(localStorage.getItem(SESSION_KEY), session?.token || null)) localStorage.removeItem(SESSION_KEY); } catch (_error) { /* Storage can be disabled. */ }
         try { sessionStorage.removeItem(SESSION_KEY); } catch (_error) { /* Clear pre-migration sessions if possible. */ }
         setSession(null);
+        seerrSearchReq.current++;
+        setSeerrEnabled(false);
+        setSeerrSearch({ items: [], loading: false, error: '' });
+        setSeerrRequested({});
+        setSeerrSheet(null);
         setViews([]);
         setResumeItems([]);
         setNextUpItems([]);
@@ -1222,7 +1309,7 @@ function App() {
                 authAttempt.invalidate();
                 activeSession.current = null;
                 clearSignedInState();
-                setError('You were signed out in another tab.');
+                setError(t('You were signed out in another tab.'));
             }
         };
         window.addEventListener('storage', onStorage);
@@ -1236,11 +1323,11 @@ function App() {
         if (remembered) {
             void JellyfinApi.getUserSession(remembered).then(currentUser => {
                 if (!authAttempt.isCurrent(attempt)) return;
-                try { localStorage.removeItem(SIGNED_OUT_KEY); } catch (_error) { /* The in-memory session can still be selected. */ }
                 setError('');
                 clearSignedInState();
-                setSession({ ...remembered, user: { ...remembered.user, ...currentUser } });
+                commitSignIn({ ...remembered, user: { ...remembered.user, ...currentUser } });
             }).catch(() => {
+                if (!authAttempt.isCurrent(attempt)) return;
                 clearRememberedToken(remembered);
                 setRememberedUsers(getRememberedUsers(remembered));
                 signInAsAnotherUser(user.name);
@@ -1269,6 +1356,7 @@ function App() {
     const returnToUserSwitcher = () => {
         const previous = switchReturnSession.current;
         if (!previous) return;
+        authAttempt.invalidate();
         setPassword('');
         setError('');
         accountGeneration.begin();
@@ -1305,6 +1393,12 @@ function App() {
         const url = new URL(window.location.href);
         if (!url.searchParams.has('live')) return;
         replaceLocation(params => params.delete('live'));
+    };
+
+    const clearItemQuery = () => {
+        const url = new URL(window.location.href);
+        if (!url.searchParams.has('item')) return;
+        replaceLocation(params => params.delete('item'));
     };
 
     const rememberLiveQuery = (tab: LiveTab) => {
@@ -1350,6 +1444,8 @@ function App() {
     /** Every route away from search owns its cancellation, so late results cannot land on another view. */
     const cancelSearch = () => {
         searchReq.current++;
+        seerrSearchReq.current++;
+        setSeerrSearch(current => current.loading ? { ...current, loading: false } : current);
         setSearchLoadingMore(false);
         if (searchInFlight.current) {
             searchInFlight.current = false;
@@ -1375,6 +1471,20 @@ function App() {
         detailRequest.current++;
         setSelected(null);
         setView('favorites');
+    };
+
+    const nowPlayingReturn = useRef<typeof profileReturnView.current | null>(null);
+    const openNowPlaying = () => {
+        if (view === 'nowplaying') return;
+        nowPlayingReturn.current = view === 'player' || view === 'profile' ? 'home' : view;
+        setProfileMenuOpen(false);
+        setView('nowplaying');
+    };
+    const leaveNowPlaying = () => {
+        const back = nowPlayingReturn.current;
+        nowPlayingReturn.current = null;
+        if (!back || back === 'home') goHome();
+        else setView(back);
     };
 
     const openLive = (next: LiveTab = 'now', library?: MediaItem | null) => {
@@ -1752,6 +1862,26 @@ function App() {
         openLive(live);
     }, [ api ]);
 
+    const restoredItemId = useRef('');
+    useEffect(() => {
+        if (!api || queryParameter('show') || queryParameter('live')) return;
+        const itemId = queryParameter('item');
+        if (!itemId || restoredItemId.current === itemId) return;
+        restoredItemId.current = itemId;
+        const intent = navigation.begin();
+        let cancelled = false;
+        void api.getItem(itemId).then(item => {
+            if (cancelled || !navigation.isCurrent(intent)) return;
+            clearItemQuery();
+            void openItem(item);
+        }).catch(e => {
+            if (cancelled || !navigation.isCurrent(intent)) return;
+            clearItemQuery();
+            setError(messageOf(e));
+        });
+        return () => { cancelled = true; };
+    }, [ api ]);
+
     const contentOrigin = (): ContentOrigin => {
         if (view === 'search') return { kind: 'search', scrollY: window.scrollY };
         if (view === 'library') return { kind: 'library', scrollY: window.scrollY };
@@ -1929,6 +2059,27 @@ function App() {
         returnFromDetails();
     };
 
+    const seerrRequestedFor = (account: number) => (item: SeerrItem) => {
+        if (accountGeneration.isCurrent(account)) setSeerrRequested(current => ({ ...current, [seerrKey(item)]: item }));
+    };
+
+    /** Seerr results load beside library results; a failure never blocks them. */
+    const startSeerrSearch = (term: string) => {
+        const owner = ++seerrSearchReq.current;
+        const account = accountGeneration.current();
+        const query = term.trim();
+        if (!api || !seerrEnabled || query.length < 2) {
+            setSeerrSearch({ items: [], loading: false, error: '' });
+            return;
+        }
+        setSeerrSearch({ items: [], loading: true, error: '' });
+        void api.searchSeerr(query).then(items => {
+            if (owner === seerrSearchReq.current && accountGeneration.isCurrent(account)) setSeerrSearch({ items: searchVisible(items), loading: false, error: '' });
+        }).catch(() => {
+            if (owner === seerrSearchReq.current && accountGeneration.isCurrent(account)) setSeerrSearch({ items: [], loading: false, error: t('Seerr results could not be loaded.') });
+        });
+    };
+
     const runSearch = async (query?: string) => {
         const term = (query ?? search).trim();
         if (!api || !term) return;
@@ -1945,6 +2096,7 @@ function App() {
         setSearchTotal(0);
         setSearchMoreError('');
         searchParams.current = { term };
+        startSeerrSearch(term);
         searchInFlight.current = true;
         setLoading(true);
         setError('');
@@ -1990,6 +2142,7 @@ function App() {
         const term = searchDraft.trim();
         const genreIds = searchGenre?.Id ? [ searchGenre.Id ] : undefined;
         if (term.length < 2 && !genreIds) {
+            startSeerrSearch('');
             cancelSearch();
             setItems(current => current.length ? [] : current);
             setSearchTotal(0);
@@ -2003,6 +2156,7 @@ function App() {
         setLoading(true);
         setSearchMoreError('');
         const timer = window.setTimeout(() => {
+            startSeerrSearch(genreIds ? '' : term);
             void api.getItems('', 0, term.length >= 2 ? term : undefined, undefined, true, SEARCH_PAGE_SIZE, undefined, 1, genreIds).then(response => {
                 if (id !== searchReq.current || !accountGeneration.isCurrent(account)) return;
                 setItems(response.Items || []);
@@ -2021,7 +2175,11 @@ function App() {
     }, [ searchDraft, searchGenre, api, tvClient, view ]);
 
     const play = async (item: MediaItem, origin?: PlaybackOrigin, intent: PlayIntent = 'resume') => {
-        if (!api) return;
+        if (!api || !session) return;
+        if (isMusicTarget(item)) {
+            void musicEngine.playItem(item);
+            return;
+        }
         const returnOrigin: PlaybackOrigin = origin || (view === 'details' && selected
             ? { kind: 'details', item: selected, parent: detailOrigin.current || contentOrigin(), scrollY: window.scrollY }
             : contentOrigin());
@@ -2036,12 +2194,39 @@ function App() {
             setPlaybackLoading(false);
             return;
         }
+        if (!playbackSessions.active() && canHandOffToAndroidNativePlayer(playbackItem)) {
+            const preferences = loadPlaybackPreferences();
+            const nativeOptions = buildAndroidNativePlayOptions({
+                itemId: playbackItem.Id,
+                startPositionTicks: resumeStartTicks(playbackItem, intent),
+                queue: playQueue.get()
+            });
+            const nativePreferences = buildAndroidNativePlayerPreferences(preferences.maxBitrate, DEFAULT_MAX_BITRATE);
+            const nativeIntent = navigation.begin();
+            const nativeSessionSync = await synchronizeAndroidNativePlayerSession({
+                serverUrl: session.server,
+                userId: session.user.Id,
+                accessToken: session.token
+            });
+            if (!navigation.isCurrent(nativeIntent)) return;
+            if (nativeSessionSync === 'ready') {
+                nativeHandoffItemId.current = playbackItem.Id;
+                const nativeDispatch = dispatchAndroidNativePlayback(nativeOptions, nativePreferences);
+                if (nativeDispatch === 'dispatched') {
+                    musicEngine.suspend();
+                    setPlaybackLoading(false);
+                    return;
+                }
+                nativeHandoffItemId.current = null;
+            }
+        }
         const playbackSession = playbackSessions.begin(playbackItem.Id);
         try {
             if ((playbackItem.Type === 'Episode' || playbackItem.SeriesId) && !playbackItem.SeriesName) {
                 try { playbackItem = { ...playbackItem, ...(await api.getItem(playbackItem.Id)) }; } catch (_error) { playbackItem = resolvePlaybackItem(item); }
             }
             if (!playbackSessions.isCurrent(playbackSession)) return;
+            musicEngine.suspend();
             const result = await api.play(playbackItem, { startTicks: resumeStartTicks(playbackItem, intent) });
             // Another play, route choice, account change, or leave retires this session.
             if (!playbackSessions.commit(playbackSession, result)) {
@@ -2287,6 +2472,9 @@ function App() {
     }) : null;
     const currentRouteKey = currentRoute ? JSON.stringify(currentRoute) : '';
     const historyRestoring = useRef<{ until: number } | null>(null);
+    // A reload keeps this tab's history entry; reopen its page once the signed-in API is ready.
+    const pendingRestore = useRef<AppRoute | null | undefined>(undefined);
+    if (pendingRestore.current === undefined) pendingRestore.current = session ? initialRoute(window.history.state, window.location.hash, window.location.search) : null;
     const [ staleBuild, setStaleBuild ] = useState(false);
     useEffect(() => {
         if (!session || buildRevision === 'dev') return;
@@ -2308,7 +2496,7 @@ function App() {
         }
     }, [ currentRouteIdentity ]);
     useEffect(() => {
-        if (!currentRoute || view === 'admin') return;
+        if (!currentRoute || view === 'admin' || pendingRestore.current) return;
         const restoring = Boolean(historyRestoring.current && historyRestoring.current.until > Date.now());
         if (!restoring) historyRestoring.current = null;
         const previous = routeFromState(window.history.state);
@@ -2336,33 +2524,40 @@ function App() {
         window.addEventListener('popstate', onPopState);
         return () => window.removeEventListener('popstate', onPopState);
     }, []);
+    useEffect(() => {
+        const route = pendingRestore.current;
+        if (!route || !api) return;
+        pendingRestore.current = null;
+        historyRestoring.current = { until: Date.now() + 8000 };
+        routeNavigator.current(route);
+    }, [ api ]);
 
     if (!session) {
         if (ssoHandoffAttempt) {
-            return <main class="login-page"><section class="login-card"><div class="brand-mark">J</div><p class="eyebrow">SECURE SIGN-IN</p><h1>Completing SSO sign-in…</h1><p class="muted">Checking your Jellyfin session.</p></section></main>;
+            return <main class="login-page"><section class="login-card"><div class="brand-mark">J</div><p class="eyebrow">{t('SECURE SIGN-IN')}</p><h1>{t('Completing SSO sign-in…')}</h1><p class="muted">{t('Checking your Jellyfin session.')}</p></section></main>;
         }
         if (!localLogin && (ssoEnabled === null || quickConnectEnabled === null)) {
-            return <main class="login-page"><section class="login-card"><div class="brand-mark">J</div><p class="eyebrow">SECURE SIGN-IN</p><h1>Checking sign-in…</h1><p class="muted">Connecting to your Jellyfin server.</p></section></main>;
+            return <main class="login-page"><section class="login-card"><div class="brand-mark">J</div><p class="eyebrow">{t('SECURE SIGN-IN')}</p><h1>{t('Checking sign-in…')}</h1><p class="muted">{t('Connecting to your Jellyfin server.')}</p></section></main>;
         }
         if (!localLogin && quickConnectSelected && quickConnectEnabled) {
             return <main class="login-page">
                 <section class="login-card login-layout" aria-labelledby="login-title">
                     <div class="login-intro">
-                        <div class="login-brand"><span class="brand-mark">J</span><span>Jellyfin</span></div>
-                        <p class="eyebrow">QUICK CONNECT</p><h1 id="login-title">Your next watch<br />starts here.</h1>
-                        <p class="login-description">Sign in with your phone or computer. No typing on your TV.</p>
-                        <ol class="login-steps"><li>Open Jellyfin on a signed-in device.</li><li>Open your profile menu and choose Quick Connect.</li><li>Enter the code shown here to approve this device.</li></ol>
+                        <div class="login-brand"><span class="brand-mark">J</span><span>{t('Jellyfin')}</span></div>
+                        <p class="eyebrow">{t('QUICK CONNECT')}</p><h1 id="login-title">{t('Your next watch')}<br />{t('starts here.')}</h1>
+                        <p class="login-description">{t('Sign in with your phone or computer. No typing on your TV.')}</p>
+                        <ol class="login-steps"><li>{t('Open Jellyfin on a signed-in device.')}</li><li>{t('Open your profile menu and choose Quick Connect.')}</li><li>{t('Enter the code shown here to approve this device.')}</li></ol>
                     </div>
                     <div class="login-panel">
-                        <h2>Connect this device</h2><p class="muted">Enter this code on your signed-in device.</p>
-                        {quickConnectCode ? <div class="quick-connect-code" aria-live="polite">{quickConnectCode}</div> : <p class="quick-connect-wait">{quickConnectBusy ? 'Requesting a code…' : 'Waiting for Quick Connect…'}</p>}
+                        <h2>{t('Connect this device')}</h2><p class="muted">{t('Enter this code on your signed-in device.')}</p>
+                        {quickConnectCode ? <div class="quick-connect-code" aria-live="polite">{quickConnectCode}</div> : <p class="quick-connect-wait">{quickConnectBusy ? t('Requesting a code…') : t('Waiting for Quick Connect…')}</p>}
                         {error && <p class="notice error" role="alert">{error}</p>}
                         {quickConnectError && <p class="notice error" role="alert">{quickConnectError}</p>}
-                        {quickConnectExpired && <button data-focusable="true" class="button secondary full" type="button" onClick={() => setQuickConnectAttempt(attempt => attempt + 1)}>Get a new code</button>}
-                        <p class="security-note">This code expires automatically. Approve it only on a device you trust.</p>
-                        {!tvClient && <button data-focusable="true" class="local-login-toggle" type="button" onClick={showSignInOptions}>Back to sign-in options</button>}
-                        {tvClient && <button data-focusable="true" class="button secondary full login-choice" type="button" onClick={useLocalLogin}>Username and password<span class="login-choice-detail">Sign in with your Jellyfin account</span></button>}
-                        {switchReturnSession.current && <button data-focusable="true" class="local-login-toggle" type="button" onClick={returnToUserSwitcher}>Choose a profile</button>}
+                        {quickConnectExpired && <button data-focusable="true" class="button secondary full" type="button" onClick={() => setQuickConnectAttempt(attempt => attempt + 1)}>{t('Get a new code')}</button>}
+                        <p class="security-note">{t('This code expires automatically. Approve it only on a device you trust.')}</p>
+                        {!tvClient && <button data-focusable="true" class="local-login-toggle" type="button" onClick={showSignInOptions}>{t('Back to sign-in options')}</button>}
+                        {tvClient && <button data-focusable="true" class="button secondary full login-choice" type="button" onClick={useLocalLogin}>{t('Username and password')}<span class="login-choice-detail">{t('Sign in with your Jellyfin account')}</span></button>}
+                        {switchReturnSession.current && <button data-focusable="true" class="local-login-toggle" type="button" onClick={returnToUserSwitcher}>{t('Choose a profile')}</button>}
                     </div>
                 </section>
             </main>;
@@ -2370,28 +2565,28 @@ function App() {
         return <main class={`login-page${brandingUrls.splashUrl ? ' branded' : ''}`} style={brandingUrls.splashUrl ? { '--login-splash': `url("${brandingUrls.splashUrl}")` } : undefined}>
             <section class="login-card login-layout" aria-labelledby="login-title">
                 <div class="login-intro">
-                    <div class="login-brand"><span class="brand-mark">J</span><span>Jellyfin</span></div>
-                    <p class="eyebrow">YOUR MEDIA, YOUR WAY</p>
-                    <h1 id="login-title">Make yourself<br />at home.</h1>
-                    <p class="login-description">Your movies, shows, and live TV.<br />Sign in and pick up where you left off.</p>
-                    <p class="login-remote-hint">Use ↑ ↓ to move · Select to continue</p>
+                    <div class="login-brand"><span class="brand-mark">J</span><span>{t('Jellyfin')}</span></div>
+                    <p class="eyebrow">{t('YOUR MEDIA, YOUR WAY')}</p>
+                    <h1 id="login-title">{t('Make yourself')}<br />{t('at home.')}</h1>
+                    <p class="login-description">{t('Your movies, shows, and live TV.')}<br />{t('Sign in and pick up where you left off.')}</p>
+                    <p class="login-remote-hint">{t('Use ↑ ↓ to move · Select to continue')}</p>
                 </div>
                 <div class="login-panel">
-                    <h2>{localLogin ? 'Sign in with your account' : 'Choose how to sign in'}</h2>
-                    <p class="muted">{localLogin ? 'Enter your Jellyfin username and password.' : 'Quick Connect lets you sign in from another device.'}</p>
-                    {ssoCheckFailed && <p class="notice error" role="status">Sign-in options could not be checked. Try reloading or sign in with your username and password.</p>}
+                    <h2>{localLogin ? t('Sign in with your account') : t('Choose how to sign in')}</h2>
+                    <p class="muted">{localLogin ? t('Enter your Jellyfin username and password.') : t('Quick Connect lets you sign in from another device.')}</p>
+                    {ssoCheckFailed && <p class="notice error" role="status">{t('Sign-in options could not be checked. Retry, or sign in with your username and password.')}{' '}<button data-focusable="true" class="button secondary" type="button" onClick={() => setSsoProbe(count => count + 1)}>{t('Retry')}</button></p>}
                     {error && <p class="notice error" role="alert">{error}</p>}
                     {!localLogin && !quickConnectSelected && <>
-                        {!tvClient && ssoEnabled && <button data-focusable="true" class="button secondary full" type="button" onClick={() => { void JellyfinApi.beginSso(server).catch(() => setError('SSO sign-in could not be started. Please try again.')); }}>Continue with SSO</button>}
-                        <button data-focusable="true" class="button primary full login-choice" type="button" disabled={!quickConnectEnabled} onClick={useQuickConnect}>Quick Connect<span class="login-choice-detail">Use your phone or computer</span></button>
-                        {!quickConnectEnabled && <p class="security-note">Quick Connect is not enabled on this Jellyfin server.</p>}
-                        <button data-focusable="true" class="button secondary full login-choice" type="button" onClick={useLocalLogin}>Username and password<span class="login-choice-detail">Sign in with your Jellyfin account</span></button>
+                        {!tvClient && ssoEnabled && <button data-focusable="true" class="button secondary full" type="button" onClick={() => { void JellyfinApi.beginSso(server, ssoCodeExchange).catch(() => setError(t('SSO sign-in could not be started. Please try again.'))); }}>{t('Continue with SSO')}</button>}
+                        <button data-focusable="true" class="button primary full login-choice" type="button" disabled={!quickConnectEnabled} onClick={useQuickConnect}>{t('Quick Connect')}<span class="login-choice-detail">{t('Use your phone or computer')}</span></button>
+                        {!quickConnectEnabled && <p class="security-note">{t('Quick Connect is not enabled on this Jellyfin server.')}</p>}
+                        <button data-focusable="true" class="button secondary full login-choice" type="button" onClick={useLocalLogin}>{t('Username and password')}<span class="login-choice-detail">{t('Sign in with your Jellyfin account')}</span></button>
                     </>}
                     {quickConnectSelected && !quickConnectEnabled && <>
-                        <p class="notice error" role="status">Quick Connect is not enabled on this Jellyfin server.</p>
-                        <button data-focusable="true" class="button secondary full" type="button" onClick={tvClient ? useLocalLogin : showSignInOptions}>{tvClient ? 'Use username and password' : 'Back to sign-in options'}</button>
+                        <p class="notice error" role="status">{t('Quick Connect is not enabled on this Jellyfin server.')}</p>
+                        <button data-focusable="true" class="button secondary full" type="button" onClick={tvClient ? useLocalLogin : showSignInOptions}>{tvClient ? t('Use username and password') : t('Back to sign-in options')}</button>
                     </>}
-                    {localLogin && !recovery && publicUserList.length > 0 && <div class="public-users" role="group" aria-label="Users on this server">
+                    {localLogin && !recovery && publicUserList.length > 0 && <div class="public-users" role="group" aria-label={t('Users on this server')}>
                         {publicUserList.map(user => <button key={user.Id} data-focusable="true" class="public-user" type="button" disabled={busy} onClick={() => choosePublicUser(user)} aria-label={`${user.Name}${user.HasPassword ? '' : ', no password'}`}>
                             {user.PrimaryImageTag ? <img class="remembered-user-avatar" src={userImageUrl(server, user.Id, user.PrimaryImageTag, 96)} alt="" /> : <span class="remembered-user-avatar" aria-hidden="true">{user.Name.slice(0, 1).toUpperCase()}</span>}
                             <span>{user.Name}</span>
@@ -2400,24 +2595,24 @@ function App() {
                     {localLogin && recovery && <div class="password-recovery">
                         {recovery.message && <p class={`notice${recovery.stage === 'done' ? '' : ' error'}`} role="status">{recovery.message}</p>}
                         {recovery.stage === 'request' && <form onSubmit={requestPasswordReset}>
-                            <label>Username<input data-focusable="true" value={recovery.username} onInput={e => setRecovery({ ...recovery, username: (e.target as HTMLInputElement).value })} required autocomplete="username" /></label>
-                            <button data-focusable="true" class="button primary full" type="submit" disabled={recovery.busy}>{recovery.busy ? 'Requesting…' : 'Reset password'}</button>
+                            <label>{t('Username')}<input data-focusable="true" value={recovery.username} onInput={e => setRecovery({ ...recovery, username: (e.target as HTMLInputElement).value })} required autocomplete="username" /></label>
+                            <button data-focusable="true" class="button primary full" type="submit" disabled={recovery.busy}>{recovery.busy ? t('Requesting…') : t('Reset password')}</button>
                         </form>}
                         {recovery.stage === 'pin' && <form onSubmit={redeemResetPin}>
-                            <label>Reset PIN<input data-focusable="true" value={recovery.pin} onInput={e => setRecovery({ ...recovery, pin: (e.target as HTMLInputElement).value })} required autocomplete="one-time-code" /></label>
-                            <button data-focusable="true" class="button primary full" type="submit" disabled={recovery.busy}>{recovery.busy ? 'Checking…' : 'Submit PIN'}</button>
+                            <label>{t('Reset PIN')}<input data-focusable="true" value={recovery.pin} onInput={e => setRecovery({ ...recovery, pin: (e.target as HTMLInputElement).value })} required autocomplete="one-time-code" /></label>
+                            <button data-focusable="true" class="button primary full" type="submit" disabled={recovery.busy}>{recovery.busy ? t('Checking…') : t('Submit PIN')}</button>
                         </form>}
-                        <button data-focusable="true" class="local-login-toggle" type="button" onClick={() => setRecovery(null)}>Back to sign in</button>
+                        <button data-focusable="true" class="local-login-toggle" type="button" onClick={() => setRecovery(null)}>{t('Back to sign in')}</button>
                     </div>}
                     {localLogin && !recovery && <form onSubmit={login}>
-                        {!configuredServer && <label>Server address<input data-focusable="true" type="url" value={server} onInput={e => setServer((e.target as HTMLInputElement).value)} placeholder="https://jellyfin.example.com" required autocomplete="url" /></label>}
-                        <label>Username<input data-focusable="true" value={username} onInput={e => setUsername((e.target as HTMLInputElement).value)} required autocomplete="username" /></label>
-                        <label>Password<input data-focusable="true" type="password" value={password} onInput={e => setPassword((e.target as HTMLInputElement).value)} autocomplete="current-password" placeholder="Leave empty for passwordless accounts" /></label>
-                        <button data-focusable="true" class="button primary full" type="submit" disabled={busy}>{busy ? 'Connecting…' : 'Sign in'}</button>
+                        {!configuredServer && <label>{t('Server address')}<input data-focusable="true" type="url" value={server} onInput={e => setServer((e.target as HTMLInputElement).value)} placeholder={t('https://jellyfin.example.com')} required autocomplete="url" /></label>}
+                        <label>{t('Username')}<input data-focusable="true" value={username} onInput={e => setUsername((e.target as HTMLInputElement).value)} required autocomplete="username" /></label>
+                        <label>{t('Password')}<input data-focusable="true" type="password" value={password} onInput={e => setPassword((e.target as HTMLInputElement).value)} autocomplete="current-password" placeholder={t('Leave empty for passwordless accounts')} /></label>
+                        <button data-focusable="true" class="button primary full" type="submit" disabled={busy}>{busy ? t('Connecting…') : t('Sign in')}</button>
                     </form>}
-                    {localLogin && !recovery && <button data-focusable="true" class="local-login-toggle" type="button" onClick={() => setRecovery({ stage: 'request', username, pin: '', message: '', busy: false })}>Forgot password?</button>}
-                    {localLogin && <button data-focusable="true" class="local-login-toggle" type="button" onClick={showSignInOptions}>Back to sign-in options</button>}
-                    {switchReturnSession.current && <button data-focusable="true" class="local-login-toggle" type="button" onClick={returnToUserSwitcher}>Choose a profile</button>}
+                    {localLogin && !recovery && <button data-focusable="true" class="local-login-toggle" type="button" onClick={() => setRecovery({ stage: 'request', username, pin: '', message: '', busy: false })}>{t('Forgot password?')}</button>}
+                    {localLogin && <button data-focusable="true" class="local-login-toggle" type="button" onClick={showSignInOptions}>{t('Back to sign-in options')}</button>}
+                    {switchReturnSession.current && <button data-focusable="true" class="local-login-toggle" type="button" onClick={returnToUserSwitcher}>{t('Choose a profile')}</button>}
                     {branding.loginDisclaimer && <p class="login-disclaimer">{branding.loginDisclaimer}</p>}
                 </div>
             </section>
@@ -2445,6 +2640,7 @@ function App() {
             if (accountGeneration.isCurrent(account)) setNextUpItems(nextUp);
         } catch (_error) { /* The session report is already saved; the next library load refreshes local progress. */ }
     };
+    nativeReturnRefresh.current = itemId => { void applyReportedPlayback(itemId); };
 
     const leavePlayer = () => {
         playbackSessions.retire();
@@ -2481,6 +2677,7 @@ function App() {
         switch (route.view) {
         case 'home': goHome(); return;
         case 'favorites': openFavorites(); return;
+        case 'nowplaying': setView('nowplaying'); return;
         case 'live': openLive((route.tab as LiveTab) || 'now'); return;
         case 'profile': openProfileScreen(route.screen as ProfileScreenName); return;
         case 'search':
@@ -2507,29 +2704,30 @@ function App() {
 
     if (view === 'admin') {
         const backToMedia = () => { window.history.replaceState(null, '', window.location.pathname + window.location.search); setView('home'); };
-        if (!adminAccessChecked || !isAdministrator || !api) return <main class="admin-workspace"><section class="ad-page" role="status"><h1>{adminAccessChecked ? 'Administrator access required' : 'Checking administrator access…'}</h1><button class="ad-btn" onClick={backToMedia}>Back to media</button></section></main>;
-        return <Suspense fallback={<main class="admin-workspace"><p class="ad-page" role="status">Loading admin workspace…</p></main>}><AdminDashboard key={session.user.Id} api={api} session={session} onBack={backToMedia} /></Suspense>;
+        if (!adminAccessChecked || !isAdministrator || !api) return <main class="admin-workspace"><section class="ad-page" role="status"><h1>{adminAccessChecked ? t('Administrator access required') : t('Checking administrator access…')}</h1><button class="ad-btn" onClick={backToMedia}>{t('Back to media')}</button></section></main>;
+        return <Suspense fallback={<main class="admin-workspace"><p class="ad-page" role="status">{t('Loading admin workspace…')}</p></main>}><AdminDashboard key={session.user.Id} api={api} session={session} onBack={backToMedia} /></Suspense>;
     }
 
     return <>
-    <div class="app-shell" aria-hidden={view === 'player'}>
+    <div class={music.current && view !== 'nowplaying' ? 'app-shell has-music' : 'app-shell'} aria-hidden={view === 'player'}>
         {!(view === 'profile' && profileScreen === 'accounts') && <header class="topbar">
-            <a class="brand" href="#home" onClick={e => { e.preventDefault(); goHome(); }} aria-label="Jellyfin home"><span class="brand-mark small">J</span><span>Jellyfin</span></a>
+            <a class="brand" href="#home" onClick={e => { e.preventDefault(); goHome(); }} aria-label={t('Jellyfin home')}><span class="brand-mark small">J</span><span>{t('Jellyfin')}</span></a>
             <button
                 ref={hamburgerRef}
                 class="hamburger-button"
                 data-focusable="true"
                 type="button"
-                aria-label={isMobileNavOpen ? 'Close navigation menu' : 'Open navigation menu'}
+                aria-label={isMobileNavOpen ? t('Close navigation menu') : t('Open navigation menu')}
                 aria-expanded={isMobileNavOpen}
                 aria-controls="mobile-library-drawer"
                 onClick={() => setIsMobileNavOpen(open => !open)}
             >
                 <span class={isMobileNavOpen ? 'hamburger-icon open' : 'hamburger-icon'} aria-hidden="true"><i /><i /><i /></span>
             </button>
-            <nav class="primary-nav" aria-label="Main navigation">
-                <button data-focusable="true" class={view === 'home' ? 'nav-link active' : 'nav-link'} onClick={goHome}>Home</button>
-                <button data-focusable="true" class={view === 'favorites' ? 'nav-link active' : 'nav-link'} aria-current={view === 'favorites' ? 'page' : undefined} onClick={openFavorites}>Favorites</button>
+            <nav class="primary-nav" aria-label={t('Main navigation')}>
+                <button data-focusable="true" class={view === 'home' ? 'nav-link active' : 'nav-link'} onClick={goHome}>{t('Home')}</button>
+                <button data-focusable="true" class={view === 'favorites' ? 'nav-link active' : 'nav-link'} aria-current={view === 'favorites' ? 'page' : undefined} onClick={openFavorites}>{t('Favorites')}</button>
+                {music.queue.order.length > 0 && <button data-focusable="true" class={view === 'nowplaying' ? 'nav-link active' : 'nav-link'} aria-current={view === 'nowplaying' ? 'page' : undefined} onClick={openNowPlaying}>{t('Now Playing')}</button>}
                 {views.map(library => {
                     const isActive = activeLibrary?.Id === library.Id && (view === 'library' || view === 'show' || view === 'details' || view === 'live');
                     return <button data-focusable="true" class={isActive ? 'nav-link active' : 'nav-link'} key={library.Id} aria-current={isActive ? 'page' : undefined} onClick={() => void openLibrary(library)}>{library.Name}</button>;
@@ -2540,7 +2738,7 @@ function App() {
                     class="search-toggle"
                     data-focusable="true"
                     type="button"
-                    aria-label="Search your library"
+                    aria-label={t('Search your library')}
                     aria-expanded={tvClient ? view === 'search' : searchExpanded}
                     onClick={() => {
                         if (tvClient) {
@@ -2552,63 +2750,69 @@ function App() {
                     }}
                 ><span aria-hidden="true">⌕</span></button>
                 {!tvClient && searchExpanded && <form class="search-expand-form" onSubmit={e => { e.preventDefault(); void runSearch(); }}>
-                    <input ref={searchInputRef} data-focusable="true" value={search} onInput={e => setSearch((e.target as HTMLInputElement).value)} onKeyDown={e => { if (e.key === 'Escape') setSearchExpanded(false); }} placeholder="Search your library" aria-label="Search your library" />
-                    <button data-focusable="true" class="search-submit" type="submit" aria-label="Submit search">→</button>
+                    <input ref={searchInputRef} data-focusable="true" value={search} onInput={e => setSearch((e.target as HTMLInputElement).value)} onKeyDown={e => { if (e.key === 'Escape') setSearchExpanded(false); }} placeholder={t('Search your library')} aria-label={t('Search your library')} />
+                    <button data-focusable="true" class="search-submit" type="submit" aria-label={t('Submit search')}><span class="dir-arrow" aria-hidden="true">→</span></button>
                 </form>}
             </div>
             <div class="profile-menu-container" ref={profileMenuRef}>
-                <button class="profile-button" data-focusable="true" type="button" onClick={() => setProfileMenuOpen(open => !open)} onKeyDown={event => { if (!profileMenuOpen && !isTvClient() && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); setProfileMenuOpen(true); } }} aria-label={`Open ${session.user.Name} menu`} aria-haspopup="menu" aria-expanded={profileMenuOpen}><span>{session.user.Name.slice(0, 1).toUpperCase()}</span></button>
-                {profileMenuOpen && <div class="profile-menu" role="menu" aria-label={`${session.user.Name} menu`}>
+                <button class="profile-button" data-focusable="true" type="button" onClick={() => setProfileMenuOpen(open => !open)} onKeyDown={event => { if (!profileMenuOpen && !isTvClient() && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); setProfileMenuOpen(true); } }} aria-label={t('Open {0} menu', session.user.Name)} aria-haspopup="menu" aria-expanded={profileMenuOpen}><span>{session.user.Name.slice(0, 1).toUpperCase()}</span></button>
+                {profileMenuOpen && <div class="profile-menu" role="menu" aria-label={t('{0} menu', session.user.Name)}>
                     <div class="profile-menu-heading"><strong>{session.user.Name}</strong></div>
-                    {!tvClient && quickConnectEnabled && <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); setProfileScreen('quickconnect'); }}>Quick Connect</button>}
-                    <button data-focusable="true" role="menuitem" type="button" onClick={() => openProfileScreen('playback')}>Playback</button>
-                    <button data-focusable="true" role="menuitem" type="button" onClick={() => openProfileScreen('subtitles')}>Subtitles</button>
-                    <button data-focusable="true" role="menuitem" type="button" onClick={() => openProfileScreen('controls')}>Controls</button>
-                    <button data-focusable="true" role="menuitem" type="button" onClick={() => openProfileScreen('home')}>Home screen</button>
+                    {!tvClient && quickConnectEnabled && <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); setProfileScreen('quickconnect'); }}>{t('Quick Connect')}</button>}
+                    <button data-focusable="true" role="menuitem" type="button" onClick={() => openProfileScreen('playback')}>{t('Playback')}</button>
+                    <button data-focusable="true" role="menuitem" type="button" onClick={() => openProfileScreen('subtitles')}>{t('Subtitles')}</button>
+                    <button data-focusable="true" role="menuitem" type="button" onClick={() => openProfileScreen('controls')}>{t('Controls')}</button>
+                    <button data-focusable="true" role="menuitem" type="button" onClick={() => openProfileScreen('display')}>{t('Display')}</button>
+                    <button data-focusable="true" role="menuitem" type="button" onClick={() => openProfileScreen('home')}>{t('Home screen')}</button>
                     {!tvClient && <>
-                        <button data-focusable="true" role="menuitem" type="button" onClick={() => openProfileScreen('taste')}>Taste</button>
-                        <button data-focusable="true" role="menuitem" type="button" onClick={() => openProfileScreen('account')}>Account</button>
+                        <button data-focusable="true" role="menuitem" type="button" onClick={() => openProfileScreen('taste')}>{t('Taste')}</button>
+                        <button data-focusable="true" role="menuitem" type="button" onClick={() => openProfileScreen('account')}>{t('Account')}</button>
                         {isAdministrator && <>
                             <div class="profile-menu-divider" />
-                            <p class="profile-menu-label">Server administration</p>
-                            <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); window.location.hash = 'admin/overview'; setView('admin'); profileReturnView.current = 'home'; }}>Admin workspace</button>
-                            {classicWebLinksAvailable && <>
-                                <button data-focusable="true" role="menuitem" type="button" onClick={() => openClassic('dashboard')}>{classicHandoff ? 'Classic dashboard' : 'Classic dashboard (separate sign-in)'}</button>
-                                <button data-focusable="true" role="menuitem" type="button" onClick={() => openClassic('metadata')}>{classicHandoff ? 'Metadata manager' : 'Metadata manager (separate sign-in)'}</button>
-                            </>}
+                            <p class="profile-menu-label">{t('Server administration')}</p>
+                            <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); window.location.hash = 'admin/overview'; setView('admin'); profileReturnView.current = 'home'; }}>{t('Admin workspace')}</button>
+                            <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); window.location.hash = 'admin/metadata'; setView('admin'); profileReturnView.current = 'home'; }}>{t('Metadata manager')}</button>
+                            {classicWebLinksAvailable && <button data-focusable="true" role="menuitem" type="button" onClick={() => openClassic('dashboard')}>{classicHandoff ? t('Classic dashboard') : t('Classic dashboard (separate sign-in)')}</button>}
                         </>}
                     </>}
+                    {(hostSupports('clientsettings') || hostSupports('downloadmanagement')) && <>
+                        <div class="profile-menu-divider" />
+                        {hostSupports('clientsettings') && <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); openHostClientSettings(); }}>{t('Client settings')}</button>}
+                        {hostSupports('downloadmanagement') && <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); openHostDownloadManager(); }}>{t('Download manager')}</button>}
+                    </>}
                     <div class="profile-menu-divider" />
-                    <button data-focusable="true" role="menuitem" type="button" onClick={() => openProfileScreen('accounts')}>Switch user</button>
+                    <button data-focusable="true" role="menuitem" type="button" onClick={() => openProfileScreen('accounts')}>{t('Switch user')}</button>
                     <div class="profile-menu-divider" />
-                    <button data-focusable="true" role="menuitem" class="sign-out-menu-item" type="button" onClick={logout}>Sign out</button>
-                    {buildRevision !== 'dev' && <p class="profile-menu-build">UI Next build {buildRevision.slice(0, 12)}</p>}
+                    <button data-focusable="true" role="menuitem" class="sign-out-menu-item" type="button" onClick={logout}>{t('Sign out')}</button>
+                    {hostSupports('exitmenu') && <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); exitHostApp(); }}>{t('Exit app')}</button>}
+                    {buildRevision !== 'dev' && <p class="profile-menu-build">{t('UI Next build {0}', buildRevision.slice(0, 12))}</p>}
                 </div>}
             </div>
         </header>}
 
         {isMobileNavOpen && !(view === 'profile' && profileScreen === 'accounts') && <div class="mobile-nav-layer">
-            <button class="mobile-nav-backdrop" type="button" tabIndex={-1} data-dialog-backdrop aria-label="Close navigation menu" onClick={closeMobileNav} />
-            <nav id="mobile-library-drawer" ref={mobileNavRef} class="mobile-library-drawer" aria-label="Libraries" aria-modal="true" role="dialog">
+            <button class="mobile-nav-backdrop" type="button" tabIndex={-1} data-dialog-backdrop aria-label={t('Close navigation menu')} onClick={closeMobileNav} />
+            <nav id="mobile-library-drawer" ref={mobileNavRef} class="mobile-library-drawer" aria-label={t('Libraries')} aria-modal="true" role="dialog">
                 <div class="drawer-heading">
-                    <div><p class="eyebrow">YOUR COLLECTION</p><h2>Browse</h2></div>
-                    <button class="drawer-close" type="button" data-focusable="true" aria-label="Close navigation menu" onClick={closeMobileNav}>×</button>
+                    <div><p class="eyebrow">{t('YOUR COLLECTION')}</p><h2>{t('Browse')}</h2></div>
+                    <button class="drawer-close" type="button" data-focusable="true" aria-label={t('Close navigation menu')} onClick={closeMobileNav}>×</button>
                 </div>
-                <button data-focusable="true" class={view === 'home' ? 'drawer-link active' : 'drawer-link'} onClick={() => { goHome(); closeMobileNav(); }}>Home</button>
-                <button data-focusable="true" class={view === 'favorites' ? 'drawer-link active' : 'drawer-link'} onClick={() => { openFavorites(); closeMobileNav(); }}>Favorites</button>
+                <button data-focusable="true" class={view === 'home' ? 'drawer-link active' : 'drawer-link'} onClick={() => { goHome(); closeMobileNav(); }}>{t('Home')}</button>
+                <button data-focusable="true" class={view === 'favorites' ? 'drawer-link active' : 'drawer-link'} onClick={() => { openFavorites(); closeMobileNav(); }}>{t('Favorites')}</button>
+                {music.queue.order.length > 0 && <button data-focusable="true" class={view === 'nowplaying' ? 'drawer-link active' : 'drawer-link'} onClick={() => { openNowPlaying(); closeMobileNav(); }}>{t('Now Playing')}</button>}
                 {views.map(library => <button data-focusable="true" class={activeLibrary?.Id === library.Id ? 'drawer-link active' : 'drawer-link'} key={library.Id} onClick={() => { closeMobileNav(); void openItem(library); }}>
                     <span class="drawer-library-icon" aria-hidden="true">{library.Name.slice(0, 1).toUpperCase()}</span>{library.Name}<span class="drawer-arrow" aria-hidden="true">›</span>
                 </button>)}
-                {!views.length && <p class="drawer-empty">No libraries are available for this user.</p>}
+                {!views.length && <p class="drawer-empty">{t('No libraries are available for this user.')}</p>}
             </nav>
         </div>}
 
         <main class="main-content">
-            {import.meta.env.DEV && session.server.indexOf('http://') === 0 && <div class="notice storage-warning" role="status"><span>Development connection is using unencrypted HTTP. Do not use real credentials or access this backend over an untrusted network.</span></div>}
-            {staleBuild && <div class="notice storage-warning" role="status"><span>A newer UI Next build is being served. Reload to use it.</span><button data-focusable="true" class="button secondary" type="button" onClick={() => window.location.reload()}>Reload</button></div>}
-            {!persistentSession && <div class="notice storage-warning" role="status"><span>This browser is not saving your session. Keep this tab open; you may need to sign in again when it closes.</span></div>}
-            {error && <div class="notice error" role="alert"><span>{error}</span><button data-focusable="true" onClick={() => setError('')} aria-label="Dismiss">×</button></div>}
-            {(loading || playbackLoading) && <div class="loading-bar" role="status" aria-live="polite"><span class="visually-hidden">Loading…</span></div>}
+            {import.meta.env.DEV && session.server.indexOf('http://') === 0 && <div class="notice storage-warning" role="status"><span>{t('Development connection is using unencrypted HTTP. Do not use real credentials or access this backend over an untrusted network.')}</span></div>}
+            {staleBuild && <div class="notice storage-warning" role="status"><span>{t('A newer UI Next build is being served. Reload to use it.')}</span><button data-focusable="true" class="button secondary" type="button" onClick={() => window.location.reload()}>{t('Reload')}</button></div>}
+            {!persistentSession && <div class="notice storage-warning" role="status"><span>{t('This browser is not saving your session. Keep this tab open; you may need to sign in again when it closes.')}</span></div>}
+            {error && <div class="notice error" role="alert"><span>{error}</span><button data-focusable="true" onClick={() => setError('')} aria-label={t('Dismiss')}>×</button></div>}
+            {(loading || playbackLoading) && <div class="loading-bar" role="status" aria-live="polite"><span class="visually-hidden">{t('Loading…')}</span></div>}
             {view === 'profile' && api && <ProfileScreen
                 screen={profileScreen}
                 api={api}
@@ -2621,7 +2825,7 @@ function App() {
             />}
             {view === 'home' && <>
                 {recommendations.length > 0
-                    ? <section class="recommendation-hero" aria-label="Recommended for you" onFocusIn={e => {
+                    ? <section class="recommendation-hero" aria-label={t('Recommended for you')} onFocusIn={e => {
                         // TV remotes reveal tall blocks edge-first, which can
                         // leave the hero half visible. Center it on entry
                         // from outside so remote users see the whole banner.
@@ -2641,35 +2845,35 @@ function App() {
                             <div class="recommendation-metadata">
                                 {recommendations[activeRecommendation].ProductionYear && <span>{recommendations[activeRecommendation].ProductionYear}</span>}
                                 {recommendations[activeRecommendation].CommunityRating && <span>★ {recommendations[activeRecommendation].CommunityRating.toFixed(1)}</span>}
-                                {recommendations[activeRecommendation].RunTimeTicks && <span>{Math.round(recommendations[activeRecommendation].RunTimeTicks / 600000000)} min</span>}
+                                {recommendations[activeRecommendation].RunTimeTicks && <span>{t('{0} min', Math.round(recommendations[activeRecommendation].RunTimeTicks / 600000000))}</span>}
                             </div>
-                            <p class="recommendation-overview">{recommendations[activeRecommendation].Overview || 'A recommendation picked for you from your library.'}</p>
-                            <button data-focusable="true" class="button primary" onClick={openRecommendation}>View details <span aria-hidden="true">→</span></button>
+                            <p class="recommendation-overview">{recommendations[activeRecommendation].Overview || t('A recommendation picked for you from your library.')}</p>
+                            <button data-focusable="true" class="button primary" onClick={openRecommendation}>{t('View details')}{' '}<span class="dir-arrow" aria-hidden="true">→</span></button>
                         </div>
-                        {recommendations.length > 1 && <div class="recommendation-controls" aria-label="Recommendation carousel controls">
-                            <button data-focusable="true" class="recommendation-arrow" aria-label="Previous recommendation" onClick={() => stepRecommendation(-1)}>‹</button>
-                            <div ref={recommendationPaginationRef} class="recommendation-pagination" aria-label={`Recommendation ${activeRecommendation + 1} of ${recommendations.length}`}>
-                                {recommendations.map((item, index) => <button key={item.Id} data-focusable="true" class={index === activeRecommendation ? 'recommendation-dot active' : 'recommendation-dot'} aria-label={`Show recommendation ${index + 1}: ${item.Name}`} aria-current={index === activeRecommendation ? 'true' : undefined} onClick={() => selectRecommendation(index)} />)}
+                        {recommendations.length > 1 && <div class="recommendation-controls" aria-label={t('Recommendation carousel controls')}>
+                            <button data-focusable="true" class="recommendation-arrow" aria-label={t('Previous recommendation')} onClick={() => stepRecommendation(-1)}>‹</button>
+                            <div ref={recommendationPaginationRef} class="recommendation-pagination" aria-label={t('Recommendation {0} of {1}', activeRecommendation + 1, recommendations.length)}>
+                                {recommendations.map((item, index) => <button key={item.Id} data-focusable="true" class={index === activeRecommendation ? 'recommendation-dot active' : 'recommendation-dot'} aria-label={t('Show recommendation {0}: {1}', index + 1, item.Name)} aria-current={index === activeRecommendation ? 'true' : undefined} onClick={() => selectRecommendation(index)} />)}
                             </div>
                             <span class="recommendation-count">{activeRecommendation + 1} / {recommendations.length}</span>
-                            <button data-focusable="true" class="recommendation-arrow" aria-label="Next recommendation" onClick={() => stepRecommendation(1)}>›</button>
+                            <button data-focusable="true" class="recommendation-arrow" aria-label={t('Next recommendation')} onClick={() => stepRecommendation(1)}>›</button>
                         </div>}
                     </section>
                     : <section class="welcome-hero">
-                        <div class="hero-copy"><p class="eyebrow">{recommendationsLoading ? 'FINDING YOUR NEXT FAVORITE' : 'A LITTLE ESCAPE, ANYTIME'}</p><h1>{recommendationsLoading ? 'Made for you.' : 'Your next great story.'}</h1><p>{recommendationsLoading ? 'Loading recommendations from your library…' : 'Explore your collection and find something to enjoy.'}</p>{!recommendationsLoading && <button data-focusable="true" class="button primary" onClick={() => views[0] && void openLibrary(views[0])}>Browse your library <span aria-hidden="true">→</span></button>}</div>
+                        <div class="hero-copy"><p class="eyebrow">{recommendationsLoading ? t('FINDING YOUR NEXT FAVORITE') : t('A LITTLE ESCAPE, ANYTIME')}</p><h1>{recommendationsLoading ? t('Made for you.') : t('Your next great story.')}</h1><p>{recommendationsLoading ? t('Loading recommendations from your library…') : t('Explore your collection and find something to enjoy.')}</p>{!recommendationsLoading && <button data-focusable="true" class="button primary" onClick={() => views[0] && void openLibrary(views[0])}>{t('Browse your library')}{' '}<span class="dir-arrow" aria-hidden="true">→</span></button>}</div>
                         <div class="hero-shade" />
                     </section>}
-                {views.length > 0 && <section class="home-library-chips" aria-label="Libraries">{views.map(library => <button data-focusable="true" class="home-library-chip" key={library.Id} onClick={() => void openLibrary(library)}>{library.Name}</button>)}</section>}
-                {homeNotice && <div class="home-section-error" role="status"><p>{homeNotice}</p><button class="button secondary" data-focusable="true" onClick={() => void loadHome()}>Retry</button></div>}
-                {homeLoading.views && <HomeSectionLoading label="Loading your libraries…" />}
-                {homeErrors.views && <HomeSectionError title="Libraries could not load" message={homeErrors.views} onRetry={() => retryHomeSection('views')} />}
-                <HomeFeed blocks={homeFeedBlocks} api={api} onSelect={selectItem} onPlay={playItem} onNeedMore={() => loadMoreHomeFeed()} hasMore={homeExploreStart < homeExploreTotal && !homeExploreError} loadingMore={loadingHomeExplore} onUserData={applyUserData} />
-                {homeExploreError && <HomeSectionError title="More titles could not load" message={homeExploreError} onRetry={() => loadMoreHomeFeed(true)} />}
-                {homeLoading.resume && !homeFeedBlocks.some(block => block.id === 'continue') && <HomeSectionLoading label="Loading continue watching…" />}
-                {homeErrors.resume && <HomeSectionError title="Continue watching is taking too long" message={homeErrors.resume} onRetry={() => retryHomeSection('resume')} />}
-                {homeLoading.latest && <HomeSectionLoading label="Loading recently added…" />}
-                {homeErrors.latest && <HomeSectionError title="Recently added could not load" message={homeErrors.latest} onRetry={() => retryHomeSection('latest')} />}
-                {!loading && !homeLoading.views && !homeLoading.resume && !homeLoading.latest && !homeErrors.views && !homeErrors.resume && !homeErrors.latest && !views.length && !resumeItems.length && !nextUpItems.length && !latestItems.length && <EmptyState title="Your library is ready" text="We could not find any libraries for this account yet." />}
+                {views.length > 0 && <section class="home-library-chips" aria-label={t('Libraries')}>{views.map(library => <button data-focusable="true" class="home-library-chip" key={library.Id} onClick={() => void openLibrary(library)}>{library.Name}</button>)}</section>}
+                {homeNotice && <div class="home-section-error" role="status"><p>{homeNotice}</p><button class="button secondary" data-focusable="true" onClick={() => void loadHome()}>{t('Retry')}</button></div>}
+                {homeLoading.views && <HomeSectionLoading label={t('Loading your libraries…')} />}
+                {homeErrors.views && <HomeSectionError title={t('Libraries could not load')} message={homeErrors.views} onRetry={() => retryHomeSection('views')} />}
+                <HomeFeed blocks={homeFeedBlocks} api={api} onSelect={selectItem} onPlay={playItem} onNeedMore={() => loadMoreHomeFeed()} hasMore={homeExploreStart < homeExploreTotal && !homeExploreError} loadingMore={loadingHomeExplore} onUserData={applyUserData} onRequest={setSeerrSheet} />
+                {homeExploreError && <HomeSectionError title={t('More titles could not load')} message={homeExploreError} onRetry={() => loadMoreHomeFeed(true)} />}
+                {homeLoading.resume && !homeFeedBlocks.some(block => block.id === 'continue') && <HomeSectionLoading label={t('Loading continue watching…')} />}
+                {homeErrors.resume && <HomeSectionError title={t('Continue watching is taking too long')} message={homeErrors.resume} onRetry={() => retryHomeSection('resume')} />}
+                {homeLoading.latest && <HomeSectionLoading label={t('Loading recently added…')} />}
+                {homeErrors.latest && <HomeSectionError title={t('Recently added could not load')} message={homeErrors.latest} onRetry={() => retryHomeSection('latest')} />}
+                {!loading && !homeLoading.views && !homeLoading.resume && !homeLoading.latest && !homeErrors.views && !homeErrors.resume && !homeErrors.latest && !views.length && !resumeItems.length && !nextUpItems.length && !latestItems.length && <EmptyState title={t('Your library is ready')} text={t('We could not find any libraries for this account yet.')} />}
             </>}
              {view === 'show' && tvSeries && <ShowDetailView
                  api={api}
@@ -2681,7 +2885,7 @@ function App() {
                 spacerHeights={seasonSpacerHeights}
                 seasonNodes={seasonNodes}
                  onBack={leaveSeries}
-                 backLabel={originLabel(seriesOrigin.current, activeLibrary ? 'Back to library' : 'Back to home')}
+                 backLabel={originLabel(seriesOrigin.current, activeLibrary ? t('Back to library') : t('Back to home'))}
                  loading={loading}
                  onEnsureSeason={seasonId => loadSeasonEpisodes(tvSeries.Id, seasonId)}
                  onActivateSeason={activateShowSeason}
@@ -2694,19 +2898,22 @@ function App() {
              />}
             {view === 'library' && activeLibrary && <LibraryPage key={activeLibrary.Id} api={api} library={activeLibrary} user={session.user} restore={libraryRestore} parentLabel={libraryTrail.current[libraryTrail.current.length - 1]?.Name} onUp={libraryTrail.current.length ? () => void navigateLibraryUp() : undefined} onSelect={selectItem} onPlay={playItem} />}
             {view === 'search' && (tvClient && api
-                ? <TvSearchPage draft={searchDraft} onDraft={setSearchDraft} items={items} loading={loading} api={api} views={views} activeGenre={searchGenre} onSelectGenre={setSearchGenre} onOpenLibrary={library => void openLibrary(library)} onBack={goHome} onSelect={selectItem} total={searchTotal} loadingMore={searchLoadingMore} moreError={searchMoreError} onLoadMore={() => void loadMoreSearch()} />
-                : <section class="catalog-page"><div class="catalog-heading"><button class="back-link" data-focusable="true" onClick={goHome}>← <span>Home</span></button><p class="eyebrow">SEARCH RESULTS</p><h1>Results for “{search}”</h1><p class="muted" aria-live="polite">{loading ? 'Searching…' : searchSummary(items.length, searchTotal)}</p></div><EntitySearchRows api={api} term={search} onSelect={selectItem} />{items.length ? <><VirtualizedMediaGrid items={items} api={api} onSelect={selectItem} hasMore={hasMoreResults(items.length, searchTotal) && !searchMoreError} onNearEnd={() => void loadMoreSearch()} /><SearchMore loaded={items.length} total={searchTotal} loading={searchLoadingMore} error={searchMoreError} onMore={() => void loadMoreSearch()} /></> : !loading && <EmptyState title="No matches found" text="Try another search or choose a different library." />}</section>)}
+                ? <TvSearchPage draft={searchDraft} onDraft={setSearchDraft} items={items} loading={loading} api={api} views={views} activeGenre={searchGenre} onSelectGenre={setSearchGenre} onOpenLibrary={library => void openLibrary(library)} onBack={goHome} onSelect={selectItem} total={searchTotal} loadingMore={searchLoadingMore} moreError={searchMoreError} onLoadMore={() => void loadMoreSearch()} seerrPending={seerrSearch.loading || seerrSearch.items.length > 0} seerrResults={<SeerrSearchResults items={withRequested(seerrSearch.items, seerrRequested)} loading={seerrSearch.loading} error={seerrSearch.error} onOpen={setSeerrSheet} />} />
+                : <section class="catalog-page"><div class="catalog-heading"><button class="back-link" data-focusable="true" onClick={goHome}><span class="dir-arrow" aria-hidden="true">←</span> <span>{t('Home')}</span></button><p class="eyebrow">{t('SEARCH RESULTS')}</p><h1>{t('Results for “{0}”', search)}</h1><p class="muted" aria-live="polite">{loading ? t('Searching…') : searchSummary(items.length, searchTotal)}</p></div><EntitySearchRows api={api} term={search} onSelect={selectItem} />{items.length ? <><VirtualizedMediaGrid items={items} api={api} onSelect={selectItem} hasMore={hasMoreResults(items.length, searchTotal) && !searchMoreError} onNearEnd={() => void loadMoreSearch()} /><SearchMore loaded={items.length} total={searchTotal} loading={searchLoadingMore} error={searchMoreError} onMore={() => void loadMoreSearch()} /></> : !loading && !seerrSearch.loading && !seerrSearch.items.length && <EmptyState title={t('No matches found')} text={t('Try another search or choose a different library.')} />}<SeerrSearchResults items={withRequested(seerrSearch.items, seerrRequested)} loading={seerrSearch.loading} error={seerrSearch.error} onOpen={setSeerrSheet} /></section>)}
              {view === 'favorites' && <FavoritesPage api={api} onSelect={selectItem} onPlay={playItem} onBack={goHome} />}
+             {view === 'nowplaying' && <NowPlaying snapshot={music} api={api} tvClient={tvClient} onBack={leaveNowPlaying} />}
              {view === 'live' && api && <LiveTvPage api={api} userId={session.user.Id} tab={liveTab} onTab={next => { setLiveTab(next); rememberLiveQuery(next); }} onPlay={item => void play(item, { kind: 'live', scrollY: window.scrollY })} />}
-             {view === 'details' && selected && <DetailPage api={api} item={selected} backLabel={originLabel(detailOrigin.current, 'Back to home')} loading={detailLoading} loadError={detailError} onRetry={() => void openItem(selected, detailOrigin.current || undefined)} onBack={returnFromDetails} onPlay={intent => void play(selected, undefined, intent)} onOpenItem={next => void openItem(next, detailOrigin.current || undefined)} onOpenSeries={() => void openEpisodeSeries(selected)} onUserData={applyUserData} user={session.user} serverId={session.serverId} onPlayItem={next => void play(next, undefined)} onDeleted={removeDeletedItem} />}
+             {view === 'details' && selected && <DetailPage api={api} item={selected} backLabel={originLabel(detailOrigin.current, t('Back to home'))} loading={detailLoading} loadError={detailError} onRetry={() => void openItem(selected, detailOrigin.current || undefined)} onBack={returnFromDetails} onPlay={intent => void play(selected, undefined, intent)} onOpenItem={next => void openItem(next, detailOrigin.current || undefined)} onOpenSeries={() => void openEpisodeSeries(selected)} onUserData={applyUserData} user={session.user} serverId={session.serverId} onPlayItem={next => void play(next, undefined)} onDeleted={removeDeletedItem} />}
         </main>
+        {view !== 'nowplaying' && view !== 'player' && <MiniPlayer snapshot={music} api={api} onExpand={openNowPlaying} />}
     </div>
-    {view === 'player' && playerUrl && <Player url={playerUrl} item={playerItem} playback={playback} playbackSession={playbackSessions.active()} sessionOwner={playbackSessions} api={api} tvClient={tvClient} onBack={leavePlayer} onPlayItem={next => void play(next, playbackOrigin.current || undefined)} onRenegotiate={renegotiate} onPlaybackReported={itemId => void applyReportedPlayback(itemId)} onError={() => setError('Playback could not start in this browser. Use Retry, Convert the stream or Try lower quality in the player.')} />}
+    {view === 'player' && playerUrl && <Player url={playerUrl} item={playerItem} playback={playback} playbackSession={playbackSessions.active()} sessionOwner={playbackSessions} api={api} tvClient={tvClient} onBack={leavePlayer} onPlayItem={next => void play(next, playbackOrigin.current || undefined)} onRenegotiate={renegotiate} onPlaybackReported={itemId => void applyReportedPlayback(itemId)} onError={() => setError(t('Playback could not start in this browser. Use Retry, Convert the stream or Try lower quality in the player.'))} />}
     {view !== 'player' && profileScreen === 'quickconnect' && session && api && <ProfileScreen screen="quickconnect" api={api} session={session} isAdministrator={isAdministrator} onBack={() => setProfileScreen('playback')} />}
+    {view !== 'player' && seerrSheet && api && <SeerrRequestSheet key={seerrKey(seerrSheet)} api={api} item={seerrRequested[seerrKey(seerrSheet)] || seerrSheet} onClose={() => setSeerrSheet(null)} onRequested={seerrRequestedFor(accountGeneration.current())} />}
     </>;
 }
 
-function TvSearchPage({ draft, onDraft, items, loading, api, views, activeGenre, onSelectGenre, onOpenLibrary, onBack, onSelect, total, loadingMore, moreError, onLoadMore }: {
+function TvSearchPage({ draft, onDraft, items, loading, api, views, activeGenre, onSelectGenre, onOpenLibrary, onBack, onSelect, total, loadingMore, moreError, onLoadMore, seerrPending = false, seerrResults }: {
     draft: string;
     onDraft: (value: string) => void;
     items: MediaItem[];
@@ -2722,6 +2929,8 @@ function TvSearchPage({ draft, onDraft, items, loading, api, views, activeGenre,
     loadingMore: boolean;
     moreError: string;
     onLoadMore: () => void;
+    seerrPending?: boolean;
+    seerrResults?: ComponentChildren;
 }) {
     const [ genres, setGenres ] = useState<Array<{ Name?: string; Id?: string }>>([]);
     const pageRef = useRef<HTMLElement>(null);
@@ -2765,48 +2974,49 @@ function TvSearchPage({ draft, onDraft, items, loading, api, views, activeGenre,
     };
     const backspace = () => onDraft(draft.slice(0, -1));
     const searching = draft.trim().length >= 2 || Boolean(activeGenre?.Id);
-    return <section ref={pageRef} class="tv-search-page" aria-label="Search your library">
+    return <section ref={pageRef} class="tv-search-page" aria-label={t('Search your library')}>
         <div class="tv-search-panel">
-            <button data-focusable="true" class="back-link tv-search-back" type="button" onClick={onBack}>← <span>Back</span></button>
-            <p class="eyebrow">SEARCH</p>
-            <h1>Find movies, shows and episodes</h1>
+            <button data-focusable="true" class="back-link tv-search-back" type="button" onClick={onBack}><span class="dir-arrow" aria-hidden="true">←</span> <span>{t('Back')}</span></button>
+            <p class="eyebrow">{t('SEARCH')}</p>
+            <h1>{t('Find movies, shows and episodes')}</h1>
             <form class="tv-search-field" onSubmit={e => e.preventDefault()}>
-                <input ref={inputRef} data-focusable="true" value={draft} onInput={e => onDraft((e.target as HTMLInputElement).value.slice(0, 60))} onKeyDown={exitFieldKeyDown} placeholder="Type a title…" aria-label="Search query" />
+                <input ref={inputRef} data-focusable="true" value={draft} onInput={e => onDraft((e.target as HTMLInputElement).value.slice(0, 60))} onKeyDown={exitFieldKeyDown} placeholder={t('Type a title…')} aria-label={t('Search query')} />
             </form>
-            <div class="tv-search-keyboard" aria-label="On-screen keyboard">
+            <div class="tv-search-keyboard" aria-label={t('On-screen keyboard')}>
                 {rows.map((row, rowIndex) => <div class="tv-search-row" key={rowIndex}>
-                    {row.map(key => <button data-focusable="true" class="tv-search-key" type="button" key={key} aria-label={`Type ${key}`} onClick={() => append(key)}>{key}</button>)}
-                    {rowIndex === 3 && <button data-focusable="true" class="tv-search-key tv-search-key-wide" type="button" aria-label="Backspace" onClick={backspace}>⌫</button>}
+                    {row.map(key => <button data-focusable="true" class="tv-search-key" type="button" key={key} aria-label={t('Type {0}', key)} onClick={() => append(key)}>{key}</button>)}
+                    {rowIndex === 3 && <button data-focusable="true" class="tv-search-key tv-search-key-wide" type="button" aria-label={t('Backspace')} onClick={backspace}>⌫</button>}
                 </div>)}
                 <div class="tv-search-row">
-                    <button data-focusable="true" class="tv-search-key tv-search-key-wide" type="button" onClick={() => onDraft(draft && !draft.endsWith(' ') ? draft + ' ' : draft)}>Space</button>
-                    <button data-focusable="true" class="tv-search-key tv-search-key-wide" type="button" onClick={() => onDraft('')}>Clear</button>
+                    <button data-focusable="true" class="tv-search-key tv-search-key-wide" type="button" onClick={() => onDraft(draft && !draft.endsWith(' ') ? draft + ' ' : draft)}>{t('Space')}</button>
+                    <button data-focusable="true" class="tv-search-key tv-search-key-wide" type="button" onClick={() => onDraft('')}>{t('Clear')}</button>
                 </div>
             </div>
         </div>
         <div class="tv-search-results" aria-live="polite">
-            {activeGenre && <div class="tv-suggest-group" aria-label="Selected genre">
-                <span class="muted">Genre: {activeGenre.Name}</span>
-                <button data-focusable="true" class="home-library-chip" type="button" onClick={() => onSelectGenre(null)}>Clear genre</button>
+            {activeGenre && <div class="tv-suggest-group" aria-label={t('Selected genre')}>
+                <span class="muted">{t('Genre: {0}', activeGenre.Name)}</span>
+                <button data-focusable="true" class="home-library-chip" type="button" onClick={() => onSelectGenre(null)}>{t('Clear genre')}</button>
             </div>}
             {searching ? <>
                 {!activeGenre && <EntitySearchRows api={api} term={draft} onSelect={onSelect} />}
-                <p class="eyebrow">RESULTS</p>
-                {loading && <p class="muted" role="status">Searching…</p>}
+                <p class="eyebrow">{t('RESULTS')}</p>
+                {loading && <p class="muted" role="status">{t('Searching…')}</p>}
                 {!loading && items.length > 0 && <p class="muted">{searchSummary(items.length, total)}</p>}
                 {items.length > 0
                     ? <><VirtualizedMediaGrid items={items} api={api} onSelect={onSelect} showKind hasMore={hasMoreResults(items.length, total) && !moreError} onNearEnd={onLoadMore} /><SearchMore loaded={items.length} total={total} loading={loadingMore} error={moreError} onMore={onLoadMore} /></>
-                    : !loading && <EmptyState title="No matches found" text="Try another search or pick a suggestion." />}
+                    : !loading && !seerrPending && <EmptyState title={t('No matches found')} text={t('Try another search or pick a suggestion.')} />}
+                {!activeGenre && seerrResults}
             </> : <>
-                <p class="eyebrow">POPULAR RIGHT NOW</p>
-                <h2>Start exploring</h2>
-                {genres.length > 0 && <div class="tv-suggest-group" aria-label="Genres">
+                <p class="eyebrow">{t('POPULAR RIGHT NOW')}</p>
+                <h2>{t('Start exploring')}</h2>
+                {genres.length > 0 && <div class="tv-suggest-group" aria-label={t('Genres')}>
                     {genres.map(genre => genre.Name && <button key={genre.Name} data-focusable="true" class={`home-library-chip${activeGenre?.Id === genre.Id ? ' active' : ''}`} type="button" aria-pressed={activeGenre?.Id === genre.Id} onClick={() => onSelectGenre({ Id: genre.Id, Name: genre.Name })}>{genre.Name}</button>)}
                 </div>}
-                {views.length > 0 && <div class="tv-suggest-group" aria-label="Libraries">
+                {views.length > 0 && <div class="tv-suggest-group" aria-label={t('Libraries')}>
                     {views.map(library => <button key={library.Id} data-focusable="true" class="home-library-chip" type="button" onClick={() => onOpenLibrary(library)}>{library.Name}</button>)}
                 </div>}
-                <p class="muted">Type two or more letters to search your whole library.</p>
+                <p class="muted">{t('Type two or more letters to search your whole library.')}</p>
             </>}
         </div>
     </section>;
@@ -2840,14 +3050,14 @@ function shuffleItems(items: MediaItem[]): MediaItem[] {
 
 function recommendationLabel(item: MediaItem): string {
     const type = item.RecommendationType;
-    if (type === 6) return 'FOR YOU · MOVIES';
-    if (type === 7) return 'FOR YOU · TV SHOWS';
-    if (type === 8) return 'FROM YOUR LIBRARY';
-    if (type === 0) return item.BaselineItemName ? `BECAUSE YOU WATCHED ${item.BaselineItemName.toUpperCase()}` : 'BECAUSE YOU WATCHED';
-    if (type === 1) return item.BaselineItemName ? `BECAUSE YOU LIKED ${item.BaselineItemName.toUpperCase()}` : 'BECAUSE YOU LIKED';
-    if (type === 2 || type === 4) return item.BaselineItemName ? `DIRECTED BY ${item.BaselineItemName.toUpperCase()}` : 'DIRECTOR PICK';
-    if (type === 3 || type === 5) return item.BaselineItemName ? `STARRING ${item.BaselineItemName.toUpperCase()}` : 'CAST PICK';
-    return 'PICKED FOR YOU';
+    if (type === 6) return t('FOR YOU · MOVIES');
+    if (type === 7) return t('FOR YOU · TV SHOWS');
+    if (type === 8) return t('FROM YOUR LIBRARY');
+    if (type === 0) return item.BaselineItemName ? `BECAUSE YOU WATCHED ${item.BaselineItemName.toUpperCase()}` : t('BECAUSE YOU WATCHED');
+    if (type === 1) return item.BaselineItemName ? `BECAUSE YOU LIKED ${item.BaselineItemName.toUpperCase()}` : t('BECAUSE YOU LIKED');
+    if (type === 2 || type === 4) return item.BaselineItemName ? `DIRECTED BY ${item.BaselineItemName.toUpperCase()}` : t('DIRECTOR PICK');
+    if (type === 3 || type === 5) return item.BaselineItemName ? `STARRING ${item.BaselineItemName.toUpperCase()}` : t('CAST PICK');
+    return t('PICKED FOR YOU');
 }
 
 function findSection(element: Element | null): Element | null {
@@ -3066,7 +3276,7 @@ function RecommendationTitle({ api, item }: { api: JellyfinApi | null; item: Med
     }, [ api, item.Id, logoUrl ]);
 
     if (logoState.status === 'loading') {
-        return <div class="recommendation-title-slot logo-loading" role="status" aria-label={`Loading ${item.Name} logo`}><span /></div>;
+        return <div class="recommendation-title-slot logo-loading" role="status" aria-label={t('Loading {0} logo', item.Name)}><span /></div>;
     }
     if (logoState.status === 'logo' && logoState.url) {
         return <div class="recommendation-title-slot"><img class="recommendation-title-logo" src={logoState.url} alt={item.Name} decoding="async" onError={() => { releaseCachedImage(logoUrl); setLogoState({ status: 'text', url: '' }); }} /></div>;
@@ -3075,17 +3285,17 @@ function RecommendationTitle({ api, item }: { api: JellyfinApi | null; item: Med
 }
 
 function MediaRow({ title, subtitle, items, api, onSelect }: { title: string; subtitle: string; items: MediaItem[]; api: JellyfinApi | null; onSelect: (item: MediaItem) => void }) {
-    return <section class="section-block"><div class="section-heading"><div><p class="eyebrow">{subtitle}</p><h2>{title}</h2></div><div class="row-controls"><button data-focusable="true" aria-label="Scroll row left" onClick={e => (findSection(e.currentTarget)?.querySelector('.media-row') as HTMLElement)?.scrollBy({ left: -700, behavior: preferredScrollBehavior() })}>←</button><button data-focusable="true" aria-label="Scroll row right" onClick={e => (findSection(e.currentTarget)?.querySelector('.media-row') as HTMLElement)?.scrollBy({ left: 700, behavior: preferredScrollBehavior() })}>→</button></div></div><div class="media-row">{items.map(item => <MediaCard key={item.Id} api={api} item={item} onSelect={onSelect} />)}</div></section>;
+    return <section class="section-block"><div class="section-heading"><div><p class="eyebrow">{subtitle}</p><h2>{title}</h2></div><div class="row-controls"><button data-focusable="true" aria-label={t('Scroll row left')} onClick={e => (findSection(e.currentTarget)?.querySelector('.media-row') as HTMLElement)?.scrollBy({ left: -700 * inlineSign(), behavior: preferredScrollBehavior() })}><span class="dir-arrow" aria-hidden="true">←</span></button><button data-focusable="true" aria-label={t('Scroll row right')} onClick={e => (findSection(e.currentTarget)?.querySelector('.media-row') as HTMLElement)?.scrollBy({ left: 700 * inlineSign(), behavior: preferredScrollBehavior() })}><span class="dir-arrow" aria-hidden="true">→</span></button></div></div><div class="media-row">{items.map(item => <MediaCard key={item.Id} api={api} item={item} onSelect={onSelect} />)}</div></section>;
 }
 
 
 
 const MediaCard = memo(function MediaCard({ api, item, onSelect, eager = false, showKind = false }: { api: JellyfinApi | null; item: MediaItem; onSelect: (item: MediaItem) => void; eager?: boolean; showKind?: boolean }) {
     const kind = showKind ? mediaKind(item) : null;
-    const fallback = item.ProductionYear ? String(item.ProductionYear) : (item.SeriesName || 'In your library');
+    const fallback = item.ProductionYear ? String(item.ProductionYear) : (item.SeriesName || t('In your library'));
     const description = describeCard(item);
-    return <button data-focusable="true" class="media-card" onClick={() => onSelect(item)} aria-label={description ? `View ${item.Name}, ${description}` : `View ${item.Name}`}><span class="media-card-art"><Artwork eager={eager} api={api} item={item} /><span class="media-card-overlay"><span class="media-name">{item.Name}</span>{kind
-        ? <span class="media-year">{kind.label && <span class={kind.live ? 'media-kind-live' : 'media-kind'}>{kind.label}</span>}{kind.label && kind.detail ? ' · ' : ''}{kind.detail || (!kind.label ? fallback : '')}</span>
+    return <button data-focusable="true" class="media-card" onClick={() => onSelect(item)} aria-label={description ? t('View {0}, {1}', item.Name, description) : t('View {0}', item.Name)}><span class="media-card-art"><Artwork eager={eager} api={api} item={item} /><span class="media-card-overlay"><span class="media-name">{item.Name}</span>{kind
+        ? <span class="media-year">{kind.label && <span class={kind.live ? 'media-kind-live' : 'media-kind'}>{t(kind.label)}</span>}{kind.label && kind.detail ? ' · ' : ''}{kind.detail || (!kind.label ? fallback : '')}</span>
         : <>{item.ProductionYear && <span class="media-year">{item.ProductionYear}</span>}</>}</span>{item.UserData?.PlayedPercentage !== undefined && item.UserData.PlayedPercentage > 0 && <span class="progress-track"><span style={{ width: `${Math.min(100, item.UserData.PlayedPercentage)}%` }} /></span>}</span></button>;
 });
 
@@ -3305,52 +3515,53 @@ function DetailPage({ api, item, backLabel, loading, loadError, onRetry, onBack,
         }
     };
     const episodeLabel = (episode: MediaItem) => `${episode.ParentIndexNumber !== undefined && episode.IndexNumber !== undefined ? `S${episode.ParentIndexNumber}:E${episode.IndexNumber} · ` : ''}${episode.Name || 'Episode'}`;
-    return <section class="detail-page"><Artwork eager api={api} item={item} backdrop className="detail-backdrop" /><div class="detail-gradient" /><div class="detail-content">
-        <button data-focusable="true" class="back-link" onClick={onBack}>← <span>{backLabel}</span></button>
+    return <><section class="detail-page"><Artwork eager api={api} item={item} backdrop className="detail-backdrop" /><div class="detail-gradient" /><div class="detail-content">
+        <button data-focusable="true" class="back-link" onClick={onBack}><span class="dir-arrow" aria-hidden="true">←</span> <span>{backLabel}</span></button>
         <p class="eyebrow">{item.Type || 'FEATURED'}</p>
         <h1>{item.Name}</h1>
         {item.Type === 'Episode' && item.SeriesName && <p class="detail-series-name muted">{item.SeriesName}</p>}
-        {loading && !loadError && <p class="muted detail-loading" role="status"><span class="mini-spinner" aria-hidden="true" /> Loading full details…</p>}
-        {loadError && <p class="notice error" role="alert"><span>Full details could not load: {loadError}</span> <button data-focusable="true" class="button secondary" type="button" onClick={onRetry}>Retry</button></p>}
-        <div class="metadata">{item.ProductionYear && <span>{item.ProductionYear}</span>}{item.CommunityRating && <span>★ {item.CommunityRating.toFixed(1)}</span>}{item.RunTimeTicks && <span>{Math.round(item.RunTimeTicks / 600000000)} min</span>}</div>
+        {loading && !loadError && <p class="muted detail-loading" role="status"><span class="mini-spinner" aria-hidden="true" />{' '}{t('Loading full details…')}</p>}
+        {loadError && <p class="notice error" role="alert"><span>{t('Full details could not load: {0}', loadError)}</span> <button data-focusable="true" class="button secondary" type="button" onClick={onRetry}>{t('Retry')}</button></p>}
+        <div class="metadata">{item.ProductionYear && <span>{item.ProductionYear}</span>}{item.CommunityRating && <span>★ {item.CommunityRating.toFixed(1)}</span>}{item.RunTimeTicks && <span>{t('{0} min', Math.round(item.RunTimeTicks / 600000000))}</span>}</div>
         <DetailFactsView item={item} />
-        <p class="overview">{item.Overview || (loading ? '' : capabilities.entity ? '' : 'A story waiting to be discovered.')}</p>
+        <p class="overview">{item.Overview || (loading ? '' : capabilities.entity ? '' : t('A story waiting to be discovered.'))}</p>
         <div class="detail-actions">
-            {capabilities.playable && (canResume(item)
-                ? <><button ref={playRef} data-focusable="true" class="button primary" onClick={() => onPlay('resume')}>▶ <span>Resume</span></button><button data-focusable="true" class="button secondary" onClick={() => onPlay('beginning')}>↺ <span>From beginning</span></button></>
-                : <button ref={playRef} data-focusable="true" class="button primary" onClick={() => onPlay('beginning')}>▶ <span>Play</span></button>)}
-            {item.Type === 'Episode' && item.SeriesId && <button data-focusable="true" class="button secondary" type="button" onClick={onOpenSeries}>Go to series</button>}
-            {capabilities.canFavorite && api && <button data-focusable="true" class="button secondary" type="button" aria-pressed={Boolean(item.UserData?.IsFavorite)} disabled={userDataBusy} onClick={() => void toggle('favorite')}>{item.UserData?.IsFavorite ? '♥ Favorite' : '♡ Favorite'}</button>}
-            {capabilities.canMarkPlayed && api && <button data-focusable="true" class="button secondary" type="button" aria-pressed={Boolean(item.UserData?.Played)} disabled={userDataBusy} onClick={() => void toggle('played')}>{item.UserData?.Played ? '✓ Watched' : 'Mark watched'}</button>}
-            {item.Type === 'Photo' && api && <button data-focusable="true" class="button primary" type="button" onClick={() => setPhotoOpen(true)}>View photo</button>}
-            <button data-focusable="true" class="button secondary" onClick={onBack}>{backLabel}</button>
+            {isMusicTarget(item) ? <MusicActions item={item} playRef={playRef} /> : capabilities.playable && (canResume(item)
+                ? <><button ref={playRef} data-focusable="true" class="button primary" onClick={() => onPlay('resume')}>▶ <span>{t('Resume')}</span></button><button data-focusable="true" class="button secondary" onClick={() => onPlay('beginning')}>↺ <span>{t('From beginning')}</span></button></>
+                : <button ref={playRef} data-focusable="true" class="button primary" onClick={() => onPlay('beginning')}>▶ <span>{t('Play')}</span></button>)}
+            {item.Type === 'Episode' && item.SeriesId && <button data-focusable="true" class="button secondary" type="button" onClick={onOpenSeries}>{t('Go to series')}</button>}
+            {capabilities.canFavorite && api && <button data-focusable="true" class="button secondary" type="button" aria-pressed={Boolean(item.UserData?.IsFavorite)} disabled={userDataBusy} onClick={() => void toggle('favorite')}>{item.UserData?.IsFavorite ? t('♥ Favorite') : t('♡ Favorite')}</button>}
+            {capabilities.canMarkPlayed && api && <button data-focusable="true" class="button secondary" type="button" aria-pressed={Boolean(item.UserData?.Played)} disabled={userDataBusy} onClick={() => void toggle('played')}>{item.UserData?.Played ? t('✓ Watched') : t('Mark watched')}</button>}
+            {item.Type === 'Photo' && api && <button data-focusable="true" class="button primary" type="button" onClick={() => setPhotoOpen(true)}>{t('View photo')}</button>}
+            <ItemActionsBar api={api} item={item} user={user} serverId={serverId} onDeleted={onDeleted} onChanged={onRetry} />
         </div>
-        {userDataError && <p class="notice error" role="alert">Could not update: {userDataError}</p>}
-        <ItemActionsBar api={api} item={item} user={user} serverId={serverId} onDeleted={onDeleted} />
+        {userDataError && <p class="notice error" role="alert">{t('Could not update: {0}', userDataError)}</p>}
         {photoOpen && api && <PhotoViewer api={api} photos={[ item ]} start={0} onClose={() => setPhotoOpen(false)} />}
-        <DetailChildren api={api} item={item} user={user} onOpen={onOpenItem} onPlay={onPlayItem} />
+    </div></section>
+    <section class="detail-body">
+        <DetailChildren api={api} item={item} user={user} onOpen={onOpenItem} onPlay={onPlayItem} onChanged={onRetry} />
         <LyricsView api={api} item={item} />
         <LinkedMetadataView api={api} item={item} onOpen={onOpenItem} />
         <DetailExtras api={api} item={item} onOpen={onOpenItem} onPlay={onPlayItem} />
         <RelatedRows api={api} item={item} onOpen={onOpenItem} />
-        {(neighbours.previous || neighbours.next) && <nav class="detail-episode-nav" aria-label="Episodes">
-            {neighbours.previous && <button data-focusable="true" class="button secondary" type="button" onClick={() => onOpenItem(neighbours.previous as MediaItem)}>← <span>{episodeLabel(neighbours.previous)}</span></button>}
-            {neighbours.next && <button data-focusable="true" class="button secondary" type="button" onClick={() => onOpenItem(neighbours.next as MediaItem)}><span>{episodeLabel(neighbours.next)}</span> →</button>}
+        {(neighbours.previous || neighbours.next) && <nav class="detail-episode-nav" aria-label={t('Episodes')}>
+            {neighbours.previous && <button data-focusable="true" class="button secondary" type="button" onClick={() => onOpenItem(neighbours.previous as MediaItem)}><span class="dir-arrow" aria-hidden="true">←</span> <span>{episodeLabel(neighbours.previous)}</span></button>}
+            {neighbours.next && <button data-focusable="true" class="button secondary" type="button" onClick={() => onOpenItem(neighbours.next as MediaItem)}><span>{episodeLabel(neighbours.next)}</span> <span class="dir-arrow" aria-hidden="true">→</span></button>}
         </nav>}
-        {capabilities.entity && <section class="detail-related" aria-label={`Titles with ${item.Name || 'this item'}`}>
-            <h2>Titles</h2>
-            <p class="muted" aria-live="polite">{relatedLoading && !related.length ? 'Loading titles…' : searchSummary(related.length, relatedTotal)}</p>
+        {capabilities.entity && <section class="detail-related" aria-label={`Titles with ${item.Name || t('this item')}`}>
+            <h2>{t('Titles')}</h2>
+            <p class="muted" aria-live="polite">{relatedLoading && !related.length ? t('Loading titles…') : searchSummary(related.length, relatedTotal)}</p>
             {related.length > 0 && <VirtualizedMediaGrid items={related} api={api} onSelect={onOpenItem} showKind />}
             <SearchMore loaded={related.length} total={relatedTotal} loading={relatedLoading && related.length > 0} error={relatedError} onMore={() => loadRelated(related.length)} />
         </section>}
-    </div></section>;
+    </section></>;
 }
 
 /** Explicit, keyboard-reachable continuation for paged result grids; also surfaces page failures with retry. */
 function SearchMore({ loaded, total, loading, error, onMore }: { loaded: number; total: number; loading: boolean; error: string; onMore: () => void }) {
-    if (error) return <div class="search-more" role="alert"><p>More results could not load: {error}</p><button data-focusable="true" class="button secondary" type="button" onClick={onMore}>Retry</button></div>;
+    if (error) return <div class="search-more" role="alert"><p>{t('More results could not load: {0}', error)}</p><button data-focusable="true" class="button secondary" type="button" onClick={onMore}>{t('Retry')}</button></div>;
     if (!hasMoreResults(loaded, total)) return null;
-    return <div class="search-more"><button data-focusable="true" class="button secondary" type="button" disabled={loading} onClick={onMore}>{loading ? 'Loading…' : `Load more results (${total - loaded} remaining)`}</button></div>;
+    return <div class="search-more"><button data-focusable="true" class="button secondary" type="button" disabled={loading} onClick={onMore}>{loading ? t('Loading…') : t('Load more results ({0} remaining)', total - loaded)}</button></div>;
 }
 
 function EmptyState({ title, text }: { title: string; text: string }) {
@@ -3358,16 +3569,16 @@ function EmptyState({ title, text }: { title: string; text: string }) {
 }
 
 function HomeSectionLoading({ label }: { label: string }) {
-    return <div class="home-section-status" role="status"><span class="mini-spinner" aria-hidden="true" />{label}</div>;
+    return <div class="home-section-status" role="status"><span class="mini-spinner" aria-hidden="true" />{t(label)}</div>;
 }
 
 function HomeSectionError({ title, message, onRetry }: { title: string; message: string; onRetry: () => void }) {
     const friendlyMessage = message.indexOf('took too long') >= 0
-        ? 'The server is taking longer than expected. Other sections can still load while this one is unavailable.'
+        ? t('The server is taking longer than expected. Other sections can still load while this one is unavailable.')
         : message;
     return <div class="home-section-error" role="alert">
         <div><h3>{title}</h3><p>{friendlyMessage}</p></div>
-        <button data-focusable="true" class="button secondary" onClick={onRetry}>Retry</button>
+        <button data-focusable="true" class="button secondary" onClick={onRetry}>{t('Retry')}</button>
     </div>;
 }
 
@@ -3719,25 +3930,25 @@ function ShowDetailView(props: ShowDetailViewProps) {
             <Artwork eager api={api} item={series} backdrop className="show-backdrop-art" />
             <div class="show-backdrop-shade" />
             <div class="show-header-copy">
-                <button class="back-link" data-show-control="back" data-focusable="true" onClick={() => { cancelIntent(); onBack(); }}>← <span>{backLabel}</span></button>
-                <p class="eyebrow">TV SERIES</p>
+                <button class="back-link" data-show-control="back" data-focusable="true" onClick={() => { cancelIntent(); onBack(); }}><span class="dir-arrow" aria-hidden="true">←</span> <span>{backLabel}</span></button>
+                <p class="eyebrow">{t('TV SERIES')}</p>
                 <h1>{series.Name}</h1>
                 <div class="show-metadata">
                     {series.ProductionYear && <span>{series.ProductionYear}{endYear && endYear !== series.ProductionYear && `–${endYear}`}</span>}
                     {series.CommunityRating && <span>★ {series.CommunityRating.toFixed(1)}</span>}
-                    <span>{seasons.length} seasons</span>
-                    {totalEpisodes > 0 && <span>{totalEpisodes} episodes</span>}
+                    <span>{t('{0} seasons', seasons.length)}</span>
+                    {totalEpisodes > 0 && <span>{t('{0} episodes', totalEpisodes)}</span>}
                 </div>
                 {series.Overview && <p class="show-overview">{series.Overview}</p>}
                 <UserDataActions api={api} item={series} onUserData={props.onUserData} />
                 {(() => {
                     const season = seasons.find(entry => entry.Id === activeSeasonId);
-                    return season ? <UserDataActions api={api} item={season} label={season.IndexNumber === 0 ? 'specials' : `season ${season.IndexNumber ?? ''}`.trim()} onUserData={props.onUserData} /> : null;
+                    return season ? <UserDataActions api={api} item={season} label={season.IndexNumber === 0 ? t('specials') : `season ${season.IndexNumber ?? ''}`.trim()} onUserData={props.onUserData} /> : null;
                 })()}
             </div>
         </section>
 
-        <nav class="season-mobile-rail" aria-label="Show seasons">
+        <nav class="season-mobile-rail" aria-label={t('Show seasons')}>
             {seasons.map((season, index) => <button
                 key={season.Id}
                 data-season-nav={season.Id}
@@ -3745,12 +3956,12 @@ function ShowDetailView(props: ShowDetailViewProps) {
                 class={season.Id === activeSeasonId ? 'season-pill active' : 'season-pill'}
                 aria-current={season.Id === activeSeasonId ? 'true' : undefined}
                 onClick={() => clickSeason(season.Id)}
-            >{season.IndexNumber === 0 ? 'Specials' : `Season ${season.IndexNumber ?? index + 1}`}</button>)}
+            >{season.IndexNumber === 0 ? t('Specials') : t('Season {0}', season.IndexNumber ?? index + 1)}</button>)}
         </nav>
 
         <div class="episode-explorer">
-            <aside class="season-sidebar" aria-label="Show seasons">
-                <p class="eyebrow">SEASONS</p>
+            <aside class="season-sidebar" aria-label={t('Show seasons')}>
+                <p class="eyebrow">{t('SEASONS')}</p>
                 {seasons.map((season, index) => {
                     const episodes = episodesBySeason[season.Id] || [];
                     const watched = episodes.filter(episode => episode.UserData?.Played).length;
@@ -3764,7 +3975,7 @@ function ShowDetailView(props: ShowDetailViewProps) {
                         onClick={() => clickSeason(season.Id)}
                     >
                         <Artwork api={api} item={season} className="season-thumb" />
-                        <span class="season-side-text"><strong>{season.IndexNumber === 0 ? 'Specials' : `Season ${season.IndexNumber ?? index + 1}`}</strong><small>{episodeCount} episodes</small>{episodes.length > 0 && <span class="season-progress"><i style={{ width: `${watched / episodes.length * 100}%` }} /></span>}</span>
+                        <span class="season-side-text"><strong>{season.IndexNumber === 0 ? t('Specials') : t('Season {0}', season.IndexNumber ?? index + 1)}</strong><small>{t('{0} episodes', episodeCount)}</small>{episodes.length > 0 && <span class="season-progress"><i style={{ width: `${watched / episodes.length * 100}%` }} /></span>}</span>
                     </button>;
                 })}
             </aside>
@@ -3775,21 +3986,21 @@ function ShowDetailView(props: ShowDetailViewProps) {
                     const withinWindow = Math.abs(index - activeIndex) <= 1;
                     const spacerHeight = spacerHeights[season.Id] || Math.max(300, (season.ChildCount || 3) * 174 + 150);
                     if (!withinWindow && !episodes) {
-                        return <div key={season.Id} class="season-spacer" data-season-section data-season-id={season.Id} ref={element => { seasonNodes.current[season.Id] = element; }} style={{ minHeight: `${spacerHeight}px` }} aria-label={`${season.Name}, ${season.ChildCount || 0} episodes`} />;
+                        return <div key={season.Id} class="season-spacer" data-season-section data-season-id={season.Id} ref={element => { seasonNodes.current[season.Id] = element; }} style={{ minHeight: `${spacerHeight}px` }} aria-label={t('{0}, {1} episodes', season.Name, season.ChildCount || 0)} />;
                     }
                     const watched = (episodes || []).filter(episode => episode.UserData?.Played).length;
                     const episodeCount = season.ChildCount || episodes?.length || 0;
                     return <section key={season.Id} class="season-section" data-season-section data-season-id={season.Id} ref={element => { seasonNodes.current[season.Id] = element; }}>
                         <header class="season-section-header">
-                            <div class="season-heading-copy"><p class="eyebrow">{season.IndexNumber === 0 ? 'SPECIALS' : `SEASON ${season.IndexNumber ?? index + 1}`}</p><h2>{season.Name}</h2></div>
-                            <div class="season-heading-meta">{season.PremiereDate && <span>{new Date(season.PremiereDate).getFullYear()}</span>}<span>{episodeCount} episodes</span>{episodes?.length ? <span>{watched} watched</span> : null}</div>
+                            <div class="season-heading-copy"><p class="eyebrow">{season.IndexNumber === 0 ? 'SPECIALS' : t('SEASON {0}', season.IndexNumber ?? index + 1)}</p><h2>{season.Name}</h2></div>
+                            <div class="season-heading-meta">{season.PremiereDate && <span>{new Date(season.PremiereDate).getFullYear()}</span>}<span>{t('{0} episodes', episodeCount)}</span>{episodes?.length ? <span>{t('{0} watched', watched)}</span> : null}</div>
                         </header>
-                        {loadingSeasons[season.Id] && !episodes && <HomeSectionLoading label="Loading episodes…" />}
+                        {loadingSeasons[season.Id] && !episodes && <HomeSectionLoading label={t('Loading episodes…')} />}
                         {episodes && episodes.length > 0 && <div class="episode-list">{episodes.map(episode => <EpisodeCard key={episode.Id} api={api} episode={episode} seasonId={season.Id} captureBookmark={captureBookmark} onOpen={onSelectEpisode} onPlay={onPlayEpisode} />)}</div>}
-                        {!loadingSeasons[season.Id] && episodes && episodes.length === 0 && <p class="season-empty">No episodes are available in this season.</p>}
+                        {!loadingSeasons[season.Id] && episodes && episodes.length === 0 && <p class="season-empty">{t('No episodes are available in this season.')}</p>}
                     </section>;
                 })}
-                {!seasons.length && (props.loading ? <HomeSectionLoading label="Loading seasons…" /> : <EmptyState title="No seasons found" text="This TV show does not have any seasons available." />)}
+                {!seasons.length && (props.loading ? <HomeSectionLoading label={t('Loading seasons…')} /> : <EmptyState title={t('No seasons found')} text={t('This TV show does not have any seasons available.')} />)}
             </div>
         </div>
     </div>;
@@ -3805,19 +4016,19 @@ const EpisodeCard = memo(function EpisodeCard({ api, episode, seasonId, captureB
 }) {
     const progress = episode.UserData?.PlayedPercentage || 0;
     return <article data-episode-id={episode.Id} data-season-id={seasonId} class={episode.UserData?.Played ? 'episode-card played' : 'episode-card'}>
-        <button class="episode-art-button" data-show-control="art" data-episode-id={episode.Id} data-season-id={seasonId} data-focusable="true" aria-label={`Play ${episode.Name}`} onClick={() => onPlay(episode, captureBookmark(seasonId, episode.Id, 'art'))}>
+        <button class="episode-art-button" data-show-control="art" data-episode-id={episode.Id} data-season-id={seasonId} data-focusable="true" aria-label={t('Play {0}', episode.Name)} onClick={() => onPlay(episode, captureBookmark(seasonId, episode.Id, 'art'))}>
             <Artwork api={api} item={episode} className="episode-art" />
-            {episode.RunTimeTicks && <span class="episode-runtime">{Math.round(episode.RunTimeTicks / 600000000)} min</span>}
-            {episode.UserData?.Played && <span class="episode-watched" aria-label="Watched">✓</span>}
+            {episode.RunTimeTicks && <span class="episode-runtime">{t('{0} min', Math.round(episode.RunTimeTicks / 600000000))}</span>}
+            {episode.UserData?.Played && <span class="episode-watched" aria-label={t('Watched')}>✓</span>}
             {progress > 0 && progress < 100 && <span class="progress-track episode-progress"><span style={{ width: `${progress}%` }} /></span>}
         </button>
         <div class="episode-copy">
             <button class="episode-title" data-show-control="title" data-episode-id={episode.Id} data-season-id={seasonId} data-focusable="true" onClick={() => onOpen(episode, captureBookmark(seasonId, episode.Id, 'title'))}><span class="episode-number">{episode.IndexNumber !== undefined ? `E${String(episode.IndexNumber).padStart(2, '0')}` : 'EPISODE'}</span><span>{episode.Name}</span></button>
-            <div class="episode-meta">{episode.PremiereDate && <span>{new Date(episode.PremiereDate).toLocaleDateString()}</span>}{episode.RunTimeTicks && <span>{Math.round(episode.RunTimeTicks / 600000000)} min</span>}</div>
+            <div class="episode-meta">{episode.PremiereDate && <span>{new Date(episode.PremiereDate).toLocaleDateString()}</span>}{episode.RunTimeTicks && <span>{t('{0} min', Math.round(episode.RunTimeTicks / 600000000))}</span>}</div>
             {episode.Overview && <p>{episode.Overview}</p>}
         </div>
-        <button class="episode-play" data-show-control="play" data-episode-id={episode.Id} data-season-id={seasonId} data-focusable="true" aria-label={`Play ${episode.Name}`} onClick={() => onPlay(episode, captureBookmark(seasonId, episode.Id, 'play'))}>▶</button>
+        <button class="episode-play" data-show-control="play" data-episode-id={episode.Id} data-season-id={seasonId} data-focusable="true" aria-label={t('Play {0}', episode.Name)} onClick={() => onPlay(episode, captureBookmark(seasonId, episode.Id, 'play'))}>▶</button>
     </article>;
 });
 
-render(<App />, document.getElementById('app')!);
+void initHostIdentity().finally(() => render(<App />, document.getElementById('app')!));

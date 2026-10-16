@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { extname } from 'node:path';
 import { test } from 'node:test';
+import { readSource } from './source.mjs';
 
 registerHooks({
     resolve(specifier, context, nextResolve) {
@@ -11,7 +12,7 @@ registerHooks({
 });
 
 const q = await import('../src/play-queue.ts');
-const source = path => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
+const source = path => readSource(new URL(`../src/${path}`, import.meta.url), 'utf8');
 const video = (id, extra = {}) => ({ Id: id, Name: id, Type: 'Movie', MediaType: 'Video', ...extra });
 const ids = items => items.map(item => item.Id);
 const seeded = (...values) => { let index = 0; return () => values[index++ % values.length]; };

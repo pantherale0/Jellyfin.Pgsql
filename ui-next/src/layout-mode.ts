@@ -1,3 +1,5 @@
+import { nativeShellLayout } from './native-host';
+
 export type LayoutChoice = 'auto' | 'tv' | 'desktop';
 
 export const LAYOUT_STORAGE_KEY = 'ui-next-layout';
@@ -47,16 +49,6 @@ export function saveLayoutChoice(choice: LayoutChoice): void {
         if (choice === 'auto') localStorage.removeItem(LAYOUT_STORAGE_KEY);
         else localStorage.setItem(LAYOUT_STORAGE_KEY, choice);
     } catch (_error) { /* Storage can be disabled. */ }
-}
-
-export function nativeShellLayout(): string | null {
-    const shell = (window as Window & { NativeShell?: { AppHost?: { getDefaultLayout?: () => unknown } } }).NativeShell;
-    try {
-        const layout = shell?.AppHost?.getDefaultLayout?.();
-        return typeof layout === 'string' ? layout : null;
-    } catch (_error) {
-        return null;
-    }
 }
 
 let cached: 'tv' | 'desktop' | null = null;

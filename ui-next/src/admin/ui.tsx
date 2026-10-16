@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { JellyfinSession } from './types';
 import { sessionControls } from './admin-state';
 import { changedFields, displayValue, getPath, parseInput, setPath, type FieldDef } from './server-settings';
+import { t } from '../i18n';
 
 export function playbackMethod(session: JellyfinSession): string {
     const method = session.PlayState?.PlayMethod;
@@ -68,11 +69,11 @@ export function StatusChip({ tone, children }: { tone: 'green' | 'amber' | 'red'
 }
 
 export function SearchInput({ value, onInput, placeholder }: { value: string; onInput: (v: string) => void; placeholder?: string }) {
-    return <input class="ad-search" value={value} onInput={e => onInput((e.target as HTMLInputElement).value)} placeholder={placeholder || 'Search…'} aria-label={placeholder || 'Search'} />;
+    return <input class="ad-search" value={value} onInput={e => onInput((e.target as HTMLInputElement).value)} placeholder={placeholder || t('Search…')} aria-label={placeholder || t('Search')} />;
 }
 
 export function FilterPills({ options, value, onPick }: { options: string[]; value: string; onPick: (v: string) => void }) {
-    return <div class="ad-chips" role="group">{options.map(o => <button key={o} type="button" class={`ad-chip${value === o ? ' on' : ''}`} aria-pressed={value === o} onClick={() => onPick(o)}>{o}</button>)}</div>;
+    return <div class="ad-chips" role="group">{options.map(o => <button key={o} type="button" class={`ad-chip${value === o ? ' on' : ''}`} aria-pressed={value === o} onClick={() => onPick(o)}>{t(o)}</button>)}</div>;
 }
 
 export function ConfirmButton({ label, onConfirm, confirmLabel, tone, busy }: {
@@ -86,13 +87,13 @@ export function ConfirmButton({ label, onConfirm, confirmLabel, tone, busy }: {
         if (locked.current || busy) return;
         locked.current = true; setPending(true); setError('');
         try { await onConfirm(); setArm(false); }
-        catch (e) { setError(e instanceof Error ? e.message : 'The operation failed.'); }
+        catch (e) { setError(e instanceof Error ? e.message : t('The operation failed.')); }
         finally { setPending(false); locked.current = false; }
     };
-    if (!arm) return <button disabled={pending || busy} class={`ad-btn${tone === 'danger' ? ' danger' : ''}`} onClick={() => { setArm(true); setError(''); }}>{busy ? 'Working…' : label}</button>;
+    if (!arm) return <button disabled={pending || busy} class={`ad-btn${tone === 'danger' ? ' danger' : ''}`} onClick={() => { setArm(true); setError(''); }}>{busy ? t('Working…') : label}</button>;
     return <span class="ad-inline-confirm">
-        <button disabled={pending || busy} aria-label={`Confirm ${label}`} class={`ad-btn ${tone === 'danger' ? 'danger fill' : ''}`} onClick={confirm}>{pending || busy ? 'Working…' : confirmLabel || 'Confirm'}</button>
-        <button disabled={pending || busy} class="ad-btn" onClick={() => setArm(false)}>Cancel</button>
+        <button disabled={pending || busy} aria-label={t('Confirm {0}', label)} class={`ad-btn ${tone === 'danger' ? 'danger fill' : ''}`} onClick={confirm}>{pending || busy ? t('Working…') : confirmLabel || t('Confirm')}</button>
+        <button disabled={pending || busy} class="ad-btn" onClick={() => setArm(false)}>{t('Cancel')}</button>
         {error && <span role="alert" class="ad-error">{error}</span>}
     </span>;
 }
@@ -115,25 +116,25 @@ export function SessionControls({ session, api, onChanged }: { session: Jellyfin
     const run = async (action: () => Promise<void>) => {
         setBusy(true); setError('');
         try { await action(); await onChanged?.(); }
-        catch (e) { setError(e instanceof Error ? e.message : 'The session did not accept the command.'); }
+        catch (e) { setError(e instanceof Error ? e.message : t('The session did not accept the command.')); }
         finally { setBusy(false); }
     };
     return <span class="ad-flex ad-session-controls">
-        <button class="ad-btn" disabled={busy} onClick={() => void run(() => controls.isPaused ? api.resumePlayback(session.Id) : api.pausePlayback(session.Id))}>{controls.isPaused ? 'Resume' : 'Pause'}</button>
+        <button class="ad-btn" disabled={busy} onClick={() => void run(() => controls.isPaused ? api.resumePlayback(session.Id) : api.pausePlayback(session.Id))}>{controls.isPaused ? t('Resume') : t('Pause')}</button>
         {composing
             ? <form class="ad-flex" onSubmit={e => { e.preventDefault(); if (!text.trim()) return; void run(async () => { await api.sendSessionMessage(session.Id, text.trim()); setText(''); setComposing(false); }); }}>
-                <input class="ad-form-input" aria-label={`Message to ${session.UserName || 'session'}`} value={text} maxLength={500} onInput={e => setText(e.currentTarget.value)} />
-                <button class="ad-btn" type="submit" disabled={busy || !text.trim()}>Send</button>
-                <button class="ad-btn" type="button" onClick={() => setComposing(false)}>Cancel</button>
+                <input class="ad-form-input" aria-label={`Message to ${session.UserName || t('session')}`} value={text} maxLength={500} onInput={e => setText(e.currentTarget.value)} />
+                <button class="ad-btn" type="submit" disabled={busy || !text.trim()}>{t('Send')}</button>
+                <button class="ad-btn" type="button" onClick={() => setComposing(false)}>{t('Cancel')}</button>
             </form>
-            : <button class="ad-btn" disabled={busy} onClick={() => setComposing(true)}>Message</button>}
-        <ConfirmButton label="Stop playback" tone="danger" busy={busy} onConfirm={async () => { await api.stopPlayback(session.Id); await onChanged?.(); }} />
+            : <button class="ad-btn" disabled={busy} onClick={() => setComposing(true)}>{t('Message')}</button>}
+        <ConfirmButton label={t('Stop playback')} tone="danger" busy={busy} onConfirm={async () => { await api.stopPlayback(session.Id); await onChanged?.(); }} />
         {error && <span role="alert" class="ad-error">{error}</span>}
     </span>;
 }
 
 export function Tabs({ tabs, value, onPick }: { tabs: string[]; value: string; onPick: (v: string) => void }) {
-    return <div class="ad-tabs" role="group">{tabs.map(t => <button key={t} type="button" class={`ad-tab${value === t ? ' on' : ''}`} aria-pressed={value === t} onClick={() => onPick(t)}>{t}</button>)}</div>;
+    return <div class="ad-tabs" role="group">{tabs.map(tab => <button key={tab} type="button" class={`ad-tab${value === tab ? ' on' : ''}`} aria-pressed={value === tab} onClick={() => onPick(tab)}>{t(tab)}</button>)}</div>;
 }
 
 export function timeAgo(d?: string): string {
@@ -207,11 +208,11 @@ export function DataTable<T>({ rows, columns, getKey, empty, query, sortKey, sor
         else { setSort(key); setAscending(key === internalSort ? !internalAscending : true); }
     };
     return <>
-        {query === undefined && <div class="ad-toolbar"><SearchInput value={internalQuery} onInput={setQuery} placeholder="Search rows…" /></div>}
+        {query === undefined && <div class="ad-toolbar"><SearchInput value={internalQuery} onInput={setQuery} placeholder={t('Search rows…')} /></div>}
         <div class="ad-table-wrap"><table class="ad-table"><thead><tr>{columns.map(c =>
-            <th key={c.key} aria-sort={selectedSort === c.key ? ascending ? 'ascending' : 'descending' : undefined}>{c.label && <button class="ad-sort" onClick={() => pickSort(c.key)} aria-label={`Sort by ${c.label}`}>{c.label}{selectedSort === c.key ? (ascending === false ? ' ↓' : ' ↑') : ''}</button>}</th>
+            <th key={c.key} aria-sort={selectedSort === c.key ? ascending ? 'ascending' : 'descending' : undefined}>{c.label && <button class="ad-sort" onClick={() => pickSort(c.key)} aria-label={t('Sort by {0}', c.label)}>{c.label}{selectedSort === c.key ? (ascending === false ? ' ↓' : ' ↑') : ''}</button>}</th>
         )}</tr></thead><tbody>{ordered.length === 0 ? <tr><td colSpan={columns.length}><Empty muted>{empty}</Empty></td></tr> : visible.map(row => <tr key={getKey(row)}>{columns.map(c => <td key={c.key}>{c.value(row)}</td>)}</tr>)}</tbody></table></div>
-        {ordered.length > 20 && <div class="ad-pagination"><button class="ad-btn" disabled={!currentPage} onClick={() => setPage(currentPage - 1)}>Previous</button><span>{currentPage * 20 + 1}–{Math.min((currentPage + 1) * 20, ordered.length)} of {ordered.length}</span><button class="ad-btn" disabled={(currentPage + 1) * 20 >= ordered.length} onClick={() => setPage(currentPage + 1)}>Next</button></div>}
+        {ordered.length > 20 && <div class="ad-pagination"><button class="ad-btn" disabled={!currentPage} onClick={() => setPage(currentPage - 1)}>{t('Previous')}</button><span>{t('{0}–{1} of {2}', currentPage * 20 + 1, Math.min((currentPage + 1) * 20, ordered.length), ordered.length)}</span><button class="ad-btn" disabled={(currentPage + 1) * 20 >= ordered.length} onClick={() => setPage(currentPage + 1)}>{t('Next')}</button></div>}
     </>;
 }
 
@@ -235,16 +236,16 @@ export function SettingsFields({ fields, draft, onChange, options = {}, disabled
         const id = `setting-${field.key.replace(/\W/g, '-')}`;
         const choices = options[field.key] || (field.values || []).map(value => Array.isArray(value) ? value : [ value, value ] as [string, string]);
         const control = field.kind === 'boolean'
-            ? <label class="ad-toggle-row"><span>{shown ? 'Enabled' : 'Disabled'}</span><input id={id} type="checkbox" checked={shown === true} disabled={disabled} onChange={e => update(field, e.currentTarget.checked)} /></label>
+            ? <label class="ad-toggle-row"><span>{shown ? t('Enabled') : t('Disabled')}</span><input id={id} type="checkbox" checked={shown === true} disabled={disabled} onChange={e => update(field, e.currentTarget.checked)} /></label>
             : field.kind === 'select'
-                ? <select id={id} class="ad-form-input" value={String(shown)} disabled={disabled} onChange={e => update(field, e.currentTarget.value)}>{!choices.some(([value]) => value === String(shown)) && <option value={String(shown)}>{String(shown) || 'Not set'}</option>}{choices.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                ? <select id={id} class="ad-form-input" value={String(shown)} disabled={disabled} onChange={e => update(field, e.currentTarget.value)}>{!choices.some(([value]) => value === String(shown)) && <option value={String(shown)}>{String(shown) || t('Not set')}</option>}{choices.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}</select>
                 : field.kind === 'textarea' || (field.kind === 'list' && field.lines)
                     ? <textarea id={id} class="ad-form-input" rows={4} value={String(shown)} disabled={disabled} onInput={e => update(field, e.currentTarget.value)} />
                     : <div class={field.unit ? 'ad-input-unit' : undefined}><input id={id} class="ad-form-input" type={field.kind === 'number' ? 'number' : field.kind === 'password' ? 'password' : 'text'} min={field.min} max={field.max} step={field.step} value={String(shown)} disabled={disabled} autoComplete={field.kind === 'password' ? 'new-password' : undefined} onInput={e => update(field, e.currentTarget.value)} />{field.unit && <span class="ad-unit">{field.unit}</span>}</div>;
         return <div class="ad-form-field" key={field.key}>
-            <label class="ad-form-label" for={id}>{field.label}</label>
+            <label class="ad-form-label" for={id}>{t(field.label)}</label>
             {control}
-            {field.note && <span class="ad-note">{field.note}</span>}
+            {field.note && <span class="ad-note">{t(field.note)}</span>}
             {errors[field.key] && <span role="alert" class="ad-error">{errors[field.key]}</span>}
         </div>;
     })}</div>;
@@ -269,23 +270,23 @@ export function ConfigSection({ api, path, title, fields, options, note, validat
         let active = true;
         setSaved(null); setLoadError('');
         api.getConfig(path).then(config => { if (active) { setSaved(config); setDraft(config); } })
-            .catch(e => { if (active) setLoadError(e instanceof Error ? e.message : 'Settings could not be loaded.'); });
+            .catch(e => { if (active) setLoadError(e instanceof Error ? e.message : t('Settings could not be loaded.')); });
         return () => { active = false; };
     }, [api, path]);
     const patch = saved ? changedFields(fields, saved, draft) : {};
     const dirty = Object.keys(patch).length > 0;
     return <Card title={title}>
-        {loadError ? <p role="alert" class="ad-error">{loadError} Settings cannot be saved until they load.</p> : !saved ? <p role="status" class="ad-note">Loading settings…</p> : <>
+        {loadError ? <p role="alert" class="ad-error">{t('{0} Settings cannot be saved until they load.', loadError)}</p> : !saved ? <p role="status" class="ad-note">{t('Loading settings…')}</p> : <>
             <SettingsFields key={revision} fields={fields} draft={draft} onChange={next => { setDraft(next); setMessage(''); }} options={options} />
             {note && <p class="ad-note">{note}</p>}
             <div class="ad-flex">
-                {!dirty ? <button class="ad-btn" disabled>Save changes</button> : <ConfirmButton label="Save changes" onConfirm={async () => {
+                {!dirty ? <button class="ad-btn" disabled>{t('Save changes')}</button> : <ConfirmButton label={t('Save changes')} onConfirm={async () => {
                     const problem = validate?.(draft);
                     if (problem) throw new Error(problem);
                     const next = await api.saveConfigPatch(path, patch);
-                    setSaved(next); setDraft(next); setRevision(value => value + 1); setMessage('Settings saved.'); onSaved?.(next);
+                    setSaved(next); setDraft(next); setRevision(value => value + 1); setMessage(t('Settings saved.')); onSaved?.(next);
                 }} />}
-                <button class="ad-btn" disabled={!dirty} onClick={() => { setDraft(saved); setRevision(value => value + 1); setMessage(''); }}>Discard</button>
+                <button class="ad-btn" disabled={!dirty} onClick={() => { setDraft(saved); setRevision(value => value + 1); setMessage(''); }}>{t('Discard')}</button>
             </div>
             {message && <p role="status" class="ad-note">{message}</p>}
         </>}

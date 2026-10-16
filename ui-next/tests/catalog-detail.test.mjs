@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { extname } from 'node:path';
 import { beforeEach, test } from 'node:test';
+import { readSource } from './source.mjs';
 
 registerHooks({
     resolve(specifier, context, nextResolve) {
@@ -32,17 +33,17 @@ globalThis.XMLHttpRequest = class {
 const detail = await import('../src/detail-model.ts');
 const catalog = await import('../src/catalog-model.ts');
 const { JellyfinApi } = await import('../src/api.ts');
-const source = path => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
+const source = path => readSource(new URL(`../src/${path}`, import.meta.url), 'utf8');
 const session = { server: 'https://jf.test', token: 'token', user: { Id: 'me', Name: 'Me' }, serverId: 's' };
 const ok = items => ({ status: 200, body: JSON.stringify({ Items: items, TotalRecordCount: items.length }) });
 const admin = { Policy: { IsAdministrator: true } };
 const viewer = { Policy: { IsAdministrator: false } };
 
-test('PART-06: details expose ratings, tagline, safe links and technical media facts', () => {
+test('PART-06: details expose ratings, tagline, safe links and media tags', () => {
     const facts = detail.detailFacts({
         Id: 'm', Name: 'Movie', OfficialRating: 'PG-13', CriticRating: 87.4, Taglines: [ '', 'In space…' ],
         ExternalUrls: [ { Name: 'IMDb', Url: 'https://imdb.com/title/tt1' }, { Name: 'Bad', Url: 'javascript:alert(1)' }, { Name: 'Plain', Url: 'http://x.test' } ],
-        MediaSources: [ { Id: 's', Container: 'mkv', Size: 4.5 * 1024 ** 3, Bitrate: 12_400_000, MediaStreams: [
+        MediaSources: [ { Id: 's', MediaStreams: [
             { Type: 'Video', Width: 3840, Height: 2160, Codec: 'hevc', VideoRangeType: 'HDR10' },
             { Type: 'Audio', DisplayTitle: 'English · EAC3 5.1' },
             { Type: 'Subtitle', Language: 'fre' },
@@ -52,13 +53,17 @@ test('PART-06: details expose ratings, tagline, safe links and technical media f
     assert.equal(facts.criticRating, 87);
     assert.equal(facts.tagline, 'In space…');
     assert.deepEqual(facts.links, [ { label: 'IMDb', url: 'https://imdb.com/title/tt1' } ]);
-    assert.equal(facts.video, '4K · HEVC · HDR10');
-    assert.deepEqual(facts.audio, [ 'English · EAC3 5.1' ]);
-    assert.deepEqual(facts.subtitles, [ 'fre' ]);
-    assert.equal(facts.container, 'MKV');
-    assert.equal(facts.size, '4.5 GB');
-    assert.equal(facts.bitrate, '12.4 Mbps');
-    assert.equal(detail.formatSize(0), undefined);
+    assert.deepEqual(facts.tags.map(tag => tag.label), [ '4K', 'HDR', 'CC' ]);
+});
+
+test('media tags grade resolution, HDR range and subtitle availability', () => {
+    const labels = item => detail.detailFacts(item).tags.map(tag => tag.label);
+    assert.deepEqual(labels({ MediaStreams: [ { Type: 'Video', Width: 1280, Height: 720 } ] }), [ 'HD' ]);
+    assert.deepEqual(labels({ MediaStreams: [ { Type: 'Video', Width: 1920, Height: 1080, VideoRangeType: 'SDR' } ] }), [ 'HD' ]);
+    assert.deepEqual(labels({ MediaStreams: [ { Type: 'Video', Width: 720, Height: 480 } ] }), [ 'SD' ]);
+    assert.deepEqual(labels({ MediaStreams: [ { Type: 'Video', Width: 3840, Height: 2160, VideoRangeType: 'DOVI' }, { Type: 'Subtitle', Language: 'eng' } ] }), [ '4K', 'Dolby Vision', 'CC' ]);
+    assert.deepEqual(labels({ MediaStreams: [ { Type: 'Video', Width: 3840, Height: 2160, VideoRange: 'HDR' } ] }), [ '4K', 'HDR' ]);
+    assert.deepEqual(labels({}), []);
 });
 
 test('MISS-17: people, genres, studios, tags and artists become openable entities', () => {
@@ -98,15 +103,15 @@ test('MISS-10/MISS-15: albums group tracks by disc and child views follow the it
 
 test('MISS-13/MISS-25/MISS-26: item actions follow server capability flags and user policy', () => {
     const movie = { Id: 'm', Type: 'Movie', CanDelete: true, CanDownload: true };
-    assert.deepEqual(detail.itemActions(movie, admin), { download: true, share: true, collection: true, remove: true });
-    assert.deepEqual(detail.itemActions({ ...movie, CanDelete: false, CanDownload: false }, viewer), { download: false, share: true, collection: false, remove: false });
+    assert.deepEqual(detail.itemActions(movie, admin), { download: true, share: true, collection: true, playlist: true, remove: true });
+    assert.deepEqual(detail.itemActions({ ...movie, CanDelete: false, CanDownload: false }, viewer), { download: false, share: true, collection: false, playlist: true, remove: false });
     assert.equal(detail.itemActions(movie, { Policy: { EnableCollectionManagement: true } }).collection, true);
     assert.equal(detail.itemActions({ Id: 'tag:x', Type: 'Tag', CanDelete: true }, admin).remove, false);
     assert.equal(detail.itemActions({ Id: 'b', Type: 'BoxSet' }, admin).collection, false);
     assert.deepEqual(detail.withoutItem([ { Id: 'a' }, { Id: 'b' } ], 'a'), [ { Id: 'b' } ]);
 
-    const link = detail.shareLink('https://jf.test/', { Id: 'm 1' }, 'srv');
-    assert.equal(link, 'https://jf.test/web/#/details?id=m+1&serverId=srv');
+    const link = detail.shareLink('https://ui.test/web/?x=1#/details', { Id: 'm 1' });
+    assert.equal(link, 'https://ui.test/web/?item=m+1');
     assert.doesNotMatch(link, /token|api_key|ApiKey/i);
 });
 
@@ -180,4 +185,21 @@ test('detail page wires the new sections and library cards offer delete and coll
     assert.match(library, /api\.removeFromCollection\(library\.Id/);
     assert.match(library, /Confirm: delete from server/);
     assert.match(source('library-query.ts'), /MediaStreams,CanDelete/);
+});
+
+test('detail page splits a capped hero from a full-width body and keeps rows readable', () => {
+    const main = source('main.tsx');
+    const bodyIndex = main.indexOf('<section class="detail-body">');
+    assert.ok(bodyIndex > 0, 'the details page renders a full-width body section');
+    assert.match(main.slice(0, bodyIndex), /<div class="detail-content">/);
+    const body = main.slice(bodyIndex);
+    for (const view of [ 'LinkedMetadataView', 'DetailExtras', 'RelatedRows' ]) assert.match(body, new RegExp(`<${view} `), `${view} must render in the full-width body, not the hero column`);
+    assert.doesNotMatch(main.slice(0, bodyIndex), /<LinkedMetadataView /, 'cast, crew and categories belong in the body');
+
+    const css = source('style.css');
+    assert.match(css, /\.detail-body\s*\{[^}]*var\(--page-gutter\)/);
+    assert.match(css, /\.detail-card\s*\{[^}]*min-width:\s*0/, 'detail cards must not stretch past their flex basis');
+    assert.match(css, /\.detail-card-art img\s*\{[^}]*width:\s*100%/, 'card art must be constrained to the card');
+    assert.match(css, /\.detail-chip small\s*\{[^}]*var\(--muted\)/, 'the crew role must be muted');
+    assert.match(css, /\.detail-chip small::before\s*\{[^}]*content:\s*'·'/, 'the crew role must be separated from the name');
 });

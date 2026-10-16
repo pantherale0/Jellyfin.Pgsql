@@ -5,7 +5,7 @@ import { libraryGeometry } from './library-geometry';
 import { JellyfinApi, peekCachedImage, releaseCachedImage, retainCachedImage } from './api';
 import { activeFilterCount as countFilters, decadeYears, defaultLibraryQuery, librarySortOptions, splitValues, toggleValue } from './library-query';
 import { cardImageType, currentMode, libraryModes } from './library-modes';
-import { CollectionPicker, MediaRow } from './detail-sections';
+import { CollectionPicker, MediaRow, PlaylistPicker } from './detail-sections';
 import { addToQueue, playNext, playQueue, queueable } from './play-queue';
 import { actionTargets, batchMessage, bulkCapabilities, MAX_SELECTION, runBatch, selectAll, toggleSelection, type BulkAction } from './bulk-actions';
 import { describeCard } from './media-labels';
@@ -13,7 +13,10 @@ import { applyUserDataChange, itemCapabilities, listsDirectChildren, peekLibrary
 import type { LibraryFeature, LibraryQuery } from './library-query';
 import type { LibraryView } from './catalog-model';
 import type { ItemResponse, JellyfinUser, MediaItem } from './types';
-import { canManageCollections, withoutItem } from './detail-model';
+import { canAddToPlaylist, canManageCollections, withoutItem } from './detail-model';
+import { t } from './i18n';
+import { isMusicTarget } from './music-model';
+import { musicEngine } from './music-player';
 
 const PAGE_SIZE = 80;
 const WINDOW_SIZE = PAGE_SIZE * 3;
@@ -116,7 +119,7 @@ export function LibraryPage({ api, library, user, restore = false, parentLabel, 
             setTotal(response.TotalRecordCount ?? total);
             if (scroll) window.scrollTo({ top: 0, behavior: 'auto' });
         } catch (e) {
-            if (currentGeneration === generation.current) setError(userMessage(e, 'Library items could not load.'));
+            if (currentGeneration === generation.current) setError(userMessage(e, t('Library items could not load.')));
         } finally {
             if (requestOwner.current === requestId) {
                 requestActive.current = false;
@@ -167,7 +170,7 @@ export function LibraryPage({ api, library, user, restore = false, parentLabel, 
         void api.getGenres(library.Id).then(nextGenres => {
             if (!active) return;
             setGenres(nextGenres.filter(item => item.Name).sort((a, b) => (a.Name || '').localeCompare(b.Name || '')));
-        }).catch(() => { if (active) setGenreError('Genres could not load.'); });
+        }).catch(() => { if (active) setGenreError(t('Genres could not load.')); });
         return () => { active = false; };
     }, [ api, library.Id, genreAttempt ]);
 
@@ -187,7 +190,7 @@ export function LibraryPage({ api, library, user, restore = false, parentLabel, 
         if (!api) return;
         void api.getYears(library.Id).then(nextYears => {
             if (active) setYears(nextYears);
-        }).catch(() => { if (active) setYearError('Decades could not load.'); });
+        }).catch(() => { if (active) setYearError(t('Decades could not load.')); });
         return () => { active = false; };
     }, [ api, library.Id, yearAttempt ]);
 
@@ -265,7 +268,7 @@ export function LibraryPage({ api, library, user, restore = false, parentLabel, 
             }
             setTotal(response.TotalRecordCount ?? totalRef.current);
         } catch (e) {
-            if (currentGeneration === generation.current) setError(userMessage(e, 'Library items could not load.'));
+            if (currentGeneration === generation.current) setError(userMessage(e, t('Library items could not load.')));
         } finally {
             if (requestOwner.current === requestId) {
                 requestActive.current = false;
@@ -534,7 +537,7 @@ export function LibraryPage({ api, library, user, restore = false, parentLabel, 
             setTotal(page.TotalRecordCount ?? totalRef.current);
             setActiveLetter(requested);
         } catch (error) {
-            if (requestGeneration === generation.current) setError(userMessage(error, 'Could not jump to that title.'));
+            if (requestGeneration === generation.current) setError(userMessage(error, t('Could not jump to that title.')));
         } finally {
             if (requestGeneration === generation.current && !pendingJump.current) {
                 jumpPending.current = false;
@@ -608,7 +611,7 @@ export function LibraryPage({ api, library, user, restore = false, parentLabel, 
             const change = applyUserDataChange(itemsRef.current, item.Id, userData, query.WatchStatus, query.Favorite);
             setItems(change.items);
             if (change.removed) setTotal(current => Math.max(0, current - change.removed));
-        } catch (e) { setError(userMessage(e, 'Could not update item.')); }
+        } catch (e) { setError(userMessage(e, t('Could not update item.'))); }
         finally { setBusyId(''); }
     };
 
@@ -620,7 +623,7 @@ export function LibraryPage({ api, library, user, restore = false, parentLabel, 
             else await api.removeFromCollection(library.Id, [ item.Id ]);
             setItems(withoutItem(itemsRef.current, item.Id));
             setTotal(current => Math.max(0, current - 1));
-        } catch (e) { setError(userMessage(e, mode === 'delete' ? 'Could not delete the item.' : 'Could not remove the item from the collection.')); }
+        } catch (e) { setError(userMessage(e, mode === 'delete' ? t('Could not delete the item.') : t('Could not remove the item from the collection.'))); }
         finally { setBusyId(''); }
     };
     const canUncollect = library.Type === 'BoxSet' && !!user && canManageCollections(user);
@@ -630,11 +633,16 @@ export function LibraryPage({ api, library, user, restore = false, parentLabel, 
     const [ bulkBusy, setBulkBusy ] = useState(false);
     const [ bulkNotice, setBulkNotice ] = useState<{ text: string; error: boolean } | null>(null);
     const [ bulkPicker, setBulkPicker ] = useState(false);
+    const [ bulkPlaylistPicker, setBulkPlaylistPicker ] = useState(false);
     const [ confirmBulkDelete, setConfirmBulkDelete ] = useState(false);
     const [ queueNotice, setQueueNotice ] = useState('');
     const enqueue = (item: MediaItem, where: 'next' | 'end') => {
+        if (isMusicTarget(item)) {
+            void (where === 'next' ? musicEngine.playNext(item) : musicEngine.addToQueue(item));
+            return;
+        }
         playQueue.update(queue => where === 'next' ? playNext(queue, item) : addToQueue(queue, item));
-        setQueueNotice(where === 'next' ? `${item.Name} will play next.` : `${item.Name} added to the queue.`);
+        setQueueNotice(where === 'next' ? t('{0} will play next.', item.Name) : t('{0} added to the queue.', item.Name));
     };
     useEffect(() => {
         setSelection(new Map());
@@ -650,6 +658,15 @@ export function LibraryPage({ api, library, user, restore = false, parentLabel, 
     };
     const selected = Array.from(selection.values());
     const bulk = bulkCapabilities(selected, user);
+    const queueMusic = async (targets: MediaItem[]) => {
+        setBulkBusy(true);
+        try {
+            for (const target of targets) await musicEngine.addToQueue(target);
+            setBulkNotice({ text: t('Added {0} music selections to the queue.', targets.length), error: false });
+        } finally {
+            setBulkBusy(false);
+        }
+    };
     const runBulk = async (action: BulkAction) => {
         if (!api || bulkBusy || !selected.length) return;
         const targets = actionTargets(selected, action);
@@ -686,102 +703,105 @@ export function LibraryPage({ api, library, user, restore = false, parentLabel, 
             setConfirmBulkDelete(false);
         }
     };
-    const bulkBar = selecting && <div class="library-bulk-bar" role="toolbar" aria-label="Actions for selected titles" data-focusable="scope">
-        <span class="library-bulk-count" aria-live="polite">{selection.size} selected{selection.size >= MAX_SELECTION ? ` (limit ${MAX_SELECTION})` : ''}</span>
-        <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy || !items.length} onClick={() => setSelection(current => selectAll(current, items))}>Select loaded</button>
-        <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy || !selection.size} onClick={() => setSelection(new Map())}>Clear</button>
+    const bulkBar = selecting && <div class="library-bulk-bar" role="toolbar" aria-label={t('Actions for selected titles')} data-focusable="scope">
+        <span class="library-bulk-count" aria-live="polite">{t('{0} selected{1}', selection.size, selection.size >= MAX_SELECTION ? ` (limit ${MAX_SELECTION})` : '')}</span>
+        <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy || !items.length} onClick={() => setSelection(current => selectAll(current, items))}>{t('Select loaded')}</button>
+        <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy || !selection.size} onClick={() => setSelection(new Map())}>{t('Clear')}</button>
         {bulk.played && <>
-            <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy} onClick={() => void runBulk('played')}>Mark played</button>
-            <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy} onClick={() => void runBulk('unplayed')}>Mark unplayed</button>
+            <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy} onClick={() => void runBulk('played')}>{t('Mark played')}</button>
+            <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy} onClick={() => void runBulk('unplayed')}>{t('Mark unplayed')}</button>
         </>}
         {bulk.favorite && <>
-            <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy} onClick={() => void runBulk('favorite')}>Favorite</button>
-            <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy} onClick={() => void runBulk('unfavorite')}>Unfavorite</button>
+            <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy} onClick={() => void runBulk('favorite')}>{t('Favorite')}</button>
+            <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy} onClick={() => void runBulk('unfavorite')}>{t('Unfavorite')}</button>
         </>}
-        {selected.some(queueable) && <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy} onClick={() => { const titles = selected.filter(queueable); playQueue.update(queue => titles.reduce(addToQueue, queue)); setBulkNotice({ text: `Added ${titles.length} ${titles.length === 1 ? 'title' : 'titles'} to the queue.`, error: false }); }}>Add to queue</button>}
-        {bulk.collection && <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy} aria-expanded={bulkPicker} onClick={() => setBulkPicker(open => !open)}>Add to collection</button>}
+        {selected.some(queueable) && <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy} onClick={() => { const titles = selected.filter(queueable); playQueue.update(queue => titles.reduce((next, item) => addToQueue(next, item), queue)); setBulkNotice({ text: `Added ${titles.length} ${titles.length === 1 ? 'title' : 'titles'} to the queue.`, error: false }); }}>{t('Add to queue')}</button>}
+        {selected.some(isMusicTarget) && <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy} onClick={() => void queueMusic(selected.filter(isMusicTarget))}>{t('Add to music queue')}</button>}
+        {bulk.collection && <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy} aria-expanded={bulkPicker} onClick={() => setBulkPicker(open => !open)}>{t('Add to collection')}</button>}
+        {bulk.playlist && <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy} aria-expanded={bulkPlaylistPicker} onClick={() => setBulkPlaylistPicker(open => !open)}>{t('Add to playlist')}</button>}
         {bulk.deletable > 0 && (confirmBulkDelete
-            ? <button type="button" class="button danger" data-focusable="true" disabled={bulkBusy} onClick={() => void runBulk('delete')}>Confirm: delete {bulk.deletable} from server</button>
-            : <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy} onClick={() => setConfirmBulkDelete(true)}>Delete…</button>)}
-        <button type="button" class="button primary" data-focusable="true" onClick={endSelecting}>Done</button>
-        {bulkBusy && <span class="mini-spinner" role="status" aria-label="Working" />}
+            ? <button type="button" class="button danger" data-focusable="true" disabled={bulkBusy} onClick={() => void runBulk('delete')}>{t('Confirm: delete {0} from server', bulk.deletable)}</button>
+            : <button type="button" class="button secondary" data-focusable="true" disabled={bulkBusy} onClick={() => setConfirmBulkDelete(true)}>{t('Delete…')}</button>)}
+        <button type="button" class="button primary" data-focusable="true" onClick={endSelecting}>{t('Done')}</button>
+        {bulkBusy && <span class="mini-spinner" role="status" aria-label={t('Working')} />}
         {bulkNotice && <p class={bulkNotice.error ? 'notice error' : 'notice success'} role={bulkNotice.error ? 'alert' : 'status'}>{bulkNotice.text}</p>}
         {bulkPicker && api && selected.length > 0 && <CollectionPicker api={api} itemIds={selected.map(item => item.Id)} onDone={text => { setBulkPicker(false); setBulkNotice({ text, error: false }); }} />}
+        {bulkPlaylistPicker && api && selected.length > 0 && <PlaylistPicker api={api} itemIds={selected.map(item => item.Id)} onDone={text => { setBulkPlaylistPicker(false); setBulkNotice({ text, error: false }); }} />}
     </div>;
 
     const yearOptions = Array.from(new Set(years.map(year => Math.floor(year / 10) * 10))).sort((a, b) => b - a);
     const countLabel = mode.noun;
     const listControls = !suggestionsMode && !mode.fixedOrder;
     const chips = (label: string, key: 'Genre' | 'Decade' | 'Tags' | 'Ratings', options: Array<[string, string]>) => options.length > 0 && <fieldset class="library-filter-chips">
-        <legend>{label}</legend>
+        <legend>{t(label)}</legend>
         <div>{options.map(([ value, text ]) => {
             const on = splitValues(query[key]).includes(value);
             return <button key={value} type="button" data-focusable="true" class={on ? 'active' : ''} aria-pressed={on} onClick={() => setFilter(key, toggleValue(query[key], value))}>{text}</button>;
         })}</div>
     </fieldset>;
     const toggleFeature = (feature: LibraryFeature) => setFilter('Features', (query.Features || []).includes(feature) ? query.Features.filter(entry => entry !== feature) : [ ...(query.Features || []), feature ]);
-    const modeTabs = modes.length > 1 && <div class="library-mode-tabs" role="group" aria-label="Library view">
-        {modes.map(entry => <button key={entry.id} type="button" data-focusable="true" class={entry.id === mode.id ? 'active' : ''} aria-pressed={entry.id === mode.id} onClick={() => selectMode(entry.id)}>{entry.label}</button>)}
+    const modeTabs = modes.length > 1 && <div class="library-mode-tabs" role="group" aria-label={t('Library view')}>
+        {modes.map(entry => <button key={entry.id} type="button" data-focusable="true" class={entry.id === mode.id ? 'active' : ''} aria-pressed={entry.id === mode.id} onClick={() => selectMode(entry.id)}>{t(entry.label)}</button>)}
     </div>;
-    const filterButton = <button class="library-filter-open" data-focusable="true" aria-expanded={filterOpen} onClick={() => setFilterOpen(open => !open)}>Filters{activeFilterCount > 0 && <span class="filter-count-pill">{activeFilterCount}</span>} <span aria-hidden="true">⌄</span></button>;
+    const filterButton = <button class="library-filter-open" data-focusable="true" aria-expanded={filterOpen} onClick={() => setFilterOpen(open => !open)}>{t('Filters')}{activeFilterCount > 0 && <span class="filter-count-pill">{activeFilterCount}</span>} <span aria-hidden="true">⌄</span></button>;
     const rail = <div class="library-controls library-toolbar" data-focusable="scope">
         {!suggestionsMode && <span class="library-count">{total.toLocaleString()} {countLabel}</span>}
         <div class="library-operation-controls">
-            {listControls && <label class="library-title-search"><span class="visually-hidden">Search this library</span><input type="search" data-focusable="true" placeholder={`Search ${library.Name}`} aria-label={`Search ${library.Name}`} value={titleDraft} onInput={event => setTitleDraft((event.currentTarget as HTMLInputElement).value)} /></label>}
+            {listControls && <label class="library-title-search"><span class="visually-hidden">{t('Search this library')}</span><input type="search" data-focusable="true" placeholder={t('Search {0}', library.Name)} aria-label={t('Search {0}', library.Name)} value={titleDraft} onInput={event => setTitleDraft((event.currentTarget as HTMLInputElement).value)} /></label>}
             {listControls && filterButton}
-            {!suggestionsMode && <button type="button" class={selecting ? 'library-select-toggle active' : 'library-select-toggle'} data-focusable="true" aria-pressed={selecting} onClick={() => (selecting ? endSelecting() : setSelecting(true))}>{selecting ? 'Done' : 'Select'}</button>}
-            {listControls && <Select label="Sort" value={sortControl} onChange={selectSort} options={librarySortOptions} />}
+            {!suggestionsMode && <button type="button" class={selecting ? 'library-select-toggle active' : 'library-select-toggle'} data-focusable="true" aria-pressed={selecting} onClick={() => (selecting ? endSelecting() : setSelecting(true))}>{selecting ? t('Done') : t('Select')}</button>}
+            {listControls && <Select label={t('Sort')} value={sortControl} onChange={selectSort} options={librarySortOptions} />}
         {!suggestionsMode && !document.documentElement.classList.contains('tv-client') && <ViewSwitch view={view} onChange={next => reset(query, next)} />}
         </div>
     </div>;
 
     return <section class={[ 'library-page', titleSort ? 'has-alpha' : '', modes.length > 1 ? 'has-modes' : '' ].filter(Boolean).join(' ')}>
         <header class={modes.length > 1 ? 'library-sticky has-modes' : 'library-sticky'}>
-            {onUp && parentLabel && <button class="back-link library-up" data-focusable="true" type="button" onClick={onUp}>← <span>Back to {parentLabel}</span></button>}
+            {onUp && parentLabel && <button class="back-link library-up" data-focusable="true" type="button" onClick={onUp}><span class="dir-arrow" aria-hidden="true">←</span> <span>{t('Back to {0}', parentLabel)}</span></button>}
             {modeTabs}
             {rail}
         </header>
-        {titleSort && <nav class="alpha-scrubber" aria-label="Jump to title" data-focusable="scope" onPointerDown={startScrub} onPointerMove={moveScrub} onPointerUp={endScrub} onPointerCancel={cancelScrub}>
-            {(query.SortOrder === 'Descending' ? LETTERS.slice().reverse() : LETTERS).map(letter => <button key={letter} data-letter={letter} data-focusable="true" class={activeLetter === letter ? 'active' : ''} aria-label={letter === '#' ? 'Numbers and symbols' : letter} onClick={event => clickScrubLetter(event, letter)}>{letter}</button>)}
+        {titleSort && <nav class="alpha-scrubber" aria-label={t('Jump to title')} data-focusable="scope" onPointerDown={startScrub} onPointerMove={moveScrub} onPointerUp={endScrub} onPointerCancel={cancelScrub}>
+            {(query.SortOrder === 'Descending' ? LETTERS.slice().reverse() : LETTERS).map(letter => <button key={letter} data-letter={letter} data-focusable="true" class={activeLetter === letter ? 'active' : ''} aria-label={letter === '#' ? t('Numbers and symbols') : letter} onClick={event => clickScrubLetter(event, letter)}>{letter}</button>)}
         </nav>}
         {!titleSort && <div class={`library-scroll-progress${scrolling ? ' visible' : ''}`} aria-hidden="true"><i style={{ height: `${Math.max(4, scrollProgress * 100)}%` }} /></div>}
         {scrubLetter && <span class="alpha-bubble" style={{ top: `${scrubBubbleY}px` }} aria-hidden="true">{scrubLetter}</span>}
-        {filterOpen && listControls && <div class="library-filter-popover" role="group" aria-label="Library filters">
-            <Select label="Watch status" value={query.WatchStatus === 'favorite' ? '' : query.WatchStatus} onChange={value => reset({ ...query, WatchStatus: value as LibraryQuery['WatchStatus'], Favorite: query.Favorite || query.WatchStatus === 'favorite' })} options={[[ '', 'Watch status' ], [ 'unplayed', 'Unplayed' ], [ 'played', 'Played' ], [ 'resumable', 'In progress' ]]} />
-            <Select label="Resolution" value={query.Resolution} onChange={value => setFilter('Resolution', value)} options={[[ '', 'Resolution' ], [ '4k', '4K' ], [ '1080p', '1080p' ]]} />
-            {mode.id === 'shows' && <Select label="Series status" value={query.SeriesStatus || ''} onChange={value => setFilter('SeriesStatus', value)} options={[[ '', 'Series status' ], [ 'Continuing', 'Continuing' ], [ 'Ended', 'Ended' ]]} />}
-            {mode.id === 'episodes' && <Select label="Availability" value={query.Availability || ''} onChange={value => setFilter('Availability', value)} options={[[ '', 'Availability' ], [ 'missing', 'Missing episodes' ], [ 'unaired', 'Unaired episodes' ]]} />}
-            <div class="library-filter-toggles" role="group" aria-label="Flags">
-                <button type="button" data-focusable="true" class={query.Favorite || query.WatchStatus === 'favorite' ? 'active' : ''} aria-pressed={query.Favorite || query.WatchStatus === 'favorite'} onClick={() => reset({ ...query, Favorite: !(query.Favorite || query.WatchStatus === 'favorite'), WatchStatus: query.WatchStatus === 'favorite' ? '' : query.WatchStatus })}>Favorites</button>
+        {filterOpen && listControls && <div class="library-filter-popover" role="group" aria-label={t('Library filters')}>
+            <Select label={t('Watch status')} value={query.WatchStatus === 'favorite' ? '' : query.WatchStatus} onChange={value => reset({ ...query, WatchStatus: value as LibraryQuery['WatchStatus'], Favorite: query.Favorite || query.WatchStatus === 'favorite' })} options={[[ '', 'Watch status' ], [ 'unplayed', 'Unplayed' ], [ 'played', 'Played' ], [ 'resumable', 'In progress' ]]} />
+            <Select label={t('Resolution')} value={query.Resolution} onChange={value => setFilter('Resolution', value)} options={[[ '', 'Resolution' ], [ '4k', '4K' ], [ '1080p', '1080p' ]]} />
+            {mode.id === 'shows' && <Select label={t('Series status')} value={query.SeriesStatus || ''} onChange={value => setFilter('SeriesStatus', value)} options={[[ '', 'Series status' ], [ 'Continuing', 'Continuing' ], [ 'Ended', 'Ended' ]]} />}
+            {mode.id === 'episodes' && <Select label={t('Availability')} value={query.Availability || ''} onChange={value => setFilter('Availability', value)} options={[[ '', 'Availability' ], [ 'missing', 'Missing episodes' ], [ 'unaired', 'Unaired episodes' ]]} />}
+            <div class="library-filter-toggles" role="group" aria-label={t('Flags')}>
+                <button type="button" data-focusable="true" class={query.Favorite || query.WatchStatus === 'favorite' ? 'active' : ''} aria-pressed={query.Favorite || query.WatchStatus === 'favorite'} onClick={() => reset({ ...query, Favorite: !(query.Favorite || query.WatchStatus === 'favorite'), WatchStatus: query.WatchStatus === 'favorite' ? '' : query.WatchStatus })}>{t('Favorites')}</button>
                 {([ [ 'subtitles', 'Has subtitles' ], [ 'trailer', 'Has trailer' ], [ 'special', 'Has extras' ] ] as Array<[LibraryFeature, string]>).map(([ feature, label ]) => {
                     const on = (query.Features || []).includes(feature);
-                    return <button key={feature} type="button" data-focusable="true" class={on ? 'active' : ''} aria-pressed={on} onClick={() => toggleFeature(feature)}>{label}</button>;
+                    return <button key={feature} type="button" data-focusable="true" class={on ? 'active' : ''} aria-pressed={on} onClick={() => toggleFeature(feature)}>{t(label)}</button>;
                 })}
             </div>
             {chips('Genres', 'Genre', genres.map(g => [ g.Name || '', g.Name || '' ] as [string, string]))}
             {chips('Decades', 'Decade', yearOptions.map(year => [ String(year), `${year}s` ] as [string, string]))}
-            {chips('Parental ratings', 'Ratings', facets.ratings.map(rating => [ rating, rating ] as [string, string]))}
+            {chips(t('Parental ratings'), 'Ratings', facets.ratings.map(rating => [ rating, rating ] as [string, string]))}
             {chips('Tags', 'Tags', facets.tags.slice(0, 60).map(tag => [ tag, tag ] as [string, string]))}
-            {activeFilterCount > 0 && <button type="button" class="button secondary" data-focusable="true" onClick={() => reset({ ...defaultLibraryQuery(), Mode: query.Mode, SortBy: query.SortBy, SortOrder: query.SortOrder, Title: query.Title })}>Clear filters</button>}
-            {genreError && <p class="library-filter-error" role="alert">{genreError} <button class="button secondary" data-focusable="true" type="button" onClick={() => setGenreAttempt(value => value + 1)}>Retry genres</button></p>}
-            {yearError && <p class="library-filter-error" role="alert">{yearError} <button class="button secondary" data-focusable="true" type="button" onClick={() => setYearAttempt(value => value + 1)}>Retry decades</button></p>}
+            {activeFilterCount > 0 && <button type="button" class="button secondary" data-focusable="true" onClick={() => reset({ ...defaultLibraryQuery(), Mode: query.Mode, SortBy: query.SortBy, SortOrder: query.SortOrder, Title: query.Title })}>{t('Clear filters')}</button>}
+            {genreError && <p class="library-filter-error" role="alert">{genreError} <button class="button secondary" data-focusable="true" type="button" onClick={() => setGenreAttempt(value => value + 1)}>{t('Retry genres')}</button></p>}
+            {yearError && <p class="library-filter-error" role="alert">{yearError} <button class="button secondary" data-focusable="true" type="button" onClick={() => setYearAttempt(value => value + 1)}>{t('Retry decades')}</button></p>}
         </div>}
         {suggestionsMode && <LibrarySuggestions api={api} library={library} onSelect={onSelect} onPlay={onPlay} />}
-        {error && <div class="home-section-error" role="alert"><p>{error}</p><button class="button secondary" data-focusable="true" onClick={() => void load(startIndex, true)}>Retry</button></div>}
+        {error && <div class="home-section-error" role="alert"><p>{error}</p><button class="button secondary" data-focusable="true" onClick={() => void load(startIndex, true)}>{t('Retry')}</button></div>}
         {!suggestionsMode && items.length > 0 && <VirtualizedLibraryGrid gridRef={grid} square={Boolean(mode.square) && view === 'poster'} items={items} startIndex={startIndex} total={total} api={api} view={view} onSelect={onSelect} onPlay={onPlay} onToggle={toggleUserData} onRemove={removeItem} canUncollect={canUncollect} busyId={busyId} selecting={selecting} selection={selection} onToggleSelect={item => setSelection(current => toggleSelection(current, item))} onQueue={enqueue} />}
         {bulkBar}
-        {queueNotice && <p class="notice success library-queue-notice" role="status">{queueNotice} <button type="button" class="button secondary" data-focusable="true" onClick={() => setQueueNotice('')}>Dismiss</button></p>}
-        {!suggestionsMode && loading && <div class="home-section-status" role="status"><span class="mini-spinner" aria-hidden="true" />{items.length ? 'Loading titles…' : 'Loading library…'}</div>}
-        {!suggestionsMode && !loading && !items.length && !error && <div class="empty-state"><span aria-hidden="true">✳</span><h2>Nothing here yet</h2><p>This library does not contain any matching items.</p></div>}
+        {queueNotice && <p class="notice success library-queue-notice" role="status">{queueNotice} <button type="button" class="button secondary" data-focusable="true" onClick={() => setQueueNotice('')}>{t('Dismiss')}</button></p>}
+        {!suggestionsMode && loading && <div class="home-section-status" role="status"><span class="mini-spinner" aria-hidden="true" />{items.length ? t('Loading titles…') : t('Loading library…')}</div>}
+        {!suggestionsMode && !loading && !items.length && !error && <div class="empty-state"><span aria-hidden="true">✳</span><h2>{t('Nothing here yet')}</h2><p>{t('This library does not contain any matching items.')}</p></div>}
     </section>;
 }
 
 function Select({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: Array<[string, string]> }) {
-    return <label class="library-select"><span class="visually-hidden">{label}</span><select data-focusable="true" aria-label={label} value={value} onChange={event => onChange((event.currentTarget as HTMLSelectElement).value)}>{options.map(([ option, text ]) => <option value={option} key={option}>{text}</option>)}</select></label>;
+    return <label class="library-select"><span class="visually-hidden">{t(label)}</span><select data-focusable="true" aria-label={label} value={value} onChange={event => onChange((event.currentTarget as HTMLSelectElement).value)}>{options.map(([ option, text ]) => <option value={option} key={option}>{t(text)}</option>)}</select></label>;
 }
 
 function ViewSwitch({ view, onChange }: { view: LibraryView; onChange: (view: LibraryView) => void }) {
-    return <div class="library-view-switch" role="group" aria-label="Library view">{([ [ 'poster', 'Grid' ], [ 'thumb', 'Thumb' ], [ 'banner', 'Banner' ], [ 'list', 'List' ] ] as Array<[LibraryView, string]>).map(([ key, label ]) => <button data-focusable="true" key={key} class={view === key ? 'active' : ''} aria-label={`${label} view`} aria-pressed={view === key} onClick={() => onChange(key)}>{label}</button>)}</div>;
+    return <div class="library-view-switch" role="group" aria-label={t('Library view')}>{([ [ 'poster', 'Grid' ], [ 'thumb', 'Thumb' ], [ 'banner', 'Banner' ], [ 'list', 'List' ] ] as Array<[LibraryView, string]>).map(([ key, label ]) => <button data-focusable="true" key={key} class={view === key ? 'active' : ''} aria-label={t('{0} view', label)} aria-pressed={view === key} onClick={() => onChange(key)}>{t(label)}</button>)}</div>;
 }
 
 function columnCount(element: HTMLElement): number {
@@ -881,7 +901,7 @@ const VirtualizedLibraryGrid = ({ items, startIndex, total, api, view, onSelect,
         window.scrollTo({ top: Math.max(0, top + Math.floor(target / columns) * range.height - window.innerHeight / 3), behavior: 'auto' });
         update();
     };
-    return <div ref={elementRef} class={`library-grid-items library-view-${view}${square ? ' library-art-square' : ''}`} role="list" aria-label="Titles" onKeyDown={onGridKeyDown} style={{ position: 'relative', height: `${Math.max(0, canvasHeight)}px`, '--library-columns': columns } as any}>
+    return <div ref={elementRef} class={`library-grid-items library-view-${view}${square ? ' library-art-square' : ''}`} role="list" aria-label={t('Titles')} onKeyDown={onGridKeyDown} style={{ position: 'relative', height: `${Math.max(0, canvasHeight)}px`, '--library-columns': columns } as any}>
         <div class="library-grid-window" style={{ position: 'absolute', top: `${paddingTop + firstRow * range.height}px`, left: gridStyle?.paddingLeft || '32px', right: gridStyle?.paddingRight || '36px', display: 'grid', gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, columnGap: gridStyle?.columnGap || '16px', rowGap: `${range.gap}px` }}>
             {Array.from({ length: leading }, (_value, index) => <div key={`lead-${index}`} class="library-grid-gap" aria-hidden="true" />)}
             {visible.map((item, offset) => <div key={item.Id} class="library-grid-cell" role="listitem" aria-posinset={absStart + offset + 1} aria-setsize={total} data-grid-index={absStart + offset}><LibraryCard api={api} item={item} view={view} onSelect={onSelect} onPlay={onPlay} onToggle={onToggle} onRemove={onRemove} canUncollect={canUncollect} busy={busyId === item.Id} selecting={selecting} selected={selection.has(item.Id)} onToggleSelect={onToggleSelect} onQueue={onQueue} /></div>)}
@@ -897,6 +917,7 @@ function LibraryCard({ api, item, view, onSelect, onPlay, onToggle, onRemove, ca
 }) {
     const [ menu, setMenu ] = useState(false);
     const [ confirmDelete, setConfirmDelete ] = useState(false);
+    const [ playlistPicker, setPlaylistPicker ] = useState<'' | 'open' | string>('');
     const [ menuPosition, setMenuPosition ] = useState({ left: 0, top: 0 });
     const cardRef = useRef<HTMLElement>(null);
     const menuRef = useRef<HTMLDivElement>(null);
@@ -952,7 +973,7 @@ function LibraryCard({ api, item, view, onSelect, onPlay, onToggle, onRemove, ca
         setMenu(true);
         window.setTimeout(() => menuRef.current?.querySelector<HTMLElement>('button')?.focus(), 0);
     };
-    const closeMenu = () => { setMenu(false); window.requestAnimationFrame(() => menuTriggerRef.current?.focus()); };
+    const closeMenu = () => { setMenu(false); setPlaylistPicker(''); window.requestAnimationFrame(() => menuTriggerRef.current?.focus()); };
     useDialogFocus(menuRef, menu, closeMenu, { initial: 'button', fallback: () => menuTriggerRef.current });
     const onPointerDown = () => { longPressed.current = false; pressTimer.current = window.setTimeout(() => { longPressed.current = true; openMenu(); }, 550); };
     const clearPress = () => { if (pressTimer.current) window.clearTimeout(pressTimer.current); };
@@ -965,18 +986,18 @@ function LibraryCard({ api, item, view, onSelect, onPlay, onToggle, onRemove, ca
     const can = itemCapabilities(item);
     const label = description ? `${item.Name}, ${description}` : item.Name;
     return <article ref={cardRef} class={`library-card library-card-${view}${selecting ? ' selecting' : ''}${selected ? ' selected' : ''}`} data-library-item-id={item.Id}>
-        <button class="library-card-open" data-focusable="true" aria-label={selecting ? `Select ${label}` : `View ${label}`} aria-pressed={selecting ? selected : undefined} onClick={() => { if (longPressed.current) { longPressed.current = false; return; } if (selecting) onToggleSelect?.(item); else onSelect(item); }} onTouchStart={onPointerDown} onTouchEnd={clearPress} onTouchMove={clearPress}>
+        <button class="library-card-open" data-focusable="true" aria-label={selecting ? t('Select {0}', label) : t('View {0}', label)} aria-pressed={selecting ? selected : undefined} onClick={() => { if (longPressed.current) { longPressed.current = false; return; } if (selecting) onToggleSelect?.(item); else onSelect(item); }} onTouchStart={onPointerDown} onTouchEnd={clearPress} onTouchMove={clearPress}>
             <span class="library-card-art"><img src={image || undefined} alt="" loading="lazy" />{!image && <span class="art-placeholder">{item.Name.slice(0, 1)}</span>}
                 {selecting && <span class="library-select-check" aria-hidden="true">{selected ? '✓' : ''}</span>}
-                {view !== 'list' && <>{unplayedCount > 0 && <span class="library-unplayed" aria-label={`${unplayedCount} unplayed`}>{unplayedCount}</span>}{showUnplayedDot && <span class="library-unplayed-dot" aria-label="Unplayed" />}{quality && <span class="library-quality" title={quality}>{quality}</span>}{progress > 0 && progress < 100 && <span class="library-progress"><i style={{ width: `${progress}%` }} /></span>}{posterOverlay}</>}
+                {view !== 'list' && <>{unplayedCount > 0 && <span class="library-unplayed" aria-label={t('{0} unplayed', unplayedCount)}>{unplayedCount}</span>}{showUnplayedDot && <span class="library-unplayed-dot" aria-label={t('Unplayed')} />}{quality && <span class="library-quality" title={quality}>{quality}</span>}{progress > 0 && progress < 100 && <span class="library-progress"><i style={{ width: `${progress}%` }} /></span>}{posterOverlay}</>}
             </span>
-            {view === 'list' && <span class="library-card-copy"><strong>{item.Name}</strong><small>{item.ProductionYear || '—'} <span>·</span> {metadataRuntime(item.RunTimeTicks)} <span>·</span> {item.CommunityRating ? `★ ${item.CommunityRating.toFixed(1)}` : 'Unrated'} <span>·</span> {director || 'Director unknown'} <span>·</span> {[ video?.Codec, audio?.Codec ].filter(Boolean).join(' / ') || 'Codec unknown'}</small></span>}
+            {view === 'list' && <span class="library-card-copy"><strong>{item.Name}</strong><small>{item.ProductionYear || '—'} <span>·</span> {metadataRuntime(item.RunTimeTicks)} <span>·</span> {item.CommunityRating ? `★ ${item.CommunityRating.toFixed(1)}` : t('Unrated')} <span>·</span> {director || t('Director unknown')} <span>·</span> {[ video?.Codec, audio?.Codec ].filter(Boolean).join(' / ') || t('Codec unknown')}</small></span>}
         </button>
-        {!selecting && view === 'list' && <div class="library-list-actions"><button data-focusable="true" aria-label={`${item.UserData?.IsFavorite ? 'Remove' : 'Add'} ${item.Name} ${item.UserData?.IsFavorite ? 'from' : 'to'} favorites`} disabled={busy} onClick={() => onToggle(item, 'favorite')}>{item.UserData?.IsFavorite ? '★' : '☆'}</button></div>}
-        {!selecting && <div class="library-card-hover">{can.playable && <button class="library-play-overlay" data-focusable="true" aria-label={`Play ${item.Name}`} onClick={() => onPlay(item)}>▶</button>}{can.canFavorite && <button class="library-card-favorite" data-focusable="true" aria-label="Toggle favorite" disabled={busy} onClick={() => onToggle(item, 'favorite')}>{item.UserData?.IsFavorite ? '★' : '☆'}</button>}<button ref={menuTriggerRef} class="library-card-more" data-focusable="true" aria-label="More actions" onClick={openMenu}>⋯</button></div>}
-        {menu && <div class="library-menu-shade" onClick={event => { if (event.target === event.currentTarget) closeMenu(); }}><div ref={menuRef} style={!document.documentElement.classList.contains('tv-client') && window.innerWidth > 767 ? { left: `${menuPosition.left}px`, top: `${menuPosition.top}px` } : undefined} class="library-card-menu" role="menu" aria-label={`Actions for ${item.Name}`} onClick={e => e.stopPropagation()}><strong>{item.Name}</strong>{can.playable && <button data-focusable="true" role="menuitem" onClick={() => { closeMenu(); onPlay(item); }}>▶ Play</button>}{onQueue && queueable(item) && <><button data-focusable="true" role="menuitem" onClick={() => { closeMenu(); onQueue(item, 'next'); }}>Play next</button><button data-focusable="true" role="menuitem" onClick={() => { closeMenu(); onQueue(item, 'end'); }}>Add to queue</button></>}{can.canFavorite && <button data-focusable="true" role="menuitem" onClick={() => { onToggle(item, 'favorite'); closeMenu(); }}>{item.UserData?.IsFavorite ? 'Remove favorite' : 'Add favorite'}</button>}{can.canMarkPlayed && <button data-focusable="true" role="menuitem" onClick={() => { onToggle(item, 'played'); closeMenu(); }}>Mark {item.UserData?.Played ? 'unplayed' : 'played'}</button>}<button data-focusable="true" role="menuitem" onClick={() => { closeMenu(); onSelect(item); }}>Open details</button>{canUncollect && <button data-focusable="true" role="menuitem" onClick={() => { closeMenu(); onRemove(item, 'uncollect'); }}>Remove from collection</button>}{item.CanDelete && (confirmDelete
-            ? <button data-focusable="true" role="menuitem" class="danger" onClick={() => { setConfirmDelete(false); closeMenu(); onRemove(item, 'delete'); }}>Confirm: delete from server</button>
-            : <button data-focusable="true" role="menuitem" onClick={() => setConfirmDelete(true)}>Delete…</button>)}<button data-focusable="true" role="menuitem" onClick={() => { setConfirmDelete(false); closeMenu(); }}>Close</button></div></div>}
+        {!selecting && view === 'list' && <div class="library-list-actions"><button data-focusable="true" aria-label={`${item.UserData?.IsFavorite ? t('Remove') : t('Add')} ${item.Name} ${item.UserData?.IsFavorite ? t('from') : t('to')} favorites`} disabled={busy} onClick={() => onToggle(item, 'favorite')}>{item.UserData?.IsFavorite ? '★' : '☆'}</button></div>}
+        {!selecting && <div class="library-card-hover">{(can.playable || isMusicTarget(item)) && <button class="library-play-overlay" data-focusable="true" aria-label={t('Play {0}', item.Name)} onClick={() => onPlay(item)}>▶</button>}{can.canFavorite && <button class="library-card-favorite" data-focusable="true" aria-label={t('Toggle favorite')} disabled={busy} onClick={() => onToggle(item, 'favorite')}>{item.UserData?.IsFavorite ? '★' : '☆'}</button>}<button ref={menuTriggerRef} class="library-card-more" data-focusable="true" aria-label={t('More actions')} onClick={openMenu}>⋯</button></div>}
+        {menu && <div class="library-menu-shade" onClick={event => { if (event.target === event.currentTarget) closeMenu(); }}><div ref={menuRef} style={!document.documentElement.classList.contains('tv-client') && window.innerWidth > 767 ? { left: `${menuPosition.left}px`, top: `${menuPosition.top}px` } : undefined} class="library-card-menu" role="menu" aria-label={t('Actions for {0}', item.Name)} onClick={e => e.stopPropagation()}><strong>{item.Name}</strong>{playlistPicker !== '' && api ? <>{playlistPicker === 'open' ? <PlaylistPicker api={api} itemIds={[ item.Id ]} onDone={text => setPlaylistPicker(text)} /> : <p class="notice success" role="status">{playlistPicker}</p>}<button data-focusable="true" role="menuitem" onClick={closeMenu}>{t('Close')}</button></> : <>{(can.playable || isMusicTarget(item)) && <button data-focusable="true" role="menuitem" onClick={() => { closeMenu(); onPlay(item); }}>{t('▶ Play')}</button>}{isMusicTarget(item) && <button data-focusable="true" role="menuitem" onClick={() => { closeMenu(); void musicEngine.instantMix(item); }}>{t('Instant Mix')}</button>}{onQueue && (queueable(item) || isMusicTarget(item)) && <><button data-focusable="true" role="menuitem" onClick={() => { closeMenu(); onQueue(item, 'next'); }}>{t('Play next')}</button><button data-focusable="true" role="menuitem" onClick={() => { closeMenu(); onQueue(item, 'end'); }}>{t('Add to queue')}</button></>}{can.canFavorite && <button data-focusable="true" role="menuitem" onClick={() => { onToggle(item, 'favorite'); closeMenu(); }}>{item.UserData?.IsFavorite ? t('Remove favorite') : t('Add favorite')}</button>}{can.canMarkPlayed && <button data-focusable="true" role="menuitem" onClick={() => { onToggle(item, 'played'); closeMenu(); }}>{t('Mark')}{' '}{item.UserData?.Played ? 'unplayed' : 'played'}</button>}{api && canAddToPlaylist(item) && <button data-focusable="true" role="menuitem" onClick={() => setPlaylistPicker('open')}>{t('Add to playlist…')}</button>}<button data-focusable="true" role="menuitem" onClick={() => { closeMenu(); onSelect(item); }}>{t('Open details')}</button>{canUncollect && <button data-focusable="true" role="menuitem" onClick={() => { closeMenu(); onRemove(item, 'uncollect'); }}>{t('Remove from collection')}</button>}{item.CanDelete && (confirmDelete
+            ? <button data-focusable="true" role="menuitem" class="danger" onClick={() => { setConfirmDelete(false); closeMenu(); onRemove(item, 'delete'); }}>{t('Confirm: delete from server')}</button>
+            : <button data-focusable="true" role="menuitem" onClick={() => setConfirmDelete(true)}>{t('Delete…')}</button>)}<button data-focusable="true" role="menuitem" onClick={() => { setConfirmDelete(false); closeMenu(); }}>{t('Close')}</button></>}</div></div>}
     </article>;
 }
 
@@ -1041,11 +1062,11 @@ function LibrarySuggestions({ api, library, onSelect, onPlay }: { api: JellyfinA
         setRows(null);
         setError('');
         if (!api) return;
-        void api.getLibrarySuggestions(library).then(next => { if (active) setRows(next); }).catch(cause => { if (active) setError(userMessage(cause, 'Suggestions could not load.')); });
+        void api.getLibrarySuggestions(library).then(next => { if (active) setRows(next); }).catch(cause => { if (active) setError(userMessage(cause, t('Suggestions could not load.'))); });
         return () => { active = false; };
     }, [ api, library.Id, attempt ]);
-    if (error) return <div class="home-section-error" role="alert"><p>{error}</p><button class="button secondary" data-focusable="true" onClick={() => setAttempt(value => value + 1)}>Retry</button></div>;
-    if (!rows) return <div class="home-section-status" role="status"><span class="mini-spinner" aria-hidden="true" />Loading suggestions…</div>;
-    if (!rows.length) return <div class="empty-state"><span aria-hidden="true">✳</span><h2>No suggestions yet</h2><p>Watch something from this library to get suggestions here.</p></div>;
+    if (error) return <div class="home-section-error" role="alert"><p>{error}</p><button class="button secondary" data-focusable="true" onClick={() => setAttempt(value => value + 1)}>{t('Retry')}</button></div>;
+    if (!rows) return <div class="home-section-status" role="status"><span class="mini-spinner" aria-hidden="true" />{t('Loading suggestions…')}</div>;
+    if (!rows.length) return <div class="empty-state"><span aria-hidden="true">✳</span><h2>{t('No suggestions yet')}</h2><p>{t('Watch something from this library to get suggestions here.')}</p></div>;
     return <div class="library-suggestions">{rows.map(row => <MediaRow key={row.title} api={api} title={row.title} items={row.items} onOpen={onSelect} onPlay={onPlay} />)}</div>;
 }

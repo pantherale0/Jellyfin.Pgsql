@@ -12,8 +12,8 @@ export interface PlaybackReport {
     PlayMethod: 'DirectPlay' | 'DirectStream' | 'Transcode';
     PlaybackStartTimeTicks: number;
     LiveStreamId?: string;
-    RepeatMode: 'RepeatNone';
-    PlaybackOrder: 'Default';
+    RepeatMode: 'RepeatNone' | 'RepeatAll' | 'RepeatOne';
+    PlaybackOrder: 'Default' | 'Shuffle';
     NowPlayingQueue: Array<{ Id: string }>;
     AspectRatio?: string;
     Failed?: boolean;
@@ -36,6 +36,10 @@ export interface PlaybackSample {
     liveStreamId?: string;
     /** Overrides the duration-based seekability, e.g. a live stream with a seekable window. */
     canSeek?: boolean;
+    /** Music queue context; video reports keep the defaults. */
+    repeatMode?: PlaybackReport['RepeatMode'];
+    shuffle?: boolean;
+    queueIds?: string[];
 }
 
 interface Clock {
@@ -73,9 +77,9 @@ export function playbackReport(sample: PlaybackSample, failed = false): Playback
         SubtitleStreamIndex: sample.subtitleStreamIndex,
         PlayMethod: sample.playMethod,
         PlaybackStartTimeTicks: Math.round(sample.startedAtMs * 10_000),
-        RepeatMode: 'RepeatNone',
-        PlaybackOrder: 'Default',
-        NowPlayingQueue: [ { Id: sample.itemId } ],
+        RepeatMode: sample.repeatMode || 'RepeatNone',
+        PlaybackOrder: sample.shuffle ? 'Shuffle' : 'Default',
+        NowPlayingQueue: sample.queueIds?.length ? sample.queueIds.map(Id => ({ Id })) : [ { Id: sample.itemId } ],
         AspectRatio: sample.aspectRatio
     };
     if (sample.liveStreamId) report.LiveStreamId = sample.liveStreamId;

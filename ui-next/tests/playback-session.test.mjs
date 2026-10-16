@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { extname } from 'node:path';
 import { beforeEach, test } from 'node:test';
+import { readSource } from './source.mjs';
 
 registerHooks({
     resolve(specifier, context, nextResolve) {
@@ -37,7 +38,7 @@ const session = {
     user: { Id: 'user-id', Name: 'Viewer' },
     serverId: 'server-id'
 };
-const source = path => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
+const source = path => readSource(new URL(`../src/${path}`, import.meta.url), 'utf8');
 
 async function tracker() {
     const { AccountGeneration } = await import('../src/account-generation.ts');

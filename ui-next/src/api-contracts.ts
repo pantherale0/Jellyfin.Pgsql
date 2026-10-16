@@ -1,4 +1,6 @@
+import type { FolderStorage, SystemStorage } from './admin/types';
 import type { ItemResponse, MediaItem } from './types';
+import { t } from './i18n';
 
 /**
  * Boundary contracts for Jellyfin item payloads. Views rely on these guarantees instead of
@@ -31,6 +33,59 @@ export function asItemResponse(raw: unknown): ItemResponse {
 
 /** A single item must at least carry its Id; anything else is a schema failure, not an empty item. */
 export function asMediaItem(raw: unknown): MediaItem {
-    if (!isMediaItem(raw)) throw new Error('The server returned an item in an unexpected format.');
+    if (!isMediaItem(raw)) throw new Error(t('The server returned an item in an unexpected format.'));
     return raw;
+}
+
+function text(value: unknown): value is string {
+    return typeof value === 'string' && value.length > 0;
+}
+
+export interface Culture { DisplayName: string; TwoLetterISOLanguageName?: string; ThreeLetterISOLanguageName: string }
+export interface Country { DisplayName: string; TwoLetterISORegionName: string }
+
+/** Language pickers need a list; anything that is not a usable culture is dropped. */
+export function asCultures(raw: unknown): Culture[] {
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(isRecord).filter(culture => text(culture.DisplayName) && text(culture.ThreeLetterISOLanguageName)).map(culture => ({
+        DisplayName: culture.DisplayName as string,
+        ThreeLetterISOLanguageName: culture.ThreeLetterISOLanguageName as string,
+        ...(text(culture.TwoLetterISOLanguageName) ? { TwoLetterISOLanguageName: culture.TwoLetterISOLanguageName } : {})
+    }));
+}
+
+export function asCountries(raw: unknown): Country[] {
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(isRecord).filter(country => text(country.DisplayName) && text(country.TwoLetterISORegionName))
+        .map(country => ({ DisplayName: country.DisplayName as string, TwoLetterISORegionName: country.TwoLetterISORegionName as string }));
+}
+
+function asFolderStorage(raw: unknown): FolderStorage | undefined {
+    if (!isRecord(raw)) return undefined;
+    const used = raw.UsedSpace, free = raw.FreeSpace;
+    if (typeof used !== 'number' || typeof free !== 'number' || !Number.isFinite(used) || !Number.isFinite(free) || used < 0 || free < 0) return undefined;
+    const folder: FolderStorage = { Path: typeof raw.Path === 'string' ? raw.Path : '', UsedSpace: used, FreeSpace: free };
+    if (text(raw.StorageType)) folder.StorageType = raw.StorageType;
+    if (text(raw.DeviceId)) folder.DeviceId = raw.DeviceId;
+    return folder;
+}
+
+const STORAGE_FOLDERS = [ 'ProgramDataFolder', 'WebFolder', 'ImageCacheFolder', 'CacheFolder', 'LogFolder', 'InternalMetadataFolder', 'TranscodingTempFolder' ] as const;
+
+/** Storage folders are individually optional: a missing or malformed mount is omitted, never rendered as undefined. */
+export function asSystemStorage(raw: unknown): SystemStorage {
+    if (!isRecord(raw)) throw new Error(t('The server returned storage information in an unexpected format.'));
+    const storage: SystemStorage = { Libraries: [] };
+    STORAGE_FOLDERS.forEach(key => {
+        const folder = asFolderStorage(raw[key]);
+        if (folder) storage[key] = folder;
+    });
+    if (Array.isArray(raw.Libraries)) {
+        storage.Libraries = raw.Libraries.filter(isRecord).filter(library => typeof library.Id === 'string').map(library => ({
+            Id: library.Id as string,
+            Name: typeof library.Name === 'string' ? library.Name : '',
+            Folders: Array.isArray(library.Folders) ? library.Folders.map(asFolderStorage).filter((folder): folder is FolderStorage => !!folder) : []
+        }));
+    }
+    return storage;
 }

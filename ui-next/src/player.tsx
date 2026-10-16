@@ -11,6 +11,8 @@ import { advance, AUTOPLAY_COUNTDOWN_SECONDS, currentItem, cycleRepeat, playQueu
 import { activeCue, adjacentChapterStart, chapterList, cueKey, currentChapterIndex, loadSegmentActions, rememberVersion, SEGMENT_LABELS, segmentDecision, skipPromptVisible, type Chapter, clampSeek, classifyPlayerKey, cueBox, describePlayMethod, describeTranscode, formatBitrate, initialAudioIndex, initialSubtitleIndex, pickTrickplay, planAudioSelection, planSubtitleSelection, playbackTitle, rangesOf, seasonLabel, seekBounds, sessionPlayMethod, streamKind, streamLabel, timelineCues, trickplayFrame, type PlaybackChoice, type PlaybackOptions, type PlayMethod, type SessionTranscodingInfo, type TimelineCue, type TrickplayLevel, type TrickplayPreview } from './player-model';
 import { BITRATE_CHOICES, loadPlaybackPreferences, PLAYER_SPEEDS, savePlaybackPreferences } from './device-profile';
 import { captionCss, loadCaptionStyle, primaryCueLine, SECONDARY_TRACK_LABEL } from './caption-style';
+import { disableHostFullscreen, enableHostFullscreen, hasNativeShell, hideHostMediaSession, hostMediaSessionInfo, hostSupports, updateHostMediaSession, updateHostVolume } from './native-host';
+import { t } from './i18n';
 
 interface PlayerProps {
     url: string;
@@ -30,7 +32,7 @@ interface PlayerProps {
 type PlayerMenu = 'episodes' | 'chapters' | 'captions' | 'settings' | null;
 type AspectFit = 'contain' | 'cover' | 'fill';
 
-const PLAYBACK_ERROR = 'Playback stopped because this browser could not play the stream.';
+const PLAYBACK_ERROR = t('Playback stopped because this browser could not play the stream.');
 
 /** Reporting state for one media load; a new URL gets a fresh object so the old stop report keeps its own position. */
 interface MediaProgress { position: number; duration: number; pendingStart: number; offset: number; loaded: boolean; frozen: boolean }
@@ -73,6 +75,14 @@ type FullscreenDocument = Document & {
 };
 
 type BrowserAudioTracks = { length: number; [index: number]: { enabled: boolean } };
+type VideoMediaSessionDetails = { seekTime?: number; seekOffset?: number };
+type VideoMediaSessionHandler = ((details: VideoMediaSessionDetails) => void) | null;
+type VideoMediaSession = {
+    metadata: unknown;
+    playbackState: string;
+    setActionHandler: (action: string, handler: VideoMediaSessionHandler) => void;
+    setPositionState?: (state: { duration: number; position: number; playbackRate: number }) => void;
+};
 
 function currentFullscreenElement(): Element | null {
     const doc = document as FullscreenDocument;
@@ -189,7 +199,7 @@ function EpisodeThumb({ api, item }: { api: JellyfinApi; item: MediaItem }) {
     return src ? <img src={src} alt="" /> : <span class="player-episode-fallback" aria-hidden="true" />;
 }
 
-const REPEAT_LABELS: Record<RepeatMode, string> = { off: 'Repeat off', all: 'Repeat queue', one: 'Repeat this title' };
+const REPEAT_LABELS: Record<RepeatMode, string> = { off: t('Repeat off'), all: t('Repeat queue'), one: t('Repeat this title') };
 
 export function Player({ url, item, playback, playbackSession, sessionOwner, api, tvClient, onBack, onError, onPlayItem, onPlaybackReported, onRenegotiate }: PlayerProps) {
     const rootRef = useRef<HTMLDivElement>(null);
@@ -209,6 +219,10 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     const onBackRef = useRef(onBack);
     const onErrorRef = useRef(onError);
     const onPlayItemRef = useRef(onPlayItem);
+    const mediaPreviousRef = useRef<(() => void) | null>(null);
+    const mediaNextRef = useRef<(() => void) | null>(null);
+    const mediaSeekToRef = useRef<(seconds: number) => void>(() => undefined);
+    const mediaSeekByRef = useRef<(seconds: number) => void>(() => undefined);
     const onReportedRef = useRef(onPlaybackReported);
     const reporterRef = useRef<PlaybackReporter | null>(null);
     const audioIndexRef = useRef<number | null>(null);
@@ -231,6 +245,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     const [ pip, setPip ] = useState(false);
     const [ osdOpen, setOsdOpen ] = useState(true);
     const [ fullscreen, setFullscreen ] = useState(false);
+    const fullscreenSupported = useRef(hostSupports('fullscreenchange')).current;
     const [ playbackError, setPlaybackError ] = useState('');
     const [ menu, setMenu ] = useState<PlayerMenu>(null);
     const [ seasonList, setSeasonList ] = useState<MediaItem[]>([]);
@@ -411,7 +426,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     const renegotiate = async (options: PlaybackOptions, onFailure: (message: string) => void): Promise<boolean> => {
         const request = onRenegotiateRef.current;
         if (!request || !playback) {
-            onFailure('This player cannot request a new stream here.');
+            onFailure(t('This player cannot request a new stream here.'));
             return false;
         }
         const position = mediaRef.current.position;
@@ -427,7 +442,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
             });
             return Boolean(result);
         } catch (cause) {
-            if (aliveRef.current) onFailure(userMessage(cause, 'The server could not prepare a new stream.'));
+            if (aliveRef.current) onFailure(userMessage(cause, t('The server could not prepare a new stream.')));
             return false;
         } finally {
             if (aliveRef.current) setSwitching(false);
@@ -437,6 +452,14 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     const seekBy = (delta: number) => {
         withVideo(video => seekTo(itemPosition(video.currentTime, mediaRef.current.offset) + delta));
     };
+    mediaSeekToRef.current = seekTo;
+    mediaSeekByRef.current = seekBy;
+    mediaPreviousRef.current = queueCurrent
+        ? queuePrevious ? () => playQueued(queuePrevious) : null
+        : neighbours.previous ? () => onPlayItemRef.current(neighbours.previous!) : null;
+    mediaNextRef.current = queueCurrent
+        ? queueNext ? () => playQueued(queueNext) : null
+        : neighbours.next ? () => onPlayItemRef.current(neighbours.next!) : null;
 
     const setPlayerVolume = (nextVolume: number, nextMuted = false) => {
         const clamped = Math.min(1, Math.max(0, nextVolume));
@@ -459,7 +482,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
 
     const toggleFullscreen = () => {
         const root = rootRef.current;
-        if (!root) return;
+        if (!root || !fullscreenSupported) return;
         const host = root as FullscreenHost;
         const video = videoRef.current as InlineVideo | null;
         if (currentFullscreenElement() === root) exitStageFullscreen();
@@ -499,8 +522,8 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                 return;
             }
         }
-        setAudioNote('Switching audio track…');
-        void renegotiate({ audioStreamIndex: index }, message => setAudioNote(`Audio track was not changed. ${message}`)).then(ok => { if (ok && aliveRef.current) setAudioNote(''); });
+        setAudioNote(t('Switching audio track…'));
+        void renegotiate({ audioStreamIndex: index }, message => setAudioNote(t('Audio track was not changed. {0}', message))).then(ok => { if (ok && aliveRef.current) setAudioNote(''); });
     };
 
     const selectSubtitle = (index: number | null) => {
@@ -522,8 +545,8 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
             void renegotiate({ subtitleStreamIndex: plan.index, forceTranscode: true }, message => setSubtitleNote(message));
             return;
         }
-        setSubtitleNote(plan.subtitleStreamIndex < 0 ? 'Removing burned-in subtitles…' : 'Preparing subtitles on the server…');
-        void renegotiate({ subtitleStreamIndex: plan.subtitleStreamIndex }, message => setSubtitleNote(`Subtitles were not changed. ${message}`)).then(ok => { if (ok && aliveRef.current) setSubtitleNote(''); });
+        setSubtitleNote(plan.subtitleStreamIndex < 0 ? t('Removing burned-in subtitles…') : t('Preparing subtitles on the server…'));
+        void renegotiate({ subtitleStreamIndex: plan.subtitleStreamIndex }, message => setSubtitleNote(t('Subtitles were not changed. {0}', message))).then(ok => { if (ok && aliveRef.current) setSubtitleNote(''); });
     };
 
     const shiftSubtitles = (delta: number) => {
@@ -812,7 +835,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                 rememberPosition(video);
                 setCurrentTime(itemPosition(video.currentTime, mediaRef.current.offset));
             });
-            setSkipNote(`Skipped ${SEGMENT_LABELS[activeSegment.kind].toLowerCase()}`);
+            setSkipNote(t('Skipped {0}', SEGMENT_LABELS[activeSegment.kind].toLowerCase()));
             const timer = window.setTimeout(() => setSkipNote(''), 3000);
             return () => window.clearTimeout(timer);
         }
@@ -927,6 +950,104 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     }, [ menu, item?.Id, seasonId, visibleEpisodes.length ]);
 
     useEffect(() => {
+        enableHostFullscreen();
+        return () => disableHostFullscreen();
+    }, []);
+
+    useEffect(() => {
+        const video = videoRef.current;
+        const session = typeof navigator !== 'undefined'
+            ? (navigator as unknown as { mediaSession?: VideoMediaSession }).mediaSession
+            : undefined;
+        if (!video || !item || !session) return;
+        const Metadata = (globalThis as unknown as { MediaMetadata?: new (value: unknown) => unknown }).MediaMetadata;
+        const imageUrl = api?.imageUrl(item, 'Primary', 512) || '';
+        if (Metadata) {
+            try {
+                session.metadata = new Metadata({
+                    title: playbackTitle(item),
+                    artist: item.SeriesName || '',
+                    album: item.ParentIndexNumber === undefined ? '' : seasonLabel(item.ParentIndexNumber),
+                    artwork: imageUrl ? [ { src: imageUrl, sizes: '512x512' } ] : []
+                });
+            } catch (_error) { /* Metadata is cosmetic. */ }
+        }
+        const setHandler = (action: string, handler: VideoMediaSessionHandler | null) => {
+            try { session.setActionHandler(action, handler); } catch (_error) { /* Unsupported action. */ }
+        };
+        const updatePosition = () => {
+            if (playback?.isLive || !session.setPositionState) return;
+            rememberPosition(video);
+            const duration = mediaRef.current.duration;
+            if (!Number.isFinite(duration) || duration <= 0) return;
+            const position = Math.min(duration, Math.max(0, mediaRef.current.position));
+            try { session.setPositionState({ duration, position, playbackRate: video.playbackRate || 1 }); } catch (_error) { /* Invalid states are dropped. */ }
+        };
+        const updatePlaybackState = () => {
+            try { session.playbackState = video.paused ? 'paused' : 'playing'; } catch (_error) { /* Cosmetic. */ }
+        };
+        const actions: Array<[string, VideoMediaSessionHandler | null]> = [
+            [ 'play', () => { void video.play(); } ],
+            [ 'pause', () => video.pause() ],
+            [ 'stop', () => { rememberPosition(video); onBackRef.current(); } ],
+            [ 'seekto', details => { if (typeof details.seekTime === 'number') mediaSeekToRef.current(details.seekTime); } ],
+            [ 'seekbackward', details => mediaSeekByRef.current(-(details.seekOffset || 10)) ],
+            [ 'seekforward', details => mediaSeekByRef.current(details.seekOffset || 10) ],
+            [ 'previoustrack', mediaPreviousRef.current ? () => mediaPreviousRef.current?.() : null ],
+            [ 'nexttrack', mediaNextRef.current ? () => mediaNextRef.current?.() : null ]
+        ];
+        actions.forEach(([ action, handler ]) => setHandler(action, handler));
+        video.addEventListener('timeupdate', updatePosition);
+        video.addEventListener('durationchange', updatePosition);
+        video.addEventListener('ratechange', updatePosition);
+        video.addEventListener('playing', updatePlaybackState);
+        video.addEventListener('pause', updatePlaybackState);
+        updatePosition();
+        updatePlaybackState();
+        return () => {
+            video.removeEventListener('timeupdate', updatePosition);
+            video.removeEventListener('durationchange', updatePosition);
+            video.removeEventListener('ratechange', updatePosition);
+            video.removeEventListener('playing', updatePlaybackState);
+            video.removeEventListener('pause', updatePlaybackState);
+            actions.forEach(([ action ]) => setHandler(action, null));
+            try { session.metadata = null; session.playbackState = 'none'; } catch (_error) { /* Cosmetic. */ }
+        };
+    }, [ api, item?.Id, playback?.isLive, Boolean(mediaPreviousRef.current), Boolean(mediaNextRef.current) ]);
+
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video || !item || !hasNativeShell()) return;
+        const imageUrl = api?.imageUrl(item, 'Primary', 600) || undefined;
+        let lastUpdate = 0;
+        const update = (action: string) => {
+            lastUpdate = Date.now();
+            updateHostMediaSession(hostMediaSessionInfo(item, {
+                action,
+                positionSeconds: mediaRef.current.position || video.currentTime + mediaRef.current.offset,
+                durationSeconds: mediaRef.current.duration || video.duration,
+                paused: video.paused,
+                imageUrl,
+            }));
+        };
+        const onPlaying = () => update('playing');
+        const onPause = () => update('pause');
+        const onTime = () => { if (Date.now() - lastUpdate >= 5000) update('timeupdate'); };
+        const onVolume = () => updateHostVolume(video.muted ? 0 : video.volume);
+        video.addEventListener('playing', onPlaying);
+        video.addEventListener('pause', onPause);
+        video.addEventListener('timeupdate', onTime);
+        video.addEventListener('volumechange', onVolume);
+        return () => {
+            video.removeEventListener('playing', onPlaying);
+            video.removeEventListener('pause', onPause);
+            video.removeEventListener('timeupdate', onTime);
+            video.removeEventListener('volumechange', onVolume);
+            hideHostMediaSession();
+        };
+    }, [ item?.Id ]);
+
+    useEffect(() => {
         const onFullscreenChange = () => setFullscreen(currentFullscreenElement() === rootRef.current);
         document.addEventListener('fullscreenchange', onFullscreenChange);
         document.addEventListener('webkitfullscreenchange', onFullscreenChange);
@@ -987,6 +1108,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
             if (action === 'toggle' || action === 'play' || action === 'pause' || action === 'stop') {
                 event.preventDefault();
                 if (action === 'stop') {
+                    withVideo(rememberPosition);
                     onBackRef.current();
                     return;
                 }
@@ -1189,49 +1311,49 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                 onErrorRef.current();
             }}
         >
-            {subtitleUrl && <track kind="subtitles" src={subtitleUrl} default label="Subtitles" onError={() => setSubtitleNote(crossOrigin
-                ? 'Subtitles could not be loaded. The server must allow this site in its CORS hosts setting.'
-                : 'Subtitles could not be loaded from the server.')} onLoad={() => withVideo(video => applySubtitleOffset(video, offsetRef.current - mediaRef.current.offset, cueLine))} />}
+            {subtitleUrl && <track kind="subtitles" src={subtitleUrl} default label={t('Subtitles')} onError={() => setSubtitleNote(crossOrigin
+                ? t('Subtitles could not be loaded. The server must allow this site in its CORS hosts setting.')
+                : t('Subtitles could not be loaded from the server.'))} onLoad={() => withVideo(video => applySubtitleOffset(video, offsetRef.current - mediaRef.current.offset, cueLine))} />}
             {secondaryUrl && <track kind="subtitles" src={secondaryUrl} label={SECONDARY_TRACK_LABEL} onLoad={event => {
                 (event.currentTarget as HTMLTrackElement).track.mode = 'showing';
                 withVideo(video => applySubtitleOffset(video, offsetRef.current - mediaRef.current.offset, cueLine));
-            }} onError={() => setSubtitleNote('Secondary subtitles could not be loaded from the server.')} />}
+            }} onError={() => setSubtitleNote(t('Secondary subtitles could not be loaded from the server.'))} />}
         </video>
         <style>{captionCss(captionStyle)}</style>
-        {!osdOpen && skipPromptShown && skip && <div class="player-skip-prompt"><button data-focusable="true" class="player-skip" type="button" onClick={() => seekTo(skip.end)}>{skip.label}</button></div>}
+        {!osdOpen && skipPromptShown && skip && <div class="player-skip-prompt"><button data-focusable="true" class="player-skip" type="button" onClick={() => seekTo(skip.end)}>{t(skip.label)}</button></div>}
         {skipNote && <p class="player-skip-note" role="status">{skipNote}</p>}
-        {upNextCard && <div class="player-up-next" role="dialog" aria-label="Up next" data-focusable="scope">
+        {upNextCard && <div class="player-up-next" role="dialog" aria-label={t('Up next')} data-focusable="scope">
             {api && <img src={api.imageUrl(upNextCard.item, 'Primary', 320)} alt="" />}
             <div>
-                <p class="player-up-next-label">{upNextCard.source === 'queue' ? 'Next in queue' : 'Next episode'}</p>
+                <p class="player-up-next-label">{upNextCard.source === 'queue' ? t('Next in queue') : t('Next episode')}</p>
                 <strong>{playbackTitle(upNextCard.item)}</strong>
-                <p role="status" aria-live="polite">Playing in {Math.max(0, upNextCard.remaining)}s</p>
+                <p role="status" aria-live="polite">{t('Playing in {0}s', Math.max(0, upNextCard.remaining))}</p>
                 <div class="player-up-next-actions">
-                    <button data-focusable="true" class="button primary" type="button" onClick={() => playQueued(upNextCard)}>Play now</button>
-                    <button data-focusable="true" class="button secondary" type="button" onClick={() => setUpNextCard(null)}>Cancel</button>
+                    <button data-focusable="true" class="button primary" type="button" onClick={() => playQueued(upNextCard)}>{t('Play now')}</button>
+                    <button data-focusable="true" class="button secondary" type="button" onClick={() => setUpNextCard(null)}>{t('Cancel')}</button>
                 </div>
             </div>
         </div>}
         {playbackError && <div class="player-error" role="alert">
             <p>{playbackError}</p>
             {onRenegotiate && <div class="player-error-actions">
-                <button data-focusable="true" class="button secondary" type="button" disabled={switching} onClick={() => { setPlaybackError(''); void renegotiate({}, message => setPlaybackError(message)); }}>Retry from {formatTime(mediaRef.current.position)}</button>
-                {playback?.method !== 'Transcode' || !diagnostics || diagnostics.IsVideoDirect ? <button data-focusable="true" class="button secondary" type="button" disabled={switching} onClick={() => { setPlaybackError(''); void renegotiate({ forceTranscode: true }, message => setPlaybackError(message)); }}>Convert the stream</button> : null}
-                <button data-focusable="true" class="button secondary" type="button" disabled={switching} onClick={() => { setPlaybackError(''); void renegotiate({ forceTranscode: true, maxBitrate: 4_000_000 }, message => setPlaybackError(message)); }}>Try lower quality</button>
+                <button data-focusable="true" class="button secondary" type="button" disabled={switching} onClick={() => { setPlaybackError(''); void renegotiate({}, message => setPlaybackError(message)); }}>{t('Retry from {0}', formatTime(mediaRef.current.position))}</button>
+                {playback?.method !== 'Transcode' || !diagnostics || diagnostics.IsVideoDirect ? <button data-focusable="true" class="button secondary" type="button" disabled={switching} onClick={() => { setPlaybackError(''); void renegotiate({ forceTranscode: true }, message => setPlaybackError(message)); }}>{t('Convert the stream')}</button> : null}
+                <button data-focusable="true" class="button secondary" type="button" disabled={switching} onClick={() => { setPlaybackError(''); void renegotiate({ forceTranscode: true, maxBitrate: 4_000_000 }, message => setPlaybackError(message)); }}>{t('Try lower quality')}</button>
             </div>}
         </div>}
         <header class="player-osd player-osd-top">
-            <button data-focusable={focusable} class="player-back" type="button" onClick={() => onBackRef.current()}>← <span>Back</span></button>
+            <button data-focusable={focusable} class="player-back" type="button" onClick={() => onBackRef.current()}><span class="dir-arrow" aria-hidden="true">←</span> <span>{t('Back')}</span></button>
             <h1>{title}</h1>
-            {chapters.length > 0 && <button data-focusable={focusable} class="player-control player-chapters" type="button" aria-label="Chapters" aria-expanded={menu === 'chapters'} onClick={() => chooseMenu('chapters')}>
+            {chapters.length > 0 && <button data-focusable={focusable} class="player-control player-chapters" type="button" aria-label={t('Chapters')} aria-expanded={menu === 'chapters'} onClick={() => chooseMenu('chapters')}>
                 <svg viewBox="0 0 24 24" class="player-icon" aria-hidden="true"><path d="M5 5v14M10 5h9M10 12h9M10 19h9" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
             </button>}
-            {isEpisode && <button data-focusable={focusable} class="player-control player-episodes" type="button" aria-label="Episodes" aria-expanded={menu === 'episodes'} onClick={() => chooseMenu('episodes')}>
+            {isEpisode && <button data-focusable={focusable} class="player-control player-episodes" type="button" aria-label={t('Episodes')} aria-expanded={menu === 'episodes'} onClick={() => chooseMenu('episodes')}>
                 <svg viewBox="0 0 24 24" class="player-icon" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
             </button>}
         </header>
         <footer class="player-osd player-osd-bottom">
-            {skip && <div class="player-skip-row"><button data-focusable={focusable} class="player-skip" type="button" onClick={() => seekTo(skip.end)}>{skip.label}</button></div>}
+            {skip && <div class="player-skip-row"><button data-focusable={focusable} class="player-skip" type="button" onClick={() => seekTo(skip.end)}>{t(skip.label)}</button></div>}
             <div class="player-timeline">
                 <span class="player-time">{bounds.live ? (bounds.seekable ? `−${formatTime(Math.max(0, bounds.end - currentTime))}` : 'LIVE') : formatTime(currentTime)}</span>
                 <div
@@ -1269,7 +1391,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                         max={bounds.end}
                         step="0.1"
                         value={Math.min(Math.max(currentTime, bounds.start), bounds.end)}
-                        aria-label={bounds.live ? 'Seek within the live buffer' : 'Seek'}
+                        aria-label={bounds.live ? t('Seek within the live buffer') : t('Seek')}
                         disabled={!bounds.seekable}
                         onPointerDown={() => holdUntilRelease(true)}
                         onInput={event => {
@@ -1290,50 +1412,50 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                     />
                 </div>
                 {bounds.live
-                    ? <button data-focusable={focusable} class="player-time player-live-edge" type="button" disabled={!bounds.seekable || bounds.end - currentTime < 10} onClick={() => seekTo(bounds.end)}>Go live</button>
+                    ? <button data-focusable={focusable} class="player-time player-live-edge" type="button" disabled={!bounds.seekable || bounds.end - currentTime < 10} onClick={() => seekTo(bounds.end)}>{t('Go live')}</button>
                     : <span class="player-time">{formatTime(duration)}</span>}
             </div>
             <div class="player-transport">
                 {queueCurrent
-                    ? <button data-focusable={focusable} class="player-control" type="button" aria-label="Previous in queue" disabled={!queuePrevious} onClick={() => playQueued(queuePrevious)}>|◀</button>
-                    : isEpisode && <button data-focusable={focusable} class="player-control" type="button" aria-label="Previous episode" disabled={!neighbours.previous} onClick={() => neighbours.previous && onPlayItemRef.current(neighbours.previous)}>|◀</button>}
-                {chapters.length > 0 && <button data-focusable={focusable} class="player-control" type="button" aria-label="Previous chapter" onClick={() => { const target = adjacentChapterStart(chapters, currentTime, -1); if (target !== null) seekTo(target); }}>⏮</button>}
-                <button data-focusable={focusable} class="player-control" type="button" aria-label="Rewind 10 seconds" onClick={() => seekBy(-10)}>−10</button>
-                <button data-focusable={focusable} class="player-control player-play" type="button" aria-label={paused ? 'Play' : 'Pause'} onClick={togglePlay}>{paused ? '▶' : '❚❚'}</button>
-                <button data-focusable={focusable} class="player-control" type="button" aria-label="Fast forward 10 seconds" onClick={() => seekBy(10)}>+10</button>
-                {chapters.length > 0 && <button data-focusable={focusable} class="player-control" type="button" aria-label="Next chapter" disabled={adjacentChapterStart(chapters, currentTime, 1) === null} onClick={() => { const target = adjacentChapterStart(chapters, currentTime, 1); if (target !== null) seekTo(target); }}>⏭</button>}
+                    ? <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Previous in queue')} disabled={!queuePrevious} onClick={() => playQueued(queuePrevious)}>|◀</button>
+                    : isEpisode && <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Previous episode')} disabled={!neighbours.previous} onClick={() => neighbours.previous && onPlayItemRef.current(neighbours.previous)}>|◀</button>}
+                {chapters.length > 0 && <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Previous chapter')} onClick={() => { const target = adjacentChapterStart(chapters, currentTime, -1); if (target !== null) seekTo(target); }}>⏮</button>}
+                <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Rewind 10 seconds')} onClick={() => seekBy(-10)}>−10</button>
+                <button data-focusable={focusable} class="player-control player-play" type="button" aria-label={paused ? t('Play') : t('Pause')} onClick={togglePlay}>{paused ? '▶' : '❚❚'}</button>
+                <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Fast forward 10 seconds')} onClick={() => seekBy(10)}>+10</button>
+                {chapters.length > 0 && <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Next chapter')} disabled={adjacentChapterStart(chapters, currentTime, 1) === null} onClick={() => { const target = adjacentChapterStart(chapters, currentTime, 1); if (target !== null) seekTo(target); }}>⏭</button>}
                 {queueCurrent
-                    ? <button data-focusable={focusable} class="player-control" type="button" aria-label={queueNext ? `Next in queue: ${playbackTitle(queueNext.item)}` : 'Next in queue'} disabled={!queueNext} onClick={() => playQueued(queueNext)}>▶|</button>
-                    : isEpisode && <button data-focusable={focusable} class="player-control" type="button" aria-label="Next episode" disabled={!neighbours.next} onClick={() => neighbours.next && onPlayItemRef.current(neighbours.next)}>▶|</button>}
-                {queueCurrent && queue.order.length > 1 && <button data-focusable={focusable} class={queue.shuffle ? 'player-control active' : 'player-control'} type="button" aria-label="Shuffle queue" aria-pressed={queue.shuffle} onClick={() => playQueue.update(current => toggleShuffle(current))}>⤮</button>}
-                {queueCurrent && <button data-focusable={focusable} class={queue.repeat !== 'off' ? 'player-control active' : 'player-control'} type="button" aria-label={REPEAT_LABELS[queue.repeat]} title={`${upcoming(queue).length} more in queue`} onClick={() => playQueue.update(current => ({ ...current, repeat: cycleRepeat(current.repeat) }))}>{queue.repeat === 'one' ? '🔂' : '🔁'}</button>}
+                    ? <button data-focusable={focusable} class="player-control" type="button" aria-label={queueNext ? t('Next in queue: {0}', playbackTitle(queueNext.item)) : t('Next in queue')} disabled={!queueNext} onClick={() => playQueued(queueNext)}>▶|</button>
+                    : isEpisode && <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Next episode')} disabled={!neighbours.next} onClick={() => neighbours.next && onPlayItemRef.current(neighbours.next)}>▶|</button>}
+                {queueCurrent && queue.order.length > 1 && <button data-focusable={focusable} class={queue.shuffle ? 'player-control active' : 'player-control'} type="button" aria-label={t('Shuffle queue')} aria-pressed={queue.shuffle} onClick={() => playQueue.update(current => toggleShuffle(current))}>⤮</button>}
+                {queueCurrent && <button data-focusable={focusable} class={queue.repeat !== 'off' ? 'player-control active' : 'player-control'} type="button" aria-label={REPEAT_LABELS[queue.repeat]} title={t('{0} more in queue', upcoming(queue).length)} onClick={() => playQueue.update(current => ({ ...current, repeat: cycleRepeat(current.repeat) }))}>{queue.repeat === 'one' ? '🔂' : '🔁'}</button>}
                 <div class="player-pop">
-                    <button data-focusable={focusable} class={menu === 'captions' ? 'player-control active' : 'player-control'} type="button" aria-label="Audio and subtitles" aria-expanded={menu === 'captions'} onClick={() => chooseMenu('captions')}>CC</button>
-                    {menu === 'captions' && <div class="player-menu" role="dialog" aria-label="Audio and subtitles">
-                        <p class="player-menu-label">Audio</p>
-                        {audioStreams.length ? audioStreams.map(stream => <button data-focusable={focusable} key={stream.Index} class={audioIndex === stream.Index ? 'player-menu-item active' : 'player-menu-item'} aria-pressed={audioIndex === stream.Index} type="button" onClick={() => selectAudio(stream.Index)}>{streamLabel(stream)}</button>) : <p class="player-menu-note">No alternate audio tracks were reported.</p>}
+                    <button data-focusable={focusable} class={menu === 'captions' ? 'player-control active' : 'player-control'} type="button" aria-label={t('Audio and subtitles')} aria-expanded={menu === 'captions'} onClick={() => chooseMenu('captions')}>CC</button>
+                    {menu === 'captions' && <div class="player-menu" role="dialog" aria-label={t('Audio and subtitles')}>
+                        <p class="player-menu-label">{t('Audio')}</p>
+                        {audioStreams.length ? audioStreams.map(stream => <button data-focusable={focusable} key={stream.Index} class={audioIndex === stream.Index ? 'player-menu-item active' : 'player-menu-item'} aria-pressed={audioIndex === stream.Index} type="button" onClick={() => selectAudio(stream.Index)}>{streamLabel(stream)}</button>) : <p class="player-menu-note">{t('No alternate audio tracks were reported.')}</p>}
                         {audioNote && <p class="player-menu-note">{audioNote}</p>}
-                        <p class="player-menu-label">Subtitles</p>
-                        <button data-focusable={focusable} class={subtitleIndex === null ? 'player-menu-item active' : 'player-menu-item'} aria-pressed={subtitleIndex === null} type="button" onClick={() => selectSubtitle(null)}>Off</button>
-                        {subtitleStreams.map(stream => <button data-focusable={focusable} key={stream.Index} class={subtitleIndex === stream.Index ? 'player-menu-item active' : 'player-menu-item'} aria-pressed={subtitleIndex === stream.Index} type="button" disabled={switching} onClick={() => selectSubtitle(stream.Index)}>{streamLabel(stream)}{stream.IsTextSubtitleStream ? '' : ' · burned in'}</button>)}
+                        <p class="player-menu-label">{t('Subtitles')}</p>
+                        <button data-focusable={focusable} class={subtitleIndex === null ? 'player-menu-item active' : 'player-menu-item'} aria-pressed={subtitleIndex === null} type="button" onClick={() => selectSubtitle(null)}>{t('Off')}</button>
+                        {subtitleStreams.map(stream => <button data-focusable={focusable} key={stream.Index} class={subtitleIndex === stream.Index ? 'player-menu-item active' : 'player-menu-item'} aria-pressed={subtitleIndex === stream.Index} type="button" disabled={switching} onClick={() => selectSubtitle(stream.Index)}>{streamLabel(stream)}{stream.IsTextSubtitleStream ? '' : t(' · burned in')}</button>)}
                         {subtitleNote && <p class="player-menu-note">{subtitleNote}</p>}
-                        {styledSubtitle && <p class="player-menu-note">Styled ASS/SSA subtitles show as plain text here. To keep their styling, choose “Also burn in styled ASS/SSA subtitles” under Subtitle preferences.</p>}
+                        {styledSubtitle && <p class="player-menu-note">{t('Styled ASS/SSA subtitles show as plain text here. To keep their styling, choose “Also burn in styled ASS/SSA subtitles” under Subtitle preferences.')}</p>}
                         {subtitleStreams.some(stream => stream.IsTextSubtitleStream && stream.Index !== subtitleIndex) && <>
-                            <p class="player-menu-label">Secondary subtitles</p>
-                            <button data-focusable={focusable} class={secondaryIndex === null ? 'player-menu-item active' : 'player-menu-item'} aria-pressed={secondaryIndex === null} type="button" onClick={() => { setSecondaryIndex(null); reveal(); }}>Off</button>
+                            <p class="player-menu-label">{t('Secondary subtitles')}</p>
+                            <button data-focusable={focusable} class={secondaryIndex === null ? 'player-menu-item active' : 'player-menu-item'} aria-pressed={secondaryIndex === null} type="button" onClick={() => { setSecondaryIndex(null); reveal(); }}>{t('Off')}</button>
                             {subtitleStreams.filter(stream => stream.IsTextSubtitleStream && stream.Index !== subtitleIndex).map(stream => <button data-focusable={focusable} key={stream.Index} class={secondaryIndex === stream.Index ? 'player-menu-item active' : 'player-menu-item'} aria-pressed={secondaryIndex === stream.Index} type="button" onClick={() => { setSecondaryIndex(stream.Index); reveal(); }}>{streamLabel(stream)}</button>)}
-                            <p class="player-menu-note">Secondary subtitles appear at the top of the picture.</p>
+                            <p class="player-menu-note">{t('Secondary subtitles appear at the top of the picture.')}</p>
                         </>}
                         <div class="player-offset">
-                            <span>Subtitle offset</span>
-                            <button data-focusable={focusable} type="button" onClick={() => shiftSubtitles(-0.5)} aria-label="Shift subtitles earlier">−0.5s</button>
+                            <span>{t('Subtitle offset')}</span>
+                            <button data-focusable={focusable} type="button" onClick={() => shiftSubtitles(-0.5)} aria-label={t('Shift subtitles earlier')}>−0.5s</button>
                             <strong>{subtitleOffset > 0 ? `+${subtitleOffset.toFixed(1)}s` : `${subtitleOffset.toFixed(1)}s`}</strong>
-                            <button data-focusable={focusable} type="button" onClick={() => shiftSubtitles(0.5)} aria-label="Shift subtitles later">+0.5s</button>
+                            <button data-focusable={focusable} type="button" onClick={() => shiftSubtitles(0.5)} aria-label={t('Shift subtitles later')}>+0.5s</button>
                         </div>
                     </div>}
                 </div>
                 <div class="player-volume-pop">
-                    <button data-focusable={focusable} class="player-control" type="button" aria-label={muted || volume === 0 ? 'Unmute' : 'Mute'} onClick={toggleMute}>{muted || volume === 0 ? '🔇' : '🔊'}</button>
+                    <button data-focusable={focusable} class="player-control" type="button" aria-label={muted || volume === 0 ? t('Unmute') : t('Mute')} onClick={toggleMute}>{muted || volume === 0 ? '🔇' : '🔊'}</button>
                     {!compactControls && <div class="player-volume-flyout">
                         <input
                             data-focusable={focusable}
@@ -1343,47 +1465,47 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                             max="100"
                             step="1"
                             value={Math.round((muted ? 0 : volume) * 100)}
-                            aria-label="Volume"
+                            aria-label={t('Volume')}
                             onPointerDown={() => holdUntilRelease(false)}
                             onInput={event => setPlayerVolume(Number((event.target as HTMLInputElement).value) / 100, false)}
                         />
                     </div>}
                 </div>
                 <div class="player-pop">
-                    <button data-focusable={focusable} class={menu === 'settings' ? 'player-control active' : 'player-control'} type="button" aria-label="Playback settings" aria-expanded={menu === 'settings'} onClick={() => chooseMenu('settings')}>⚙</button>
-                    {menu === 'settings' && <div class="player-menu" role="dialog" aria-label="Playback settings">
-                        <p class="player-menu-label">Playback speed</p>
+                    <button data-focusable={focusable} class={menu === 'settings' ? 'player-control active' : 'player-control'} type="button" aria-label={t('Playback settings')} aria-expanded={menu === 'settings'} onClick={() => chooseMenu('settings')}>⚙</button>
+                    {menu === 'settings' && <div class="player-menu" role="dialog" aria-label={t('Playback settings')}>
+                        <p class="player-menu-label">{t('Playback speed')}</p>
                         <div class="player-speed-row">
                             {PLAYER_SPEEDS.map(value => <button data-focusable={focusable} key={value} class={speed === value ? 'player-menu-item active' : 'player-menu-item'} aria-pressed={speed === value} type="button" onClick={() => { setSpeed(value); choosePreference({ speed: value }); withVideo(video => { video.playbackRate = value; }); reveal(); }}>{value}×</button>)}
                         </div>
-                        <p class="player-menu-label">Aspect ratio</p>
-                        {([ [ 'contain', 'Original' ], [ 'cover', 'Zoom' ], [ 'fill', 'Stretch' ] ] as Array<[AspectFit, string]>).map(([ value, label ]) => <button data-focusable={focusable} key={value} class={fit === value ? 'player-menu-item active' : 'player-menu-item'} aria-pressed={fit === value} type="button" onClick={() => { setFit(value); choosePreference({ fit: value }); }}>{label}</button>)}
-                        {videoStream?.AspectRatio && <p class="player-menu-note">Source frame {videoStream.AspectRatio}.</p>}
+                        <p class="player-menu-label">{t('Aspect ratio')}</p>
+                        {([ [ 'contain', 'Original' ], [ 'cover', 'Zoom' ], [ 'fill', 'Stretch' ] ] as Array<[AspectFit, string]>).map(([ value, label ]) => <button data-focusable={focusable} key={value} class={fit === value ? 'player-menu-item active' : 'player-menu-item'} aria-pressed={fit === value} type="button" onClick={() => { setFit(value); choosePreference({ fit: value }); }}>{t(label)}</button>)}
+                        {videoStream?.AspectRatio && <p class="player-menu-note">{t('Source frame {0}.', videoStream.AspectRatio)}</p>}
                         {playback?.versions && <>
-                            <p class="player-menu-label">Version</p>
+                            <p class="player-menu-label">{t('Version')}</p>
                             {playback.versions.map(version => <button data-focusable={focusable} key={version.id} class={playback.mediaSourceId === version.id ? 'player-menu-item active' : 'player-menu-item'} aria-pressed={playback.mediaSourceId === version.id} type="button" disabled={switching || !onRenegotiate} onClick={() => {
                                 if (playback.mediaSourceId === version.id) return;
                                 rememberVersion(item?.SeriesId, version.name);
                                 void renegotiate({ mediaSourceId: version.id, audioStreamIndex: undefined, subtitleStreamIndex: undefined }, message => setPlaybackError(message));
                             }}>{version.name}</button>)}
                         </>}
-                        <p class="player-menu-label">Quality</p>
+                        <p class="player-menu-label">{t('Quality')}</p>
                         <div class="player-speed-row">
-                            {BITRATE_CHOICES.map(choice => <button data-focusable={focusable} key={choice.value} class={(playback?.maxBitrate || 0) === choice.value ? 'player-menu-item active' : 'player-menu-item'} type="button" disabled={switching || !onRenegotiate} onClick={() => { if ((playback?.maxBitrate || 0) !== choice.value) void renegotiate({ maxBitrate: choice.value || undefined }, message => setPlaybackError(message)); }}>{choice.label}</button>)}
+                            {BITRATE_CHOICES.map(choice => <button data-focusable={focusable} key={choice.value} class={(playback?.maxBitrate || 0) === choice.value ? 'player-menu-item active' : 'player-menu-item'} type="button" disabled={switching || !onRenegotiate} onClick={() => { if ((playback?.maxBitrate || 0) !== choice.value) void renegotiate({ maxBitrate: choice.value || undefined }, message => setPlaybackError(message)); }}>{t(choice.label)}</button>)}
                         </div>
-                        <p class="player-menu-note">{formatBitrate(diagnostics?.Bitrate || playback?.bitrate)} · {describePlayMethod(playMethod, diagnostics)}. The default quality is set under Playback preferences.</p>
-                        <p class="player-menu-label">Transcode reasons</p>
+                        <p class="player-menu-note">{t('{0} · {1}. The default quality is set under Playback preferences.', formatBitrate(diagnostics?.Bitrate || playback?.bitrate), describePlayMethod(playMethod, diagnostics))}</p>
+                        <p class="player-menu-label">{t('Transcode reasons')}</p>
                         <p class="player-menu-note">{describeTranscode(diagnostics?.TranscodeReasons ?? playback?.transcodeReasons, playMethod === 'DirectPlay')}</p>
                     </div>}
                 </div>
-                {pipSupported && <button data-focusable={focusable} class={pip ? 'player-control active' : 'player-control'} type="button" aria-pressed={pip} aria-label={pip ? 'Exit picture-in-picture' : 'Picture-in-picture'} onClick={togglePictureInPicture}>⧉</button>}
-                <button data-focusable={focusable} class="player-control" type="button" aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'} onClick={toggleFullscreen}>{fullscreen ? '⤡' : '⛶'}</button>
+                {pipSupported && <button data-focusable={focusable} class={pip ? 'player-control active' : 'player-control'} type="button" aria-pressed={pip} aria-label={pip ? t('Exit picture-in-picture') : t('Picture-in-picture')} onClick={togglePictureInPicture}>⧉</button>}
+                {fullscreenSupported && <button data-focusable={focusable} class="player-control" type="button" aria-label={fullscreen ? t('Exit fullscreen') : t('Fullscreen')} onClick={toggleFullscreen}>{fullscreen ? '⤡' : '⛶'}</button>}
             </div>
         </footer>
-        {menu === 'chapters' && <aside class="player-drawer" role="dialog" aria-label="Chapters">
+        {menu === 'chapters' && <aside class="player-drawer" role="dialog" aria-label={t('Chapters')}>
             <div class="player-drawer-head">
-                <div><p class="eyebrow">CHAPTERS</p><h2>{title}</h2></div>
-                <button data-focusable="true" class="player-control" type="button" aria-label="Close chapters" onClick={closeMenu}>×</button>
+                <div><p class="eyebrow">{t('CHAPTERS')}</p><h2>{title}</h2></div>
+                <button data-focusable="true" class="player-control" type="button" aria-label={t('Close chapters')} onClick={closeMenu}>×</button>
             </div>
             <div class="player-episode-list">
                 {chapters.map((chapter, position) => <button data-focusable="true" key={chapter.index} class={position === chapterIndex ? 'player-episode current' : 'player-episode'} type="button" onClick={() => { seekTo(chapter.start); closeMenu(); }}>
@@ -1392,26 +1514,26 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                 </button>)}
             </div>
         </aside>}
-        {menu === 'episodes' && <aside class="player-drawer" role="dialog" aria-label="Episodes">
+        {menu === 'episodes' && <aside class="player-drawer" role="dialog" aria-label={t('Episodes')}>
             <div class="player-drawer-head">
                 <div>
-                    <p class="eyebrow">EPISODES</p>
-                    <h2>{item?.SeriesName || 'This series'}</h2>
+                    <p class="eyebrow">{t('EPISODES')}</p>
+                    <h2>{item?.SeriesName || t('This series')}</h2>
                 </div>
-                <button data-focusable="true" class="player-control" type="button" aria-label="Close episodes" onClick={closeMenu}>×</button>
+                <button data-focusable="true" class="player-control" type="button" aria-label={t('Close episodes')} onClick={closeMenu}>×</button>
             </div>
             {seasonList.length > 1 && <div class="player-season-row">
                 {seasonList.map(entry => <button data-focusable="true" key={entry.Id} class={entry.Id === seasonId ? 'player-season active' : 'player-season'} type="button" aria-pressed={entry.Id === seasonId} onClick={() => setSeasonId(entry.Id)}>{entry.Name || seasonLabel(entry.IndexNumber)}</button>)}
             </div>}
             <div class="player-episode-list">
-                {episodeState === 'error' && <p class="player-menu-note">Episodes could not be loaded. <button data-focusable="true" class="button secondary" type="button" onClick={() => { setEpisodeState('idle'); setEpisodesBySeason(current => ({ ...current })); }}>Retry</button></p>}
-                {episodeState === 'loading' && <p class="player-menu-note">Loading episodes…</p>}
-                {episodeState === 'ready' && !visibleEpisodes.length && <p class="player-menu-note">No episodes in this season.</p>}
+                {episodeState === 'error' && <p class="player-menu-note">{t('Episodes could not be loaded.')}{' '}<button data-focusable="true" class="button secondary" type="button" onClick={() => { setEpisodeState('idle'); setEpisodesBySeason(current => ({ ...current })); }}>{t('Retry')}</button></p>}
+                {episodeState === 'loading' && <p class="player-menu-note">{t('Loading episodes…')}</p>}
+                {episodeState === 'ready' && !visibleEpisodes.length && <p class="player-menu-note">{t('No episodes in this season.')}</p>}
                 {visibleEpisodes.map(episode => <button data-focusable="true" key={episode.Id} class={episode.Id === item?.Id ? 'player-episode current' : 'player-episode'} type="button" onClick={() => { if (episode.Id !== item?.Id) onPlayItemRef.current(episode); }}>
                     {api && <span class="player-episode-art">{<EpisodeThumb api={api} item={episode} />}</span>}
                     <span class="player-episode-copy">
                         <strong>{episode.IndexNumber !== undefined ? `${episode.IndexNumber}. ` : ''}{episode.Name}</strong>
-                        {episode.RunTimeTicks ? <small>{Math.round(episode.RunTimeTicks / 600000000)} min</small> : null}
+                        {episode.RunTimeTicks ? <small>{t('{0} min', Math.round(episode.RunTimeTicks / 600000000))}</small> : null}
                     </span>
                 </button>)}
             </div>
