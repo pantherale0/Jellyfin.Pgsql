@@ -1,9 +1,9 @@
 diff --git a/Jellyfin.Api/Controllers/SSOController.cs b/Jellyfin.Api/Controllers/SSOController.cs
 new file mode 100644
-index 0000000000..5c269e8ca3
+index 0000000000..0149b5e3ca
 --- /dev/null
 +++ b/Jellyfin.Api/Controllers/SSOController.cs
-@@ -0,0 +1,1143 @@
+@@ -0,0 +1,1142 @@
 +using System;
 +using System.Collections.Concurrent;
 +using System.Collections.Generic;
@@ -44,32 +44,31 @@ index 0000000000..5c269e8ca3
 +[Route("[controller]")]
 +public class SSOController : ControllerBase
 +{
-+    private static readonly HttpClient _httpClient = new HttpClient();
 +    private const string StateCookieName = "jellyfin_sso_state";
 +    private const int MaxPendingStates = 1000;
++    private const int MaxPendingCodes = 1000;
++    private static readonly HttpClient _httpClient = new HttpClient();
 +    private static readonly TimeSpan _stateLifetime = TimeSpan.FromMinutes(10);
 +    private static readonly TimeSpan _pruneInterval = TimeSpan.FromSeconds(30);
 +    private static readonly ConcurrentDictionary<string, (string DeviceId, DateTime CreatedAt, string BrowserNonce, string ReturnUrl, string Challenge)> _stateStore = new();
-+    private const int MaxPendingCodes = 1000;
 +    private static readonly TimeSpan _codeLifetime = TimeSpan.FromSeconds(60);
 +    private static readonly ConcurrentDictionary<string, (string AccessToken, string UserId, string ServerId, string Challenge, DateTime CreatedAt)> _codeStore = new();
-+    private static long _lastPruneTicks;
 +    private static readonly object _configLock = new object();
 +    private static readonly System.Text.Json.JsonSerializerOptions _jsonOptions = new System.Text.Json.JsonSerializerOptions
 +    {
 +        WriteIndented = true
 +    };
++    private static long _lastPruneTicks;
++    private static string? _authorizationEndpoint;
++    private static string? _tokenEndpoint;
++    private static string? _userinfoEndpoint;
++    private static string? _cachedAuthority;
 +
 +    private readonly IUserManager _userManager;
 +    private readonly ISessionManager _sessionManager;
 +    private readonly ILogger<SSOController> _logger;
 +    private readonly IServerConfigurationManager _config;
 +    private readonly ILibraryManager _libraryManager;
-+
-+    private static string? _authorizationEndpoint;
-+    private static string? _tokenEndpoint;
-+    private static string? _userinfoEndpoint;
-+    private static string? _cachedAuthority;
 +
 +    /// <summary>
 +    /// Initializes a new instance of the <see cref="SSOController"/> class.
