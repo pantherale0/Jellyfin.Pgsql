@@ -97,7 +97,7 @@ export function AdminPluginPostgres({ adminApi: api, plugin, session }: {
 
             <Card title={t('Query optimisations')}>
                 <div class="ad-form-grid">
-                    {[['OptimizeLatestQueries', 'Optimised Latest queries'], ['OptimizeNextUpQueries', 'Optimised Next Up queries']].map(([key, label]) => (
+                    {[['OptimizeLatestQueries', 'Optimised Latest queries'], ['OptimizeNextUpQueries', 'Optimised Next Up queries'], ['OptimizeResumeQueries', 'Optimised Resume queries']].map(([key, label]) => (
                         <div class="ad-form-field" key={key}>
                             <label class="ad-form-label">{t(label)}</label>
                             <label class="ad-toggle-row"><span>{draft[key] ? t('Enabled') : t('Disabled')}</span><input type="checkbox" checked={draft[key] === true} onChange={e => patch(key, e.currentTarget.checked)} /></label>

@@ -38,10 +38,22 @@ COPY ui-next/package.json ui-next/package-lock.json ./
 RUN npm ci
 
 COPY ui-next/index.html ./index.html
+COPY ui-next/README.md ./README.md
 COPY ui-next/tsconfig.json ./tsconfig.json
 COPY ui-next/vite.config.ts ./vite.config.ts
 COPY ui-next/src/ ./src/
 COPY ui-next/tests/ ./tests/
+
+# UI Next tests assert against repository sources outside ui-next/ (server
+# contracts, plugin configuration, patches, CI workflow). The paths resolve
+# to /src/<path>, so stage those files here before running the suite.
+COPY jellyfin/MediaBrowser.Model/System/SystemInfo.cs jellyfin/MediaBrowser.Model/System/PublicSystemInfo.cs /src/jellyfin/MediaBrowser.Model/System/
+COPY jellyfin/MediaBrowser.Providers/Plugins/Tmdb/Configuration/PluginConfiguration.cs /src/jellyfin/MediaBrowser.Providers/Plugins/Tmdb/Configuration/PluginConfiguration.cs
+COPY Jellyfin.Plugin.Pgsql/Configuration/PluginConfiguration.cs /src/Jellyfin.Plugin.Pgsql/Configuration/PluginConfiguration.cs
+COPY Jellyfin.Plugin.Seerr/Configuration/PluginConfiguration.cs /src/Jellyfin.Plugin.Seerr/Configuration/PluginConfiguration.cs
+COPY patches/jellyfin_sso.patch patches/jellyfin_zz_last_admin_invariant.patch /src/patches/
+COPY .github/workflows/test.yaml /src/.github/workflows/test.yaml
+COPY docker/Dockerfile /src/docker/Dockerfile
 
 RUN npm test && npm run build
 
