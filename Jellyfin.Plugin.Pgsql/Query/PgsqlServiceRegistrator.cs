@@ -34,6 +34,7 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<TastePersonaGenerator>();
         serviceCollection.AddSingleton<TasteMatchService>();
         serviceCollection.AddSingleton<UserMergeService>();
+        serviceCollection.AddSingleton<MergePreviewTokens>();
         serviceCollection.AddSingleton<EmbyImportSessionStore>();
         serviceCollection.AddSingleton<EmbySqliteReader>();
         serviceCollection.AddSingleton<EmbyUserDataMatcher>();

@@ -15,6 +15,7 @@ Deep documentation (benefits/drawbacks, architecture, features, full patch catal
 | [Features](docs/features.md) | Operator feature map (SSO, cache, taste, Seerr, …) |
 | [Patches](docs/patches.md) | What / why / where / how for every file in `patches/` |
 | [Known issues](docs/known-issues.md) | Fork tracker items and inherited Postgres caveats |
+| [UI Next review](UI_NEXT_REVIEW.md) | Prioritized design, implementation, administration, and standard-web feature-parity findings |
 
 The experimental frontend in [`ui-next/`](ui-next/) has its own [development and security notes](ui-next/README.md). The standard image still serves the patched classic web UI; an opt-in `ui-next-test` image is available for early testing.
 
@@ -67,7 +68,15 @@ services:
     image: ghcr.io/pantherale0/jellyfin.pgsql:ui-next-test-12.1
 ```
 
-To return to the classic web UI, change the image back to the matching standard Jellyfin-version tag, such as `ghcr.io/pantherale0/jellyfin.pgsql:12.1`. The UI Next test image hides links to the classic dashboard and Metadata manager. Physical TV and wrapper compatibility remains under test.
+To return to the classic web UI, change the image back to the matching standard Jellyfin-version tag, such as `ghcr.io/pantherale0/jellyfin.pgsql:12.1`. The UI Next test image hides links to the classic dashboard and Metadata manager. In the official Jellyfin Android app, select ExoPlayer in the app's video-player settings to hand supported video playback to its native player. UI Next verifies the same server and user with the app before handoff; the app's controls appear during playback. webOS keeps UI Next's controls and uses the TV media pipeline through HTML video when supported. Test both paths on the target device and WebView/TV versions.
+
+Android native handoff requires a Jellyfin Android build that includes the companion `NativePlayer.syncSession` bridge; unmodified releases fall back to UI Next's browser player.
+
+To confirm a deployment serves the expected frontend, compare the image digest with the profile menu build revision. The menu shows the short commit the image was built from:
+
+```bash
+docker inspect ghcr.io/pantherale0/jellyfin.pgsql:ui-next-test-12.1 --format '{{.RepoDigests}}'
+```
 
 ## Query cache and optimisation (optional, experimental)
 
@@ -124,6 +133,8 @@ Keep `/config` on one writer (or set `JELLYFIN_SERVER_ID` so both pods share the
 
 When HA is enabled, point k8s **readiness** at `/health/ready` (not `/health`). In-flight TCP streams still drop; HLS VOD/remux can resume from the next segment request; Live TV returns `LiveStreamFenced` (503) and the client should restart playback.
 
+Every response carries `X-Jellyfin-Ha-Role` (`single`, `leader` or `standby`) and `X-Jellyfin-Leader-Epoch`; both are listed in `Access-Control-Expose-Headers` for cross-origin requests. If a reverse proxy rewrites CORS headers, keep them exposed so a separately hosted UI Next can read them. Administrators can see the role, epoch, instance host name, leader-since time and heartbeat in `GET /Pgsql/Stats`, and in the UI Next admin top bar and Overview "High availability" card. Without readable headers the card falls back to stats and says so.
+
 To build the image locally instead:
 
 ```bash
@@ -175,6 +186,11 @@ Configure the OIDC integration using the following environment variables in your
 | `JELLYFIN_SSO_OIDC_ADMIN_ROLE` | `jellyfin_admin` | The role/group name that grants Administrator privileges in Jellyfin |
 | `JELLYFIN_SSO_OIDC_BIRTHDATE_CLAIM` | `birthdate` | The claim containing the user's date of birth (`YYYY-MM-DD`). Used to set max parental rating from age on each login. Missing/invalid values leave the existing rating unchanged. |
 | `JELLYFIN_SSO_OIDC_CREATE_USERS` | `true` | Set to `false` to disable auto-creation of new users |
+| `JELLYFIN_SSO_UI_RETURN_URLS` | empty | Comma-separated UI addresses allowed to receive a one-time SSO code (e.g. `https://ui.example.com/,https://jellyfin.example.com/jellyfin/web/`). Needed for UI Next on a separate origin or under a custom base path. `https` only (`http` for localhost); a return address matches when scheme, host and port are equal and its path is under the listed path. |
+
+Sign-in must start on the same host as `JELLYFIN_SSO_OIDC_REDIRECT_URI`: the login sets a short-lived `jellyfin_sso_state` cookie that the callback must receive, so starting from a LAN address while the redirect URI uses a public domain fails with "This sign-in was not started in this browser". Sign-ins must also complete within 10 minutes.
+
+UI Next on a separate origin (or a custom base path) uses a one-time code instead of Jellyfin Web's stored credentials. List its address in `JELLYFIN_SSO_UI_RETURN_URLS`: `/sso/config?returnUrl=` then reports `codeExchange: true`, the callback redirects to that address with `#sso_code=...` (single use, valid 60 seconds), and UI Next redeems it with `POST /sso/exchange` together with a PKCE-style verifier only that tab holds. The token never appears in a URL. A separate UI origin must also be listed in Jellyfin's CORS hosts. Without an allowlisted address UI Next falls back to the same-origin handoff. The classic callback returns to `<BaseUrl>/web/index.html`, so same-origin deployments under a base path also work.
 
 Startup environment logging redacts values whose names indicate credentials (including secrets, passwords, tokens, API keys, private keys, and connection strings). This only protects future logs: rotate any credential that appeared in logs produced by an older image.
 

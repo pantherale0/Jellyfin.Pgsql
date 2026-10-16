@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { isMergePreviewCurrent, type MergePreviewIdentity } from '../merge-preview';
-import { canDeleteAdminUser, embyImportMapping, sameEmbyImportMapping, validateNewPassword, type EmbyImportMapping } from '../admin-state';
-import type { AdminApi } from '../admin-api';
+import { canDeleteAdminUser, embyImportMapping, userChangeError, sameEmbyImportMapping, validateNewPassword, type EmbyImportMapping } from '../admin-state';
+import type { AdminApi, UserAdminTransferResponse } from '../admin-api';
 import type { JellyfinUserInfo } from '../types';
 import type { DeviceInfo } from '../types';
 import type { TasteProfile } from '../../types';
 import { PageShell, Card, StatusChip, SearchInput, FilterPills, Empty, Tabs, timeAgo, InfoRow, ConfirmButton, DataTable, SettingsFields } from '../ui';
 import { POLICY_FIELDS, RBAC_PERMISSIONS, SCHEDULE_DAYS, UNRATED_ITEM_KINDS, validateSchedule, type AccessSchedule } from '../server-settings';
+import { t } from '../../i18n';
 
 export function AdminUsers({ adminApi: api, session }: { adminApi: AdminApi; session: { user: { Id: string } } }) {
     const [tab, setTab] = useState('Users');
@@ -25,7 +26,7 @@ export function AdminUsers({ adminApi: api, session }: { adminApi: AdminApi; ses
     const [newPassword, setNewPassword] = useState('');
     const [mergeTarget, setMergeTarget] = useState('');
     const [mergeMode, setMergeMode] = useState<'merge' | 'move'>('merge');
-    const [mergePreview, setMergePreview] = useState<{ counts: Record<string, number>; warning?: string } | null>(null);
+    const [mergePreview, setMergePreview] = useState<UserAdminTransferResponse | null>(null);
     const [mergePreviewIdentity, setMergePreviewIdentity] = useState<MergePreviewIdentity | null>(null);
     const mergeRequest = useRef(0);
     const [allLibraries, setAllLibraries] = useState<Array<{ ItemId?: string; Name?: string }>>([]);
@@ -65,7 +66,7 @@ export function AdminUsers({ adminApi: api, session }: { adminApi: AdminApi; ses
         setImportMapping(null);
     };
 
-    const load = useCallback(async () => { try { setUsers(await api.getUsers()); } catch (e) { setUserError(e instanceof Error ? e.message : 'Could not load users.'); } }, [api]);
+    const load = useCallback(async () => { try { setUsers(await api.getUsers()); } catch (e) { setUserError(e instanceof Error ? e.message : t('Could not load users.')); } }, [api]);
     useEffect(() => { load(); }, [load]);
     useEffect(() => {
         if (selected) return;
@@ -117,13 +118,13 @@ export function AdminUsers({ adminApi: api, session }: { adminApi: AdminApi; ses
         setSelected(u); setSelectedPolicy(u.Policy || {}); setRenameDraft(u.Name); setUserError(''); setNewUserPassword(''); setConfirmUserPassword(''); setMergeTarget(''); setMergePreview(null); setMergePreviewIdentity(null);
     };
     const userColumns = [
-        { key: 'Select', label: '', value: (u: JellyfinUserInfo) => <input type="checkbox" aria-label={`Select ${u.Name}`} disabled={userBusy || u.Id === session.user.Id} checked={checkedUsers.includes(u.Id)} onChange={e => { const checked = e.currentTarget.checked; setCheckedUsers(old => checked ? [...old, u.Id] : old.filter(id => id !== u.Id)); }} /> },
-        { key: 'Name', label: 'User', value: (u: JellyfinUserInfo) => <><span class="ad-av">{u.Name[0]}</span><button class="ad-text-link" onClick={() => openUser(u)}>{u.DisplayName || u.Name}</button>{u.Id === session.user.Id && <StatusChip tone="blue">You</StatusChip>}</>, searchValue: (u: JellyfinUserInfo) => u.Name },
-        { key: 'Role', label: 'Role', value: (u: JellyfinUserInfo) => <StatusChip tone={u.IsAdministrator ? 'blue' : 'muted'}>{u.IsAdministrator ? 'Admin' : 'User'}</StatusChip> },
-        { key: 'LastSeen', label: 'Last seen', value: (u: JellyfinUserInfo) => timeAgo(u.LastActivityDate || u.LastLoginDate), searchValue: (u: JellyfinUserInfo) => u.LastActivityDate || u.LastLoginDate || '' },
-        { key: 'Status', label: 'Status', value: (u: JellyfinUserInfo) => <StatusChip tone={u.IsDisabled ? 'red' : 'green'}>{u.IsDisabled ? 'Disabled' : 'Active'}</StatusChip> },
-        { key: 'Libraries', label: 'Libraries', value: (u: JellyfinUserInfo) => u.Policy?.EnableAllFolders ? 'All libraries' : Array.isArray(u.Policy?.EnabledFolders) ? u.Policy!.EnabledFolders.length : 'Not reported' },
-        { key: 'Action', label: '', value: (u: JellyfinUserInfo) => <button class="ad-btn" onClick={() => openUser(u)}>Details</button> },
+        { key: 'Select', label: '', value: (u: JellyfinUserInfo) => <input type="checkbox" aria-label={t('Select {0}', u.Name)} disabled={userBusy || u.Id === session.user.Id} checked={checkedUsers.includes(u.Id)} onChange={e => { const checked = e.currentTarget.checked; setCheckedUsers(old => checked ? [...old, u.Id] : old.filter(id => id !== u.Id)); }} /> },
+        { key: 'Name', label: t('User'), value: (u: JellyfinUserInfo) => <><span class="ad-av">{u.Name[0]}</span><button class="ad-text-link" onClick={() => openUser(u)}>{u.DisplayName || u.Name}</button>{u.Id === session.user.Id && <StatusChip tone="blue">{t('You')}</StatusChip>}</>, searchValue: (u: JellyfinUserInfo) => u.Name },
+        { key: 'Role', label: t('Role'), value: (u: JellyfinUserInfo) => <StatusChip tone={u.IsAdministrator ? 'blue' : 'muted'}>{u.IsAdministrator ? t('Admin') : t('User')}</StatusChip> },
+        { key: 'LastSeen', label: t('Last seen'), value: (u: JellyfinUserInfo) => timeAgo(u.LastActivityDate || u.LastLoginDate), searchValue: (u: JellyfinUserInfo) => u.LastActivityDate || u.LastLoginDate || '' },
+        { key: 'Status', label: t('Status'), value: (u: JellyfinUserInfo) => <StatusChip tone={u.IsDisabled ? 'red' : 'green'}>{u.IsDisabled ? t('Disabled') : t('Active')}</StatusChip> },
+        { key: 'Libraries', label: t('Libraries'), value: (u: JellyfinUserInfo) => u.Policy?.EnableAllFolders ? 'All libraries' : Array.isArray(u.Policy?.EnabledFolders) ? u.Policy!.EnabledFolders.length : 'Not reported' },
+        { key: 'Action', label: '', value: (u: JellyfinUserInfo) => <button class="ad-btn" onClick={() => openUser(u)}>{t('Details')}</button> },
     ];
     const bulk = async (action: 'enable' | 'disable' | 'delete') => {
         setUserBusy(true);
@@ -131,45 +132,45 @@ export function AdminUsers({ adminApi: api, session }: { adminApi: AdminApi; ses
         for (const id of checkedUsers) {
             try {
                 if (action === 'delete') await api.deleteUser(id);
-                else { const user = await api.getUser(id); if (!user.Policy) throw new Error('Policy not reported'); await api.updateUserPolicy(id, { ...user.Policy, IsDisabled: action === 'disable' }); }
+                else { const user = await api.getUser(id); if (!user.Policy) throw new Error(t('Policy not reported')); await api.updateUserPolicy(id, { ...user.Policy, IsDisabled: action === 'disable' }); }
                 completed += 1;
-            } catch (e) { failed.push(`${users.find(u => u.Id === id)?.Name || id}: ${e instanceof Error ? e.message : 'Failed'}`); }
+            } catch (e) { failed.push(`${users.find(u => u.Id === id)?.Name || id}: ${userChangeError(e, action === 'delete' ? 'delete' : 'policy', 'Failed')}`); }
         }
         setUserBusy(false); setCheckedUsers([]); await load();
-        setUserMessage(`${completed} users updated.${failed.length ? ` Failures: ${failed.join('; ')}` : ''}`);
+        setUserMessage(t('{0} users updated.{1}', completed, failed.length ? ` Failures: ${failed.join('; ')}` : ''));
     };
 
-    return <PageShell title="Users & access" subtitle="Lifecycle, permissions and SSO/RBAC"
-        actions={<><button class="ad-btn" onClick={() => setCreating(v => !v)}>Add user</button><button class="ad-btn" onClick={load}>Refresh</button></>}>
+    return <PageShell title={t('Users & access')} subtitle={t('Lifecycle, permissions and SSO/RBAC')}
+        actions={<><button class="ad-btn" onClick={() => setCreating(v => !v)}>{t('Add user')}</button><button class="ad-btn" onClick={load}>{t('Refresh')}</button></>}>
         <Tabs tabs={['Users', 'SSO / OIDC', 'Emby import']} value={tab} onPick={setTab} />
         {userError && !selected && <p role="alert" class="ad-error">{userError}</p>}
         {userMessage && <p role="status" class="ad-note">{userMessage}</p>}
-        {creating && <Card title="Add local user"><form onSubmit={async e => {
+        {creating && <Card title={t('Add local user')}><form onSubmit={async e => {
             e.preventDefault(); if (userBusy || !newName.trim() || !newPassword) return;
             setUserBusy(true); setUserError('');
-            try { await api.createUser(newName.trim(), newPassword); setCreating(false); setNewName(''); setNewPassword(''); await load(); setUserMessage('User created.'); }
-            catch (err) { setUserError(err instanceof Error ? err.message : 'User creation failed.'); }
+            try { await api.createUser(newName.trim(), newPassword); setCreating(false); setNewName(''); setNewPassword(''); await load(); setUserMessage(t('User created.')); }
+            catch (err) { setUserError(err instanceof Error ? err.message : t('User creation failed.')); }
             finally { setUserBusy(false); }
-        }}><div class="ad-grid2"><label class="ad-field">Username<input required value={newName} onInput={e => setNewName(e.currentTarget.value)} autoComplete="off" /></label><label class="ad-field">Initial password<input required type="password" value={newPassword} onInput={e => setNewPassword(e.currentTarget.value)} autoComplete="new-password" /></label></div><button class="ad-btn" type="submit" disabled={userBusy}>Create user</button></form></Card>}
+        }}><div class="ad-grid2"><label class="ad-field">{t('Username')}<input required value={newName} onInput={e => setNewName(e.currentTarget.value)} autoComplete="off" /></label><label class="ad-field">{t('Initial password')}<input required type="password" value={newPassword} onInput={e => setNewPassword(e.currentTarget.value)} autoComplete="new-password" /></label></div><button class="ad-btn" type="submit" disabled={userBusy}>{t('Create user')}</button></form></Card>}
 
-        {tab === 'Users' && <Card title="Users">
+        {tab === 'Users' && <Card title={t('Users')}>
             <div class="ad-toolbar">
-                <SearchInput value={search} onInput={setSearch} placeholder="Search users…" />
+                <SearchInput value={search} onInput={setSearch} placeholder={t('Search users…')} />
                 <FilterPills options={['All', 'Admin', 'User']} value={role} onPick={setRole} />
                 <FilterPills options={['All', 'Active', 'Disabled']} value={status} onPick={setStatus} />
             </div>
-            {checkedUsers.length > 0 && <div class="ad-toolbar"><span class="ad-note">{checkedUsers.length} selected</span><ConfirmButton label="Enable selected" onConfirm={() => bulk('enable')} busy={userBusy} /><ConfirmButton label="Disable selected" tone="danger" onConfirm={() => bulk('disable')} busy={userBusy} /><ConfirmButton label="Delete selected" tone="danger" onConfirm={() => bulk('delete')} busy={userBusy} /><button class="ad-btn" disabled={userBusy} onClick={() => setCheckedUsers([])}>Clear selection</button></div>}
-            <DataTable rows={filtered} columns={userColumns} query={search} getKey={u => u.Id} empty="No users match" />
+            {checkedUsers.length > 0 && <div class="ad-toolbar"><span class="ad-note">{t('{0} selected', checkedUsers.length)}</span><ConfirmButton label={t('Enable selected')} onConfirm={() => bulk('enable')} busy={userBusy} /><ConfirmButton label={t('Disable selected')} tone="danger" onConfirm={() => bulk('disable')} busy={userBusy} /><ConfirmButton label={t('Delete selected')} tone="danger" onConfirm={() => bulk('delete')} busy={userBusy} /><button class="ad-btn" disabled={userBusy} onClick={() => setCheckedUsers([])}>{t('Clear selection')}</button></div>}
+            <DataTable rows={filtered} columns={userColumns} query={search} getKey={u => u.Id} empty={t('No users match')} />
         </Card>}
 
         {tab === 'SSO / OIDC' && <SsoPanel api={api} />}
 
-        {tab === 'Emby import' && <Card title="Emby userdata import">
+        {tab === 'Emby import' && <Card title={t('Emby userdata import')}>
             {importError && <p class="ad-import-error" role="alert">{importError}</p>}
             {importStep === 'upload' && <div class="ad-import-step">
-                <p class="ad-note">Select the Emby <code>library.db</code> and <code>users.db</code> files. Upload is chunked and held in a short-lived, admin-owned import session.</p>
-                <label class="ad-file-field">library.db<input type="file" accept=".db,.sqlite,.sqlite3" onChange={e => setLibraryFile((e.currentTarget as HTMLInputElement).files?.[0] || null)} /></label>
-                <label class="ad-file-field">users.db<input type="file" accept=".db,.sqlite,.sqlite3" onChange={e => setUsersFile((e.currentTarget as HTMLInputElement).files?.[0] || null)} /></label>
+                <p class="ad-note">{t('Select the Emby')}{' '}<code>library.db</code>{' '}{t('and')}{' '}<code>users.db</code>{' '}{t('files. Upload is chunked and held in a short-lived, admin-owned import session.')}</p>
+                <label class="ad-file-field">{t('library.db')}<input type="file" accept=".db,.sqlite,.sqlite3" onChange={e => setLibraryFile((e.currentTarget as HTMLInputElement).files?.[0] || null)} /></label>
+                <label class="ad-file-field">{t('users.db')}<input type="file" accept=".db,.sqlite,.sqlite3" onChange={e => setUsersFile((e.currentTarget as HTMLInputElement).files?.[0] || null)} /></label>
                 {importBusy && <div class="ad-progress"><i style={{ width: `${importProgress}%` }} /></div>}
                 <button class="ad-btn" disabled={!libraryFile || !usersFile || importBusy} onClick={async () => {
                     if (!libraryFile || !usersFile) return;
@@ -185,139 +186,150 @@ export function AdminUsers({ adminApi: api, session }: { adminApi: AdminApi; ses
                         await api.uploadEmbyChunks(init.sessionId, 'usersDb', usersFile, init.chunkSizeBytes, p => setImportProgress(50 + Math.round(p * .5)), abort.signal);
                         const complete = await api.completeEmbyUpload(init.sessionId);
                         setEmbyUsers(complete.users); setImportStep('select');
-                    } catch (e) { setImportError(e instanceof Error ? e.message : 'Upload failed.'); resetImportMapping(); if (uploadSession.current) { await api.discardEmbyImport(uploadSession.current).catch(() => undefined); uploadSession.current = ''; } }
+                    } catch (e) { setImportError(e instanceof Error ? e.message : t('Upload failed.')); resetImportMapping(); if (uploadSession.current) { await api.discardEmbyImport(uploadSession.current).catch(() => undefined); uploadSession.current = ''; } }
                     finally { setImportBusy(false); }
-                }}>{importBusy ? `Uploading ${importProgress}%` : 'Upload databases'}</button>
-                {importBusy && <button class="ad-btn" onClick={() => uploadAbort.current?.abort()}>Cancel upload</button>}
+                }}>{importBusy ? t('Uploading {0}%', importProgress) : t('Upload databases')}</button>
+                {importBusy && <button class="ad-btn" onClick={() => uploadAbort.current?.abort()}>{t('Cancel upload')}</button>}
             </div>}
             {importStep === 'select' && <div class="ad-import-step">
-                <div class="ad-grid2"><label class="ad-field">Target Jellyfin user<select value={targetUserId} onChange={e => setTargetUserId((e.currentTarget as HTMLSelectElement).value)}><option value="">Choose a user</option>{users.map(u => <option value={u.Id}>{u.Name}</option>)}</select></label>
-                    <div class="ad-user-options">{embyUsers.map(u => <label key={u.id}><input type="checkbox" checked={selectedEmbyUsers.includes(u.id)} onChange={e => setSelectedEmbyUsers(old => (e.currentTarget as HTMLInputElement).checked ? [...old, u.id] : old.filter(x => x !== u.id))} /> {u.name} · {u.userDataCount} entries</label>)}</div></div>
+                <div class="ad-grid2"><label class="ad-field">{t('Target Jellyfin user')}<select value={targetUserId} onChange={e => setTargetUserId((e.currentTarget as HTMLSelectElement).value)}><option value="">{t('Choose a user')}</option>{users.map(u => <option value={u.Id}>{u.Name}</option>)}</select></label>
+                    <div class="ad-user-options">{embyUsers.map(u => <label key={u.id}><input type="checkbox" checked={selectedEmbyUsers.includes(u.id)} onChange={e => setSelectedEmbyUsers(old => (e.currentTarget as HTMLInputElement).checked ? [...old, u.id] : old.filter(x => x !== u.id))} /> {t('{0} · {1} entries', u.name, u.userDataCount)}</label>)}</div></div>
                 <div class="ad-flex"><button class="ad-btn" disabled={!targetUserId || selectedEmbyUsers.length === 0 || importBusy} onClick={async () => {
                     const mapping = embyImportMapping(importSession, selectedEmbyUsers, embyUsers, targetUserId);
-                    if (!mapping) { setImportError('Select at least one user from the current upload.'); return; }
-                    setImportBusy(true); try { const p = await api.previewEmbyImport(mapping.sessionId, mapping.sourceUserIds, mapping.targetUserId); setSelectedEmbyUsers(mapping.sourceUserIds); setImportMapping(mapping); setImportPreview(p); setImportStep('preview'); } catch (e) { setImportError(e instanceof Error ? e.message : 'Preview failed.'); } finally { setImportBusy(false); }
-                }}>Preview import</button><button class="ad-btn" disabled={importBusy} onClick={async () => { await api.discardEmbyImport(importSession).catch(() => undefined); uploadSession.current = ''; resetImportMapping(); setImportStep('upload'); }}>Discard</button></div>
+                    if (!mapping) { setImportError(t('Select at least one user from the current upload.')); return; }
+                    setImportBusy(true); try { const p = await api.previewEmbyImport(mapping.sessionId, mapping.sourceUserIds, mapping.targetUserId); setSelectedEmbyUsers(mapping.sourceUserIds); setImportMapping(mapping); setImportPreview(p); setImportStep('preview'); } catch (e) { setImportError(e instanceof Error ? e.message : t('Preview failed.')); } finally { setImportBusy(false); }
+                }}>{t('Preview import')}</button><button class="ad-btn" disabled={importBusy} onClick={async () => { await api.discardEmbyImport(importSession).catch(() => undefined); uploadSession.current = ''; resetImportMapping(); setImportStep('upload'); }}>{t('Discard')}</button></div>
             </div>}
-            {importStep === 'preview' && <div class="ad-import-step"><p class="ad-note">Review the preview counts before applying userdata.</p>
+            {importStep === 'preview' && <div class="ad-import-step"><p class="ad-note">{t('Review the preview counts before applying userdata.')}</p>
                 {importPreview?.counts && Object.entries(importPreview.counts).map(([k, v]) => <InfoRow key={k} k={k} v={String(v)} />)}
-                <div class="ad-danger"><p>Import selected users into {users.find(u => u.Id === targetUserId)?.Name || 'target user'}?</p><ConfirmButton label="Import UserData" tone="danger" onConfirm={async () => {
+                <div class="ad-danger"><p>{t('Import selected users into')}{' '}{users.find(u => u.Id === targetUserId)?.Name || t('target user')}?</p><ConfirmButton label={t('Import UserData')} tone="danger" onConfirm={async () => {
                     const mapping = embyImportMapping(importSession, selectedEmbyUsers, embyUsers, targetUserId);
-                    if (!importMapping || !sameEmbyImportMapping(mapping, importMapping)) throw new Error('The mapping changed after the preview. Preview the import again.');
-                    setImportBusy(true); try { setImportResult(await api.executeEmbyImport(importMapping.sessionId, importMapping.sourceUserIds, importMapping.targetUserId)); uploadSession.current = ''; resetImportMapping(); setEmbyUsers([]); setImportStep('done'); } catch (e) { setImportError(e instanceof Error ? e.message : 'Import failed.'); } finally { setImportBusy(false); }
-                }} busy={importBusy} /><button class="ad-btn" disabled={importBusy} onClick={() => { setImportPreview(null); setImportMapping(null); setImportStep('select'); }}>Back to mapping</button></div>
+                    if (!importMapping || !sameEmbyImportMapping(mapping, importMapping)) throw new Error(t('The mapping changed after the preview. Preview the import again.'));
+                    setImportBusy(true); try { setImportResult(await api.executeEmbyImport(importMapping.sessionId, importMapping.sourceUserIds, importMapping.targetUserId)); uploadSession.current = ''; resetImportMapping(); setEmbyUsers([]); setImportStep('done'); } catch (e) { setImportError(e instanceof Error ? e.message : t('Import failed.')); } finally { setImportBusy(false); }
+                }} busy={importBusy} /><button class="ad-btn" disabled={importBusy} onClick={() => { setImportPreview(null); setImportMapping(null); setImportStep('select'); }}>{t('Back to mapping')}</button></div>
             </div>}
-            {importStep === 'done' && <div class="ad-import-step"><StatusChip tone="green">Import complete</StatusChip>{importResult?.counts && Object.entries(importResult.counts).map(([k, v]) => <InfoRow key={k} k={k} v={String(v)} />)}{importResult?.warning && <p class="ad-note">{importResult.warning}</p>}<button class="ad-btn" onClick={() => { setImportStep('upload'); setImportProgress(0); setLibraryFile(null); setUsersFile(null); resetImportMapping(); }}>Start another import</button></div>}
+            {importStep === 'done' && <div class="ad-import-step"><StatusChip tone="green">{t('Import complete')}</StatusChip>{importResult?.counts && Object.entries(importResult.counts).map(([k, v]) => <InfoRow key={k} k={k} v={String(v)} />)}{importResult?.warning && <p class="ad-note">{importResult.warning}</p>}<button class="ad-btn" onClick={() => { setImportStep('upload'); setImportProgress(0); setLibraryFile(null); setUsersFile(null); resetImportMapping(); }}>{t('Start another import')}</button></div>}
         </Card>}
         {selected && <div class="ad-drawer-backdrop" onClick={() => setSelected(null)}><aside ref={drawerRef} class="ad-drawer" role="dialog" aria-modal="true" aria-labelledby="admin-user-detail-title" onClick={e => e.stopPropagation()}>
-            <button class="ad-drawer-close" onClick={() => setSelected(null)} aria-label="Close details">×</button>
+            <button class="ad-drawer-close" onClick={() => setSelected(null)} aria-label={t('Close details')}>×</button>
             <h2 id="admin-user-detail-title">{selected.DisplayName || selected.Name}</h2>
-            <StatusChip tone={selected.IsAdministrator ? 'blue' : 'muted'}>{selected.IsAdministrator ? 'Administrator' : 'User'}</StatusChip>
-            <InfoRow k="Status" v={selected.IsDisabled ? 'Disabled' : 'Active'} />
-            <InfoRow k="Last seen" v={timeAgo(selected.LastActivityDate || selected.LastLoginDate)} />
+            <StatusChip tone={selected.IsAdministrator ? 'blue' : 'muted'}>{selected.IsAdministrator ? t('Administrator') : t('User')}</StatusChip>
+            <InfoRow k={t('Status')} v={selected.IsDisabled ? t('Disabled') : t('Active')} />
+            <InfoRow k={t('Last seen')} v={timeAgo(selected.LastActivityDate || selected.LastLoginDate)} />
             {userError && <p class="ad-error" role="alert">{userError}</p>}
-            <h3 class="ad-drawer-section-title">Profile</h3>
-            <div class="ad-flex"><label class="ad-field">Username<input value={renameDraft} maxLength={100} autoComplete="off" onInput={e => setRenameDraft(e.currentTarget.value)} /></label>
-                <ConfirmButton label="Rename" onConfirm={async () => {
+            <h3 class="ad-drawer-section-title">{t('Profile')}</h3>
+            <div class="ad-flex"><label class="ad-field">{t('Username')}<input value={renameDraft} maxLength={100} autoComplete="off" onInput={e => setRenameDraft(e.currentTarget.value)} /></label>
+                <ConfirmButton label={t('Rename')} onConfirm={async () => {
                     const name = renameDraft.trim();
-                    if (!name) throw new Error('A username is required.');
+                    if (!name) throw new Error(t('A username is required.'));
                     if (name === selected.Name) return;
-                    if (users.some(u => u.Id !== selected.Id && u.Name.toLowerCase() === name.toLowerCase())) throw new Error('Another user already has that name.');
+                    if (users.some(u => u.Id !== selected.Id && u.Name.toLowerCase() === name.toLowerCase())) throw new Error(t('Another user already has that name.'));
                     await api.renameUser(selected.Id, name);
                     setSelected({ ...selected, Name: name });
-                    setUserMessage(`Renamed to ${name}.`);
+                    setUserMessage(t('Renamed to {0}.', name));
                     await load();
                 }} /></div>
-            {selected.Policy && <><h3 class="ad-drawer-section-title">Permissions &amp; access</h3>
+            {selected.Policy && <><h3 class="ad-drawer-section-title">{t('Permissions & access')}</h3>
                 {(['IsAdministrator', 'IsDisabled', 'EnableLiveTvAccess', 'EnableLiveTvManagement', 'EnableRemoteAccess', 'EnableMediaPlayback'] as const).map(key => <label class="ad-policy-row" key={key}><span>{policyLabel(key)}</span><input type="checkbox" checked={selectedPolicy[key] === true} disabled={userBusy || key === 'IsDisabled' && selected.IsAdministrator} onChange={e => setSelectedPolicy(old => ({ ...old, [key]: (e.currentTarget as HTMLInputElement).checked }))} /></label>)}
-                {'EnableLiveTvMultiview' in selectedPolicy && <label class="ad-policy-row"><span>Live TV Multiview</span><input type="checkbox" checked={selectedPolicy.EnableLiveTvMultiview === true} onChange={e => setSelectedPolicy(old => ({ ...old, EnableLiveTvMultiview: e.currentTarget.checked }))} /></label>}
-                <h3 class="ad-drawer-section-title">Library access</h3>
-                <label class="ad-policy-row"><span>All libraries</span><input type="checkbox" checked={selectedPolicy.EnableAllFolders === true} onChange={e => setSelectedPolicy(old => ({ ...old, EnableAllFolders: e.currentTarget.checked }))} /></label>
+                {'EnableLiveTvMultiview' in selectedPolicy && <label class="ad-policy-row"><span>{t('Live TV Multiview')}</span><input type="checkbox" checked={selectedPolicy.EnableLiveTvMultiview === true} onChange={e => setSelectedPolicy(old => ({ ...old, EnableLiveTvMultiview: e.currentTarget.checked }))} /></label>}
+                <h3 class="ad-drawer-section-title">{t('Library access')}</h3>
+                <label class="ad-policy-row"><span>{t('All libraries')}</span><input type="checkbox" checked={selectedPolicy.EnableAllFolders === true} onChange={e => setSelectedPolicy(old => ({ ...old, EnableAllFolders: e.currentTarget.checked }))} /></label>
                 {!selectedPolicy.EnableAllFolders && allLibraries.map(l => <label class="ad-policy-row" key={l.ItemId}><span>{l.Name}</span><input type="checkbox" checked={(selectedPolicy.EnabledFolders || []).includes(l.ItemId)} onChange={e => { const checked = e.currentTarget.checked; setSelectedPolicy(old => ({ ...old, EnabledFolders: checked ? [...(old.EnabledFolders || []), l.ItemId] : (old.EnabledFolders || []).filter((id: string) => id !== l.ItemId) })); }} /></label>)}
-                <h3 class="ad-drawer-section-title">Parental controls</h3>
-                <label class="ad-field">Maximum parental rating (empty means unrestricted)<input type="number" min="0" value={selectedPolicy.MaxParentalRating ?? ''} onInput={e => setSelectedPolicy(old => ({ ...old, MaxParentalRating: e.currentTarget.value === '' ? null : Number(e.currentTarget.value) }))} /></label>
-                <label class="ad-field">Blocked tags (comma-separated)<input value={(selectedPolicy.BlockedTags || []).join(', ')} onInput={e => setSelectedPolicy(old => ({ ...old, BlockedTags: e.currentTarget.value.split(',').map(t => t.trim()).filter(Boolean) }))} /></label>
-                <fieldset class="ad-fieldset"><legend>Block items with no rating</legend>{UNRATED_ITEM_KINDS.map(([kind, label]) => <label class="ad-policy-row" key={kind}><span>{label}</span><input type="checkbox" checked={(selectedPolicy.BlockUnratedItems || []).includes(kind)} onChange={e => { const checked = e.currentTarget.checked; setSelectedPolicy(old => ({ ...old, BlockUnratedItems: checked ? [ ...(old.BlockUnratedItems || []), kind ] : (old.BlockUnratedItems || []).filter((value: string) => value !== kind) })); }} /></label>)}</fieldset>
-                <h3 class="ad-drawer-section-title">Access schedule</h3>
-                {(selectedPolicy.AccessSchedules || []).length === 0 ? <p class="ad-note">No schedule: access is allowed at any time.</p> : (selectedPolicy.AccessSchedules as AccessSchedule[]).map((entry, index) => <div class="ad-info" key={index}><span class="ad-info-k">{entry.DayOfWeek} · {entry.StartHour}:00–{entry.EndHour}:00</span><button class="ad-btn" onClick={() => setSelectedPolicy(old => ({ ...old, AccessSchedules: (old.AccessSchedules || []).filter((_: AccessSchedule, i: number) => i !== index) }))}>Remove</button></div>)}
-                <div class="ad-flex"><label class="ad-field">Day<select value={schedule.DayOfWeek} onChange={e => setSchedule(old => ({ ...old, DayOfWeek: e.currentTarget.value }))}>{SCHEDULE_DAYS.map(day => <option key={day} value={day}>{day}</option>)}</select></label>
-                    <label class="ad-field">From hour<input type="number" min="0" max="23" value={schedule.StartHour} onInput={e => setSchedule(old => ({ ...old, StartHour: Number(e.currentTarget.value) }))} /></label>
-                    <label class="ad-field">To hour<input type="number" min="1" max="24" value={schedule.EndHour} onInput={e => setSchedule(old => ({ ...old, EndHour: Number(e.currentTarget.value) }))} /></label>
-                    <button class="ad-btn" onClick={() => { const problem = validateSchedule(schedule); if (problem) { setUserError(problem); return; } setUserError(''); setSelectedPolicy(old => ({ ...old, AccessSchedules: [ ...(old.AccessSchedules || []), schedule ] })); }}>Add window</button></div>
-                <h3 class="ad-drawer-section-title">Channel access</h3>
-                <label class="ad-policy-row"><span>All channels</span><input type="checkbox" checked={selectedPolicy.EnableAllChannels !== false} onChange={e => setSelectedPolicy(old => ({ ...old, EnableAllChannels: e.currentTarget.checked }))} /></label>
-                {selectedPolicy.EnableAllChannels === false && (contentChannels.length ? contentChannels.map(c => <label class="ad-policy-row" key={c.Id}><span>{c.Name || c.Id}</span><input type="checkbox" checked={(selectedPolicy.EnabledChannels || []).includes(c.Id)} onChange={e => { const checked = e.currentTarget.checked; setSelectedPolicy(old => ({ ...old, EnabledChannels: checked ? [ ...(old.EnabledChannels || []), c.Id ] : (old.EnabledChannels || []).filter((id: string) => id !== c.Id) })); }} /></label>) : <p class="ad-note">No content channels are installed.</p>)}
-                <h3 class="ad-drawer-section-title">Device access</h3>
-                <label class="ad-policy-row"><span>All devices</span><input type="checkbox" checked={selectedPolicy.EnableAllDevices !== false} onChange={e => setSelectedPolicy(old => ({ ...old, EnableAllDevices: e.currentTarget.checked }))} /></label>
-                {selectedPolicy.EnableAllDevices === false && (allDevices.length ? allDevices.filter(d => d.Id).map(d => <label class="ad-policy-row" key={d.Id}><span>{d.CustomName || d.Name} · {d.AppName}</span><input type="checkbox" checked={(selectedPolicy.EnabledDevices || []).includes(d.Id)} onChange={e => { const checked = e.currentTarget.checked; setSelectedPolicy(old => ({ ...old, EnabledDevices: checked ? [ ...(old.EnabledDevices || []), d.Id ] : (old.EnabledDevices || []).filter((id: string) => id !== d.Id) })); }} /></label>) : <p class="ad-note">No devices are registered.</p>)}
-                <h3 class="ad-drawer-section-title">Playback and features</h3>
+                <h3 class="ad-drawer-section-title">{t('Parental controls')}</h3>
+                <label class="ad-field">{t('Maximum parental rating (empty means unrestricted)')}<input type="number" min="0" value={selectedPolicy.MaxParentalRating ?? ''} onInput={e => setSelectedPolicy(old => ({ ...old, MaxParentalRating: e.currentTarget.value === '' ? null : Number(e.currentTarget.value) }))} /></label>
+                <label class="ad-field">{t('Blocked tags (comma-separated)')}<input value={(selectedPolicy.BlockedTags || []).join(', ')} onInput={e => setSelectedPolicy(old => ({ ...old, BlockedTags: e.currentTarget.value.split(',').map(t => t.trim()).filter(Boolean) }))} /></label>
+                <fieldset class="ad-fieldset"><legend>{t('Block items with no rating')}</legend>{UNRATED_ITEM_KINDS.map(([kind, label]) => <label class="ad-policy-row" key={kind}><span>{t(label)}</span><input type="checkbox" checked={(selectedPolicy.BlockUnratedItems || []).includes(kind)} onChange={e => { const checked = e.currentTarget.checked; setSelectedPolicy(old => ({ ...old, BlockUnratedItems: checked ? [ ...(old.BlockUnratedItems || []), kind ] : (old.BlockUnratedItems || []).filter((value: string) => value !== kind) })); }} /></label>)}</fieldset>
+                <h3 class="ad-drawer-section-title">{t('Access schedule')}</h3>
+                {(selectedPolicy.AccessSchedules || []).length === 0 ? <p class="ad-note">{t('No schedule: access is allowed at any time.')}</p> : (selectedPolicy.AccessSchedules as AccessSchedule[]).map((entry, index) => <div class="ad-info" key={index}><span class="ad-info-k">{entry.DayOfWeek} · {entry.StartHour}:00–{entry.EndHour}:00</span><button class="ad-btn" onClick={() => setSelectedPolicy(old => ({ ...old, AccessSchedules: (old.AccessSchedules || []).filter((_: AccessSchedule, i: number) => i !== index) }))}>{t('Remove')}</button></div>)}
+                <div class="ad-flex"><label class="ad-field">{t('Day')}<select value={schedule.DayOfWeek} onChange={e => setSchedule(old => ({ ...old, DayOfWeek: e.currentTarget.value }))}>{SCHEDULE_DAYS.map(day => <option key={day} value={day}>{t(day)}</option>)}</select></label>
+                    <label class="ad-field">{t('From hour')}<input type="number" min="0" max="23" value={schedule.StartHour} onInput={e => setSchedule(old => ({ ...old, StartHour: Number(e.currentTarget.value) }))} /></label>
+                    <label class="ad-field">{t('To hour')}<input type="number" min="1" max="24" value={schedule.EndHour} onInput={e => setSchedule(old => ({ ...old, EndHour: Number(e.currentTarget.value) }))} /></label>
+                    <button class="ad-btn" onClick={() => { const problem = validateSchedule(schedule); if (problem) { setUserError(problem); return; } setUserError(''); setSelectedPolicy(old => ({ ...old, AccessSchedules: [ ...(old.AccessSchedules || []), schedule ] })); }}>{t('Add window')}</button></div>
+                <h3 class="ad-drawer-section-title">{t('Channel access')}</h3>
+                <label class="ad-policy-row"><span>{t('All channels')}</span><input type="checkbox" checked={selectedPolicy.EnableAllChannels !== false} onChange={e => setSelectedPolicy(old => ({ ...old, EnableAllChannels: e.currentTarget.checked }))} /></label>
+                {selectedPolicy.EnableAllChannels === false && (contentChannels.length ? contentChannels.map(c => <label class="ad-policy-row" key={c.Id}><span>{c.Name || c.Id}</span><input type="checkbox" checked={(selectedPolicy.EnabledChannels || []).includes(c.Id)} onChange={e => { const checked = e.currentTarget.checked; setSelectedPolicy(old => ({ ...old, EnabledChannels: checked ? [ ...(old.EnabledChannels || []), c.Id ] : (old.EnabledChannels || []).filter((id: string) => id !== c.Id) })); }} /></label>) : <p class="ad-note">{t('No content channels are installed.')}</p>)}
+                <h3 class="ad-drawer-section-title">{t('Device access')}</h3>
+                <label class="ad-policy-row"><span>{t('All devices')}</span><input type="checkbox" checked={selectedPolicy.EnableAllDevices !== false} onChange={e => setSelectedPolicy(old => ({ ...old, EnableAllDevices: e.currentTarget.checked }))} /></label>
+                {selectedPolicy.EnableAllDevices === false && (allDevices.length ? allDevices.filter(d => d.Id).map(d => <label class="ad-policy-row" key={d.Id}><span>{d.CustomName || d.Name} · {d.AppName}</span><input type="checkbox" checked={(selectedPolicy.EnabledDevices || []).includes(d.Id)} onChange={e => { const checked = e.currentTarget.checked; setSelectedPolicy(old => ({ ...old, EnabledDevices: checked ? [ ...(old.EnabledDevices || []), d.Id ] : (old.EnabledDevices || []).filter((id: string) => id !== d.Id) })); }} /></label>) : <p class="ad-note">{t('No devices are registered.')}</p>)}
+                <h3 class="ad-drawer-section-title">{t('Playback and features')}</h3>
                 <SettingsFields key={selected.Id} fields={POLICY_FIELDS} draft={selectedPolicy} onChange={setSelectedPolicy} options={{ AuthenticationProviderId: providers.auth, PasswordResetProviderId: providers.reset }} />
-                <div class="ad-drawer-actions"><ConfirmButton label="Save policy" busy={userBusy} onConfirm={async () => { setUserBusy(true); setUserError(''); try { await api.updateUserPolicy(selected.Id, selectedPolicy); setSelected({ ...selected, Policy: selectedPolicy, IsAdministrator: selectedPolicy.IsAdministrator, IsDisabled: selectedPolicy.IsDisabled }); await load(); } catch (e) { setUserError(e instanceof Error ? e.message : 'Policy update failed.'); } finally { setUserBusy(false); } }} />
+                <div class="ad-drawer-actions"><ConfirmButton label={t('Save policy')} busy={userBusy} onConfirm={async () => { setUserBusy(true); setUserError(''); try { await api.updateUserPolicy(selected.Id, selectedPolicy); setSelected({ ...selected, Policy: selectedPolicy, IsAdministrator: selectedPolicy.IsAdministrator, IsDisabled: selectedPolicy.IsDisabled }); await load(); } catch (e) { setUserError(userChangeError(e, 'policy', t('Policy update failed.'))); } finally { setUserBusy(false); } }} />
                     {canDeleteAdminUser(selected, session.user.Id, users)
-                        ? <ConfirmButton label="Delete user" tone="danger" onConfirm={async () => {
+                        ? <ConfirmButton label={t('Delete user')} tone="danger" onConfirm={async () => {
                             setUserBusy(true);
                             try {
                                 const currentUsers = await api.getUsers();
                                 const currentTarget = currentUsers.find(user => user.Id === selected.Id);
-                                if (!currentTarget) throw new Error('This user no longer exists. Refresh the user list and try again.');
-                                if (!canDeleteAdminUser(currentTarget, session.user.Id, currentUsers)) throw new Error('You cannot delete your own account or the last enabled administrator.');
+                                if (!currentTarget) throw new Error(t('This user no longer exists. Refresh the user list and try again.'));
+                                if (!canDeleteAdminUser(currentTarget, session.user.Id, currentUsers)) throw new Error(t('You cannot delete your own account or the last enabled administrator.'));
                                 await api.deleteUser(currentTarget.Id);
                                 setSelected(null);
                                 await load();
-                            } catch (e) { setUserError(e instanceof Error ? e.message : 'Delete failed.'); }
+                            } catch (e) { setUserError(userChangeError(e, 'delete', t('Delete failed.'))); }
                             finally { setUserBusy(false); }
                         }} busy={userBusy} />
-                        : <p class="ad-note">{selected.Id === session.user.Id ? 'You cannot delete your own account here.' : 'The last enabled administrator cannot be deleted.'}</p>}
+                        : <p class="ad-note">{selected.Id === session.user.Id ? t('You cannot delete your own account here.') : t('The last enabled administrator cannot be deleted.')}</p>}
                 </div>
                 {selected.Id !== session.user.Id && <form class="ad-password-form" onSubmit={e => e.preventDefault()}>
-                    <h3 class="ad-drawer-section-title">Set password</h3>
-                    <div class="ad-grid2"><label class="ad-field">New password<input type="password" autoComplete="new-password" value={newUserPassword} onInput={e => setNewUserPassword(e.currentTarget.value)} /></label>
-                        <label class="ad-field">Confirm password<input type="password" autoComplete="new-password" value={confirmUserPassword} onInput={e => setConfirmUserPassword(e.currentTarget.value)} /></label></div>
-                    <ConfirmButton label="Set password" onConfirm={async () => {
+                    <h3 class="ad-drawer-section-title">{t('Set password')}</h3>
+                    <div class="ad-grid2"><label class="ad-field">{t('New password')}<input type="password" autoComplete="new-password" value={newUserPassword} onInput={e => setNewUserPassword(e.currentTarget.value)} /></label>
+                        <label class="ad-field">{t('Confirm password')}<input type="password" autoComplete="new-password" value={confirmUserPassword} onInput={e => setConfirmUserPassword(e.currentTarget.value)} /></label></div>
+                    <ConfirmButton label={t('Set password')} onConfirm={async () => {
                         const problem = validateNewPassword(newUserPassword, confirmUserPassword);
                         if (problem) throw new Error(problem);
                         await api.setUserPassword(selected.Id, newUserPassword);
                         setNewUserPassword(''); setConfirmUserPassword('');
-                        setUserMessage(`Password updated for ${selected.Name}. Their other sessions were signed out.`);
+                        setUserMessage(t('Password updated for {0}. Their other sessions were signed out.', selected.Name));
                     }} />
                 </form>}
                 <div class="ad-drawer-actions">{selected.IsAdministrator
-                    ? <p class="ad-note">Clearing the password is unavailable for administrators; set a new password instead.</p>
-                    : <ConfirmButton label="Clear password" tone="danger" onConfirm={async () => { await api.resetUserPassword(selected.Id); setUserMessage('Password cleared. The user can sign in without a password until one is set.'); }} />}</div>
-                <h3 class="ad-drawer-section-title">Merge userdata and account</h3>
-                <label class="ad-field">Merge into<select value={mergeTarget} onChange={e => { mergeRequest.current += 1; setMergeTarget(e.currentTarget.value); setMergePreview(null); setMergePreviewIdentity(null); }}><option value="">Select target</option>{users.filter(u => u.Id !== selected.Id).map(u => <option value={u.Id} key={u.Id}>{u.Name}</option>)}</select></label>
-                <div class="ad-flex" role="group" aria-label="Transfer mode">
-                    {([['merge', 'Full merge'], ['move', 'Userdata only']] as const).map(([mode, label]) => <button key={mode} type="button" class={`ad-btn${mergeMode === mode ? ' active' : ''}`} aria-pressed={mergeMode === mode} onClick={() => { mergeRequest.current += 1; setMergeMode(mode); setMergePreview(null); setMergePreviewIdentity(null); }}>{label}</button>)}
+                    ? <p class="ad-note">{t('Clearing the password is unavailable for administrators; set a new password instead.')}</p>
+                    : <ConfirmButton label={t('Clear password')} tone="danger" onConfirm={async () => { await api.resetUserPassword(selected.Id); setUserMessage(t('Password cleared. The user can sign in without a password until one is set.')); }} />}</div>
+                <h3 class="ad-drawer-section-title">{t('Merge userdata and account')}</h3>
+                <label class="ad-field">{t('Merge into')}<select value={mergeTarget} onChange={e => { mergeRequest.current += 1; setMergeTarget(e.currentTarget.value); setMergePreview(null); setMergePreviewIdentity(null); }}><option value="">{t('Select target')}</option>{users.filter(u => u.Id !== selected.Id).map(u => <option value={u.Id} key={u.Id}>{u.Name}</option>)}</select></label>
+                <div class="ad-flex" role="group" aria-label={t('Transfer mode')}>
+                    {([['merge', 'Full merge'], ['move', 'Userdata only']] as const).map(([mode, label]) => <button key={mode} type="button" class={`ad-btn${mergeMode === mode ? ' active' : ''}`} aria-pressed={mergeMode === mode} onClick={() => { mergeRequest.current += 1; setMergeMode(mode); setMergePreview(null); setMergePreviewIdentity(null); }}>{t(label)}</button>)}
                 </div>
-                {mergeMode === 'move' && <p class="ad-note">Moves watch history and favorites without deleting the source account.</p>}
+                {mergeMode === 'move' && <p class="ad-note">{t('Moves watch history and favorites without deleting the source account.')}</p>}
                 {selected.Id !== session.user.Id && <button class="ad-btn" disabled={!mergeTarget} onClick={async () => {
                     const sourceId = selected.Id, targetId = mergeTarget, mode = mergeMode;
                     const requestId = ++mergeRequest.current;
                     try {
                         const preview = mode === 'move' ? await api.moveUserData(sourceId, targetId) : await api.mergeUsers(sourceId, targetId);
                         if (mergeRequest.current !== requestId) return;
+                        if (!preview.previewToken) throw new Error(t('The server did not authorize this preview. Preview again.'));
                         setMergePreview(preview);
                         setMergePreviewIdentity({ sourceId, targetId, requestId, mode });
-                    } catch (e) { if (mergeRequest.current === requestId) setUserError(e instanceof Error ? e.message : 'Merge preview failed.'); }
-                }}>Preview merge</button>}
-                {mergePreview && mergePreviewIdentity && isMergePreviewCurrent(mergePreviewIdentity, selected.Id, mergeTarget, mergeRequest.current, mergeMode) && <><div class="ad-note">{mergePreviewIdentity.mode === 'move' ? 'The source account is kept.' : 'The source account will be deleted after merging.'}</div>{Object.entries(mergePreview.counts).map(([k, v]) => <InfoRow key={k} k={k} v={v} />)}<ConfirmButton key={`${mergePreviewIdentity.sourceId}:${mergePreviewIdentity.targetId}:${mergePreviewIdentity.requestId}:${mergePreviewIdentity.mode}`} label={mergePreviewIdentity.mode === 'move' ? 'Move userdata' : 'Merge and delete source'} tone="danger" onConfirm={async () => {
-                    if (!isMergePreviewCurrent(mergePreviewIdentity, selected.Id, mergeTarget, mergeRequest.current, mergeMode)) throw new Error('This preview is for a different user pair. Preview the current pair before merging.');
+                    } catch (e) { if (mergeRequest.current === requestId) setUserError(e instanceof Error ? e.message : t('Merge preview failed.')); }
+                }}>{t('Preview merge')}</button>}
+                {mergePreview && mergePreviewIdentity && isMergePreviewCurrent(mergePreviewIdentity, selected.Id, mergeTarget, mergeRequest.current, mergeMode) && <><div class="ad-note">{mergePreviewIdentity.mode === 'move' ? t('The source account is kept.') : t('The source account will be deleted after merging.')}</div>{Object.entries(mergePreview.counts).map(([k, v]) => <InfoRow key={k} k={k} v={v} />)}<ConfirmButton key={`${mergePreviewIdentity.sourceId}:${mergePreviewIdentity.targetId}:${mergePreviewIdentity.requestId}:${mergePreviewIdentity.mode}`} label={mergePreviewIdentity.mode === 'move' ? t('Move userdata') : t('Merge and delete source')} tone="danger" onConfirm={async () => {
+                    if (!isMergePreviewCurrent(mergePreviewIdentity, selected.Id, mergeTarget, mergeRequest.current, mergeMode)) throw new Error(t('This preview is for a different user pair. Preview the current pair before merging.'));
                     const move = mergePreviewIdentity.mode === 'move';
-                    const result = move
-                        ? await api.moveUserData(mergePreviewIdentity.sourceId, mergePreviewIdentity.targetId, false)
-                        : await api.mergeUsers(mergePreviewIdentity.sourceId, mergePreviewIdentity.targetId, false);
+                    let result: UserAdminTransferResponse;
+                    try {
+                        result = move
+                            ? await api.moveUserData(mergePreviewIdentity.sourceId, mergePreviewIdentity.targetId, false, mergePreview.previewToken)
+                            : await api.mergeUsers(mergePreviewIdentity.sourceId, mergePreviewIdentity.targetId, false, mergePreview.previewToken);
+                    } catch (error) {
+                        if ((error as { status?: unknown } | null)?.status === 409) {
+                            mergeRequest.current += 1;
+                            setMergePreview(null); setMergePreviewIdentity(null);
+                            throw new Error(t('The users changed since the preview. Preview again.'));
+                        }
+                        throw error;
+                    }
                     mergeRequest.current += 1;
                     setMergePreview(null); setMergePreviewIdentity(null);
-                    setUserMessage(result.warning || (move ? 'Userdata moved.' : 'Accounts merged.'));
+                    setUserMessage(result.warning || (move ? t('Userdata moved.') : t('Accounts merged.')));
                     if (!move) setSelected(null);
                     await load();
                 }} /></>}
             </>}
-            {!selected.Policy && <p class="ad-note">User policy is not available from the response.</p>}
-            <h3 class="ad-drawer-section-title">Devices last used by this user</h3>
-            {userDevices.length ? userDevices.map(d => <div class="ad-info" key={d.Id}><span class="ad-info-k">{d.Name} · {d.AppName}</span>{d.Id && <ConfirmButton label="Revoke device" tone="danger" onConfirm={async () => { await api.deleteDevice(d.Id!); setUserDevices(old => old.filter(v => v.Id !== d.Id)); }} />}</div>) : <Empty muted>No devices reported</Empty>}
-            {history && <><h3 class="ad-drawer-section-title">Watch history · last 28 days</h3>{history.length ? history.map(h => <InfoRow key={h.MediaType} k={h.MediaType} v={`${h.PlayCount} plays · ${(h.TotalTicks / 36_000_000_000).toFixed(1)} hours`} />) : <Empty muted>No recorded playback</Empty>}</>}
-            {taste?.HasProfile && <><h3 class="ad-drawer-section-title">Taste profile</h3>{taste.Persona?.Title && <InfoRow k="Identity" v={taste.Persona.Title} />}<InfoRow k="Samples" v={taste.SampleCount} /><InfoRow k="Top genres" v={(taste.Genres || []).slice(0,5).map(g => g.Label).filter(Boolean).join(', ')} />{taste.UpdatedAt && <InfoRow k="Refreshed" v={timeAgo(taste.UpdatedAt)} />}</>}
+            {!selected.Policy && <p class="ad-note">{t('User policy is not available from the response.')}</p>}
+            <h3 class="ad-drawer-section-title">{t('Devices last used by this user')}</h3>
+            {userDevices.length ? userDevices.map(d => <div class="ad-info" key={d.Id}><span class="ad-info-k">{d.Name} · {d.AppName}</span>{d.Id && <ConfirmButton label={t('Revoke device')} tone="danger" onConfirm={async () => { await api.deleteDevice(d.Id!); setUserDevices(old => old.filter(v => v.Id !== d.Id)); }} />}</div>) : <Empty muted>{t('No devices reported')}</Empty>}
+            {history && <><h3 class="ad-drawer-section-title">{t('Watch history · last 28 days')}</h3>{history.length ? history.map(h => <InfoRow key={h.MediaType} k={h.MediaType} v={t('{0} plays · {1} hours', h.PlayCount, (h.TotalTicks / 36_000_000_000).toFixed(1))} />) : <Empty muted>{t('No recorded playback')}</Empty>}</>}
+            {taste?.HasProfile && <><h3 class="ad-drawer-section-title">{t('Taste profile')}</h3>{taste.Persona?.Title && <InfoRow k={t('Identity')} v={taste.Persona.Title} />}<InfoRow k={t('Samples')} v={taste.SampleCount} /><InfoRow k={t('Top genres')} v={(taste.Genres || []).slice(0,5).map(g => g.Label).filter(Boolean).join(', ')} />{taste.UpdatedAt && <InfoRow k={t('Refreshed')} v={timeAgo(taste.UpdatedAt)} />}</>}
         </aside></div>}
     </PageShell>;
 }
@@ -338,37 +350,37 @@ function SsoPanel({ api }: { api: AdminApi }) {
     let draft: any[] = [];
     try { const value = JSON.parse(rbacText); if (Array.isArray(value)) draft = value; } catch { /* advanced JSON editor reports validation on save */ }
     const updateMapping = (index: number, patch: Record<string, unknown>) => setRbacText(JSON.stringify(draft.map((m, i) => i === index ? { ...m, ...patch } : m), null, 2));
-    return <Card title="SSO / OIDC">
+    return <Card title={t('SSO / OIDC')}>
         <div class="ad-grid2">
-            <InfoRow k="OIDC configuration" v={<StatusChip tone={oidcEnabled ? 'green' : 'muted'}>{oidcEnabled === null ? 'Unavailable' : oidcEnabled ? 'Configured' : 'Not configured'}</StatusChip>} />
-            <InfoRow k="RBAC mappings" v={mappings ? <StatusChip tone={mappings.length ? 'green' : 'muted'}>{mappings.length ? 'Configured' : 'No mappings'}</StatusChip> : <StatusChip tone="muted">Endpoint unavailable</StatusChip>} />
-            {mappings && <InfoRow k="Mappings" v={`${mappings.length} group mappings`} />}
+            <InfoRow k={t('OIDC configuration')} v={<StatusChip tone={oidcEnabled ? 'green' : 'muted'}>{oidcEnabled === null ? t('Unavailable') : oidcEnabled ? t('Configured') : t('Not configured')}</StatusChip>} />
+            <InfoRow k={t('RBAC mappings')} v={mappings ? <StatusChip tone={mappings.length ? 'green' : 'muted'}>{mappings.length ? t('Configured') : t('No mappings')}</StatusChip> : <StatusChip tone="muted">{t('Endpoint unavailable')}</StatusChip>} />
+            {mappings && <InfoRow k={t('Mappings')} v={t('{0} group mappings', mappings.length)} />}
         </div>
-        {mappings && !editingRbac && <div class="ad-rbac-list">{mappings.map((m, i) => <details class="ad-rbac-row" key={i}><summary>{m.oidcGroup || `Mapping ${i + 1}`}</summary><InfoRow k="Administrator" v={m.permissions?.IsAdministrator ? 'Yes' : 'No'} /><InfoRow k="Libraries" v={m.enableAllFolders ? 'All libraries' : (m.enabledFolders || []).map((id: string) => libraries.find(l => l.id === id)?.name || id).join(', ') || 'None'} /><pre class="ad-json">{JSON.stringify(m, null, 2)}</pre></details>)}</div>}
+        {mappings && !editingRbac && <div class="ad-rbac-list">{mappings.map((m, i) => <details class="ad-rbac-row" key={i}><summary>{m.oidcGroup || t('Mapping {0}', i + 1)}</summary><InfoRow k={t('Administrator')} v={m.permissions?.IsAdministrator ? t('Yes') : t('No')} /><InfoRow k={t('Libraries')} v={m.enableAllFolders ? t('All libraries') : (m.enabledFolders || []).map((id: string) => libraries.find(l => l.id === id)?.name || id).join(', ') || t('None')} /><pre class="ad-json">{JSON.stringify(m, null, 2)}</pre></details>)}</div>}
         {mappings && <div class="ad-rbac-editor">
             {editingRbac && <>
-                <div class="ad-rbac-list">{draft.map((m, index) => <fieldset class="ad-mapping-form" key={index}><legend>Group {index + 1}</legend>
-                    <label class="ad-field">IdP group<input value={m.oidcGroup || ''} onInput={e => updateMapping(index, { oidcGroup: e.currentTarget.value })} /></label>
-                    <div class="ad-grid2">{RBAC_PERMISSIONS.map(([key, label]) => <label key={key} class="ad-policy-row"><span>{label}</span><input type="checkbox" checked={m.permissions?.[key] === true} onChange={e => updateMapping(index, { permissions: { ...m.permissions, [key]: e.currentTarget.checked } })} /></label>)}</div>
-                    <label class="ad-policy-row"><span>All libraries</span><input type="checkbox" checked={m.enableAllFolders === true} onChange={e => updateMapping(index, { enableAllFolders: e.currentTarget.checked })} /></label>
-                    {!m.enableAllFolders && <label class="ad-field">Allowed libraries<select multiple size={Math.min(5, libraries.length || 1)} value={m.enabledFolders || []} onChange={e => updateMapping(index, { enabledFolders: Array.from(e.currentTarget.selectedOptions).map(o => o.value) })}>{libraries.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</select></label>}
-                    <div class="ad-grid2"><label class="ad-field">Blocked tags (comma-separated)<input value={(m.blockedTags || []).join(', ')} onInput={e => updateMapping(index, { blockedTags: e.currentTarget.value.split(',').map(t => t.trim()).filter(Boolean) })} /></label><label class="ad-field">Allowed tags (comma-separated)<input value={(m.allowedTags || []).join(', ')} onInput={e => updateMapping(index, { allowedTags: e.currentTarget.value.split(',').map(t => t.trim()).filter(Boolean) })} /></label></div>
-                    <div class="ad-grid2">{UNRATED_ITEM_KINDS.map(([kind, label]) => <label key={kind} class="ad-policy-row"><span>Block unrated {label}</span><input type="checkbox" checked={(m.blockUnratedItems || []).includes(kind)} onChange={e => updateMapping(index, { blockUnratedItems: e.currentTarget.checked ? [...(m.blockUnratedItems || []), kind] : (m.blockUnratedItems || []).filter((value: string) => value !== kind) })} /></label>)}</div>
-                    <div class="ad-grid2"><label class="ad-field">Live TV allowlisted categories<select multiple size={4} value={m.allowedLiveTvCategories || []} onChange={e => updateMapping(index, { allowedLiveTvCategories: Array.from(e.currentTarget.selectedOptions).map(o => o.value) })}>{categories.map(c => <option key={c} value={c}>{c}</option>)}</select></label><label class="ad-field">Live TV allowlisted channels<select multiple size={4} value={m.allowedLiveTvChannels || []} onChange={e => updateMapping(index, { allowedLiveTvChannels: Array.from(e.currentTarget.selectedOptions).map(o => o.value) })}>{channels.map(c => <option key={c.id} value={c.id}>{c.number ? `${c.number} · ` : ''}{c.name}</option>)}</select></label></div>
-                    <ConfirmButton label="Remove draft group" tone="danger" onConfirm={() => setRbacText(JSON.stringify(draft.filter((_, i) => i !== index), null, 2))} />
+                <div class="ad-rbac-list">{draft.map((m, index) => <fieldset class="ad-mapping-form" key={index}><legend>{t('Group {0}', index + 1)}</legend>
+                    <label class="ad-field">{t('IdP group')}<input value={m.oidcGroup || ''} onInput={e => updateMapping(index, { oidcGroup: e.currentTarget.value })} /></label>
+                    <div class="ad-grid2">{RBAC_PERMISSIONS.map(([key, label]) => <label key={key} class="ad-policy-row"><span>{t(label)}</span><input type="checkbox" checked={m.permissions?.[key] === true} onChange={e => updateMapping(index, { permissions: { ...m.permissions, [key]: e.currentTarget.checked } })} /></label>)}</div>
+                    <label class="ad-policy-row"><span>{t('All libraries')}</span><input type="checkbox" checked={m.enableAllFolders === true} onChange={e => updateMapping(index, { enableAllFolders: e.currentTarget.checked })} /></label>
+                    {!m.enableAllFolders && <label class="ad-field">{t('Allowed libraries')}<select multiple size={Math.min(5, libraries.length || 1)} value={m.enabledFolders || []} onChange={e => updateMapping(index, { enabledFolders: Array.from(e.currentTarget.selectedOptions).map(o => o.value) })}>{libraries.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</select></label>}
+                    <div class="ad-grid2"><label class="ad-field">{t('Blocked tags (comma-separated)')}<input value={(m.blockedTags || []).join(', ')} onInput={e => updateMapping(index, { blockedTags: e.currentTarget.value.split(',').map(t => t.trim()).filter(Boolean) })} /></label><label class="ad-field">{t('Allowed tags (comma-separated)')}<input value={(m.allowedTags || []).join(', ')} onInput={e => updateMapping(index, { allowedTags: e.currentTarget.value.split(',').map(t => t.trim()).filter(Boolean) })} /></label></div>
+                    <div class="ad-grid2">{UNRATED_ITEM_KINDS.map(([kind, label]) => <label key={kind} class="ad-policy-row"><span>{t('Block unrated {0}', label)}</span><input type="checkbox" checked={(m.blockUnratedItems || []).includes(kind)} onChange={e => updateMapping(index, { blockUnratedItems: e.currentTarget.checked ? [...(m.blockUnratedItems || []), kind] : (m.blockUnratedItems || []).filter((value: string) => value !== kind) })} /></label>)}</div>
+                    <div class="ad-grid2"><label class="ad-field">{t('Live TV allowlisted categories')}<select multiple size={4} value={m.allowedLiveTvCategories || []} onChange={e => updateMapping(index, { allowedLiveTvCategories: Array.from(e.currentTarget.selectedOptions).map(o => o.value) })}>{categories.map(c => <option key={c} value={c}>{c}</option>)}</select></label><label class="ad-field">{t('Live TV allowlisted channels')}<select multiple size={4} value={m.allowedLiveTvChannels || []} onChange={e => updateMapping(index, { allowedLiveTvChannels: Array.from(e.currentTarget.selectedOptions).map(o => o.value) })}>{channels.map(c => <option key={c.id} value={c.id}>{c.number ? `${c.number} · ` : ''}{c.name}</option>)}</select></label></div>
+                    <ConfirmButton label={t('Remove draft group')} tone="danger" onConfirm={() => setRbacText(JSON.stringify(draft.filter((_, i) => i !== index), null, 2))} />
                 </fieldset>)}</div>
-                <button class="ad-btn" onClick={() => setRbacText(JSON.stringify([...draft, { oidcGroup: '', enableAllFolders: false, enabledFolders: [], permissions: {}, blockedTags: [], allowedTags: [], allowedLiveTvChannels: [], allowedLiveTvCategories: [] }], null, 2))}>Add group mapping</button>
-                <details class="ad-rbac-row"><summary>Advanced JSON</summary><label class="ad-field">Group mapping JSON<textarea value={rbacText} rows={12} onInput={e => setRbacText(e.currentTarget.value)} /></label></details>
+                <button class="ad-btn" onClick={() => setRbacText(JSON.stringify([...draft, { oidcGroup: '', enableAllFolders: false, enabledFolders: [], permissions: {}, blockedTags: [], allowedTags: [], allowedLiveTvChannels: [], allowedLiveTvCategories: [] }], null, 2))}>{t('Add group mapping')}</button>
+                <details class="ad-rbac-row"><summary>{t('Advanced JSON')}</summary><label class="ad-field">{t('Group mapping JSON')}<textarea value={rbacText} rows={12} onInput={e => setRbacText(e.currentTarget.value)} /></label></details>
             </>}
             {rbacSaved && <p class="ad-note" role="status">{rbacSaved}</p>}
             {!editingRbac
-                ? <button class="ad-btn" onClick={() => setEditingRbac(true)}>Edit mappings</button>
-                : <span class="ad-flex"><ConfirmButton label="Save mappings" onConfirm={async () => { const value = JSON.parse(rbacText); if (!Array.isArray(value) || value.some(m => typeof m.oidcGroup !== 'string' || !m.oidcGroup.trim())) throw new Error('Each group mapping must have an IdP group name.'); await api.saveSsoConfig(value); setMappings(value); setEditingRbac(false); setRbacSaved('Mappings saved.'); }} /><button class="ad-btn" onClick={() => { setRbacText(JSON.stringify(mappings, null, 2)); setEditingRbac(false); }}>Cancel</button></span>}
+                ? <button class="ad-btn" onClick={() => setEditingRbac(true)}>{t('Edit mappings')}</button>
+                : <span class="ad-flex"><ConfirmButton label={t('Save mappings')} onConfirm={async () => { const value = JSON.parse(rbacText); if (!Array.isArray(value) || value.some(m => typeof m.oidcGroup !== 'string' || !m.oidcGroup.trim())) throw new Error(t('Each group mapping must have an IdP group name.')); await api.saveSsoConfig(value); setMappings(value); setEditingRbac(false); setRbacSaved(t('Mappings saved.')); }} /><button class="ad-btn" onClick={() => { setRbacText(JSON.stringify(mappings, null, 2)); setEditingRbac(false); }}>{t('Cancel')}</button></span>}
         </div>}
-        {libraries.length > 0 && <InfoRow k="Available libraries" v={libraries.map(l => l.name).filter(Boolean).join(', ')} />}
-        {channels.length > 0 && <InfoRow k="Live TV allowlist candidates" v={`${channels.length} channels / categories available`} />}
-        <div class="ad-note">Mappings apply at the next OIDC sign-in. Emergency local login: <code>?local=true</code>.</div>
+        {libraries.length > 0 && <InfoRow k={t('Available libraries')} v={libraries.map(l => l.name).filter(Boolean).join(', ')} />}
+        {channels.length > 0 && <InfoRow k={t('Live TV allowlist candidates')} v={t('{0} channels / categories available', channels.length)} />}
+        <div class="ad-note">{t('Mappings apply at the next OIDC sign-in. Emergency local login:')}{' '}<code>?local=true</code>.</div>
     </Card>;
 }
 
-function policyLabel(key: string): string { return ({ IsAdministrator: 'Administrator', IsDisabled: 'Disabled', EnableLiveTvAccess: 'Live TV access', EnableLiveTvManagement: 'Live TV management', EnableRemoteAccess: 'Remote access', EnableMediaPlayback: 'Media playback' } as Record<string, string>)[key] || key; }
+function policyLabel(key: string): string { return ({ IsAdministrator: 'Administrator', IsDisabled: 'Disabled', EnableLiveTvAccess: t('Live TV access'), EnableLiveTvManagement: t('Live TV management'), EnableRemoteAccess: t('Remote access'), EnableMediaPlayback: t('Media playback') } as Record<string, string>)[key] || key; }

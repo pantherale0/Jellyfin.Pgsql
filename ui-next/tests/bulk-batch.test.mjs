@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { extname } from 'node:path';
 import { test } from 'node:test';
+import { readSource } from './source.mjs';
 
 registerHooks({
     resolve(specifier, context, nextResolve) {
@@ -16,7 +17,7 @@ globalThis.localStorage = { getItem: key => store.has(key) ? store.get(key) : nu
 if (typeof globalThis.document === 'undefined') globalThis.document = { createElement: () => ({ canPlayType: () => '' }) };
 
 const bulk = await import('../src/bulk-actions.ts');
-const source = path => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
+const source = path => readSource(new URL(`../src/${path}`, import.meta.url), 'utf8');
 const movie = (id, extra = {}) => ({ Id: id, Name: id, Type: 'Movie', MediaType: 'Video', ...extra });
 const admin = { Policy: { IsAdministrator: true } };
 const viewer = { Policy: { IsAdministrator: false } };

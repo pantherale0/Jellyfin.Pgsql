@@ -1,57 +1,53 @@
 import type { JellyfinUser, MediaItem } from './types';
+import { t } from './i18n';
 
 export interface DetailLink { label: string; url: string }
+
+export interface MediaTag { label: string; title: string }
 
 export interface DetailFacts {
     officialRating?: string;
     criticRating?: number;
     tagline?: string;
     links: DetailLink[];
-    video?: string;
-    audio: string[];
-    subtitles: string[];
-    container?: string;
-    size?: string;
-    bitrate?: string;
+    tags: MediaTag[];
 }
 
 const streamType = (type: string | number | undefined) => type === 'Video' || type === 1 ? 'video' : type === 'Audio' || type === 0 ? 'audio' : type === 'Subtitle' || type === 2 ? 'subtitle' : 'other';
 
-function resolutionLabel(width?: number, height?: number): string {
-    if (!width && !height) return '';
+function resolutionTag(width?: number, height?: number): MediaTag | undefined {
+    if (!width && !height) return undefined;
     const w = width || 0, h = height || 0;
-    if (w >= 3800 || h >= 2100) return '4K';
-    if (w >= 2500 || h >= 1400) return '1440p';
-    if (w >= 1900 || h >= 1000) return '1080p';
-    if (w >= 1260 || h >= 700) return '720p';
-    return h ? `${h}p` : `${w}w`;
+    if (w >= 3800 || h >= 2100) return { label: '4K', title: '4K UHD' };
+    if (w >= 1260 || h >= 700) return { label: 'HD', title: 'High definition' };
+    return { label: 'SD', title: 'Standard definition' };
 }
 
-export function formatSize(bytes?: number): string | undefined {
-    if (!bytes || bytes <= 0) return undefined;
-    const units = [ 'B', 'KB', 'MB', 'GB', 'TB' ];
-    let value = bytes, unit = 0;
-    while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
-    return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
-}
-
-/** Ratings, tagline, external links and technical media information for the details page. */
-export function detailFacts(item: MediaItem): DetailFacts {
+/** Compact Netflix-style capability tags (resolution, HDR range, subtitles) for the details page. */
+export function mediaTags(item: MediaItem): MediaTag[] {
     const source = item.MediaSources?.[0];
     const streams = source?.MediaStreams || item.MediaStreams || [];
     const video = streams.find(stream => streamType(stream.Type) === 'video');
+    const tags: MediaTag[] = [];
+    if (video) {
+        const resolution = resolutionTag(video.Width, video.Height);
+        if (resolution) tags.push(resolution);
+        const range = video.VideoRangeType || video.VideoRange;
+        if (range && range.toUpperCase() !== 'SDR') tags.push(/DOVI|DOLBY/i.test(range) ? { label: 'Dolby Vision', title: 'Dolby Vision' } : { label: 'HDR', title: 'High dynamic range' });
+    }
+    if (streams.some(stream => streamType(stream.Type) === 'subtitle')) tags.push({ label: 'CC', title: 'Subtitles available' });
+    return tags;
+}
+
+/** Ratings, tagline, external links and media capability tags for the details page. */
+export function detailFacts(item: MediaItem): DetailFacts {
     const links = (item.ExternalUrls || []).filter(link => link.Name && link.Url && /^https:\/\//i.test(link.Url)).map(link => ({ label: link.Name as string, url: link.Url as string }));
     return {
         officialRating: item.OfficialRating || undefined,
         criticRating: typeof item.CriticRating === 'number' ? Math.round(item.CriticRating) : undefined,
         tagline: item.Taglines?.find(Boolean),
         links,
-        video: video ? [ resolutionLabel(video.Width, video.Height), video.Codec?.toUpperCase(), video.VideoRangeType && video.VideoRangeType !== 'SDR' ? video.VideoRangeType : '' ].filter(Boolean).join(' · ') : undefined,
-        audio: streams.filter(stream => streamType(stream.Type) === 'audio').map(stream => stream.DisplayTitle || [ stream.Language, stream.Codec?.toUpperCase() ].filter(Boolean).join(' · ')).filter(Boolean).slice(0, 6),
-        subtitles: streams.filter(stream => streamType(stream.Type) === 'subtitle').map(stream => stream.DisplayTitle || stream.Language || '').filter(Boolean).slice(0, 8),
-        container: source?.Container?.toUpperCase(),
-        size: formatSize(source?.Size),
-        bitrate: source?.Bitrate ? `${(source.Bitrate / 1_000_000).toFixed(1)} Mbps` : undefined,
+        tags: mediaTags(item),
     };
 }
 
@@ -124,7 +120,15 @@ export function canManageCollections(user: Pick<JellyfinUser, 'Policy'>): boolea
     return user.Policy?.IsAdministrator === true || user.Policy?.EnableCollectionManagement === true;
 }
 
-export interface ItemActionSet { download: boolean; share: boolean; collection: boolean; remove: boolean }
+export interface ItemActionSet { download: boolean; share: boolean; collection: boolean; playlist: boolean; remove: boolean }
+
+/** Types a playlist can hold; folders (series, seasons, albums) add their playable children. */
+const PLAYLIST_ITEM_TYPES = [ 'Movie', 'Series', 'Season', 'Episode', 'Video', 'MusicVideo', 'MusicAlbum', 'Audio', 'Trailer', 'AudioBook' ];
+
+/** Any signed-in user can keep their own playlists. */
+export function canAddToPlaylist(item: Pick<MediaItem, 'Type' | 'Id'>): boolean {
+    return !item.Id.startsWith('tag:') && PLAYLIST_ITEM_TYPES.includes(item.Type || '');
+}
 
 /** Actions offered for an item, from the server's per-item capability flags and the user's policy. */
 export function itemActions(item: Pick<MediaItem, 'Type' | 'CanDelete' | 'CanDownload' | 'Id'>, user: Pick<JellyfinUser, 'Policy'>): ItemActionSet {
@@ -133,15 +137,18 @@ export function itemActions(item: Pick<MediaItem, 'Type' | 'CanDelete' | 'CanDow
         download: real && item.CanDownload === true,
         share: real,
         collection: real && canManageCollections(user) && [ 'Movie', 'Series', 'Episode', 'Video', 'MusicVideo', 'MusicAlbum', 'Audio', 'Book', 'Photo', 'Trailer' ].includes(item.Type || ''),
+        playlist: canAddToPlaylist(item),
         remove: real && item.CanDelete === true,
     };
 }
 
-/** A link other signed-in users of this server can open in Jellyfin Web; no credentials are included. */
-export function shareLink(server: string, item: Pick<MediaItem, 'Id'>, serverId: string): string {
-    const params = new URLSearchParams({ id: item.Id });
-    if (serverId) params.set('serverId', serverId);
-    return `${server.replace(/\/+$/, '')}/web/#/details?${params}`;
+/** A link other signed-in users of this server can open in UI Next; no credentials are included. */
+export function shareLink(appUrl: string, item: Pick<MediaItem, 'Id'>): string {
+    const url = new URL(appUrl);
+    url.search = '';
+    url.hash = '';
+    url.searchParams.set('item', item.Id);
+    return url.toString();
 }
 
 export function wrapIndex(index: number, count: number, direction: 1 | -1): number {
@@ -157,13 +164,13 @@ export function withoutItem<T extends Pick<MediaItem, 'Id'>>(items: T[], id: str
 export function extrasSections(trailers: MediaItem[], features: MediaItem[], parts: MediaItem[]): Array<{ title: string; items: MediaItem[] }> {
     const label = (type?: string) => ({ BehindTheScenes: 'Behind the scenes', DeletedScene: 'Deleted scenes', Interview: 'Interviews', Featurette: 'Featurettes', Short: 'Shorts', Clip: 'Clips', Scene: 'Scenes', Sample: 'Samples', ThemeSong: 'Theme songs', ThemeVideo: 'Theme videos' } as Record<string, string>)[type || ''] || 'Extras';
     const sections: Array<{ title: string; items: MediaItem[] }> = [];
-    if (trailers.length) sections.push({ title: 'Trailers', items: trailers });
+    if (trailers.length) sections.push({ title: t('Trailers'), items: trailers });
     const grouped = new Map<string, MediaItem[]>();
     features.forEach(feature => {
         const title = label(feature.ExtraType);
         grouped.set(title, [ ...(grouped.get(title) || []), feature ]);
     });
     grouped.forEach((items, title) => sections.push({ title, items }));
-    if (parts.length) sections.push({ title: 'Additional parts', items: parts });
+    if (parts.length) sections.push({ title: t('Additional parts'), items: parts });
     return sections;
 }

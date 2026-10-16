@@ -5,9 +5,12 @@ import type { JellyfinApi } from './api';
 import type { HomeFeedBlock } from './home-feed-blocks';
 import { preferredScrollBehavior } from './live-model';
 import { describeCard } from './media-labels';
+import type { SeerrItem } from './seerr';
+import { SeerrCard } from './seerr-views';
 import type { MediaItem, RecommendationGroup } from './types';
+import { inlineSign, t } from './i18n';
 
-export function HomeFeed({ blocks, api, onSelect, onPlay, onNeedMore, hasMore, loadingMore, onUserData }: {
+export function HomeFeed({ blocks, api, onSelect, onPlay, onNeedMore, hasMore, loadingMore, onUserData, onRequest }: {
     blocks: HomeFeedBlock[];
     api: JellyfinApi | null;
     onSelect: (item: MediaItem) => void;
@@ -16,6 +19,7 @@ export function HomeFeed({ blocks, api, onSelect, onPlay, onNeedMore, hasMore, l
     hasMore: boolean;
     loadingMore: boolean;
     onUserData?: (itemId: string, userData: NonNullable<MediaItem['UserData']>) => void;
+    onRequest?: (item: SeerrItem) => void;
 }) {
     const [ activeBlock, setActiveBlock ] = useState(0);
     const [ heights, setHeights ] = useState<Record<string, number>>({});
@@ -167,18 +171,19 @@ export function HomeFeed({ blocks, api, onSelect, onPlay, onNeedMore, hasMore, l
             const height = heights[block.id] || fallbackHeight;
             return rendered
                 ? <div key={block.id} data-block-index={index} data-block-id={block.id} class="home-feed-block">
-                    {block.kind === 'rail'
-                        ? <HomeRail block={block} api={api} onSelect={onSelect} initialScrollLeft={railOffsets.current[block.id] || 0} onScrollLeft={value => { railOffsets.current[block.id] = value; }} />
+                    {block.kind !== 'spotlight'
+                        ? <HomeRail block={block} api={api} onSelect={onSelect} onRequest={onRequest} initialScrollLeft={railOffsets.current[block.id] || 0} onScrollLeft={value => { railOffsets.current[block.id] = value; }} />
                         : <Spotlight block={block} api={api} onSelect={onSelect} onPlay={onPlay} onUserData={onUserData} nextBlockId={blocks[index + 1]?.id} />}
                 </div>
                 : <div key={block.id} data-block-index={index} data-block-id={block.id} data-placeholder="true" class="home-feed-block-placeholder" style={{ height: `${height}px` }} />;
         })}
         <div class="home-feed-sentinel" aria-hidden="true" />
-        {loadingMore && <div class="home-feed-more-status" role="status"><span class="mini-spinner" aria-hidden="true" />Finding more to explore…</div>}
+        {loadingMore && <div class="home-feed-more-status" role="status"><span class="mini-spinner" aria-hidden="true" />{t('Finding more to explore…')}</div>}
     </div>;
 }
 
-function HomeRail({ block, api, onSelect, initialScrollLeft, onScrollLeft }: { block: HomeFeedBlock; api: JellyfinApi | null; onSelect: (item: MediaItem) => void; initialScrollLeft: number; onScrollLeft: (value: number) => void }) {
+function HomeRail({ block, api, onSelect, onRequest, initialScrollLeft, onScrollLeft }: { block: HomeFeedBlock; api: JellyfinApi | null; onSelect: (item: MediaItem) => void; onRequest?: (item: SeerrItem) => void; initialScrollLeft: number; onScrollLeft: (value: number) => void }) {
+    const requests = block.kind === 'requests' ? block.requests || [] : null;
     const rail = useRef<HTMLDivElement>(null);
     const [ canScrollLeft, setCanScrollLeft ] = useState(false);
     const [ canScrollRight, setCanScrollRight ] = useState(false);
@@ -186,8 +191,9 @@ function HomeRail({ block, api, onSelect, initialScrollLeft, onScrollLeft }: { b
     const updateArrows = () => {
         const element = rail.current;
         if (!element) return;
-        setCanScrollLeft(element.scrollLeft > 2);
-        setCanScrollRight(element.scrollLeft + element.clientWidth < element.scrollWidth - 2);
+        const offset = Math.abs(element.scrollLeft);
+        setCanScrollLeft(offset > 2);
+        setCanScrollRight(offset + element.clientWidth < element.scrollWidth - 2);
         if (!restoring.current) onScrollLeft(element.scrollLeft);
     };
     useLayoutEffect(() => {
@@ -199,13 +205,15 @@ function HomeRail({ block, api, onSelect, initialScrollLeft, onScrollLeft }: { b
             restoring.current = false;
         });
         return () => window.cancelAnimationFrame(frame);
-    }, [ initialScrollLeft, block.id, block.items.length ]);
+    }, [ initialScrollLeft, block.id, requests ? requests.length : block.items.length ]);
     return <section class="section-block home-feed-rail">
-        <div class="section-heading home-feed-rail-heading"><div><p class="eyebrow">{block.subtitle}</p><h2>{block.title}</h2></div><div class="home-feed-rail-controls" aria-label={`${block.title} horizontal scrolling`}>
-            <button data-focusable="true" type="button" aria-label={`Scroll ${block.title} left`} disabled={!canScrollLeft} onClick={() => rail.current?.scrollBy({ left: -Math.max(300, rail.current.clientWidth * .8), behavior: preferredScrollBehavior() })}>‹</button>
-            <button data-focusable="true" type="button" aria-label={`Scroll ${block.title} right`} disabled={!canScrollRight} onClick={() => rail.current?.scrollBy({ left: Math.max(300, rail.current.clientWidth * .8), behavior: preferredScrollBehavior() })}>›</button>
+        <div class="section-heading home-feed-rail-heading"><div><p class="eyebrow">{block.subtitle}</p><h2>{block.title}</h2></div><div class="home-feed-rail-controls" aria-label={t('{0} horizontal scrolling', block.title)}>
+            <button data-focusable="true" type="button" aria-label={t('Scroll {0} left', block.title)} disabled={!canScrollLeft} onClick={() => rail.current?.scrollBy({ left: -Math.max(300, rail.current.clientWidth * .8) * inlineSign(), behavior: preferredScrollBehavior() })}>‹</button>
+            <button data-focusable="true" type="button" aria-label={t('Scroll {0} right', block.title)} disabled={!canScrollRight} onClick={() => rail.current?.scrollBy({ left: Math.max(300, rail.current.clientWidth * .8) * inlineSign(), behavior: preferredScrollBehavior() })}>›</button>
         </div></div>
-        <div ref={rail} class="home-feed-rail-items" onScroll={updateArrows}>{block.items.slice(0, 24).map(item => <HomeFeedCard key={item.Id} item={item} api={api} onSelect={onSelect} />)}</div>
+        <div ref={rail} class="home-feed-rail-items" onScroll={updateArrows}>{requests
+            ? requests.slice(0, 24).map(item => <SeerrCard key={`${item.mediaType}:${item.mediaId}`} item={item} onOpen={next => onRequest?.(next)} />)
+            : block.items.slice(0, 24).map(item => <HomeFeedCard key={item.Id} item={item} api={api} onSelect={onSelect} />)}</div>
     </section>;
 }
 
@@ -218,13 +226,13 @@ function HomeFeedCard({ item, api, onSelect }: { item: MediaItem; api: JellyfinA
     const hasImage = Boolean(src) && !imageFailed;
     const initials = item.Name.trim().split(/\s+/).slice(0, 2).map(word => word.charAt(0)).join('').toUpperCase();
     const description = describeCard(item);
-    return <button data-focusable="true" class={`home-feed-card ${type}`} aria-label={description ? `View ${item.Name}, ${description}` : `View ${item.Name}`} onClick={() => onSelect(item)}>
+    return <button data-focusable="true" class={`home-feed-card ${type}`} aria-label={description ? t('View {0}, {1}', item.Name, description) : t('View {0}', item.Name)} onClick={() => onSelect(item)}>
         <span class={`home-feed-card-art${hasImage ? '' : ' no-artwork'}${liveProgram ? ' live-artwork' : ''}`}>
             {hasImage
                 ? <img src={src} alt="" loading="lazy" onError={() => setImageFailed(true)} />
-                : <span class="home-feed-card-fallback" aria-hidden="true"><span class="home-feed-fallback-glow" /><span class="home-feed-fallback-icon">{liveProgram ? 'LIVE' : initials || 'J'}</span><span class="home-feed-fallback-label">{liveProgram ? item.ChannelName || 'ON NOW' : item.Type === 'Series' ? 'SERIES' : 'IN YOUR LIBRARY'}</span></span>}
+                : <span class="home-feed-card-fallback" aria-hidden="true"><span class="home-feed-fallback-glow" /><span class="home-feed-fallback-icon">{liveProgram ? 'LIVE' : initials || 'J'}</span><span class="home-feed-fallback-label">{liveProgram ? item.ChannelName || t('ON NOW') : item.Type === 'Series' ? 'SERIES' : t('IN YOUR LIBRARY')}</span></span>}
             {tasteTierLabel(item.TasteTier) && <span class={`home-feed-tier tier-${item.TasteTier}`}>{tasteTierLabel(item.TasteTier)}</span>}
-            <span class="home-feed-card-overlay"><strong>{item.Name}</strong><small>{item.ProductionYear || item.SeriesName || 'In your library'}</small></span>
+            <span class="home-feed-card-overlay"><strong>{item.Name}</strong><small>{item.ProductionYear || item.SeriesName || t('In your library')}</small></span>
             {type === 'landscape' && progress > 0 && <i style={{ width: `${progress}%` }} />}
         </span>
     </button>;
@@ -250,9 +258,9 @@ function Spotlight({ block, api, onSelect, onPlay, onUserData, nextBlockId }: {
         imageNodes.forEach(node => { node.src = ''; });
         if (background.current) background.current.style.backgroundImage = 'none';
     }, []);
-    const label = block.spotlightType === 'collection' ? 'COLLECTION SPOTLIGHT'
-        : block.spotlightType === 'director' ? 'DIRECTOR FOCUS'
-            : block.spotlightType === 'milestone' ? 'NEXT TV MILESTONE' : block.subtitle || 'SPOTLIGHT';
+    const label = block.spotlightType === 'collection' ? t('COLLECTION SPOTLIGHT')
+        : block.spotlightType === 'director' ? t('DIRECTOR FOCUS')
+            : block.spotlightType === 'milestone' ? t('NEXT TV MILESTONE') : block.subtitle || 'SPOTLIGHT';
     const focusSpotlight = (event: FocusEvent) => {
         if (!document.documentElement.classList.contains('tv-client')) return;
         const target = event.target as HTMLElement;
@@ -268,15 +276,15 @@ function Spotlight({ block, api, onSelect, onPlay, onUserData, nextBlockId }: {
             <h2>{block.title}</h2>
             <div class="home-spotlight-metadata">
                 {item?.ProductionYear && <span>{item.ProductionYear}</span>}
-                {item?.ChildCount && <span>{item.ChildCount} titles</span>}
+                {item?.ChildCount && <span>{t('{0} titles', item.ChildCount)}</span>}
                 {item?.CommunityRating && <span>★ {item.CommunityRating.toFixed(1)}</span>}
                 {item?.MediaStreams?.some(stream => (stream.VideoRange || '').toUpperCase() === 'HDR') && <span>HDR</span>}
-                {item?.UserData?.PlayedItemCount != null && item.UserData.UnplayedItemCount != null && <span>{item.UserData.PlayedItemCount} of {item.UserData.PlayedItemCount + item.UserData.UnplayedItemCount} watched</span>}
+                {item?.UserData?.PlayedItemCount != null && item.UserData.UnplayedItemCount != null && <span>{t('{0} of {1} watched', item.UserData.PlayedItemCount, item.UserData.PlayedItemCount + item.UserData.UnplayedItemCount)}</span>}
             </div>
             {block.description && <p class="home-spotlight-description">{block.description}</p>}
             <div class="home-spotlight-actions">
-                {item && <button data-focusable="true" class="home-spotlight-primary" onClick={() => onPlay(item)}>{item.UserData?.PlaybackPositionTicks ? '▶ Resume' : '▶ Play'}</button>}
-                {item && <button data-focusable="true" class={`home-spotlight-secondary${favorited ? ' is-favorite' : ''}`} aria-pressed={favorited} aria-label={favorited ? 'Favorite (saved)' : 'Add to favorites'} title={favorited ? 'Remove from favorites' : 'Add to favorites'} disabled={savingFavorite} onClick={() => {
+                {item && <button data-focusable="true" class="home-spotlight-primary" onClick={() => onPlay(item)}>{item.UserData?.PlaybackPositionTicks ? t('▶ Resume') : t('▶ Play')}</button>}
+                {item && <button data-focusable="true" class={`home-spotlight-secondary${favorited ? ' is-favorite' : ''}`} aria-pressed={favorited} aria-label={favorited ? t('Favorite (saved)') : t('Add to favorites')} title={favorited ? t('Remove from favorites') : t('Add to favorites')} disabled={savingFavorite} onClick={() => {
                     if (!api || savingFavorite) return;
                     setSavingFavorite(true);
                     setFavoriteError('');
@@ -285,10 +293,10 @@ function Spotlight({ block, api, onSelect, onPlay, onUserData, nextBlockId }: {
                         const userData = returned || { ...item.UserData, IsFavorite: next };
                         setFavorited(userData.IsFavorite === true);
                         onUserData?.(item.Id, userData);
-                    }).catch(() => setFavoriteError('Favorite could not be saved.')).finally(() => setSavingFavorite(false));
-                }}>{favorited ? '★ Favorite' : '☆ Favorite'}</button>}
+                    }).catch(() => setFavoriteError(t('Favorite could not be saved.'))).finally(() => setSavingFavorite(false));
+                }}>{favorited ? t('★ Favorite') : t('☆ Favorite')}</button>}
                 {favoriteError && <p class="notice error" role="alert">{favoriteError}</p>}
-                {item && <button data-focusable="true" class="home-spotlight-details" onClick={() => onSelect(item)}>View details</button>}
+                {item && <button data-focusable="true" class="home-spotlight-details" onClick={() => onSelect(item)}>{t('View details')}</button>}
             </div>
         </div>
         <span class="home-spotlight-next" data-next-block={nextBlockId} aria-hidden="true" />

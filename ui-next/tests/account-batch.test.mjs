@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { extname } from 'node:path';
 import { beforeEach, test } from 'node:test';
+import { readSource } from './source.mjs';
 
 registerHooks({
     resolve(specifier, context, nextResolve) {
@@ -33,7 +34,7 @@ const account = await import('../src/account.ts');
 const controls = await import('../src/controls.ts');
 const { preferredScrollBehavior } = await import('../src/live-model.ts');
 const { JellyfinApi } = await import('../src/api.ts');
-const source = path => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
+const source = path => readSource(new URL(`../src/${path}`, import.meta.url), 'utf8');
 const session = { server: 'https://jf.test', token: 'token', user: { Id: 'me', Name: 'Me' }, serverId: 's' };
 
 test('MISS-44: TV profile menu reaches playback, subtitle and control settings', () => {

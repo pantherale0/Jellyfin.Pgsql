@@ -87,4 +87,22 @@ public sealed class PgsqlStatsResponse
 
     /// <summary>Gets or sets optimized NextUp failures.</summary>
     public long OptimizedNextUpFailures { get; set; }
+
+    /// <summary>Gets or sets a value indicating whether active-standby HA is enabled.</summary>
+    public bool HaEnabled { get; set; }
+
+    /// <summary>Gets or sets the HA role of this instance (<c>single</c>, <c>leader</c>, or <c>standby</c>).</summary>
+    public string HaRole { get; set; } = "single";
+
+    /// <summary>Gets or sets the leadership epoch of this process.</summary>
+    public long LeaderEpoch { get; set; }
+
+    /// <summary>Gets or sets when this instance acquired leadership, if it is the leader.</summary>
+    public DateTimeOffset? LeaderSinceUtc { get; set; }
+
+    /// <summary>Gets or sets the HA heartbeat interval in seconds, when HA is enabled.</summary>
+    public int? HaHeartbeatSeconds { get; set; }
+
+    /// <summary>Gets or sets the host name of the instance that served this response.</summary>
+    public string InstanceName { get; set; } = string.Empty;
 }

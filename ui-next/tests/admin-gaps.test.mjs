@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { extname } from 'node:path';
 import { test } from 'node:test';
+import { readSource } from './source.mjs';
 
 registerHooks({
     resolve(specifier, context, nextResolve) {
@@ -16,7 +17,7 @@ const { tasteRuntimeOverrides } = await import('../src/admin/admin-state.ts');
 const { createAdminApi } = await import('../src/admin/admin-api.ts');
 const { normalizeBranding, brandingAssets } = await import('../src/branding.ts');
 
-const source = path => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
+const source = path => readSource(new URL(`../src/${path}`, import.meta.url), 'utf8');
 
 function fakeApi(responses = {}) {
     const calls = [];

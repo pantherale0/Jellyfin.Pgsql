@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { extname } from 'node:path';
 import { beforeEach, test } from 'node:test';
+import { readSource } from './source.mjs';
 
 registerHooks({
     resolve(specifier, context, nextResolve) {
@@ -38,7 +39,7 @@ globalThis.XMLHttpRequest = class {
 
 const session = { server: 'https://jellyfin.example.test', token: 'token', user: { Id: 'user-id', Name: 'Viewer' }, serverId: 'server-id' };
 const root = path => new URL(`../${path}`, import.meta.url);
-const source = file => readFileSync(root(`src/${file}`), 'utf8');
+const source = file => readSource(root(`src/${file}`), 'utf8');
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
 test('ENG-01 legacy bundles polyfill by usage and shim the unguarded DOM APIs', async () => {
@@ -168,7 +169,7 @@ test('ENG-10 scheduler comments describe only what the code guarantees', () => {
 
 test('ENG-12 tests run in the documented runtime, in CI and before the image build', () => {
     const pkg = JSON.parse(readFileSync(root('package.json'), 'utf8'));
-    assert.equal(pkg.scripts.test, 'node --test tests/*.test.mjs');
+    assert.equal(pkg.scripts.test, 'node --test tests/*.test.mjs e2e/fake-server/*.test.mjs');
     assert.equal(pkg.engines.node, '>=22.18');
     const workflow = readFileSync(new URL('../../.github/workflows/test.yaml', import.meta.url), 'utf8');
     assert.match(workflow, /ui-next:\n\s+runs-on: ubuntu-latest\n\s+defaults:\n\s+run:\n\s+working-directory: ui-next/);

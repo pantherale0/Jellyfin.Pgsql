@@ -92,11 +92,13 @@ public sealed class UserMergeService
     /// </summary>
     /// <param name="sourceUserId">Source user id.</param>
     /// <param name="targetUserId">Target user id.</param>
+    /// <param name="expectedFingerprint">Fingerprint returned by the matching preview.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Result counts.</returns>
     public async Task<UserMergeCounts> MergeAsync(
         Guid sourceUserId,
         Guid targetUserId,
+        string expectedFingerprint,
         CancellationToken cancellationToken)
     {
         ValidateUsers(sourceUserId, targetUserId, requireSourceDeletable: true);
@@ -108,6 +110,8 @@ public sealed class UserMergeService
             await using var transaction = await context.Database
                 .BeginTransactionAsync(cancellationToken)
                 .ConfigureAwait(false);
+            await LockUsersAsync(context, sourceUserId, targetUserId, cancellationToken).ConfigureAwait(false);
+            ValidateUsers(sourceUserId, targetUserId, requireSourceDeletable: true);
 
             await MoveUserDataCoreAsync(context, sourceUserId, targetUserId, counts, cancellationToken)
                 .ConfigureAwait(false);
@@ -138,6 +142,7 @@ public sealed class UserMergeService
             await RemoveSourceBecauseYouAsync(context, sourceUserId, cancellationToken)
                 .ConfigureAwait(false);
 
+            EnsurePreviewStillCurrent(counts, expectedFingerprint);
             await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -174,11 +179,13 @@ public sealed class UserMergeService
     /// </summary>
     /// <param name="sourceUserId">Source user id.</param>
     /// <param name="targetUserId">Target user id.</param>
+    /// <param name="expectedFingerprint">Fingerprint returned by the matching preview.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Result counts.</returns>
     public async Task<UserMergeCounts> MoveUserDataAsync(
         Guid sourceUserId,
         Guid targetUserId,
+        string expectedFingerprint,
         CancellationToken cancellationToken)
     {
         ValidateUsers(sourceUserId, targetUserId, requireSourceDeletable: false);
@@ -190,9 +197,12 @@ public sealed class UserMergeService
             await using var transaction = await context.Database
                 .BeginTransactionAsync(cancellationToken)
                 .ConfigureAwait(false);
+            await LockUsersAsync(context, sourceUserId, targetUserId, cancellationToken).ConfigureAwait(false);
+            ValidateUsers(sourceUserId, targetUserId, requireSourceDeletable: false);
 
             await MoveUserDataCoreAsync(context, sourceUserId, targetUserId, counts, cancellationToken)
                 .ConfigureAwait(false);
+            EnsurePreviewStillCurrent(counts, expectedFingerprint);
             await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -211,6 +221,28 @@ public sealed class UserMergeService
         }
 
         return counts;
+    }
+
+    private static async Task LockUsersAsync(
+        JellyfinDbContext context,
+        Guid sourceUserId,
+        Guid targetUserId,
+        CancellationToken cancellationToken)
+    {
+        await context.Database.ExecuteSqlInterpolatedAsync(
+            $"""SELECT 1 FROM "Users" WHERE "Id" IN ({sourceUserId}, {targetUserId}) FOR UPDATE""",
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static void EnsurePreviewStillCurrent(UserMergeCounts counts, string expectedFingerprint)
+    {
+        if (!string.Equals(
+                MergePreviewTokens.Fingerprint(counts),
+                expectedFingerprint,
+                StringComparison.Ordinal))
+        {
+            throw new UserMergeConflictException("The users changed since the preview. Preview again.");
+        }
     }
 
     private async Task<UserMergeCounts> PreviewAsync(

@@ -3,6 +3,7 @@ import type { AdminApi } from '../admin-api';
 import type { ServerActivityEntry } from '../types';
 import { PageShell, Card, FilterPills, StatusChip, Empty, timeAgo, SearchInput } from '../ui';
 import { ACTIVITY_SEVERITIES, activitySeverityParam, isErrorSeverity } from '../admin-state';
+import { t } from '../../i18n';
 
 export function AdminActivity({ adminApi: api }: { adminApi: AdminApi }) {
     const [items, setItems] = useState<ServerActivityEntry[]>([]);
@@ -25,7 +26,7 @@ export function AdminActivity({ adminApi: api }: { adminApi: AdminApi }) {
         if (severity) filters.severity = severity;
         if (username.trim()) filters.username = username.trim();
         try { const r = await api.getActivityLog(page * 50, 50, filters); setItems(r.Items || []); setTotal(r.TotalRecordCount || 0); }
-        catch (e) { setError(e instanceof Error ? e.message : 'Activity request failed.'); }
+        catch (e) { setError(e instanceof Error ? e.message : t('Activity request failed.')); }
         finally { setLoading(false); }
     }, [api, page, range, sev, username]);
     useEffect(() => { const timer = window.setTimeout(load, 250); return () => window.clearTimeout(timer); }, [load]);
@@ -70,31 +71,31 @@ export function AdminActivity({ adminApi: api }: { adminApi: AdminApi }) {
         const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'jellyfin-activity.csv'; anchor.click(); URL.revokeObjectURL(url);
     };
 
-    return <PageShell title="Activity" subtitle="Unified event stream" actions={<button class="ad-btn" onClick={load}>Refresh</button>}>
-        <Card title="Events">
+    return <PageShell title={t('Activity')} subtitle={t('Unified event stream')} actions={<button class="ad-btn" onClick={load}>{t('Refresh')}</button>}>
+        <Card title={t('Events')}>
             <div class="ad-toolbar">
                 <FilterPills options={types} value={type} onPick={setType} />
                 <FilterPills options={[...ACTIVITY_SEVERITIES]} value={sev} onPick={setSev} />
                 <FilterPills options={['All time', '24 hours', '7 days']} value={range} onPick={setRange} />
-                <SearchInput value={search} onInput={setSearch} placeholder="Search events…" />
-                <SearchInput value={username} onInput={setUsername} placeholder="Filter by username…" />
-                <button class="ad-btn" onClick={exportCsv} disabled={filtered.length === 0}>Export CSV</button>
+                <SearchInput value={search} onInput={setSearch} placeholder={t('Search events…')} />
+                <SearchInput value={username} onInput={setUsername} placeholder={t('Filter by username…')} />
+                <button class="ad-btn" onClick={exportCsv} disabled={filtered.length === 0}>{t('Export CSV')}</button>
             </div>
             <div class="ad-feed">
                 {error && <p class="ad-error" role="alert">{error}</p>}
-                {loading && <p role="status" class="ad-note">Loading events…</p>}
-                {!loading && !error && filtered.length === 0 && <Empty muted>No matching events on this page</Empty>}
+                {loading && <p role="status" class="ad-note">{t('Loading events…')}</p>}
+                {!loading && !error && filtered.length === 0 && <Empty muted>{t('No matching events on this page')}</Empty>}
                 {filtered.slice(0, limit).map((a, index) => <div key={a.Id}>
-                    {(index === 0 || bucket(filtered[index - 1].Date) !== bucket(a.Date)) && <h4 class="ad-feed-bucket">{bucket(a.Date)}</h4>}
+                    {(index === 0 || bucket(filtered[index - 1].Date) !== bucket(a.Date)) && <h4 class="ad-feed-bucket">{t(bucket(a.Date))}</h4>}
                     <div class="ad-feed-row">
                     <span class={`ad-feed-dot ${isErrorSeverity(a.Severity) ? 'red' : a.Severity === 'Warning' ? 'amber' : 'gray'}`} />
                     <span class="ad-feed-line">{a.Name || a.Overview || a.ShortOverview || '—'}</span>
-                    <StatusChip tone={classify(a) === 'Playback' || classify(a) === 'Auth' ? 'blue' : 'muted'}>{classify(a)}</StatusChip>
+                    <StatusChip tone={classify(a) === 'Playback' || classify(a) === 'Auth' ? 'blue' : 'muted'}>{t(classify(a))}</StatusChip>
                     <span class="ad-feed-time">{timeAgo(a.Date)}</span>
                     </div>
                 </div>)}
             </div>
-            <div class="ad-pagination"><span class="ad-note">Type and text filters apply to the current page. CSV exports visible matching events.</span><button class="ad-btn" disabled={page === 0 || loading} onClick={() => setPage(v => v - 1)}>Previous</button><span>{total ? `${page * 50 + 1}–${Math.min(page * 50 + 50, total)} of ${total}` : '0 events'}</span><button class="ad-btn" disabled={loading || (page + 1) * 50 >= total} onClick={() => setPage(v => v + 1)}>Next</button></div>
+            <div class="ad-pagination"><span class="ad-note">{t('Type and text filters apply to the current page. CSV exports visible matching events.')}</span><button class="ad-btn" disabled={page === 0 || loading} onClick={() => setPage(v => v - 1)}>{t('Previous')}</button><span>{total ? t('{0}–{1} of {2}', page * 50 + 1, Math.min(page * 50 + 50, total), total) : t('0 events')}</span><button class="ad-btn" disabled={loading || (page + 1) * 50 >= total} onClick={() => setPage(v => v + 1)}>{t('Next')}</button></div>
         </Card>
     </PageShell>;
 }

@@ -5,11 +5,12 @@ import { userMessage } from './ui-errors';
 import { GuideToolbar, LiveGuide, LiveThumb, ProgramSummary } from './live-guide';
 import { CHANNEL_PAGE_SIZE, GUIDE_CHUNK_MS, airingProgress, categoryLabel, channelFromProgram, chunkStarts, currentProgramFor, directionalFocusIndex, formatClock, formatRange, formatRemaining, groupOnNow, guideDays, initialGuideRange, isAiring, isoTime, matchChannelIndex, mergePrograms, moveChannel, orderChannels, peekLiveView, programRecordingState, readChannelOrder, rememberLiveView, startOfLocalDay, timerDraft, timerInProgress, timerUpdatePayload, upNextByChannel, validateTimerDraft, withFavorite, withRecordingPending, writeChannelOrder, type FocusRect, type GuideDay, type GuideDirection, type TimerDraft } from './live-model';
 import type { LiveChannelFilter, LiveTab, LiveTimer, MediaItem } from './types';
+import { t } from './i18n';
 
 const TABS: Array<{ id: LiveTab; label: string }> = [
-    { id: 'now', label: 'On Now' },
-    { id: 'guide', label: 'Guide' },
-    { id: 'channels', label: 'Channels' },
+    { id: 'now', label: t('On Now') },
+    { id: 'guide', label: t('Guide') },
+    { id: 'channels', label: t('Channels') },
     { id: 'dvr', label: 'DVR' }
 ];
 
@@ -178,7 +179,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             setGuideChannels(items);
             setGuideTotal(response.TotalRecordCount ?? items.length);
         }).catch(error => {
-            if (generation === guideGeneration.current) setGuideError(liveError(error, 'The guide could not load.'));
+            if (generation === guideGeneration.current) setGuideError(liveError(error, t('The guide could not load.')));
         }).finally(() => {
             if (generation === guideGeneration.current) setGuideLoading(false);
         });
@@ -212,7 +213,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                 queuePrograms(response.Items || []);
             } catch (error) {
                 job.ids.forEach(id => loadedChunks.current.delete(`${id}:${job.chunk}`));
-                setGuideError(liveError(error, 'The guide could not load.'));
+                setGuideError(liveError(error, t('The guide could not load.')));
             }
         }));
     };
@@ -230,7 +231,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             setGuideChannels(current => current.concat(items.filter(item => !current.some(existing => existing.Id === item.Id))));
             if (!items.length) setGuideTotal(guideCount.current);
         } catch (error) {
-            setGuideError(liveError(error, 'The guide could not load.'));
+            setGuideError(liveError(error, t('The guide could not load.')));
         } finally {
             guideLoadingMore.current = false;
         }
@@ -257,7 +258,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             const follow = await api.getLivePrograms(ids, isoTime(start), isoTime(start + GUIDE_CHUNK_MS), 400);
             if (!cancelled) setUpcoming(follow.Items || []);
         }).catch(error => {
-            if (!cancelled) setNowError(liveError(error, 'On Now could not load.'));
+            if (!cancelled) setNowError(liveError(error, t('On Now could not load.')));
         }).finally(() => {
             if (!cancelled) setNowLoading(false);
         });
@@ -272,7 +273,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             setAiring(current => current.concat((response.Items || []).filter(item => !current.some(existing => existing.Id === item.Id))));
             setAiringTotal(response.TotalRecordCount ?? airing.length);
         } catch (error) {
-            setNowError(liveError(error, 'On Now could not load.'));
+            setNowError(liveError(error, t('On Now could not load.')));
         } finally {
             setAiringMore(false);
         }
@@ -290,7 +291,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             setDirectory(items);
             setDirectoryTotal(response.TotalRecordCount ?? items.length);
         }).catch(error => {
-            if (!cancelled) setDirectoryError(liveError(error, 'Channels could not load.'));
+            if (!cancelled) setDirectoryError(liveError(error, t('Channels could not load.')));
         }).finally(() => {
             if (!cancelled) setDirectoryLoading(false);
         });
@@ -309,7 +310,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             setRecordings(nextRecordings.Items || []);
             setRecordingsTotal(nextRecordings.TotalRecordCount ?? (nextRecordings.Items || []).length);
         }).catch(error => {
-            if (!cancelled) setDvrError(liveError(error, 'Recordings could not load.'));
+            if (!cancelled) setDvrError(liveError(error, t('Recordings could not load.')));
         }).finally(() => {
             if (!cancelled) setDvrLoading(false);
         });
@@ -337,7 +338,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
         void api.getLivePrograms([ expandedId ], isoTime(dayStart), isoTime(dayStart + 86400000), 300).then(response => {
             if (!cancelled) setDayPrograms((response.Items || []).slice().sort((a, b) => Date.parse(a.StartDate || '') - Date.parse(b.StartDate || '')));
         }).catch(error => {
-            if (!cancelled) setActionError(liveError(error, 'The channel schedule could not load.'));
+            if (!cancelled) setActionError(liveError(error, t('The channel schedule could not load.')));
         });
         return () => { cancelled = true; };
     }, [ api, expandedId, dayStart ]);
@@ -416,7 +417,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             const revert = (items: MediaItem[]) => items.map(item => item.Id === channel.Id ? withFavorite(item, !next) : item);
             setGuideChannels(current => revert(current));
             setDirectory(current => revert(current));
-            setActionError(liveError(error, 'Favorites could not be updated.'));
+            setActionError(liveError(error, t('Favorites could not be updated.')));
         }
     };
 
@@ -440,7 +441,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             setDvrTick(value => value + 1);
             setSheet(current => withRecordingPending(current, programId, series));
         } catch (error) {
-            setActionError(liveError(error, 'Recording is not available for this account.'));
+            setActionError(liveError(error, t('Recording is not available for this account.')));
         } finally {
             setRecordingBusy(false);
         }
@@ -456,7 +457,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             after?.();
             setDvrTick(value => value + 1);
         } catch (error) {
-            setActionError(liveError(error, 'Recording is not available for this account.'));
+            setActionError(liveError(error, t('Recording is not available for this account.')));
         } finally {
             setRecordingBusy(false);
         }
@@ -470,7 +471,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             closeSheet();
             setEditor({ series, timer, draft: timerDraft(timer), saving: false, error: '' });
         } catch (error) {
-            const message = liveError(error, 'Recording is not available for this account.');
+            const message = liveError(error, t('Recording is not available for this account.'));
             if (sheet) setActionError(message);
             else setDvrError(message);
         }
@@ -490,7 +491,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             setEditor(null);
             setDvrTick(value => value + 1);
         } catch (error) {
-            setEditor(current => current ? { ...current, saving: false, error: liveError(error, 'Recording is not available for this account.') } : current);
+            setEditor(current => current ? { ...current, saving: false, error: liveError(error, t('Recording is not available for this account.')) } : current);
         }
     };
 
@@ -507,7 +508,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             setDirectory(current => current.concat(items.filter(item => !current.some(existing => existing.Id === item.Id))));
             if (!items.length) setDirectoryTotal(directoryCount.current);
         } catch (error) {
-            setDirectoryError(liveError(error, 'Channels could not load.'));
+            setDirectoryError(liveError(error, t('Channels could not load.')));
         } finally {
             setDirectoryLoading(false);
         }
@@ -523,18 +524,18 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
         const state = programRecordingState(program);
         const airingNow = isAiring(program, now);
         if (state.kind === 'none') return <>
-            <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void record(false)}>Record Episode</button>
-            {state.series && <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void record(true)}>Record Series</button>}
+            <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void record(false)}>{t('Record Episode')}</button>
+            {state.series && <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void record(true)}>{t('Record Series')}</button>}
         </>;
-        if (state.pending) return <span class="muted">Recording scheduled.</span>;
+        if (state.pending) return <span class="muted">{t('Recording scheduled.')}</span>;
         if (state.kind === 'episode') return <>
-            <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void openEditor(false, state.timerId)}>Edit recording</button>
-            <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void runDvrAction(() => api.cancelLiveTimer(state.timerId), () => updateSheetProgram({ TimerId: undefined }))}>{airingNow ? 'Stop recording' : 'Cancel recording'}</button>
+            <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void openEditor(false, state.timerId)}>{t('Edit recording')}</button>
+            <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void runDvrAction(() => api.cancelLiveTimer(state.timerId), () => updateSheetProgram({ TimerId: undefined }))}>{airingNow ? t('Stop recording') : t('Cancel recording')}</button>
         </>;
         return <>
-            <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void openEditor(true, state.seriesTimerId)}>Edit series rule</button>
-            {state.timerId && <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void runDvrAction(() => api.cancelLiveTimer(state.timerId || ''), () => updateSheetProgram({ TimerId: undefined }))}>{airingNow ? 'Stop this episode' : 'Skip this episode'}</button>}
-            <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void runDvrAction(() => api.cancelSeriesTimer(state.seriesTimerId), () => updateSheetProgram({ SeriesTimerId: undefined, TimerId: undefined }))}>Cancel series</button>
+            <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void openEditor(true, state.seriesTimerId)}>{t('Edit series rule')}</button>
+            {state.timerId && <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void runDvrAction(() => api.cancelLiveTimer(state.timerId || ''), () => updateSheetProgram({ TimerId: undefined }))}>{airingNow ? t('Stop this episode') : t('Skip this episode')}</button>}
+            <button type="button" class="button secondary" data-focusable="true" disabled={recordingBusy} onClick={() => void runDvrAction(() => api.cancelSeriesTimer(state.seriesTimerId), () => updateSheetProgram({ SeriesTimerId: undefined, TimerId: undefined }))}>{t('Cancel series')}</button>
         </>;
     };
 
@@ -542,18 +543,18 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
         currentProgramFor(channel, programs, now);
 
     return <section class="live-page">
-        <div class="live-tabs" role="tablist" aria-label="Live TV">
-            {TABS.map(item => <button type="button" role="tab" aria-selected={tab === item.id ? 'true' : 'false'} data-focusable="true" class={tab === item.id ? 'live-tab active' : 'live-tab'} key={item.id} onClick={() => onTab(item.id)}>{item.label}</button>)}
+        <div class="live-tabs" role="tablist" aria-label={t('Live TV')}>
+            {TABS.map(item => <button type="button" role="tab" aria-selected={tab === item.id ? 'true' : 'false'} data-focusable="true" class={tab === item.id ? 'live-tab active' : 'live-tab'} key={item.id} onClick={() => onTab(item.id)}>{t(item.label)}</button>)}
         </div>
         {actionError && !sheet && <p class="notice error" role="alert">{actionError}</p>}
-        {digits && tab !== 'guide' && <p class="live-digits" aria-live="polite">Channel {digits}</p>}
+        {digits && tab !== 'guide' && <p class="live-digits" aria-live="polite">{t('Channel {0}', digits)}</p>}
 
         {tab === 'now' && <div class="live-now">
             {nowError && <p class="notice error" role="alert">{nowError}</p>}
-            {nowLoading && !airing.length && <p class="live-empty">Loading what is on now…</p>}
-            {!nowLoading && !nowError && !groups.length && <p class="live-empty">Nothing is airing in the guide right now.</p>}
+            {nowLoading && !airing.length && <p class="live-empty">{t('Loading what is on now…')}</p>}
+            {!nowLoading && !nowError && !groups.length && <p class="live-empty">{t('Nothing is airing in the guide right now.')}</p>}
             {groups.map(group => <section class="live-group" key={group.id}>
-                <h2>{group.title}</h2>
+                <h2>{t(group.title)}</h2>
                 <div class="live-cards">
                     {group.items.map(program => {
                         const channel = channelFromProgram(program);
@@ -568,14 +569,14 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                                     <strong>{program.Name}</strong>
                                     <span class="live-progress" aria-hidden="true"><span style={{ width: `${Math.round(progress * 100)}%` }} /></span>
                                     <span class="live-card-meta">{formatRemaining(program.EndDate, now)}{categoryLabel(program) ? ` · ${categoryLabel(program)}` : ''}</span>
-                                    {following && <span class="live-up-next">Up next: {following.Name}{following.StartDate ? ` · ${formatClock(Date.parse(following.StartDate))}` : ''}</span>}
+                                    {following && <span class="live-up-next">{t('Up next: {0}{1}', following.Name, following.StartDate ? ` · ${formatClock(Date.parse(following.StartDate))}` : '')}</span>}
                                 </span>
                             </button>
                         </article>;
                     })}
                 </div>
             </section>)}
-            {airing.length < airingTotal && <button type="button" class="button secondary" data-focusable="true" onClick={() => void loadMoreAiring()}>{airingMore ? 'Loading…' : `Show more (${airingTotal - airing.length} remaining)`}</button>}
+            {airing.length < airingTotal && <button type="button" class="button secondary" data-focusable="true" onClick={() => void loadMoreAiring()}>{airingMore ? t('Loading…') : t('Show more ({0} remaining)', airingTotal - airing.length)}</button>}
         </div>}
 
         {tab === 'guide' && !compact && <LiveGuide
@@ -617,8 +618,8 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
         {tab === 'guide' && compact && <div class="live-mobile">
             <GuideToolbar days={days} dayStart={dayStart} digits={digits} filter={filter} onDay={setDayStart} onFilter={setFilter} onFocusChannels={() => document.querySelector<HTMLElement>('.live-now-next-card')?.focus()} />
             {guideError && <p class="notice error" role="alert">{guideError}</p>}
-            {guideLoading && !orderedGuide.length && <p class="live-empty">Loading channels…</p>}
-            {!guideLoading && !orderedGuide.length && <p class="live-empty">No channels are available for this filter.</p>}
+            {guideLoading && !orderedGuide.length && <p class="live-empty">{t('Loading channels…')}</p>}
+            {!guideLoading && !orderedGuide.length && <p class="live-empty">{t('No channels are available for this filter.')}</p>}
             <ul class="live-now-next">
                 {orderedGuide.map(channel => {
                     const program = currentProgram(channel);
@@ -629,8 +630,8 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                             <span class="live-logo"><LiveThumb api={api} item={channel} width={96} /></span>
                             <span class="live-now-next-copy">
                                 <span class="live-channel-name">{channel.ChannelNumber ? `${channel.ChannelNumber} ` : ''}{channel.Name}</span>
-                                <span class="live-bar"><span class="live-bar-label">Now</span><span>{program?.Name || 'No program data available'}</span>{program && <span class="live-progress" aria-hidden="true"><span style={{ width: `${Math.round(airingProgress(program.StartDate, program.EndDate, now) * 100)}%` }} /></span>}{program && <span class="live-pill-tag">{categoryLabel(program)}</span>}</span>
-                                <span class="live-bar next"><span class="live-bar-label">Next</span><span>{following?.Name || 'Up next is not listed'}</span>{following?.StartDate && <span class="muted">{formatClock(Date.parse(following.StartDate))}</span>}</span>
+                                <span class="live-bar"><span class="live-bar-label">{t('Now')}</span><span>{program?.Name || t('No program data available')}</span>{program && <span class="live-progress" aria-hidden="true"><span style={{ width: `${Math.round(airingProgress(program.StartDate, program.EndDate, now) * 100)}%` }} /></span>}{program && <span class="live-pill-tag">{categoryLabel(program)}</span>}</span>
+                                <span class="live-bar next"><span class="live-bar-label">{t('Next')}</span><span>{following?.Name || t('Up next is not listed')}</span>{following?.StartDate && <span class="muted">{formatClock(Date.parse(following.StartDate))}</span>}</span>
                             </span>
                         </button>
                         {open && <div class="live-day-schedule">
@@ -638,19 +639,19 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                                 <span>{formatRange(item.StartDate, item.EndDate)}</span>
                                 <strong>{item.Name}</strong>
                             </button>)}
-                            {!dayPrograms.length && <p class="muted">No program data available</p>}
+                            {!dayPrograms.length && <p class="muted">{t('No program data available')}</p>}
                         </div>}
                     </li>;
                 })}
             </ul>
-            {orderedGuide.length < guideTotal && <button type="button" class="button secondary" data-focusable="true" onClick={() => void loadMoreGuide()}>Load more channels</button>}
+            {orderedGuide.length < guideTotal && <button type="button" class="button secondary" data-focusable="true" onClick={() => void loadMoreGuide()}>{t('Load more channels')}</button>}
         </div>}
 
         {tab === 'channels' && <div class="live-directory">
             {directoryError && <p class="notice error" role="alert">{directoryError}</p>}
-            <p class="muted">Channel order is saved only in this browser on this device; other devices keep their own order. Favorites sync with your Jellyfin account. {order.length > 0 && <button type="button" class="button secondary live-reset-order" data-focusable="true" onClick={() => { setOrder([]); writeChannelOrder(userId, []); }}>Reset order</button>}</p>
-            {directoryLoading && !orderedDirectory.length && <p class="live-empty">Loading channels…</p>}
-            {!directoryLoading && !directoryError && !orderedDirectory.length && <p class="live-empty">No channels are available.</p>}
+            <p class="muted">{t('Channel order is saved only in this browser on this device; other devices keep their own order. Favorites sync with your Jellyfin account.')}{' '}{order.length > 0 && <button type="button" class="button secondary live-reset-order" data-focusable="true" onClick={() => { setOrder([]); writeChannelOrder(userId, []); }}>{t('Reset order')}</button>}</p>
+            {directoryLoading && !orderedDirectory.length && <p class="live-empty">{t('Loading channels…')}</p>}
+            {!directoryLoading && !directoryError && !orderedDirectory.length && <p class="live-empty">{t('No channels are available.')}</p>}
             <ul class="live-channel-list">
                 {orderedDirectory.map((channel, index) => <li key={channel.Id}>
                     <button type="button" class="live-directory-tune" id={`live-directory-${channel.Id}`} data-focusable="true" onClick={() => tune(channel, channel.CurrentProgram)}>
@@ -661,50 +662,50 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                             {channel.CurrentProgram?.Name && <span class="muted">{channel.CurrentProgram.Name}</span>}
                         </span>
                     </button>
-                    <button type="button" class={channel.UserData?.IsFavorite ? 'live-star on' : 'live-star'} data-focusable="true" aria-pressed={channel.UserData?.IsFavorite ? 'true' : 'false'} aria-label={channel.UserData?.IsFavorite ? `Remove ${channel.Name} from favorites` : `Add ${channel.Name} to favorites`} onClick={() => void toggleFavorite(channel)}>{channel.UserData?.IsFavorite ? '★' : '☆'}</button>
-                    <button type="button" class="live-move" data-focusable="true" aria-label={`Move ${channel.Name} earlier`} disabled={index === 0} onClick={() => shift(channel.Id, -1)}>↑</button>
-                    <button type="button" class="live-move" data-focusable="true" aria-label={`Move ${channel.Name} later`} disabled={index === orderedDirectory.length - 1} onClick={() => shift(channel.Id, 1)}>↓</button>
+                    <button type="button" class={channel.UserData?.IsFavorite ? 'live-star on' : 'live-star'} data-focusable="true" aria-pressed={channel.UserData?.IsFavorite ? 'true' : 'false'} aria-label={channel.UserData?.IsFavorite ? t('Remove {0} from favorites', channel.Name) : t('Add {0} to favorites', channel.Name)} onClick={() => void toggleFavorite(channel)}>{channel.UserData?.IsFavorite ? '★' : '☆'}</button>
+                    <button type="button" class="live-move" data-focusable="true" aria-label={t('Move {0} earlier', channel.Name)} disabled={index === 0} onClick={() => shift(channel.Id, -1)}>↑</button>
+                    <button type="button" class="live-move" data-focusable="true" aria-label={t('Move {0} later', channel.Name)} disabled={index === orderedDirectory.length - 1} onClick={() => shift(channel.Id, 1)}>↓</button>
                 </li>)}
             </ul>
-            {orderedDirectory.length < directoryTotal && <button type="button" class="button secondary" data-focusable="true" onClick={() => void loadMoreDirectory()}>{directoryLoading ? 'Loading…' : 'Load more channels'}</button>}
+            {orderedDirectory.length < directoryTotal && <button type="button" class="button secondary" data-focusable="true" onClick={() => void loadMoreDirectory()}>{directoryLoading ? t('Loading…') : t('Load more channels')}</button>}
         </div>}
 
         {tab === 'dvr' && <div class="live-dvr">
             {dvrError && <p class="notice error" role="alert">{dvrError}</p>}
-            {dvrLoading && !timers.length && !seriesTimers.length && !recordings.length && <p class="live-empty">Loading recordings…</p>}
+            {dvrLoading && !timers.length && !seriesTimers.length && !recordings.length && <p class="live-empty">{t('Loading recordings…')}</p>}
             <section>
-                <h2>Scheduled</h2>
-                {!timers.length && !dvrLoading && <p class="muted">No upcoming recordings.</p>}
+                <h2>{t('Scheduled')}</h2>
+                {!timers.length && !dvrLoading && <p class="muted">{t('No upcoming recordings.')}</p>}
                 <ul class="live-dvr-list">
                     {timers.map(timer => <li key={timer.Id}>
-                        <div><strong>{timer.Name || 'Recording'}</strong><span class="muted">{timer.ChannelName}{timer.StartDate ? ` · ${formatRange(timer.StartDate, timer.EndDate)}` : ''}{timer.Status ? ` · ${timer.Status}` : ''}</span></div>
+                        <div><strong>{timer.Name || t('Recording')}</strong><span class="muted">{timer.ChannelName}{timer.StartDate ? ` · ${formatRange(timer.StartDate, timer.EndDate)}` : ''}{timer.Status ? ` · ${timer.Status}` : ''}</span></div>
                         <span class="live-dvr-actions">
-                            <button type="button" class="button secondary" data-focusable="true" onClick={() => void openEditor(false, timer.Id)}>Edit</button>
-                            <button type="button" class="button secondary" data-focusable="true" onClick={() => void api.cancelLiveTimer(timer.Id).then(() => setDvrTick(value => value + 1)).catch(error => setDvrError(liveError(error, 'Recording is not available for this account.')))}>{timerInProgress(timer, now) ? 'Stop recording' : 'Cancel'}</button>
+                            <button type="button" class="button secondary" data-focusable="true" onClick={() => void openEditor(false, timer.Id)}>{t('Edit')}</button>
+                            <button type="button" class="button secondary" data-focusable="true" onClick={() => void api.cancelLiveTimer(timer.Id).then(() => setDvrTick(value => value + 1)).catch(error => setDvrError(liveError(error, t('Recording is not available for this account.'))))}>{timerInProgress(timer, now) ? t('Stop recording') : t('Cancel')}</button>
                         </span>
                     </li>)}
                 </ul>
             </section>
             <section>
-                <h2>Series rules</h2>
-                {!seriesTimers.length && !dvrLoading && <p class="muted">No series recording rules.</p>}
+                <h2>{t('Series rules')}</h2>
+                {!seriesTimers.length && !dvrLoading && <p class="muted">{t('No series recording rules.')}</p>}
                 <ul class="live-dvr-list">
                     {seriesTimers.map(timer => <li key={timer.Id}>
-                        <div><strong>{timer.Name || 'Series recording'}</strong><span class="muted">{timer.RecordAnyChannel ? 'Any channel' : timer.ChannelName}{timer.RecordNewOnly ? ' · New episodes only' : ''}{timer.KeepUpTo ? ` · Keep ${timer.KeepUpTo}` : ''}</span></div>
+                        <div><strong>{timer.Name || t('Series recording')}</strong><span class="muted">{timer.RecordAnyChannel ? t('Any channel') : timer.ChannelName}{timer.RecordNewOnly ? t(' · New episodes only') : ''}{timer.KeepUpTo ? t(' · Keep {0}', timer.KeepUpTo) : ''}</span></div>
                         <span class="live-dvr-actions">
-                            <button type="button" class="button secondary" data-focusable="true" onClick={() => void openEditor(true, timer.Id)}>Edit</button>
-                            <button type="button" class="button secondary" data-focusable="true" onClick={() => void api.cancelSeriesTimer(timer.Id).then(() => setDvrTick(value => value + 1)).catch(error => setDvrError(liveError(error, 'Recording is not available for this account.')))}>Cancel series</button>
+                            <button type="button" class="button secondary" data-focusable="true" onClick={() => void openEditor(true, timer.Id)}>{t('Edit')}</button>
+                            <button type="button" class="button secondary" data-focusable="true" onClick={() => void api.cancelSeriesTimer(timer.Id).then(() => setDvrTick(value => value + 1)).catch(error => setDvrError(liveError(error, t('Recording is not available for this account.'))))}>{t('Cancel series')}</button>
                         </span>
                     </li>)}
                 </ul>
             </section>
             <section>
-                <h2>Recordings</h2>
-                {!recordings.length && !dvrLoading && <p class="muted">No recordings yet.</p>}
+                <h2>{t('Recordings')}</h2>
+                {!recordings.length && !dvrLoading && <p class="muted">{t('No recordings yet.')}</p>}
                 <ul class="live-dvr-list">
                     {recordings.map(item => <li key={item.Id}>
                         <button type="button" class="live-recording" data-focusable="true" onClick={() => onPlay(item)}><LiveThumb api={api} item={item} width={160} /><span><strong>{item.Name}</strong>{item.StartDate && <span class="muted">{formatRange(item.StartDate, item.EndDate)}</span>}</span></button>
-                        <button type="button" class="button secondary" data-focusable="true" onClick={() => void api.deleteRecording(item.Id).then(() => setDvrTick(value => value + 1)).catch(error => setDvrError(liveError(error, 'Recording is not available for this account.')))}>Delete</button>
+                        <button type="button" class="button secondary" data-focusable="true" onClick={() => void api.deleteRecording(item.Id).then(() => setDvrTick(value => value + 1)).catch(error => setDvrError(liveError(error, t('Recording is not available for this account.'))))}>{t('Delete')}</button>
                     </li>)}
                 </ul>
                 {recordings.length < recordingsTotal && <button type="button" class="button secondary" data-focusable="true" onClick={async () => {
@@ -715,11 +716,11 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                         setRecordings(current => current.concat((page.Items || []).filter(item => !current.some(existing => existing.Id === item.Id))));
                         setRecordingsTotal(page.TotalRecordCount ?? recordings.length);
                     } catch (error) {
-                        setDvrError(liveError(error, 'Recordings could not load.'));
+                        setDvrError(liveError(error, t('Recordings could not load.')));
                     } finally {
                         setRecordingsMore(false);
                     }
-                }}>{recordingsMore ? 'Loading…' : `Show more (${recordingsTotal - recordings.length} remaining)`}</button>}
+                }}>{recordingsMore ? t('Loading…') : t('Show more ({0} remaining)', recordingsTotal - recordings.length)}</button>}
             </section>
         </div>}
 
@@ -728,29 +729,29 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                 <ProgramSummary program={sheet.program} channel={sheet.channel} now={now} />
                 {actionError && <p class="notice error" role="alert">{actionError}</p>}
                 <div class="live-actions">
-                    <button type="button" class="button primary" data-focusable="true" onClick={() => tune(sheet.channel, sheet.program)}>Watch Now</button>
+                    <button type="button" class="button primary" data-focusable="true" onClick={() => tune(sheet.channel, sheet.program)}>{t('Watch Now')}</button>
                     {recordingActions(sheet.program)}
-                    <button type="button" class="button secondary" data-focusable="true" onClick={closeSheet}>Close</button>
+                    <button type="button" class="button secondary" data-focusable="true" onClick={closeSheet}>{t('Close')}</button>
                 </div>
             </aside>
         </div>}
 
         {editor && <div class="live-sheet-backdrop" onClick={event => { if (event.target === event.currentTarget && !editor.saving) setEditor(null); }}>
-            <aside ref={editorRef} class="live-sheet" role="dialog" aria-modal="true" aria-label={editor.series ? 'Edit series recording' : 'Edit recording'}>
-                <h2>{editor.series ? 'Series recording' : 'Recording'}: {editor.timer.Name || 'Untitled'}</h2>
+            <aside ref={editorRef} class="live-sheet" role="dialog" aria-modal="true" aria-label={editor.series ? t('Edit series recording') : t('Edit recording')}>
+                <h2>{editor.series ? t('Series recording') : t('Recording')}: {editor.timer.Name || t('Untitled')}</h2>
                 {editor.error && <p class="notice error" role="alert">{editor.error}</p>}
                 <form class="profile-form live-timer-form" onSubmit={event => { event.preventDefault(); void saveEditor(); }}>
-                    <label>Start early (minutes)<input data-focusable="true" type="number" min="0" max="240" step="1" value={editor.draft.prePaddingMinutes} onInput={event => updateDraft({ prePaddingMinutes: Number((event.currentTarget as HTMLInputElement).value) })} /></label>
-                    <label>Stop late (minutes)<input data-focusable="true" type="number" min="0" max="240" step="1" value={editor.draft.postPaddingMinutes} onInput={event => updateDraft({ postPaddingMinutes: Number((event.currentTarget as HTMLInputElement).value) })} /></label>
+                    <label>{t('Start early (minutes)')}<input data-focusable="true" type="number" min="0" max="240" step="1" value={editor.draft.prePaddingMinutes} onInput={event => updateDraft({ prePaddingMinutes: Number((event.currentTarget as HTMLInputElement).value) })} /></label>
+                    <label>{t('Stop late (minutes)')}<input data-focusable="true" type="number" min="0" max="240" step="1" value={editor.draft.postPaddingMinutes} onInput={event => updateDraft({ postPaddingMinutes: Number((event.currentTarget as HTMLInputElement).value) })} /></label>
                     {editor.series && <>
-                        <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={editor.draft.recordNewOnly} onChange={event => updateDraft({ recordNewOnly: (event.currentTarget as HTMLInputElement).checked })} /> Record new episodes only</label>
-                        <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={editor.draft.recordAnyChannel} onChange={event => updateDraft({ recordAnyChannel: (event.currentTarget as HTMLInputElement).checked })} /> Record on any channel</label>
-                        <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={editor.draft.recordAnyTime} onChange={event => updateDraft({ recordAnyTime: (event.currentTarget as HTMLInputElement).checked })} /> Record at any time</label>
-                        <label>Keep up to (episodes, 0 keeps all)<input data-focusable="true" type="number" min="0" max="1000" step="1" value={editor.draft.keepUpTo} onInput={event => updateDraft({ keepUpTo: Number((event.currentTarget as HTMLInputElement).value) })} /></label>
+                        <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={editor.draft.recordNewOnly} onChange={event => updateDraft({ recordNewOnly: (event.currentTarget as HTMLInputElement).checked })} />{' '}{t('Record new episodes only')}</label>
+                        <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={editor.draft.recordAnyChannel} onChange={event => updateDraft({ recordAnyChannel: (event.currentTarget as HTMLInputElement).checked })} />{' '}{t('Record on any channel')}</label>
+                        <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={editor.draft.recordAnyTime} onChange={event => updateDraft({ recordAnyTime: (event.currentTarget as HTMLInputElement).checked })} />{' '}{t('Record at any time')}</label>
+                        <label>{t('Keep up to (episodes, 0 keeps all)')}<input data-focusable="true" type="number" min="0" max="1000" step="1" value={editor.draft.keepUpTo} onInput={event => updateDraft({ keepUpTo: Number((event.currentTarget as HTMLInputElement).value) })} /></label>
                     </>}
                     <div class="live-actions">
-                        <button type="submit" class="button primary" data-focusable="true" disabled={editor.saving}>{editor.saving ? 'Saving…' : 'Save'}</button>
-                        <button type="button" class="button secondary" data-focusable="true" disabled={editor.saving} onClick={() => setEditor(null)}>Cancel</button>
+                        <button type="submit" class="button primary" data-focusable="true" disabled={editor.saving}>{editor.saving ? t('Saving…') : t('Save')}</button>
+                        <button type="button" class="button secondary" data-focusable="true" disabled={editor.saving} onClick={() => setEditor(null)}>{t('Cancel')}</button>
                     </div>
                 </form>
             </aside>

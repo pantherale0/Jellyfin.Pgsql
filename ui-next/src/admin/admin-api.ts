@@ -1,18 +1,23 @@
 import type { JellyfinApi } from '../api';
+import { haTracker, type HaReadiness } from '../ha-status';
 import type {
     PgsqlStatsSnapshot, SystemInfo, ServerActivityEntry, JellyfinSession, ScheduledTask,
-    JellyfinUserInfo, LibraryInfo, PluginInfo, ForkStatus, DeviceInfo, ApiKey,
+    JellyfinUserInfo, LibraryInfo, PluginInfo, PackageInfo, RepositoryInfo, ForkStatus, DeviceInfo, ApiKey,
     SystemStorage, VirtualFolder, TasteShadowEval,
     LiveTvConfiguration, TunerHostInfo, ListingsProviderInfo, ChannelMappingOptions, TunerChannelMapping,
 } from './types';
 import type { AvailableLibraryOptions, LibraryOptions } from './library-options';
 import { applyPatch, type TaskTrigger } from './server-settings';
+import { asPackages, asRepositories } from './plugin-catalog';
+import { asCountries, asCultures, asSystemStorage, type Country, type Culture } from '../api-contracts';
+import { t } from '../i18n';
 
 const CAMEL_CASE = { Accept: 'application/json; profile="CamelCase"' };
 
 export interface PlaybackStatsFilter { startDate?: string; endDate?: string }
 export interface RecentPlayback { Id?: string; UserId?: string; ItemId?: string; ItemName?: string; SeriesName?: string; MediaType?: string; PlayedTicks?: number; DatePlayed?: string; PlaybackMethod?: string; TranscodeReasons?: string; ClientName?: string; DeviceName?: string }
 export interface BackupManifest { ServerVersion?: string; BackupEngineVersion?: string; DateCreated?: string; Path?: string; Options?: Record<string, boolean> }
+export interface UserAdminTransferResponse { counts: Record<string, number | boolean>; previewToken?: string; warning?: string }
 
 export function createAdminApi(api: JellyfinApi) {
     const get = <T>(path: string, priority = 1): Promise<T> => api.request<T>(path, {}, false, priority);
@@ -36,7 +41,19 @@ export function createAdminApi(api: JellyfinApi) {
         const current = await get<Record<string, unknown>>('/System/Configuration');
         await api.request<void>('/System/Configuration', { method: 'POST', body: JSON.stringify({ ...current, ServerName: name }) }, true);
     };
-    const getPgsqlStats = (): Promise<PgsqlStatsSnapshot> => get<PgsqlStatsSnapshot>('/Pgsql/Stats');
+    const getPgsqlStats = (): Promise<PgsqlStatsSnapshot> => get<PgsqlStatsSnapshot>('/Pgsql/Stats').then(stats => {
+        haTracker.observeStats(stats);
+        return stats;
+    });
+    /** `/health/ready` answers 503 while starting up or on an HA standby; 404 means an unpatched server. */
+    const getHealthReadiness = async (): Promise<HaReadiness> => {
+        try {
+            await api.requestText('/health/ready', 2, 5000);
+            return 'ready';
+        } catch (error) {
+            return (error as { status?: unknown } | null)?.status === 503 ? 'not-ready' : 'unknown';
+        }
+    };
     const getSessions = (): Promise<JellyfinSession[]> => get<JellyfinSession[]>('/Sessions', 2);
     const getScheduledTasks = (): Promise<ScheduledTask[]> => get<ScheduledTask[]>('/ScheduledTasks');
     const getActivityLog = (start = 0, limit = 50, filters: Record<string, string> = {}): Promise<{ Items: ServerActivityEntry[]; TotalRecordCount?: number }> =>
@@ -96,8 +113,8 @@ export function createAdminApi(api: JellyfinApi) {
     const createUser = (name: string, password: string): Promise<JellyfinUserInfo> => postB<JellyfinUserInfo>('/Users/New', { Name: name, Password: password }).then(normalizeUser);
     const resetUserPassword = (id: string): Promise<void> => api.request<void>(`/Users/Password?userId=${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ ResetPassword: true }) }, true, 2);
     const setUserPassword = (id: string, newPassword: string): Promise<void> => api.request<void>(`/Users/Password?userId=${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ NewPw: newPassword }) }, true, 2);
-    const mergeUsers = (sourceUserId: string, targetUserId: string, preview = true): Promise<{ counts: Record<string, number>; warning?: string }> => api.request(`/Pgsql/Admin/Users/Merge${preview ? '/Preview' : ''}`, { method: 'POST', headers: { Accept: 'application/json; profile="CamelCase"' }, body: JSON.stringify({ sourceUserId, targetUserId }) });
-    const moveUserData = (sourceUserId: string, targetUserId: string, preview = true): Promise<{ counts: Record<string, number>; warning?: string }> => api.request(`/Pgsql/Admin/Users/MoveUserData${preview ? '/Preview' : ''}`, { method: 'POST', headers: { Accept: 'application/json; profile="CamelCase"' }, body: JSON.stringify({ sourceUserId, targetUserId }) });
+    const mergeUsers = (sourceUserId: string, targetUserId: string, preview = true, previewToken?: string): Promise<UserAdminTransferResponse> => api.request(`/Pgsql/Admin/Users/Merge${preview ? '/Preview' : ''}`, { method: 'POST', headers: CAMEL_CASE, body: JSON.stringify({ sourceUserId, targetUserId, previewToken }) });
+    const moveUserData = (sourceUserId: string, targetUserId: string, preview = true, previewToken?: string): Promise<UserAdminTransferResponse> => api.request(`/Pgsql/Admin/Users/MoveUserData${preview ? '/Preview' : ''}`, { method: 'POST', headers: CAMEL_CASE, body: JSON.stringify({ sourceUserId, targetUserId, previewToken }) });
     const renameUser = async (id: string, name: string): Promise<void> => {
         const fresh = await get<Record<string, unknown>>(`/Users/${encodeURIComponent(id)}`, 2);
         await api.request<void>(`/Users/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ ...fresh, Name: name }) }, true, 2);
@@ -170,7 +187,7 @@ export function createAdminApi(api: JellyfinApi) {
         return { Movies, Series, Episodes, Audio: Songs + Albums, Books, Videos: MusicVideos + HomeVideos };
     };
     const getVirtualFolders = (): Promise<VirtualFolder[]> => get<VirtualFolder[]>('/Library/VirtualFolders');
-    const getSystemStorage = (): Promise<SystemStorage> => get<SystemStorage>('/System/Info/Storage');
+    const getSystemStorage = (): Promise<SystemStorage> => get<unknown>('/System/Info/Storage').then(asSystemStorage);
     const getMediaEncoderCapabilities = async (): Promise<Record<string, any> | null> => raw<Record<string, any>>('/System/MediaEncoder/Capabilities').catch(() => null);
     const refreshLibrary = (itemId: string, metadataRefreshMode = 'Default', imageRefreshMode = 'Default'): Promise<void> => post(`/Items/${encodeURIComponent(itemId)}/Refresh?${new URLSearchParams({ metadataRefreshMode, imageRefreshMode })}`);
     const addLibrary = (name: string, collectionType: string, paths: string[]): Promise<void> => api.request<void>(`/Library/VirtualFolders?${new URLSearchParams({ name, ...(collectionType ? { collectionType } : {}), refreshLibrary: 'false' })}`, { method: 'POST', body: JSON.stringify({ LibraryOptions: { PathInfos: paths.map(Path => ({ Path })) } }) }, true);
@@ -181,13 +198,22 @@ export function createAdminApi(api: JellyfinApi) {
     const updateLibraryOptions = (id: string, options: LibraryOptions): Promise<void> => api.request<void>('/Library/VirtualFolders/LibraryOptions', { method: 'POST', body: JSON.stringify({ Id: id, LibraryOptions: options }) }, true, 2);
     const getAvailableLibraryOptions = (collectionType?: string): Promise<AvailableLibraryOptions> =>
         get<AvailableLibraryOptions>(`/Libraries/AvailableOptions?${new URLSearchParams({ ...(collectionType && collectionType !== 'mixed' ? { libraryContentType: collectionType } : {}), isNewLibrary: 'false' })}`);
-    const getCultures = (): Promise<Array<{ DisplayName?: string; TwoLetterISOLanguageName?: string; ThreeLetterISOLanguageName?: string }>> => get('/Localization/Cultures');
-    const getCountries = (): Promise<Array<{ DisplayName?: string; TwoLetterISORegionName?: string }>> => get('/Localization/Countries');
+    const getCultures = (): Promise<Culture[]> => get<unknown>('/Localization/Cultures').then(asCultures);
+    const getCountries = (): Promise<Country[]> => get<unknown>('/Localization/Countries').then(asCountries);
 
     /* Plugins */
     const getPlugins = (): Promise<PluginInfo[]> => get<PluginInfo[]>('/Plugins');
     const enablePlugin = (pluginId: string, version: string): Promise<void> => post(`/Plugins/${encodeURIComponent(pluginId)}/${encodeURIComponent(version)}/Enable`);
     const disablePlugin = (pluginId: string, version: string): Promise<void> => post(`/Plugins/${encodeURIComponent(pluginId)}/${encodeURIComponent(version)}/Disable`);
+    const uninstallPlugin = (pluginId: string, version: string): Promise<void> => del(`/Plugins/${encodeURIComponent(pluginId)}/${encodeURIComponent(version)}`);
+    const getPackages = (): Promise<PackageInfo[]> => get<unknown>('/Packages').then(asPackages);
+    /** Resolves once the server has downloaded and unpacked the plugin, which can take minutes. */
+    const installPackage = ({ name, id, version, repositoryUrl }: { name: string; id: string; version: string; repositoryUrl: string }): Promise<void> => {
+        const query = new URLSearchParams({ assemblyGuid: id, version, repositoryUrl });
+        return api.request<void>(`/Packages/Installed/${encodeURIComponent(name)}?${query}`, { method: 'POST', timeoutMs: 5 * 60_000 }, true, 2);
+    };
+    const getRepositories = (): Promise<RepositoryInfo[]> => get<unknown>('/Repositories', 2).then(asRepositories);
+    const setRepositories = (repositories: RepositoryInfo[]): Promise<void> => putB<void>('/Repositories', repositories, true);
 
     /* Logs */
     const getLogs = async (): Promise<Array<{ Name?: string; Size?: number; DateModified?: string }>> => get<Array<{ Name?: string; Size?: number; DateModified?: string }>>('/System/Logs');
@@ -247,7 +273,7 @@ export function createAdminApi(api: JellyfinApi) {
     const initEmbyUpload = (libraryDbBytes: number, usersDbBytes: number): Promise<{ sessionId: string; chunkSizeBytes: number }> =>
         postB<{ sessionId: string; chunkSizeBytes: number }>('/Pgsql/Admin/EmbyImport/Upload/Init', { libraryDbBytes, usersDbBytes });
     const uploadEmbyChunks = async (sessionId: string, fileName: 'libraryDb' | 'usersDb', file: File, chunkSize: number, progress?: (value: number) => void, signal?: AbortSignal): Promise<void> => {
-        if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0 || chunkSize > 64 * 1024 * 1024) throw new Error('The server returned an invalid upload chunk size.');
+        if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0 || chunkSize > 64 * 1024 * 1024) throw new Error(t('The server returned an invalid upload chunk size.'));
         const count = Math.ceil(file.size / chunkSize);
         for (let index = 0; index < count; index += 1) {
             const form = new FormData();
@@ -268,10 +294,10 @@ export function createAdminApi(api: JellyfinApi) {
     const discardEmbyImport = (sessionId: string): Promise<void> => del(`/Pgsql/Admin/EmbyImport/${encodeURIComponent(sessionId)}`);
 
     return {
-        getUsers, getSystemInfo, getNetworkConfig, saveNetworkConfig, saveServerName, getPgsqlStats, getSessions, getScheduledTasks, getActivityLog,
+        getUsers, getSystemInfo, getNetworkConfig, saveNetworkConfig, saveServerName, getPgsqlStats, getHealthReadiness, getSessions, getScheduledTasks, getActivityLog,
         getLibraryTotals, getForkStatus, getDevices, getScheduledTask, startTask, stopTask,
         getUser, createUser, resetUserPassword, mergeUsers, moveUserData, deleteUser, updateUserPolicy, getApiKeys, createApiKey, getBackups, createBackup, restoreBackup, getPlaybackOverview, getLibraries, getLibraryCounts, getVirtualFolders,
-        getSystemStorage, getMediaEncoderCapabilities, refreshLibrary, addLibrary, removeLibrary, renameLibrary, addLibraryPath, removeLibraryPath, updateLibraryOptions, getAvailableLibraryOptions, getCultures, getCountries, getDailyPlayback, getPlaybackDimensions, getPlugins, enablePlugin, disablePlugin, getLogs, getLogText, getSeerrStatus, testSeerrConnection,
+        getSystemStorage, getMediaEncoderCapabilities, refreshLibrary, addLibrary, removeLibrary, renameLibrary, addLibraryPath, removeLibraryPath, updateLibraryOptions, getAvailableLibraryOptions, getCultures, getCountries, getDailyPlayback, getPlaybackDimensions, getPlugins, enablePlugin, disablePlugin, uninstallPlugin, getPackages, installPackage, getRepositories, setRepositories, getLogs, getLogText, getSeerrStatus, testSeerrConnection,
         getTasteShadowEval, getSsoConfig, getSsoStatus, saveSsoConfig, getTunerHostTypes, getLiveTvInfo, getLiveTvChannels, cancelTimer,
         getLiveTvConfig, discoverTuners, saveTunerHost, deleteTunerHost, getDefaultListingProvider, saveListingProvider, deleteListingProvider,
         getLineups, getSchedulesDirectCountries, getChannelMappingOptions, setChannelMapping,

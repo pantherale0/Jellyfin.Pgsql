@@ -8,10 +8,14 @@ import type { LibraryItemsOptions } from './library-query';
 import { clientVersion } from './build';
 import { recommendationTitle } from './home-feed-blocks';
 import { withEntityType, type EntitySearchSection, type FavoriteGroup } from './discovery';
-import { asItemResponse, asMediaItem } from './api-contracts';
+import { asCultures, asItemResponse, asMediaItem, type Culture } from './api-contracts';
+import { asSeerrEnabled, asSeerrItems, type SeerrItem, type SeerrMediaType } from './seerr';
 import { normalizeBranding, NO_BRANDING, type Branding } from './branding';
 import { publicUsers, type ForgotPasswordResult, type PublicUser } from './account';
-import { createSsoSession, normalizeUserId, SSO_HANDOFF_KEY, UI_NEXT_SIGNED_OUT_KEY, type SsoHandoff, type SsoHandoffAttempt } from './sso-session';
+import { createSsoChallenge, createSsoSession, normalizeUserId, SSO_HANDOFF_KEY, ssoHandoffFromExchange, ssoReturnUrl, UI_NEXT_SIGNED_OUT_KEY, type SsoHandoff, type SsoHandoffAttempt } from './sso-session';
+import { haTracker } from './ha-status';
+import { hostDeviceProfile, hostIdentity } from './native-host';
+import { t } from './i18n';
 
 const CLIENT_NAME = 'Jellyfin UI Next';
 const CLIENT_VERSION = clientVersion();
@@ -23,6 +27,7 @@ const DEVICE_NAME = /web0s|webos|netcast/.test(USER_AGENT) ? 'webOS TV Browser'
                 : /android/.test(USER_AGENT) ? 'Android Browser'
                     : /iphone|ipad|ipod/.test(USER_AGENT) ? 'iOS Browser' : 'Web Browser';
 const DEVICE_ID_KEY = 'jellyfin-ui-next-device-id';
+const SEERR_HEADERS = { 'Accept': 'application/json; profile="CamelCase"' };
 let fallbackDeviceId: string | undefined;
 
 function createDeviceId(): string {
@@ -30,6 +35,8 @@ function createDeviceId(): string {
 }
 
 function deviceId(): string {
+    const host = hostIdentity();
+    if (host) return host.deviceId;
     try {
         let id = localStorage.getItem(DEVICE_ID_KEY);
         if (!id) {
@@ -49,24 +56,29 @@ function normalizeServer(server: string): string {
     const isSameOrigin = url.origin === window.location.origin;
     const devHttpAllowed = import.meta.env?.DEV === true && url.protocol === 'http:';
     if (url.protocol !== 'https:' && !(url.protocol === 'http:' && (devHttpAllowed || isLocalhost || isSameOrigin))) {
-        throw new Error('Use HTTPS for Jellyfin servers. HTTP is allowed for localhost, the same origin, or this development build.');
+        throw new Error(t('Use HTTPS for Jellyfin servers. HTTP is allowed for localhost, the same origin, or this development build.'));
     }
     if (url.username || url.password || url.search || url.hash) {
-        throw new Error('Enter the Jellyfin server address only, without credentials or query parameters.');
+        throw new Error(t('Enter the Jellyfin server address only, without credentials or query parameters.'));
     }
     url.pathname = url.pathname.replace(/\/(web|web\/index\.html)\/?$/i, '').replace(/\/$/, '');
     return url.toString().replace(/\/$/, '');
 }
 
 function authorization(token?: string): string {
+    const host = hostIdentity();
     const values = [
-        `Client="${encodeURIComponent(CLIENT_NAME)}"`,
-        `Device="${encodeURIComponent(DEVICE_NAME)}"`,
+        `Client="${encodeURIComponent(host?.appName || CLIENT_NAME)}"`,
+        `Device="${encodeURIComponent(host?.deviceName || DEVICE_NAME)}"`,
         `DeviceId="${encodeURIComponent(deviceId())}"`,
-        `Version="${encodeURIComponent(CLIENT_VERSION)}"`,
+        `Version="${encodeURIComponent(host?.appVersion || CLIENT_VERSION)}"`,
         `Token="${encodeURIComponent(token || '')}"`
     ];
     return `MediaBrowser ${values.join(', ')}`;
+}
+
+function currentHref(): string {
+    return typeof window === 'undefined' ? '' : window.location?.href || '';
 }
 
 function queryString(values: Record<string, string | number | undefined>): string {
@@ -75,6 +87,12 @@ function queryString(values: Record<string, string | number | undefined>): strin
         .map(key => `${encodeURIComponent(key)}=${encodeURIComponent(String(values[key]))}`)
         .join('&');
 }
+
+export const PLAYLIST_PAGE_SIZE = 200;
+export const MAX_MUSIC_QUEUE = 500;
+const MUSIC_FIELDS = 'PrimaryImageAspectRatio,UserData,RunTimeTicks,IndexNumber,ParentIndexNumber,ImageTags,CanDownload,NormalizationGain,AlbumId,Album,AlbumArtist,AlbumArtists,Artists,ArtistItems,AlbumPrimaryImageTag,MediaType';
+/** Play all / Shuffle load at most this many playlist entries into the queue. */
+export const PLAYLIST_QUEUE_LIMIT = 5000;
 
 const IMAGE_CACHE_LIMIT = 200;
 
@@ -285,20 +303,37 @@ export interface ApiRequestInit {
     headers?: Record<string, string>;
     body?: string | FormData;
     signal?: AbortSignal | null;
+    /** Overrides the default 20 second timeout for slow server operations. */
+    timeoutMs?: number;
+}
+
+export class RequestTimeoutError extends Error {
+    constructor() {
+        super(t('The Jellyfin server took too long to respond.'));
+    }
 }
 
 /** DOMException is not constructible on the oldest legacy targets. */
 function abortError(): Error {
     try {
-        return new DOMException('The request was cancelled.', 'AbortError');
+        return new DOMException(t('The request was cancelled.'), 'AbortError');
     } catch (_error) {
-        const error = new Error('The request was cancelled.');
+        const error = new Error(t('The request was cancelled.'));
         error.name = 'AbortError';
         return error;
     }
 }
 
-function xhrRequest<T>(url: string, method = 'GET', headers: Record<string, string> = {}, body?: Document | XMLHttpRequestBodyInit, emptyOk = false, priority = 2, signal?: AbortSignal | null, responseType: 'json' | 'text' = 'json', maxResponseBytes?: number): Promise<T> {
+/** Reads every header in one call: cross-origin `getResponseHeader` on an unexposed name logs a browser console error. */
+function observeHaHeaders(xhr: XMLHttpRequest): void {
+    try {
+        haTracker.observeHeaders(xhr.getAllResponseHeaders());
+    } catch (_error) {
+        /* Diagnostics must never fail a request. */
+    }
+}
+
+function xhrRequest<T>(url: string, method = 'GET', headers: Record<string, string> = {}, body?: Document | XMLHttpRequestBodyInit, emptyOk = false, priority = 2, signal?: AbortSignal | null, responseType: 'json' | 'text' = 'json', maxResponseBytes?: number, timeoutMs = 20000): Promise<T> {
     return new Promise((resolve, reject) => {
         if (signal?.aborted) { reject(abortError()); return; }
         const cleanup = () => signal?.removeEventListener('abort', onAbort);
@@ -310,7 +345,7 @@ function xhrRequest<T>(url: string, method = 'GET', headers: Record<string, stri
         };
         const dropQueued = () => {
             cleanup();
-            reject(new Error('The Jellyfin server took too long to respond.'));
+            reject(new Error(t('The Jellyfin server took too long to respond.')));
         };
         const handle = enqueueRequest(priority, (finish, registerAbort) => {
             const xhr = new XMLHttpRequest();
@@ -329,13 +364,14 @@ function xhrRequest<T>(url: string, method = 'GET', headers: Record<string, stri
                 xhr.onload = () => {
                     try {
                         if (xhr.responseURL && new URL(xhr.responseURL).origin !== new URL(url, window.location.href).origin) {
-                            settle(() => reject(new Error('The Jellyfin server redirected this request to another origin. Check the server address and proxy configuration.')));
+                            settle(() => reject(new Error(t('The Jellyfin server redirected this request to another origin. Check the server address and proxy configuration.'))));
                             return;
                         }
                     } catch (_error) {
-                        settle(() => reject(new Error('The Jellyfin server returned an invalid response URL.')));
+                        settle(() => reject(new Error(t('The Jellyfin server returned an invalid response URL.'))));
                         return;
                     }
+                    observeHaHeaders(xhr);
                     if (xhr.status < 200 || xhr.status >= 300) {
                         const responseMessage = (xhr.responseText || '')
                             .replace(/[\u0000-\u001f\u007f]/g, ' ')
@@ -357,7 +393,7 @@ function xhrRequest<T>(url: string, method = 'GET', headers: Record<string, stri
                             else resolve((responseType === 'text' ? text : JSON.parse(text)) as T);
                         } catch (_error) {
                             if (emptyOk) resolve(undefined as T);
-                            else reject(new Error('The server returned an invalid response.'));
+                            else reject(new Error(t('The server returned an invalid response.')));
                         }
                         finish();
                     };
@@ -367,19 +403,19 @@ function xhrRequest<T>(url: string, method = 'GET', headers: Record<string, stri
                     if (text.length > 120000) window.setTimeout(deliver, 0);
                     else deliver();
                 };
-                xhr.onerror = () => settle(() => reject(new Error('Could not reach the Jellyfin server. Check the address and connection.')));
+                xhr.onerror = () => settle(() => reject(new Error(t('Could not reach the Jellyfin server. Check the address and connection.'))));
                 xhr.onprogress = event => {
                     if (maxResponseBytes && event.loaded > maxResponseBytes) {
-                        settle(() => reject(new Error('This log exceeds the 2 MB viewer limit. Select a smaller log file.')));
+                        settle(() => reject(new Error(t('This log exceeds the 2 MB viewer limit. Select a smaller log file.'))));
                         xhr.abort();
                     }
                 };
-                xhr.ontimeout = () => settle(() => reject(new Error('The Jellyfin server took too long to respond.')));
-                xhr.onabort = () => settle(() => reject(new Error('The request was cancelled.')));
-                xhr.timeout = 20000;
+                xhr.ontimeout = () => settle(() => reject(new RequestTimeoutError()));
+                xhr.onabort = () => settle(() => reject(new Error(t('The request was cancelled.'))));
+                xhr.timeout = timeoutMs;
                 xhr.send(body || null);
             } catch (_error) {
-                settle(() => reject(new Error('Could not reach the Jellyfin server. Check the address and connection.')));
+                settle(() => reject(new Error(t('Could not reach the Jellyfin server. Check the address and connection.'))));
             }
         }, dropQueued);
         signal?.addEventListener('abort', onAbort, { once: true });
@@ -428,9 +464,9 @@ export class JellyfinApi {
             }, JSON.stringify({ Username: username, Pw: password }));
         } catch (error) {
             if (error instanceof JellyfinRequestError) throw error;
-            throw new Error(error instanceof Error ? error.message : 'Sign-in failed. Check your server and credentials.');
+            throw new Error(error instanceof Error ? error.message : t('Sign-in failed. Check your server and credentials.'));
         }
-        if (!data.AccessToken || !data.User?.Id) throw new Error('The server returned an incomplete sign-in response.');
+        if (!data.AccessToken || !data.User?.Id) throw new Error(t('The server returned an incomplete sign-in response.'));
         return {
             server,
             token: data.AccessToken,
@@ -447,57 +483,82 @@ export class JellyfinApi {
             { 'Content-Type': 'application/json', 'Authorization': authorization() },
             JSON.stringify({ Secret: secret })
         );
-        if (!result.AccessToken || !result.User?.Id) throw new Error('Quick Connect did not return a Jellyfin session.');
+        if (!result.AccessToken || !result.User?.Id) throw new Error(t('Quick Connect did not return a Jellyfin session.'));
         return { server, token: result.AccessToken, user: result.User, serverId: result.ServerId || '' };
     }
 
-    static async getSsoConfig(serverInput: string): Promise<{ enabled: boolean; checked: boolean }> {
+    static async getSsoConfig(serverInput: string): Promise<{ enabled: boolean; checked: boolean; codeExchange: boolean }> {
         const server = normalizeServer(serverInput);
+        const returnUrl = ssoReturnUrl(currentHref());
+        const returnQuery = returnUrl ? `returnUrl=${encodeURIComponent(returnUrl)}` : '';
         const configUrl = import.meta.env?.DEV === true
-            ? `/__debug/sso-config?server=${encodeURIComponent(server)}`
-            : `${server}/sso/config`;
+            ? `/__debug/sso-config?server=${encodeURIComponent(server)}${returnQuery ? `&${returnQuery}` : ''}`
+            : `${server}/sso/config${returnQuery ? `?${returnQuery}` : ''}`;
         try {
-            const result = await xhrRequest<{ Enabled?: boolean; enabled?: boolean }>(configUrl);
-            return { enabled: result.Enabled === true || result.enabled === true, checked: true };
+            const result = await xhrRequest<{ Enabled?: boolean; enabled?: boolean; CodeExchange?: boolean; codeExchange?: boolean }>(configUrl);
+            const enabled = result.Enabled === true || result.enabled === true;
+            return { enabled, checked: true, codeExchange: enabled && (result.CodeExchange === true || result.codeExchange === true) };
         } catch (_error) {
             // Optional feature probe: a failed probe is unavailable, not disabled.
-            return { enabled: false, checked: false };
+            return { enabled: false, checked: false, codeExchange: false };
         }
     }
 
-    static async beginSso(serverInput: string): Promise<void> {
+    /**
+     * Starts SSO. With `codeExchange` (the server allows this UI's address) the callback returns a
+     * one-time code to this page, which works across origins and base paths; otherwise the callback
+     * writes Jellyfin Web credentials on the server origin, which UI Next can only read same-origin.
+     */
+    static async beginSso(serverInput: string, codeExchange = false): Promise<void> {
         const server = normalizeServer(serverInput);
         try { localStorage.setItem('jellyfin-ui-next-server', server); } catch (_error) { /* Session screen remains available after callback. */ }
         let previousAccessToken: string | null = null;
         try {
             previousAccessToken = localStorage.getItem('api_key');
         } catch (_error) { /* A callback can still be parsed if there was no saved classic session. */ }
+        const returnUrl = codeExchange ? ssoReturnUrl(currentHref()) : null;
+        const pkce = returnUrl ? await createSsoChallenge() : null;
         const attempt: SsoHandoffAttempt = {
             server,
             startedAt: Date.now(),
-            previousAccessToken
+            previousAccessToken,
+            ...(returnUrl && pkce ? { verifier: pkce.verifier, returnUrl } : {})
         };
         try {
             localStorage.removeItem(UI_NEXT_SIGNED_OUT_KEY);
             sessionStorage.setItem(SSO_HANDOFF_KEY, JSON.stringify(attempt));
         } catch (_error) {
             try { sessionStorage.removeItem(SSO_HANDOFF_KEY); } catch (_storageError) { /* No pending marker was saved. */ }
-            throw new Error('This browser cannot store the SSO sign-in handoff.');
+            throw new Error(t('This browser cannot store the SSO sign-in handoff.'));
         }
-        const query = queryString({ deviceId: deviceId() });
+        const query = queryString({ deviceId: deviceId(), returnUrl: attempt.verifier ? returnUrl || undefined : undefined, challenge: attempt.verifier ? pkce?.challenge : undefined });
         window.location.assign(`${server}/sso/login?${query}`);
+    }
+
+    /** Redeems the one-time code from the SSO callback; the code is single-use and bound to this tab's verifier. */
+    static async exchangeSsoCode(serverInput: string, code: string, verifier: string): Promise<SsoHandoff> {
+        const server = normalizeServer(serverInput);
+        const result = await xhrRequest<unknown>(
+            `${server}/sso/exchange`,
+            'POST',
+            { 'Content-Type': 'application/json', 'Accept': 'application/json; profile="CamelCase"' },
+            JSON.stringify({ code, verifier })
+        );
+        const handoff = ssoHandoffFromExchange(server, result);
+        if (!handoff) throw new Error(t('The Jellyfin server returned an incomplete SSO session.'));
+        return handoff;
     }
 
     static async restoreSsoSession(handoff: SsoHandoff): Promise<Session> {
         const server = normalizeServer(handoff.server);
         const [ user, serverInfo ] = await Promise.all([
-            xhrRequest<unknown>(`${server}/Users/${encodeURIComponent(handoff.userId)}`, 'GET', {
+            xhrRequest<unknown>(`${server}/Users/Me`, 'GET', {
                 'Authorization': authorization(handoff.token)
             }),
             xhrRequest<unknown>(`${server}/System/Info/Public`)
         ]);
         const session = createSsoSession({ ...handoff, server }, user, serverInfo);
-        if (!session) throw new Error('The Jellyfin server returned an incomplete SSO session.');
+        if (!session) throw new Error(t('The Jellyfin server returned an incomplete SSO session.'));
         return session;
     }
 
@@ -544,10 +605,15 @@ export class JellyfinApi {
         }
     }
 
+    /** Resolves the token's own user; a token that belongs to anyone else is treated as expired. */
     static async getUserSession(session: Session): Promise<JellyfinUser> {
-        return xhrRequest<JellyfinUser>(`${session.server}/Users/${encodeURIComponent(session.user.Id)}`, 'GET', {
+        const user = await xhrRequest<JellyfinUser>(`${session.server}/Users/Me`, 'GET', {
             'Authorization': authorization(session.token)
         });
+        if (!user?.Id || normalizeUserId(user.Id) !== normalizeUserId(session.user.Id)) {
+            throw new JellyfinRequestError(401, t('This saved profile no longer matches its sign-in. Sign in again.'));
+        }
+        return user;
     }
 
     static async getUsers(session: Session): Promise<JellyfinUser[]> {
@@ -568,7 +634,7 @@ export class JellyfinApi {
         const result = await xhrRequest<{ Secret?: string; Code?: string }>(
             `${server}/QuickConnect/Initiate`, 'POST', { 'Authorization': authorization() }
         );
-        if (!result.Secret || !result.Code) throw new Error('The server returned an invalid Quick Connect challenge.');
+        if (!result.Secret || !result.Code) throw new Error(t('The server returned an invalid Quick Connect challenge.'));
         return { secret: result.Secret, code: result.Code };
     }
 
@@ -602,7 +668,7 @@ export class JellyfinApi {
             });
         }
         try {
-            return await xhrRequest<T>(`${this.session.server}${path}`, init.method || 'GET', headers, init.body, emptyOk, priority, init.signal);
+            return await xhrRequest<T>(`${this.session.server}${path}`, init.method || 'GET', headers, init.body, emptyOk, priority, init.signal, 'json', undefined, init.timeoutMs);
         } catch (error) {
             this.handleRequestError(error);
         }
@@ -614,15 +680,15 @@ export class JellyfinApi {
                 this.sessionExpired = true;
                 this.onSessionExpired?.();
             }
-            throw new JellyfinRequestError(401, 'Your session expired. Sign in again.');
+            throw new JellyfinRequestError(401, t('Your session expired. Sign in again.'));
         }
         throw error;
     }
 
-    async requestText(path: string, priority = 1): Promise<string> {
+    async requestText(path: string, priority = 1, timeoutMs?: number): Promise<string> {
         const headers = { 'Authorization': authorization(this.session.token) };
         try {
-            const value = await xhrRequest<string>(`${this.session.server}${path}`, 'GET', headers, undefined, false, priority, undefined, 'text', 2 * 1024 * 1024);
+            const value = await xhrRequest<string>(`${this.session.server}${path}`, 'GET', headers, undefined, false, priority, undefined, 'text', 2 * 1024 * 1024, timeoutMs);
             return typeof value === 'string' ? value : String(value);
         } catch (error) {
             this.handleRequestError(error);
@@ -653,8 +719,8 @@ export class JellyfinApi {
     }
 
     /** One group of the global Favorites page. */
-    async getFavorites(group: FavoriteGroup, limit = 24): Promise<{ items: MediaItem[]; total: number }> {
-        const common = { UserId: this.session.user.Id, Limit: limit, SortBy: 'SortName', SortOrder: 'Ascending', Fields: 'PrimaryImageAspectRatio,UserData,ProductionYear,RunTimeTicks,SeriesName,IndexNumber,ParentIndexNumber' };
+    async getFavorites(group: FavoriteGroup, limit = 24, startIndex = 0): Promise<{ items: MediaItem[]; total: number }> {
+        const common = { UserId: this.session.user.Id, Limit: limit, StartIndex: startIndex || undefined, SortBy: 'SortName', SortOrder: 'Ascending', Fields: 'PrimaryImageAspectRatio,UserData,ProductionYear,RunTimeTicks,SeriesName,IndexNumber,ParentIndexNumber' };
         const result = group.path
             ? await this.bulkItems(`${group.path}?${queryString({ ...common, IsFavorite: 'true' })}`)
             : await this.bulkItems(`/Items?${queryString({ ...common, Filters: 'IsFavorite', Recursive: 'true', IncludeItemTypes: group.types?.join(',') })}`);
@@ -780,7 +846,7 @@ export class JellyfinApi {
     async getUser(): Promise<JellyfinUser> {
         const user = await this.request<JellyfinUser>('/Users/Me');
         if (!user?.Id || normalizeUserId(user.Id) !== normalizeUserId(this.session.user.Id)) {
-            throw new JellyfinRequestError(401, 'Your session expired. Sign in again.');
+            throw new JellyfinRequestError(401, t('Your session expired. Sign in again.'));
         }
         return user;
     }
@@ -813,8 +879,29 @@ export class JellyfinApi {
         await this.request<void>(`/UserImage?${new URLSearchParams({ userId: this.session.user.Id })}`, { method: 'DELETE' }, true);
     }
 
-    async getCultures(): Promise<Array<{ ThreeLetterISOLanguageName: string; DisplayName: string }>> {
-        return this.request<Array<{ ThreeLetterISOLanguageName: string; DisplayName: string }>>('/Localization/Cultures');
+    async getCultures(): Promise<Culture[]> {
+        return asCultures(await this.request<unknown>('/Localization/Cultures'));
+    }
+
+    async getSeerrStatus(): Promise<boolean> {
+        return asSeerrEnabled(await this.request<unknown>('/Seerr/Status', { headers: SEERR_HEADERS }, false, 1));
+    }
+
+    async searchSeerr(query: string, signal?: AbortSignal): Promise<SeerrItem[]> {
+        return asSeerrItems(await this.request<unknown>(`/Seerr/Search?${queryString({ query: query.trim().slice(0, 200) })}`, { headers: SEERR_HEADERS, signal }, false, 2));
+    }
+
+    async discoverSeerr(options: { mediaType: SeerrMediaType; genreIds?: number[]; voteAverageGte?: number; limit?: number }): Promise<SeerrItem[]> {
+        return asSeerrItems(await this.request<unknown>(`/Seerr/Discover?${queryString({
+            mediaType: options.mediaType,
+            genreIds: options.genreIds?.length ? options.genreIds.slice(0, 5).join(',') : undefined,
+            voteAverageGte: options.voteAverageGte !== undefined ? String(options.voteAverageGte) : undefined,
+            limit: String(Math.min(24, Math.max(1, options.limit || 16)))
+        })}`, { headers: SEERR_HEADERS }, false, 1));
+    }
+
+    async requestSeerr(mediaType: SeerrMediaType, mediaId: number): Promise<void> {
+        await this.request<unknown>('/Seerr/Request', { method: 'POST', headers: SEERR_HEADERS, body: JSON.stringify({ mediaType, mediaId }) }, true, 2);
     }
 
     async getTasteProfile(): Promise<TasteProfile> {
@@ -863,10 +950,10 @@ export class JellyfinApi {
                 settle(this.bulkItems(`/Items?${queryString({ UserId: userId, ParentId: library.Id, IncludeItemTypes: 'MusicAlbum', Recursive: 'true', Filters: 'IsFavorite', SortBy: 'Random', Limit: 12, Fields: 'PrimaryImageAspectRatio,UserData' })}`).then(result => result.Items || []), [] as MediaItem[]),
             ]);
             return [
-                { title: 'Latest albums', items: latestAlbums },
-                { title: 'Recently played', items: recent },
-                { title: 'Frequently played', items: frequent },
-                { title: 'Favorite albums', items: favorites },
+                { title: t('Latest albums'), items: latestAlbums },
+                { title: t('Recently played'), items: recent },
+                { title: t('Frequently played'), items: frequent },
+                { title: t('Favorite albums'), items: favorites },
             ].filter(row => row.items.length > 0);
         }
         const [ resume, nextUp, latest, groups ] = await Promise.all([
@@ -876,9 +963,9 @@ export class JellyfinApi {
             tv ? Promise.resolve([] as RecommendationGroup[]) : settle(this.bulk<RecommendationGroup[]>(`/Movies/Recommendations?${queryString({ UserId: userId, ParentId: library.Id, categoryLimit: 3, itemLimit: 12, Fields: fields })}`).then(result => Array.isArray(result) ? result : []), [] as RecommendationGroup[]),
         ]);
         const rows = [
-            { title: 'Continue watching', items: resume },
-            { title: 'Next up', items: nextUp },
-            { title: 'Latest', items: latest },
+            { title: t('Continue watching'), items: resume },
+            { title: t('Next up'), items: nextUp },
+            { title: t('Latest'), items: latest },
             ...groups.map(group => ({ title: recommendationTitle(group), items: group.Items || [] })),
         ];
         return rows.filter(row => row.items.length > 0);
@@ -1035,9 +1122,39 @@ export class JellyfinApi {
         return this.detailList('/Items', { ParentId: parentId, SortBy: sortBy, SortOrder: 'Ascending', Limit: limit, Fields: 'PrimaryImageAspectRatio,UserData,ProductionYear,RunTimeTicks,IndexNumber,ParentIndexNumber,SeriesName,ImageTags,CanDelete,CanDownload,ExtraType,ArtistItems,AlbumArtists,Width,Height,Tags' });
     }
 
-    /** Playlist entries keep their PlaylistItemId so repeated titles stay distinct. */
-    getPlaylistEntries(playlistId: string, limit = 500): Promise<MediaItem[]> {
-        return this.detailList(`/Playlists/${encodeURIComponent(playlistId)}/Items`, { Limit: limit });
+    /** Album tracks in disc and track order, with the fields the music player needs. */
+    getAlbumTracks(albumId: string): Promise<MediaItem[]> {
+        return this.detailList('/Items', { ParentId: albumId, IncludeItemTypes: 'Audio', Recursive: 'true', SortBy: 'ParentIndexNumber,IndexNumber,SortName', SortOrder: 'Ascending', Limit: MAX_MUSIC_QUEUE, Fields: MUSIC_FIELDS });
+    }
+
+    /** An artist's or genre's tracks, album by album. */
+    getMusicTracks(container: Pick<MediaItem, 'Id' | 'Type'>): Promise<MediaItem[]> {
+        const scope = container.Type === 'MusicGenre' ? { GenreIds: container.Id } : container.Type === 'MusicArtist' ? { ArtistIds: container.Id } : { ParentId: container.Id };
+        return this.detailList('/Items', { ...scope, IncludeItemTypes: 'Audio', Recursive: 'true', SortBy: 'ProductionYear,Album,ParentIndexNumber,IndexNumber,SortName', SortOrder: 'Ascending', Limit: MAX_MUSIC_QUEUE, Fields: MUSIC_FIELDS });
+    }
+
+    /** Jellyfin's Instant Mix: similar tracks seeded from a song, album, artist, genre or playlist. */
+    getInstantMix(itemId: string, limit = 200): Promise<MediaItem[]> {
+        return this.detailList(`/Items/${encodeURIComponent(itemId)}/InstantMix`, { Limit: limit, Fields: MUSIC_FIELDS });
+    }
+
+    /** Album-level normalization gains for album mode, keyed by album id; albums without a scan are omitted. */
+    async getNormalizationGains(albumIds: string[]): Promise<Record<string, number>> {
+        const ids = Array.from(new Set(albumIds.filter(Boolean)));
+        const gains: Record<string, number> = {};
+        for (let index = 0; index < ids.length; index += 50) {
+            const albums = await this.detailList('/Items', { Ids: ids.slice(index, index + 50).join(','), Fields: 'NormalizationGain' });
+            albums.forEach(album => { if (typeof album.NormalizationGain === 'number') gains[album.Id] = album.NormalizationGain; });
+        }
+        return gains;
+    }
+
+    /** One page of playlist entries; entries keep their PlaylistItemId so repeated titles stay distinct. */
+    async getPlaylistEntries(playlistId: string, startIndex = 0, limit = PLAYLIST_PAGE_SIZE): Promise<{ items: MediaItem[]; total: number }> {
+        const value = await this.request<unknown>(`/Playlists/${encodeURIComponent(playlistId)}/Items?${queryString({ UserId: this.session.user.Id, Fields: 'PrimaryImageAspectRatio,UserData,ProductionYear,RunTimeTicks,IndexNumber,ParentIndexNumber,SeriesName,ImageTags,CanDelete,CanDownload,ExtraType,NormalizationGain,AlbumId,Album,AlbumArtist,Artists,AlbumPrimaryImageTag', StartIndex: startIndex || undefined, Limit: limit })}`, {}, false, 1);
+        const response = asItemResponse(value);
+        const items = response.Items || [];
+        return { items, total: Math.max(response.TotalRecordCount ?? 0, startIndex + items.length) };
     }
 
     async deleteItem(id: string): Promise<void> {
@@ -1058,6 +1175,48 @@ export class JellyfinApi {
 
     async removeFromCollection(collectionId: string, itemIds: string[]): Promise<void> {
         await this.request<void>(`/Collections/${encodeURIComponent(collectionId)}/Items?${queryString({ ids: itemIds.join(',') })}`, { method: 'DELETE' }, true);
+    }
+
+    /** Playlists visible to this user (owned and shared). */
+    getPlaylists(): Promise<MediaItem[]> {
+        return this.detailList('/Items', { IncludeItemTypes: 'Playlist', Recursive: 'true', SortBy: 'SortName', Limit: 200 });
+    }
+
+    async createPlaylist(name: string, itemIds: string[]): Promise<{ Id?: string }> {
+        return this.request<{ Id?: string }>('/Playlists', {
+            method: 'POST',
+            body: JSON.stringify({ Name: name, Ids: itemIds, UserId: this.session.user.Id })
+        });
+    }
+
+    async addToPlaylist(playlistId: string, itemIds: string[]): Promise<void> {
+        await this.request<void>(`/Playlists/${encodeURIComponent(playlistId)}/Items?${queryString({ ids: itemIds.join(','), userId: this.session.user.Id })}`, { method: 'POST' }, true);
+    }
+
+    /** Removes entries by PlaylistItemId, so one copy of a repeated title can go. */
+    async removeFromPlaylist(playlistId: string, entryIds: string[]): Promise<void> {
+        await this.request<void>(`/Playlists/${encodeURIComponent(playlistId)}/Items?${queryString({ entryIds: entryIds.join(',') })}`, { method: 'DELETE' }, true);
+    }
+
+    async movePlaylistEntry(playlistId: string, entryId: string, newIndex: number): Promise<void> {
+        await this.request<void>(`/Playlists/${encodeURIComponent(playlistId)}/Items/${encodeURIComponent(entryId)}/Move/${Math.max(0, Math.floor(newIndex))}`, { method: 'POST' }, true);
+    }
+
+    async renamePlaylist(playlistId: string, name: string): Promise<void> {
+        await this.request<void>(`/Playlists/${encodeURIComponent(playlistId)}`, {
+            method: 'POST',
+            body: JSON.stringify({ Name: name })
+        }, true);
+    }
+
+    /** Whether this user may change the playlist: its owner, or a share with CanEdit. */
+    async canEditPlaylist(playlistId: string): Promise<boolean> {
+        try {
+            const permission = await this.request<{ CanEdit?: boolean; canEdit?: boolean } | null>(`/Playlists/${encodeURIComponent(playlistId)}/Users/${encodeURIComponent(this.session.user.Id)}`, {}, true, 1);
+            return permission?.CanEdit === true || permission?.canEdit === true;
+        } catch (_error) {
+            return false;
+        }
     }
 
     async getLyrics(id: string): Promise<Array<{ Text?: string; Start?: number }>> {
@@ -1329,9 +1488,14 @@ export class JellyfinApi {
         });
     }
 
-    async play(item: MediaItem, options: PlaybackOptions = {}): Promise<PlaybackChoice> {
+    /** Negotiates a music track; direct play streams from `/Audio`, so the server applies audio rules. */
+    playAudio(item: MediaItem, options: PlaybackOptions = {}): Promise<PlaybackChoice> {
+        return this.play(item, options, 'Audio');
+    }
+
+    async play(item: MediaItem, options: PlaybackOptions = {}, media: 'Video' | 'Audio' = 'Video'): Promise<PlaybackChoice> {
         const preferences = loadPlaybackPreferences();
-        const profile = buildDeviceProfile(browserCapabilities(), preferences);
+        const profile = await hostDeviceProfile(() => buildDeviceProfile(browserCapabilities(), preferences), CLIENT_VERSION);
         const maxBitrate = options.maxBitrate ?? (preferences.maxBitrate || undefined);
         const startTicks = Math.max(0, Math.round(options.startTicks || 0));
         const request = {
@@ -1355,18 +1519,18 @@ export class JellyfinApi {
             `/Items/${encodeURIComponent(item.Id)}/PlaybackInfo`,
             { method: 'POST', body: JSON.stringify(request) }
         );
-        if (result.ErrorCode) throw new Error(`The server refused playback (${result.ErrorCode}).`);
+        if (result.ErrorCode) throw new Error(t('The server refused playback ({0}).', result.ErrorCode));
         const versions = mediaVersions(result.MediaSources);
         const wantedSource = options.mediaSourceId || preferredVersionId(item.SeriesId, versions);
         let source = (wantedSource && result.MediaSources?.find(candidate => candidate.Id === wantedSource)) || result.MediaSources?.[0];
-        if (!source) throw new Error('No playable media source was returned.');
+        if (!source) throw new Error(t('No playable media source was returned.'));
         try {
             if (source.RequiresOpening && !source.LiveStreamId) {
                 const opened = await this.request<{ MediaSource?: PlaybackMediaSource }>(`/LiveStreams/Open`, {
                     method: 'POST',
                     body: JSON.stringify({ ...request, OpenToken: source.OpenToken, PlaySessionId: result.PlaySessionId, ItemId: item.Id })
                 });
-                if (!opened.MediaSource) throw new Error('The tuner did not open a live stream.');
+                if (!opened.MediaSource) throw new Error(t('The tuner did not open a live stream.'));
                 source = opened.MediaSource;
             }
             const nullableIndex = (value: number | null | undefined) => value === undefined || value === null || value < 0 ? null : value;
@@ -1384,7 +1548,7 @@ export class JellyfinApi {
             };
             const directPlay = source.SupportsDirectPlay !== false && !options.forceTranscode;
             if (!directPlay && !source.TranscodingUrl) {
-                throw new Error('The server could not prepare a stream this browser can play.');
+                throw new Error(t('The server could not prepare a stream this browser can play.'));
             }
             if (!directPlay && source.TranscodingUrl) {
                 const serverUrl = new URL(this.session.server);
@@ -1392,7 +1556,7 @@ export class JellyfinApi {
                     ? new URL(source.TranscodingUrl)
                     : new URL(`${serverUrl.origin}${serverUrl.pathname.replace(/\/$/, '')}${source.TranscodingUrl.startsWith('/') ? source.TranscodingUrl : `/${source.TranscodingUrl}`}`);
                 if (transcodeUrl.origin !== serverUrl.origin) {
-                    throw new Error('The server returned a playback URL on another origin.');
+                    throw new Error(t('The server returned a playback URL on another origin.'));
                 }
                 const url = transcodeUrl.toString();
                 const reasons = transcodeReasonsFromUrl(url);
@@ -1411,7 +1575,7 @@ export class JellyfinApi {
                 PlaySessionId: result.PlaySessionId,
                 LiveStreamId: source.LiveStreamId
             });
-            const url = `${this.session.server}/Videos/${encodeURIComponent(item.Id)}/stream?${query}&ApiKey=${encodeURIComponent(this.session.token)}`;
+            const url = `${this.session.server}/${media === 'Audio' ? 'Audio' : 'Videos'}/${encodeURIComponent(item.Id)}/stream?${query}&ApiKey=${encodeURIComponent(this.session.token)}`;
             return { ...choice, ...startPlan(url, true, false, startTicks), url, direct: true, method: 'DirectPlay', transcodeReasons: source.TranscodeReasons };
         } catch (cause) {
             await this.releasePlayback({ liveStreamId: source.LiveStreamId, playSessionId: result.PlaySessionId }, options.liveStreamId);

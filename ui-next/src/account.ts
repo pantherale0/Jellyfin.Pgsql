@@ -1,9 +1,10 @@
+import { t } from './i18n';
 export const AVATAR_TYPES = [ 'image/png', 'image/jpeg', 'image/webp', 'image/gif' ];
 export const AVATAR_MAX_BYTES = 10 * 1024 * 1024;
 
 export function validateAvatar(file: { type: string; size: number }): string {
-    if (!AVATAR_TYPES.includes(file.type)) return 'Choose a PNG, JPEG, WebP or GIF image.';
-    if (file.size > AVATAR_MAX_BYTES) return 'The image must be 10 MB or smaller.';
+    if (!AVATAR_TYPES.includes(file.type)) return t('Choose a PNG, JPEG, WebP or GIF image.');
+    if (file.size > AVATAR_MAX_BYTES) return t('The image must be 10 MB or smaller.');
     return '';
 }
 
@@ -14,10 +15,10 @@ export function base64FromDataUrl(dataUrl: string): string {
 }
 
 export function validatePasswordChange(current: string, next: string, confirm: string, hasPassword: boolean): string {
-    if (hasPassword && !current) return 'Enter your current password.';
-    if (!next) return 'Enter a new password.';
-    if (next !== confirm) return 'The new passwords do not match.';
-    if (hasPassword && next === current) return 'The new password must be different from the current one.';
+    if (hasPassword && !current) return t('Enter your current password.');
+    if (!next) return t('Enter a new password.');
+    if (next !== confirm) return t('The new passwords do not match.');
+    if (hasPassword && next === current) return t('The new password must be different from the current one.');
     return '';
 }
 
@@ -27,15 +28,15 @@ export function forgotPasswordOutcome(result: ForgotPasswordResult, now = Date.n
     if (result.Action === 'PinCode') {
         const expires = Date.parse(result.PinExpirationDate || '');
         const minutes = Number.isFinite(expires) ? Math.max(0, Math.round((expires - now) / 60000)) : 0;
-        return { message: `The server created a reset PIN. Ask your administrator for it${minutes ? `; it expires in about ${minutes} minutes` : ''}, then enter it below.`, askPin: true };
+        return { message: t('The server created a reset PIN. Ask your administrator for it{0}, then enter it below.', minutes ? `; it expires in about ${minutes} minutes` : ''), askPin: true };
     }
-    if (result.Action === 'InNetworkRequired') return { message: 'Password reset is only available from the server’s home network. Try again from there or contact your administrator.', askPin: false };
-    return { message: 'Contact your server administrator to reset your password.', askPin: false };
+    if (result.Action === 'InNetworkRequired') return { message: t('Password reset is only available from the server’s home network. Try again from there or contact your administrator.'), askPin: false };
+    return { message: t('Contact your server administrator to reset your password.'), askPin: false };
 }
 
 export function pinRedeemMessage(result: { Success?: boolean; UsersReset?: string[] }): { ok: boolean; message: string } {
-    if (!result.Success || !result.UsersReset?.length) return { ok: false, message: 'That PIN was not accepted. Check it and try again, or request a new one.' };
-    return { ok: true, message: `Password reset for ${result.UsersReset.join(', ')}. Sign in using the PIN as your password, then change it from Account.` };
+    if (!result.Success || !result.UsersReset?.length) return { ok: false, message: t('That PIN was not accepted. Check it and try again, or request a new one.') };
+    return { ok: true, message: t('Password reset for {0}. Sign in using the PIN as your password, then change it from Account.', result.UsersReset.join(', ')) };
 }
 
 export interface PublicUser { Id: string; Name: string; HasPassword: boolean; PrimaryImageTag?: string }

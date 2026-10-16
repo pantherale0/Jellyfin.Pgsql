@@ -9,6 +9,78 @@ export interface SsoHandoffAttempt {
     server: string;
     startedAt: number;
     previousAccessToken: string | null;
+    /** Present when the server returns a one-time code to this UI instead of writing classic credentials. */
+    verifier?: string;
+    returnUrl?: string;
+}
+
+const CODE_FRAGMENT = /^#sso_code=([A-Za-z0-9_-]{20,64})$/;
+const VERIFIER = /^[A-Za-z0-9._~-]{43,128}$/;
+
+/** Reads `#sso_code=...` written by the SSO callback; anything else in the fragment is ignored. */
+export function parseSsoCodeFragment(hash: string): string | null {
+    return CODE_FRAGMENT.exec(hash)?.[1] ?? null;
+}
+
+/** The UI address the server sends the code back to: origin and path only. */
+export function ssoReturnUrl(href: string): string | null {
+    try {
+        const url = new URL(href);
+        if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+        return `${url.origin}${url.pathname}`;
+    } catch (_error) {
+        return null;
+    }
+}
+
+function base64Url(bytes: Uint8Array): string {
+    let binary = '';
+    bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/** A random verifier and its base64url SHA-256 challenge, or null when Web Crypto is unavailable (insecure context). */
+export async function createSsoChallenge(): Promise<{ verifier: string; challenge: string } | null> {
+    const webCrypto = globalThis.crypto;
+    if (!webCrypto?.getRandomValues || !webCrypto.subtle) return null;
+    const verifier = base64Url(webCrypto.getRandomValues(new Uint8Array(32)));
+    const digest = await webCrypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+    return { verifier, challenge: base64Url(new Uint8Array(digest)) };
+}
+
+/** A fresh code-exchange attempt, or null when the marker is stale, malformed or for the legacy handoff. */
+export function parseSsoCodeAttempt(attempt: string | null, now: number): (SsoHandoffAttempt & { verifier: string }) | null {
+    if (!attempt) return null;
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(attempt);
+    } catch (_error) {
+        return null;
+    }
+    if (!isRecord(parsed)) return null;
+    const { server, startedAt, verifier, returnUrl } = parsed;
+    if (typeof server !== 'string' || typeof verifier !== 'string' || !VERIFIER.test(verifier)) return null;
+    if (typeof startedAt !== 'number' || !Number.isFinite(startedAt) || startedAt <= 0 || !Number.isFinite(now) || now < startedAt || now - startedAt > SSO_HANDOFF_MAX_AGE_MS) return null;
+    try {
+        const url = new URL(server);
+        if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password || url.search || url.hash) return null;
+    } catch (_error) {
+        return null;
+    }
+    return { server: server.replace(/\/$/, ''), startedAt, previousAccessToken: null, verifier, returnUrl: typeof returnUrl === 'string' ? returnUrl : undefined };
+}
+
+/** Validates the `/sso/exchange` response (camelCase or PascalCase). */
+export function ssoHandoffFromExchange(server: string, response: unknown): SsoHandoff | null {
+    if (!isRecord(response)) return null;
+    const pick = (camel: string, pascal: string) => {
+        const value = response[camel] ?? response[pascal];
+        return typeof value === 'string' && value.length > 0 && value.length <= 512 ? value : null;
+    };
+    const token = pick('accessToken', 'AccessToken');
+    const userId = pick('userId', 'UserId');
+    const serverId = pick('serverId', 'ServerId');
+    return token && userId && serverId ? { server, token, userId, serverId } : null;
 }
 
 export interface SsoHandoff {

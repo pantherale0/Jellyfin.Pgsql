@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
+import { readSource } from './source.mjs';
 const ssoSession = await import('../src/sso-session.ts');
 
 const origin = 'https://jellyfin.example.test';
@@ -135,12 +136,13 @@ test('restores the patched callback with its hyphenated GUID and the API compact
         .replaceAll('""', '"').replaceAll('{{', '{').replaceAll('}}', '}')
         .replace('{authResult.AccessToken}', accessToken)
         .replace('{authResult.User.Id.ToString()}', callbackUserId)
-        .replace('{authResult.ServerId}', serverId), {
+        .replace('{authResult.ServerId}', serverId)
+        .replace('{webIndex}', '/jellyfin/web/index.html'), {
         localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
         window: { location },
         Date: { now: () => startedAt + 1000 }
     });
-    assert.equal(location.href, '/web/index.html');
+    assert.equal(location.href, '/jellyfin/web/index.html');
     const handoff = parseHandoff(handoffInput({
         credentials: storage.get('jellyfin_credentials'),
         apiKey: storage.get('api_key'),
@@ -172,4 +174,90 @@ test('a stale SSO restore cannot commit after the request is cancelled or anothe
     assert.equal(ssoSession.canCommitSsoRestore({ requestActive: true, signedOut: false }), true);
     assert.equal(ssoSession.canCommitSsoRestore({ requestActive: false, signedOut: false }), false);
     assert.equal(ssoSession.canCommitSsoRestore({ requestActive: true, signedOut: true }), false);
+});
+
+const patchSource = () => {
+    const patch = readFileSync(new URL('../../patches/jellyfin_sso.patch', import.meta.url), 'utf8');
+    return patch.split('\n').filter(line => line.startsWith('+') && !line.startsWith('+++')).map(line => line.slice(1)).join('\n');
+};
+
+test('legacy callback redirects under the configured base URL, JavaScript-encoded', () => {
+    const source = patchSource();
+    assert.match(source, /var webIndex = JavaScriptEncoder\.Default\.Encode\(_config\.GetNetworkConfiguration\(\)\.BaseUrl\.TrimEnd\('\/'\) \+ "\/web\/index\.html"\);/);
+    assert.match(source, /window\.location\.href = ""\{webIndex\}"";/);
+    assert.doesNotMatch(source, /window\.location\.href = '\/web\/index\.html'/);
+});
+
+test('server code exchange: allowlisted return URL, PKCE challenge, single-use short-lived code, generic failures', () => {
+    const source = patchSource();
+    assert.match(source, /GetEnv\("JELLYFIN_SSO_UI_RETURN_URLS"\)/);
+    assert.match(source, /public async Task<ActionResult> Login\(\[FromQuery\] string\? deviceId, \[FromQuery\] string\? returnUrl, \[FromQuery\] string\? challenge\)/);
+    assert.match(source, /normalized is null \|\| !IsChallenge\(challenge\)/);
+    assert.match(source, /_codeLifetime = TimeSpan\.FromSeconds\(60\)/);
+    assert.match(source, /return Redirect\(cachedState\.ReturnUrl \+ "#sso_code=" \+ oneTimeCode\);/);
+    assert.match(source, /\[HttpPost\("exchange"\)\]\s*\[AllowAnonymous\]/);
+    assert.match(source, /_codeStore\.TryRemove\(request\.Code, out var entry\)/);
+    assert.match(source, /SHA256\.HashData/);
+    assert.match(source, /codeExchange = enabled && NormalizeReturnUrl\(returnUrl\) is not null/);
+    const exchange = source.slice(source.indexOf('public ActionResult<SsoCodeExchangeResultDto> Exchange'), source.indexOf('Serves the dynamic injection login script'));
+    assert.equal((exchange.match(/return invalid;/g) || []).length, 3, 'every exchange failure returns the same generic response');
+    assert.doesNotMatch(exchange, /AccessToken = entry\.AccessToken[\s\S]*Log/, 'tokens are never logged');
+});
+
+test('parses only a well-formed #sso_code fragment', () => {
+    const code = 'A'.repeat(43);
+    assert.equal(ssoSession.parseSsoCodeFragment(`#sso_code=${code}`), code);
+    assert.equal(ssoSession.parseSsoCodeFragment('#admin/overview'), null);
+    assert.equal(ssoSession.parseSsoCodeFragment(`#sso_code=${code}&x=1`), null);
+    assert.equal(ssoSession.parseSsoCodeFragment('#sso_code=<script>'), null);
+    assert.equal(ssoSession.parseSsoCodeFragment(''), null);
+});
+
+test('return URL keeps origin and path only', () => {
+    assert.equal(ssoSession.ssoReturnUrl('https://ui.example.test/next/?x=1#admin/overview'), 'https://ui.example.test/next/');
+    assert.equal(ssoSession.ssoReturnUrl('javascript:alert(1)'), null);
+    assert.equal(ssoSession.ssoReturnUrl('not a url'), null);
+});
+
+test('PKCE challenge is the base64url SHA-256 of a 43-character verifier', async () => {
+    const { createHash } = await import('node:crypto');
+    const pair = await ssoSession.createSsoChallenge();
+    assert.ok(pair);
+    assert.match(pair.verifier, /^[A-Za-z0-9_-]{43}$/);
+    assert.equal(pair.challenge, createHash('sha256').update(pair.verifier).digest('base64url'));
+    const other = await ssoSession.createSsoChallenge();
+    assert.notEqual(other.verifier, pair.verifier);
+});
+
+test('code attempts must be fresh, carry a verifier and name an http(s) server', () => {
+    const verifier = 'v'.repeat(43);
+    const good = attempt({ server: 'https://jellyfin.example.test/jellyfin/', verifier, returnUrl: 'https://ui.example.test/' });
+    assert.deepEqual(ssoSession.parseSsoCodeAttempt(good, startedAt + 1000), {
+        server: 'https://jellyfin.example.test/jellyfin', startedAt, previousAccessToken: null, verifier, returnUrl: 'https://ui.example.test/'
+    });
+    assert.equal(ssoSession.parseSsoCodeAttempt(attempt(), startedAt + 1000), null, 'legacy markers take the legacy path');
+    assert.equal(ssoSession.parseSsoCodeAttempt(good, startedAt + 11 * 60 * 1000), null);
+    assert.equal(ssoSession.parseSsoCodeAttempt(attempt({ verifier: 'short' }), startedAt + 1000), null);
+    assert.equal(ssoSession.parseSsoCodeAttempt(attempt({ verifier, server: 'javascript:alert(1)' }), startedAt + 1000), null);
+    assert.equal(ssoSession.parseSsoCodeAttempt('{', startedAt), null);
+});
+
+test('exchange responses are validated in either JSON casing', () => {
+    const server = 'https://jellyfin.example.test';
+    const expected = { server, token: 't', userId: 'u', serverId: 's' };
+    assert.deepEqual(ssoSession.ssoHandoffFromExchange(server, { accessToken: 't', userId: 'u', serverId: 's' }), expected);
+    assert.deepEqual(ssoSession.ssoHandoffFromExchange(server, { AccessToken: 't', UserId: 'u', ServerId: 's' }), expected);
+    assert.equal(ssoSession.ssoHandoffFromExchange(server, { accessToken: 't', userId: 'u' }), null);
+    assert.equal(ssoSession.ssoHandoffFromExchange(server, null), null);
+    assert.equal(ssoSession.ssoHandoffFromExchange(server, { accessToken: 1, userId: 'u', serverId: 's' }), null);
+});
+
+test('UI Next clears the code fragment before use and only uses code exchange when the server allows this address', () => {
+    const main = readSource(new URL('../src/main.tsx', import.meta.url), 'utf8');
+    assert.match(main, /const code = parseSsoCodeFragment\(window\.location\.hash\);\s*if \(code\) window\.history\.replaceState/);
+    assert.match(main, /JellyfinApi\.exchangeSsoCode\(codeAttempt\.server, ssoCode, codeAttempt\.verifier\)/);
+    assert.match(main, /JellyfinApi\.beginSso\(server, ssoCodeExchange\)/);
+    const api = readSource(new URL('../src/api.ts', import.meta.url), 'utf8');
+    assert.match(api, /`\$\{server\}\/sso\/exchange`/);
+    assert.match(api, /codeExchange: enabled && \(result\.CodeExchange === true \|\| result\.codeExchange === true\)/);
 });

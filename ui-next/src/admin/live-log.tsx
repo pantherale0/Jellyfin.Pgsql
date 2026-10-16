@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import type { AdminApi } from './admin-api';
 import { appendLogText, parseLogLine, type LogTailState } from './admin-state';
+import { t } from '../i18n';
 
 export function LiveLogViewer({ api, logName, onNameChange }: {
     api: AdminApi; logName: string; onNameChange: (name: string) => void;
@@ -25,7 +26,7 @@ export function LiveLogViewer({ api, logName, onNameChange }: {
         api.getLogs().then(rows => {
             setLogs(rows);
             if (!logName && rows[0]?.Name) onNameChange(rows[0].Name);
-        }).catch(e => setError(e instanceof Error ? e.message : 'Could not list log files.'));
+        }).catch(e => setError(e instanceof Error ? e.message : t('Could not list log files.')));
     }, [api]);
 
     const loadLog = useCallback(async (reset = false) => {
@@ -47,7 +48,7 @@ export function LiveLogViewer({ api, logName, onNameChange }: {
                 containerRef.current.scrollTop = containerRef.current.scrollHeight;
             }
         } catch (e) {
-            if (request === generation.current) setError(e instanceof Error ? e.message : 'Could not load log.');
+            if (request === generation.current) setError(e instanceof Error ? e.message : t('Could not load log.'));
         } finally {
             if (request === generation.current) setLoading(false);
         }
@@ -83,37 +84,37 @@ export function LiveLogViewer({ api, logName, onNameChange }: {
             await navigator.clipboard.writeText(text);
             setCopied(`Copied ${filtered.length} lines.`);
         } catch {
-            setCopied('Copy failed. Download the log instead.');
+            setCopied(t('Copy failed. Download the log instead.'));
         }
         window.setTimeout(() => setCopied(''), 3000);
     };
 
     return <div class="llv">
         <div class="ad-toolbar">
-            <select class="ad-select" value={logName} onChange={e => onNameChange(e.currentTarget.value)} aria-label="Choose log file">
+            <select class="ad-select" value={logName} onChange={e => onNameChange(e.currentTarget.value)} aria-label={t('Choose log file')}>
                 {logs.map(l => <option key={l.Name} value={l.Name}>{l.Name} · {fmtSize(l.Size || 0)}</option>)}
             </select>
             <button class="ad-btn" onClick={() => void loadLog(true)}>
-                {loading ? 'Loading…' : '⟳ Reload'}
+                {loading ? t('Loading…') : t('⟳ Reload')}
             </button>
-            <button class="ad-btn" disabled={!rawText.current} onClick={download}>Download</button>
-            <button class="ad-btn" disabled={filtered.length === 0} onClick={() => void copy()}>{search.trim() ? 'Copy matching lines' : 'Copy lines'}</button>
+            <button class="ad-btn" disabled={!rawText.current} onClick={download}>{t('Download')}</button>
+            <button class="ad-btn" disabled={filtered.length === 0} onClick={() => void copy()}>{search.trim() ? t('Copy matching lines') : t('Copy lines')}</button>
             <button class={`ad-btn${paused ? ' danger' : ''}`} onClick={() => setPaused(v => !v)}>
-                {paused ? '▶ Resume' : '⏸ Pause'}
+                {paused ? t('▶ Resume') : t('⏸ Pause')}
             </button>
             <span class="llv-status">
-                {totalBytes > 0 && <span class="ad-note">{fmtSize(totalBytes)} · {lines.length} lines</span>}
-                {paused && <span class="ad-st amber">Paused</span>}
+                {totalBytes > 0 && <span class="ad-note">{t('{0} · {1} lines', fmtSize(totalBytes), lines.length)}</span>}
+                {paused && <span class="ad-st amber">{t('Paused')}</span>}
             </span>
         </div>
         <div class="ad-toolbar">
-            <input class="ad-search" value={search} onInput={e => setSearch(e.currentTarget.value)} placeholder="Filter log lines…" aria-label="Filter log lines" />
-            <span class="ad-note">{filtered.length !== lines.length ? `${filtered.length} of ` : ''}{lines.length} lines{visible.length < filtered.length ? ` (showing latest 500)` : ''}</span>
-            <button class={`ad-btn${autoScroll ? ' active' : ''}`} onClick={() => setAutoScroll(v => !v)}>{autoScroll ? 'Auto-scroll on' : 'Auto-scroll off'}</button>
+            <input class="ad-search" value={search} onInput={e => setSearch(e.currentTarget.value)} placeholder={t('Filter log lines…')} aria-label={t('Filter log lines')} />
+            <span class="ad-note">{t('{0}{1} lines', filtered.length !== lines.length ? `${filtered.length} of ` : '', lines.length)}{visible.length < filtered.length ? t(' (showing latest 500)') : ''}</span>
+            <button class={`ad-btn${autoScroll ? ' active' : ''}`} onClick={() => setAutoScroll(v => !v)}>{autoScroll ? t('Auto-scroll on') : t('Auto-scroll off')}</button>
         </div>
         {error && <p class="ad-error" role="alert">{error}</p>}
         {copied && <p class="ad-note" role="status">{copied}</p>}
-        {lines.length === 0 && !error && <p class="ad-empty muted">Waiting for log content…</p>}
+        {lines.length === 0 && !error && <p class="ad-empty muted">{t('Waiting for log content…')}</p>}
         <div ref={containerRef} class="llv-log" onScroll={() => {
             if (!containerRef.current) return;
             const { scrollTop, scrollHeight, clientHeight } = containerRef.current;

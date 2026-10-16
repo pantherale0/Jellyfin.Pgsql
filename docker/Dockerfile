@@ -31,6 +31,8 @@ WORKDIR /src/ui-next
 
 ARG VITE_CLASSIC_WEB_AVAILABLE=false
 ENV VITE_CLASSIC_WEB_AVAILABLE=${VITE_CLASSIC_WEB_AVAILABLE}
+ARG UI_NEXT_BUILD=unknown
+ENV UI_NEXT_BUILD=${UI_NEXT_BUILD}
 
 COPY ui-next/package.json ui-next/package-lock.json ./
 RUN npm ci
@@ -39,8 +41,9 @@ COPY ui-next/index.html ./index.html
 COPY ui-next/tsconfig.json ./tsconfig.json
 COPY ui-next/vite.config.ts ./vite.config.ts
 COPY ui-next/src/ ./src/
+COPY ui-next/tests/ ./tests/
 
-RUN npm run build
+RUN npm test && npm run build
 
 # Build stage
 # Context hint: project root ../

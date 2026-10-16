@@ -23,9 +23,16 @@ export const MAX_QUEUE = 500;
 
 const LIVE_TYPES = [ 'TvChannel', 'Program' ];
 
+export type QueueFilter = (item: Pick<MediaItem, 'Type' | 'MediaType'>) => boolean;
+
 /** Video titles that can sit in the queue; audio queues belong to the music player and live streams never end. */
 export function queueable(item: Pick<MediaItem, 'Type' | 'MediaType'>): boolean {
-    return itemCapabilities(item).playable && item.MediaType !== 'Audio' && LIVE_TYPES.indexOf(item.Type || '') < 0;
+    return itemCapabilities(item).playable && item.MediaType !== 'Audio' && item.Type !== 'Audio' && LIVE_TYPES.indexOf(item.Type || '') < 0;
+}
+
+/** Tracks the music player can queue. */
+export function audioQueueable(item: Pick<MediaItem, 'Type' | 'MediaType'>): boolean {
+    return item.MediaType === 'Audio' || item.Type === 'Audio';
 }
 
 export function emptyQueue(): PlayQueue {
@@ -42,8 +49,8 @@ function shuffled(items: MediaItem[], random: () => number): MediaItem[] {
 }
 
 /** Starts a queue from a playlist or collection; the returned item is what to play now. */
-export function createQueue(items: MediaItem[], startIndex = 0, options: { shuffle?: boolean; repeat?: RepeatMode; random?: () => number } = {}): { queue: PlayQueue; item: MediaItem } | null {
-    const original = items.filter(queueable).slice(0, MAX_QUEUE);
+export function createQueue(items: MediaItem[], startIndex = 0, options: { shuffle?: boolean; repeat?: RepeatMode; random?: () => number; accept?: QueueFilter } = {}): { queue: PlayQueue; item: MediaItem } | null {
+    const original = items.filter(options.accept || queueable).slice(0, MAX_QUEUE);
     if (!original.length) return null;
     const start = options.shuffle && startIndex < 0
         ? original[Math.floor((options.random || Math.random)() * original.length)]
@@ -64,15 +71,15 @@ function insertAfter(list: MediaItem[], index: number, item: MediaItem): MediaIt
 }
 
 /** Inserts the title so it plays when the current one ends. */
-export function playNext(queue: PlayQueue, item: MediaItem): PlayQueue {
-    if (!queueable(item) || queue.order.length >= MAX_QUEUE) return queue;
+export function playNext(queue: PlayQueue, item: MediaItem, accept: QueueFilter = queueable): PlayQueue {
+    if (!accept(item) || queue.order.length >= MAX_QUEUE) return queue;
     const anchor = queue.order[queue.position];
     const originalIndex = anchor ? queue.original.indexOf(anchor) : -1;
     return { ...queue, original: insertAfter(queue.original, originalIndex, item), order: insertAfter(queue.order, queue.position, item) };
 }
 
-export function addToQueue(queue: PlayQueue, item: MediaItem): PlayQueue {
-    if (!queueable(item) || queue.order.length >= MAX_QUEUE) return queue;
+export function addToQueue(queue: PlayQueue, item: MediaItem, accept: QueueFilter = queueable): PlayQueue {
+    if (!accept(item) || queue.order.length >= MAX_QUEUE) return queue;
     return { ...queue, original: [ ...queue.original, item ], order: [ ...queue.order, item ] };
 }
 
@@ -82,6 +89,22 @@ export function removeFromQueue(queue: PlayQueue, index: number): PlayQueue {
     const order = queue.order.filter((_, entry) => entry !== index);
     const original = queue.original.filter(entry => entry !== item);
     return { ...queue, order, original, position: index < queue.position ? queue.position - 1 : queue.position };
+}
+
+/** Moves a title one place in play order; the playing title can move too and keeps playing. */
+export function moveInQueue(queue: PlayQueue, index: number, delta: -1 | 1): PlayQueue {
+    const target = index + delta;
+    if (!queue.order[index] || target < 0 || target >= queue.order.length) return queue;
+    const order = queue.order.slice();
+    [ order[index], order[target] ] = [ order[target], order[index] ];
+    const position = queue.position === index ? target : queue.position === target ? index : queue.position;
+    return { ...queue, order, original: queue.shuffle ? queue.original : order, position };
+}
+
+/** Makes the title at `index` current. */
+export function jumpTo(queue: PlayQueue, index: number): { queue: PlayQueue; item: MediaItem } | null {
+    const item = queue.order[index];
+    return item ? { queue: { ...queue, position: index, active: true }, item } : null;
 }
 
 /** Titles still to play, in play order. */

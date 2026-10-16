@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { extname } from 'node:path';
 import { beforeEach, test } from 'node:test';
+import { readSource } from './source.mjs';
 
 registerHooks({
     resolve(specifier, context, nextResolve) {
@@ -34,7 +35,7 @@ const modes = await import('../src/library-modes.ts');
 const catalog = await import('../src/catalog-model.ts');
 const { recommendationTitle } = await import('../src/home-feed-blocks.ts');
 const { JellyfinApi } = await import('../src/api.ts');
-const source = path => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
+const source = path => readSource(new URL(`../src/${path}`, import.meta.url), 'utf8');
 const session = { server: 'https://jf.test', token: 'token', user: { Id: 'me', Name: 'Me' }, serverId: 's' };
 const ok = body => ({ status: 200, body: JSON.stringify(body) });
 const params = request => new URL(request.url).searchParams;

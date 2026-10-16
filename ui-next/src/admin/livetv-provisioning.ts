@@ -1,4 +1,5 @@
 import type { ChannelMappingOptions, ListingsProviderInfo, TunerHostInfo } from './types';
+import { t } from '../i18n';
 
 export type TunerType = 'm3u' | 'hdhomerun';
 export type ProviderType = 'xmltv' | 'SchedulesDirect';
@@ -93,10 +94,10 @@ export function buildTunerPayload(stored: TunerHostInfo | null | undefined, draf
 }
 
 export function validateTunerDraft(draft: TunerDraft): string | null {
-    if (draft.Type !== 'm3u' && draft.Type !== 'hdhomerun') return 'Choose a supported tuner type.';
-    if (!draft.Url.trim()) return draft.Type === 'm3u' ? 'Enter the M3U file path or URL.' : 'Enter the tuner IP address or URL.';
-    if (!Number.isFinite(draft.TunerCount) || draft.TunerCount < 0) return 'Tuner count must be 0 or more.';
-    if (!Number.isFinite(draft.FallbackMaxStreamingBitrateMbps) || draft.FallbackMaxStreamingBitrateMbps <= 0) return 'Fallback bitrate must be greater than 0 Mbps.';
+    if (draft.Type !== 'm3u' && draft.Type !== 'hdhomerun') return t('Choose a supported tuner type.');
+    if (!draft.Url.trim()) return draft.Type === 'm3u' ? t('Enter the M3U file path or URL.') : t('Enter the tuner IP address or URL.');
+    if (!Number.isFinite(draft.TunerCount) || draft.TunerCount < 0) return t('Tuner count must be 0 or more.');
+    if (!Number.isFinite(draft.FallbackMaxStreamingBitrateMbps) || draft.FallbackMaxStreamingBitrateMbps <= 0) return t('Fallback bitrate must be greater than 0 Mbps.');
     return null;
 }
 
@@ -177,19 +178,19 @@ export type ProviderValidationStage = 'login' | 'listings';
 
 export function validateProviderDraft(draft: ProviderDraft, stage: ProviderValidationStage, hasStoredPassword: boolean): string | null {
     if (draft.Type === 'xmltv') {
-        if (!draft.Path.trim()) return 'Enter the XMLTV file path or URL.';
+        if (!draft.Path.trim()) return t('Enter the XMLTV file path or URL.');
     } else if (draft.Type === 'SchedulesDirect') {
-        if (!draft.Username.trim()) return 'Enter the Schedules Direct username.';
-        if (!draft.Password && !hasStoredPassword) return 'Enter the Schedules Direct password.';
+        if (!draft.Username.trim()) return t('Enter the Schedules Direct username.');
+        if (!draft.Password && !hasStoredPassword) return t('Enter the Schedules Direct password.');
         if (stage === 'listings') {
-            if (!draft.Country) return 'Choose a country.';
-            if (!draft.ZipCode.trim()) return 'Enter a postal code.';
-            if (!draft.ListingsId) return 'Choose a lineup.';
+            if (!draft.Country) return t('Choose a country.');
+            if (!draft.ZipCode.trim()) return t('Enter a postal code.');
+            if (!draft.ListingsId) return t('Choose a lineup.');
         }
     } else {
-        return 'Choose a supported guide provider.';
+        return t('Choose a supported guide provider.');
     }
-    if (!draft.EnableAllTuners && draft.EnabledTuners.length === 0) return 'Select at least one tuner, or use all tuners.';
+    if (!draft.EnableAllTuners && draft.EnabledTuners.length === 0) return t('Select at least one tuner, or use all tuners.');
     return null;
 }
 

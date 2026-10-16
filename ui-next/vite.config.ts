@@ -22,6 +22,7 @@ export default defineConfig(({ command, mode }) => {
                 devServer.middlewares.use('/__debug/sso-config', async (request, response) => {
                     const query = request.url?.split('?')[1] || '';
                     const serverInput = new URLSearchParams(query).get('server');
+                    const returnUrl = new URLSearchParams(query).get('returnUrl');
                     try {
                         if (!serverInput || serverInput.length > 2048) throw new Error('Invalid server address.');
                         const target = new URL(serverInput);
@@ -40,16 +41,17 @@ export default defineConfig(({ command, mode }) => {
                         const abort = new AbortController();
                         const timeout = setTimeout(() => abort.abort(), 5000);
                         try {
-                            const result = await fetch(`${target.toString().replace(/\/$/, '')}/sso/config`, {
+                            const returnQuery = returnUrl && returnUrl.length <= 2048 ? `?returnUrl=${encodeURIComponent(returnUrl)}` : '';
+                            const result = await fetch(`${target.toString().replace(/\/$/, '')}/sso/config${returnQuery}`, {
                                 redirect: 'manual',
                                 signal: abort.signal
                             });
                             if (result.status < 200 || result.status >= 300) throw new Error('SSO status unavailable.');
-                            const config = await result.json() as { Enabled?: boolean; enabled?: boolean };
+                            const config = await result.json() as { Enabled?: boolean; enabled?: boolean; CodeExchange?: boolean; codeExchange?: boolean };
                             response.statusCode = 200;
                             response.setHeader('Content-Type', 'application/json; charset=utf-8');
                             response.setHeader('Cache-Control', 'no-store');
-                            response.end(JSON.stringify({ Enabled: config.Enabled === true || config.enabled === true }));
+                            response.end(JSON.stringify({ Enabled: config.Enabled === true || config.enabled === true, CodeExchange: config.CodeExchange === true || config.codeExchange === true }));
                         } finally {
                             clearTimeout(timeout);
                         }

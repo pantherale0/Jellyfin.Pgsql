@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { extname } from 'node:path';
 import { test } from 'node:test';
@@ -85,4 +86,29 @@ test('ADMIN-03 stale merge preview cannot execute against a new target pair', as
     assert.equal(isMergePreviewCurrent(preview, 'source', 'target-c', 1, 'merge'), false);
     assert.equal(isMergePreviewCurrent(preview, 'source', 'target-b', 2, 'merge'), false);
     assert.equal(isMergePreviewCurrent(preview, 'source', 'target-b', 1, 'move'), false);
+});
+
+test('ADMIN-03 execute sends the server preview token and a 409 discards stale UI state', async () => {
+    const calls = [];
+    const { createAdminApi } = await import('../src/admin/admin-api.ts');
+    const admin = createAdminApi({
+        session,
+        request: async (path, init) => {
+            calls.push({ path, init });
+            return { counts: {} };
+        }
+    });
+    await admin.mergeUsers('source', 'target', false, 'signed-preview');
+    assert.equal(calls[0].path, '/Pgsql/Admin/Users/Merge');
+    assert.deepEqual(JSON.parse(calls[0].init.body), {
+        sourceUserId: 'source',
+        targetUserId: 'target',
+        previewToken: 'signed-preview'
+    });
+    assert.equal(calls[0].init.headers.Accept, 'application/json; profile="CamelCase"');
+
+    const users = readFileSync(new URL('../src/admin/pages/admin-users.tsx', import.meta.url), 'utf8');
+    assert.match(users, /status\?: unknown[\s\S]*=== 409/);
+    assert.match(users, /setMergePreview\(null\); setMergePreviewIdentity\(null\);/);
+    assert.match(users, /The users changed since the preview\. Preview again\./);
 });

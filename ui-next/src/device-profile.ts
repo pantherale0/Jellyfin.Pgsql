@@ -1,3 +1,4 @@
+import { t } from './i18n';
 export interface BrowserCapabilities {
     canPlay: (type: string) => boolean;
     userAgent: string;
@@ -21,9 +22,9 @@ export interface PlaybackPreferences {
 /** auto: text subtitles render in the browser and image subtitles are burned in; styled: ASS/SSA are burned in too, keeping their styling; all: every subtitle is burned in. */
 export type SubtitleBurnIn = 'auto' | 'styled' | 'all';
 export const SUBTITLE_BURN_IN_CHOICES: Array<{ value: SubtitleBurnIn; label: string }> = [
-    { value: 'auto', label: 'Automatic (burn in image subtitles only)' },
-    { value: 'styled', label: 'Also burn in styled ASS/SSA subtitles' },
-    { value: 'all', label: 'Burn in all subtitles' }
+    { value: 'auto', label: t('Automatic (burn in image subtitles only)') },
+    { value: 'styled', label: t('Also burn in styled ASS/SSA subtitles') },
+    { value: 'all', label: t('Burn in all subtitles') }
 ];
 
 export const PLAYBACK_PREFERENCES_KEY = 'jellyfin-ui-next-playback-preferences';
@@ -41,18 +42,18 @@ export const DEFAULT_PLAYBACK_PREFERENCES: PlaybackPreferences = {
 };
 
 export const BITRATE_CHOICES: Array<{ value: number; label: string }> = [
-    { value: 0, label: 'Auto' },
-    { value: 60_000_000, label: '60 Mbps' },
-    { value: 20_000_000, label: '20 Mbps' },
-    { value: 10_000_000, label: '10 Mbps' },
-    { value: 8_000_000, label: '8 Mbps' },
-    { value: 4_000_000, label: '4 Mbps' },
-    { value: 2_000_000, label: '2 Mbps' },
-    { value: 1_000_000, label: '1 Mbps' }
+    { value: 0, label: t('Auto') },
+    { value: 60_000_000, label: t('60 Mbps') },
+    { value: 20_000_000, label: t('20 Mbps') },
+    { value: 10_000_000, label: t('10 Mbps') },
+    { value: 8_000_000, label: t('8 Mbps') },
+    { value: 4_000_000, label: t('4 Mbps') },
+    { value: 2_000_000, label: t('2 Mbps') },
+    { value: 1_000_000, label: t('1 Mbps') }
 ];
 
 export const RESOLUTION_CHOICES: Array<{ value: number; label: string }> = [
-    { value: 0, label: 'Auto' },
+    { value: 0, label: t('Auto') },
     { value: 2160, label: '4K' },
     { value: 1080, label: '1080p' },
     { value: 720, label: '720p' },
@@ -60,10 +61,10 @@ export const RESOLUTION_CHOICES: Array<{ value: number; label: string }> = [
 ];
 
 export const AUDIO_CHANNEL_CHOICES: Array<{ value: number; label: string }> = [
-    { value: 0, label: 'Auto' },
+    { value: 0, label: t('Auto') },
     { value: 8, label: '7.1' },
     { value: 6, label: '5.1' },
-    { value: 2, label: 'Stereo' }
+    { value: 2, label: t('Stereo') }
 ];
 
 export const PLAYER_SPEEDS = [ 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3 ];
@@ -132,6 +133,11 @@ function supportedVideoCodecs(caps: BrowserCapabilities): string[] {
     return codecs;
 }
 
+/** Containers each browser audio codec arrives in for music direct play. */
+const AUDIO_CONTAINERS: Record<string, string> = { aac: 'm4a,m4b,aac,mp4', mp3: 'mp3', flac: 'flac', opus: 'ogg,oga,opus,webm,webma', vorbis: 'ogg,oga,webm,webma' };
+
+export const MUSIC_TRANSCODE_BITRATE = 384_000;
+
 function supportedAudioCodecs(caps: BrowserCapabilities): string[] {
     const family = browserFamily(caps.userAgent);
     const codecs: string[] = [];
@@ -173,7 +179,8 @@ export function buildDeviceProfile(caps: BrowserCapabilities, preferences: Playb
     if (mp4Video.length && mp4Audio.length) directPlayProfiles.push({ Container: 'mp4,m4v', Type: 'Video', VideoCodec: mp4Video.join(','), AudioCodec: mp4Audio.join(',') });
     if (webmVideo.length && webmAudio.length) directPlayProfiles.push({ Container: 'webm', Type: 'Video', VideoCodec: webmVideo.join(','), AudioCodec: webmAudio.join(',') });
     if (canDirectPlayMkv(caps) && video.length && audio.length) directPlayProfiles.push({ Container: 'mkv', Type: 'Video', VideoCodec: video.join(','), AudioCodec: audio.join(',') });
-    audio.filter(codec => codec !== 'ac3' && codec !== 'eac3').forEach(codec => directPlayProfiles.push({ Container: codec === 'aac' ? 'm4a,aac' : codec === 'vorbis' ? 'ogg' : codec, Type: 'Audio' }));
+    audio.filter(codec => codec !== 'ac3' && codec !== 'eac3').forEach(codec => directPlayProfiles.push({ Container: AUDIO_CONTAINERS[codec] || codec, AudioCodec: codec, Type: 'Audio' }));
+    if (caps.canPlay('audio/wav')) directPlayProfiles.push({ Container: 'wav', Type: 'Audio' });
 
     const transcodeVideo = [ 'h264', ...(preferences.hlsContainer === 'mp4' && video.includes('hevc') ? [ 'hevc' ] : []) ];
     const transcodeAudio = [ 'aac', 'mp3', ...(surround ? [ 'ac3' ] : []) ];
@@ -209,7 +216,7 @@ export function buildDeviceProfile(caps: BrowserCapabilities, preferences: Playb
     return {
         MaxStreamingBitrate: preferences.maxBitrate || DEFAULT_MAX_BITRATE,
         MaxStaticBitrate: 100_000_000,
-        MusicStreamingTranscodingBitrate: 384_000,
+        MusicStreamingTranscodingBitrate: Math.min(preferences.maxBitrate || MUSIC_TRANSCODE_BITRATE, MUSIC_TRANSCODE_BITRATE),
         DirectPlayProfiles: directPlayProfiles,
         TranscodingProfiles: [
             {
@@ -223,6 +230,7 @@ export function buildDeviceProfile(caps: BrowserCapabilities, preferences: Playb
                 MinSegments: '1',
                 BreakOnNonKeyFrames: true
             },
+            ...(audio.includes('aac') ? [ { Container: 'aac', Type: 'Audio', AudioCodec: 'aac', Context: 'Streaming', Protocol: 'http', MaxAudioChannels: '2' } ] : []),
             { Container: 'mp3', Type: 'Audio', AudioCodec: 'mp3', Context: 'Streaming', Protocol: 'http', MaxAudioChannels: '2' }
         ],
         ContainerProfiles: [],
