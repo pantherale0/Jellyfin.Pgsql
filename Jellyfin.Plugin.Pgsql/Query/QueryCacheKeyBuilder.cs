@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Jellyfin.Data.Enums;
 using MediaBrowser.Controller.Entities;
 
@@ -57,9 +58,22 @@ internal static class QueryCacheKeyBuilder
             return null;
         }
 
+        var resumeCriteria = JsonSerializer.Serialize(new
+        {
+            filter.ParentType,
+            filter.DescendantOfId,
+            LinkedChildAncestorIds = filter.LinkedChildAncestorIds.Order(),
+            filter.IncludeOwnedItems,
+            filter.IncludeAlternateVersions,
+            filter.MaxParentalRating,
+            BlockUnratedItems = filter.BlockUnratedItems.Order(),
+            IncludeInheritedTags = filter.IncludeInheritedTags.Order(StringComparer.Ordinal),
+            ExcludeInheritedTags = filter.ExcludeInheritedTags.Order(StringComparer.Ordinal),
+            filter.UserHasContentRestrictions,
+        });
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"lv{libraryVersion}:uv{userVersion}:resume:{Hash(canonical)}");
+            $"lv{libraryVersion}:uv{userVersion}:resume:v2:{Hash(canonical + resumeCriteria)}");
     }
 
     /// <summary>

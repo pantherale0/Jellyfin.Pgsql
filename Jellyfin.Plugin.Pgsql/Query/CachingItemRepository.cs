@@ -30,6 +30,8 @@ internal sealed class CachingItemRepository : IItemRepository
     private readonly IQueryCacheVersionStore _versions;
     private readonly CachedItemLoader _loader;
     private readonly PgLatestQueryService _latestQueries;
+    private readonly PgResumeQuery _resumeQuery;
+    private readonly PgsqlQueryOptions _options;
     private readonly QueryRuntimeStats _stats;
     private readonly ILogger<CachingItemRepository> _logger;
 
@@ -41,6 +43,8 @@ internal sealed class CachingItemRepository : IItemRepository
     /// <param name="versions">The query cache version store.</param>
     /// <param name="loader">The cached item loader.</param>
     /// <param name="latestQueries">The PostgreSQL Latest query optimisers.</param>
+    /// <param name="resumeQuery">The candidate-first Resume selector.</param>
+    /// <param name="options">Resolved cache and optimization options.</param>
     /// <param name="stats">The runtime stats collector.</param>
     /// <param name="logger">The logger.</param>
     public CachingItemRepository(
@@ -49,6 +53,8 @@ internal sealed class CachingItemRepository : IItemRepository
         IQueryCacheVersionStore versions,
         CachedItemLoader loader,
         PgLatestQueryService latestQueries,
+        PgResumeQuery resumeQuery,
+        PgsqlQueryOptions options,
         QueryRuntimeStats stats,
         ILogger<CachingItemRepository> logger)
     {
@@ -57,6 +63,8 @@ internal sealed class CachingItemRepository : IItemRepository
         _versions = versions;
         _loader = loader;
         _latestQueries = latestQueries;
+        _resumeQuery = resumeQuery;
+        _options = options;
         _stats = stats;
         _logger = logger;
     }
@@ -64,7 +72,7 @@ internal sealed class CachingItemRepository : IItemRepository
     /// <inheritdoc/>
     public IReadOnlyList<BaseItem> GetLatestItemList(InternalItemsQuery filter, CollectionType collectionType)
     {
-        var options = PgsqlQueryOptions.Current;
+        var options = _options;
         if (!options.CacheActive || options.LatestTtl <= TimeSpan.Zero)
         {
             return GetLatestUncached(filter, collectionType);
@@ -105,10 +113,15 @@ internal sealed class CachingItemRepository : IItemRepository
     /// <inheritdoc/>
     public IReadOnlyList<BaseItem> GetItemList(InternalItemsQuery filter)
     {
-        var options = PgsqlQueryOptions.Current;
-        if (filter.IsResumable != true || !options.CacheActive || options.ResumeTtl <= TimeSpan.Zero)
+        if (!ResumeQueryFilter.TryCreate(filter, out _))
         {
             return _inner.GetItemList(filter);
+        }
+
+        var options = _options;
+        if (!options.CacheActive || options.ResumeTtl <= TimeSpan.Zero)
+        {
+            return GetResumeUncached(filter);
         }
 
         var userId = QueryCacheKeyBuilder.GetVersionUserId(filter);
@@ -118,7 +131,7 @@ internal sealed class CachingItemRepository : IItemRepository
             _versions.GetUserVersion(userId));
         if (key is null)
         {
-            return _inner.GetItemList(filter);
+            return GetResumeUncached(filter);
         }
 
         if (_cache.TryGet(key, out var cachedIds))
@@ -137,10 +150,13 @@ internal sealed class CachingItemRepository : IItemRepository
         }
 
         _stats.RecordResumeCacheLookup(hit: false);
-        var result = _inner.GetItemList(filter);
+        var result = GetResumeUncached(filter);
         _cache.Set(key, result.Select(i => i.Id).ToArray(), options.ResumeTtl);
         return result;
     }
+
+    private IReadOnlyList<BaseItem> GetResumeUncached(InternalItemsQuery filter)
+        => _resumeQuery.TryGetItems(filter)?.Items ?? _inner.GetItemList(filter);
 
     private IReadOnlyList<BaseItem> GetLatestUncached(InternalItemsQuery filter, CollectionType collectionType)
     {
@@ -154,7 +170,23 @@ internal sealed class CachingItemRepository : IItemRepository
     /// <inheritdoc/>
     public QueryResult<BaseItem> GetItems(InternalItemsQuery filter)
     {
-        var options = PgsqlQueryOptions.Current;
+        if (filter.IsResumable == true)
+        {
+            if (!ResumeQueryFilter.TryCreate(filter, out _))
+            {
+                return _inner.GetItems(filter);
+            }
+
+            if (!filter.EnableTotalRecordCount)
+            {
+                var items = GetItemList(filter);
+                return new QueryResult<BaseItem>(filter.StartIndex, items.Count, items);
+            }
+
+            return _resumeQuery.TryGetItems(filter) ?? _inner.GetItems(filter);
+        }
+
+        var options = _options;
         if (!options.CacheActive || options.BrowseTtl <= TimeSpan.Zero)
         {
             return _inner.GetItems(filter);
