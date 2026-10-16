@@ -178,6 +178,7 @@ const PGSQL_RUNTIME_FIELDS: Array<[configKey: string, statsKey: string, envVar: 
     ['NextUpCacheTtlSeconds', 'NextUpTtlSeconds', 'Pgsql_CACHE_NEXTUP_TTL'],
     ['BrowseCacheTtlSeconds', 'BrowseTtlSeconds', 'Pgsql_CACHE_BROWSE_TTL'],
     ['OptimizeNextUpQueries', 'OptimizeNextUp', 'Pgsql_PG_OPTIMIZE_NEXTUP'],
+    ['OptimizeResumeQueries', 'OptimizeResume', 'Pgsql_PG_OPTIMIZE_RESUME'],
 ];
 
 /** Saved settings whose effective runtime value differs, meaning an environment variable overrides them. */
