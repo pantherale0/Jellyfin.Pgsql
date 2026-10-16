@@ -60,13 +60,15 @@ UI Next keeps an accepted playback source active while a replacement is prepared
 
 **Related:** SQLite→PG migration in [README](../README.md#migrating-from-sqlite-to-postgresql); inherited scale caveats in [known issues](known-issues.md).
 
-## Query cache and optimised Latest
+## Query cache and optimised Latest and Resume
 
-**What:** Cache home Latest/Resume ID lists and stable library browse `/Items` pages; optionally replace Latest queries with PostgreSQL `DISTINCT ON` variants.
+**What:** Cache home Latest/Resume ID lists and stable library browse `/Items` pages; optionally replace Latest queries with PostgreSQL `DISTINCT ON` variants. Supported Resume pages use a candidate-first selector driven by the user's positive playback-progress rows, including total counts before paging.
 
 **Where:** [`Jellyfin.Plugin.Pgsql/Query/`](../Jellyfin.Plugin.Pgsql/Query/); toggles `Pgsql_CACHE_*`, `Pgsql_PG_OPTIMIZE_*`, `REDIS_CONNECTION_STRING` ([README](../README.md#query-cache-and-optimisation-optional-experimental)).
 
 **How:** Cache keys are per user and per view (never shared across users). Alphabet prefix/lower/upper boundaries are included so different letter queries cannot share IDs or counts. Failures fall back to stock Jellyfin queries. Redis uses a shared persistent multiplexer with background PING health: request paths only touch Redis when status is `Ready`; `Unknown`/`Unavailable` skip immediately to the in-process memory fallback (no repeated SyncTimeout wait). Cache operations default to a bounded 250 ms deadline (`Pgsql_REDIS_OPERATION_TIMEOUT_MS`) so brief local stalls do not cause the 100 ms false-unhealthy flapping seen under load. Default Latest TTL is 120s; browse pages default to 60s (`Pgsql_CACHE_BROWSE_TTL`). Browse cache stores `(TotalRecordCount, ids[])` for recursive SortName-style library pages.
+
+**Resume selection:** `Query/PgResumeQuery.cs` reuses core access-filter translation without its generic resumability expression. It aggregates progress once, compares candidate versions, and loads item details and collections by the selected IDs. `Pgsql_PG_OPTIMIZE_RESUME` works even with caching disabled. Resume keys include owner/version options, descendant scope, and explicit rating/tag restrictions. In-scope folder candidates, search, alternate ordering, and unsupported filters fall back to core. Configure the switch in the [README query optimisation section](../README.md#query-cache-and-optimisation-optional-experimental). Existing server support comes from the [query split patch](patches.md#jellyfin_query_split_userdatapatch) and [home API performance patch](patches.md#jellyfin_home_api_performancepatch); this selector adds no server patch.
 
 **Patches that help home/query load:** [`jellyfin_home_api_performance`](patches.md#jellyfin_home_api_performancepatch), [`jellyfin_unoptimized_query_fixes`](patches.md#jellyfin_unoptimized_query_fixespatch), [`jellyfin_query_split_userdata`](patches.md#jellyfin_query_split_userdatapatch), [`jellyfin_z_items_browse_perf`](patches.md#jellyfin_z_items_browse_perfpatch), [`jellyfin_latest_tv_always_series`](patches.md#jellyfin_latest_tv_always_seriespatch), [`jellyfin_zzz_byname_access_semijoin`](patches.md#jellyfin_zzz_byname_access_semijoinpatch), [`jellyfin_zzzz_people_query_perf`](patches.md#jellyfin_zzzz_people_query_perfpatch). Descendant-query memory fixes are stock Jellyfin as of v12.0-rc6 ([jellyfin#17602](https://github.com/jellyfin/jellyfin/issues/17602)).
 

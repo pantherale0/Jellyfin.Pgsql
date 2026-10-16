@@ -81,8 +81,8 @@ docker inspect ghcr.io/pantherale0/jellyfin.pgsql:ui-next-test-12.1 --format '{{
 ## Query cache and optimisation (optional, experimental)
 
 The plugin can cache the home-screen queries (Latest and Resume rows), stable library
-browse `/Items` pages, and replace Jellyfin's Latest queries with PostgreSQL-optimised
-versions (`DISTINCT ON` instead of nested `GROUP BY` subqueries). Both features are enabled
+browse `/Items` pages, and replace Jellyfin's Latest and supported Resume queries with PostgreSQL-optimised
+versions. Latest uses `DISTINCT ON`; Resume starts from the user's in-progress items instead of scanning the video library. These features are enabled
 by default, fail open (any error falls back to the standard Jellyfin queries), and are
 provided strictly as-is.
 
@@ -103,6 +103,7 @@ appear in the Latest row.
 | `Pgsql_PG_OPTIMIZE_MOVIES_LATEST` | inherit | Per-type override for movies |
 | `Pgsql_PG_OPTIMIZE_TV_LATEST` | inherit | Per-type override for TV shows |
 | `Pgsql_PG_OPTIMIZE_MUSIC_LATEST` | inherit | Per-type override for music |
+| `Pgsql_PG_OPTIMIZE_RESUME` | `true` | Enable candidate-first Resume selection independently of cache settings; overrides plugin `OptimizeResumeQueries`. Restart after changing this setting |
 | `Pgsql_COMMAND_TIMEOUT` | `90` | Database command timeout in seconds (Jellyfin's default of 30 is too tight for heavy library queries on large remote databases) |
 
 Use the in-process `Memory` backend for a single Jellyfin instance; use `Redis` when running
@@ -114,6 +115,7 @@ keeping the first request after a real failure bounded.
 
 Known trade-offs:
 
+- Resume optimisation supports DatePlayed descending requests, including counted pages. It preserves library, parental, tag, and item restrictions through Jellyfin's query helpers, then loads details only for the selected IDs. Search, other sorting, unsupported criteria, and any in-progress folder candidate use the standard repository. An offset beyond the last item still returns the full eligible total when requested.
 - The TV Latest optimisation ports Jellyfin's Season/Series container-selection logic into the
   plugin, so its behaviour must be re-checked when syncing against new Jellyfin releases.
 - Cached Latest rows can lag behind library scans by up to the configured TTL.

@@ -32,6 +32,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Jellyfin.Plugin.Pgsql\Jellyfin.Plugin.Pgsql.csproj" />
+    <ProjectReference Include="..\jellyfin\Jellyfin.Server.Implementations\Jellyfin.Server.Implementations.csproj" />
+    <ProjectReference Include="..\jellyfin\Emby.Server.Implementations\Emby.Server.Implementations.csproj" />
     <ProjectReference Include="..\jellyfin\src\Jellyfin.Database\Jellyfin.Database.Implementations\Jellyfin.Database.Implementations.csproj" />
     <ProjectReference Include="..\jellyfin\MediaBrowser.Controller\MediaBrowser.Controller.csproj" />
   </ItemGroup>

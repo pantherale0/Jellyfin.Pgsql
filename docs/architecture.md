@@ -114,7 +114,7 @@ Inside `Jellyfin.Plugin.Pgsql`:
 |---|---|
 | `Database/` | Npgsql provider, connection string / timeout, backups |
 | `Migrations/` | PostgreSQL EF migrations (synced from Jellyfin + fork entities) |
-| `Query/` | Latest/Resume/NextUp cache and PG-optimised Latest SQL |
+| `Query/` | Latest/Resume/NextUp cache and PG-optimised Latest, NextUp, and candidate-first Resume SQL |
 | `Search/` | Trigram / franchise-oriented fuzzy search (`<%` / `jellyfin_word_similar` on GIN) |
 | `Taste/` | Profile rebuild, scoring, recommendations |
 | `Api/` | Taste, Emby import, user admin, plugin stats controllers |
@@ -122,6 +122,14 @@ Inside `Jellyfin.Plugin.Pgsql`:
 | `Playback/` | Playback-reporting import helpers (where applicable) |
 
 `Jellyfin.Plugin.Seerr` talks to an external Seerr/Jellyseerr instance (URL + API key in plugin config) and is consumed by web search / Beyond Your Library patches.
+
+### Candidate-first Resume selection
+
+`CachingItemRepository` decorates both `GetItemList` and `GetItems`. For supported DatePlayed-descending Resume requests, `ResumeQueryFilter` creates an independent filter with core resumability disabled and alternate versions retained. The public `IItemQueryHelpers.TranslateQuery` supplies the actual library and access restrictions.
+
+`PgResumeQuery` embeds that filter's ID projection using `PgQuerySqlBuilder`, preserving EF's typed parameters. Materialized progress and candidate CTEs select the small active set. Correlated key lookups keep unrelated videos out of item and permission scans. Version comparison precedes output restrictions, and totals precede paging. A permitted folder candidate triggers core fallback before paging.
+
+`CachedItemLoader` loads the selected IDs with split collection queries and restores selection order. Counted pages use the selector directly; uncounted pages can reuse the existing Resume ID cache. The optimizer also runs when caching is disabled. This path is plugin-owned and adds no server patch. See the [README switch](../README.md#query-cache-and-optimisation-optional-experimental) and [fallback caveat](known-issues.md#operational-caveats-this-image).
 
 ## Migration sync (summary)
 
