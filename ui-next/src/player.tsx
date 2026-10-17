@@ -1,4 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { h } from 'preact';
+import { ArrowLeft02Icon, Backward02Icon, Book02Icon, Cancel01Icon, CaptionsIcon, Forward02Icon, FullScreenIcon, GoBackward10SecIcon, GoForward10SecIcon, ListIcon, Minimize01Icon, NextIcon, PauseIcon, PictureInPictureExitIcon, PictureInPictureIcon, PlayIcon, PreviousIcon, RepeatIcon, RepeatOne01Icon, Settings01Icon, ShuffleIcon, VolumeHighIcon, VolumeOffIcon } from '@hugeicons/core-free-icons';
 import { itemPosition, mediaPosition, type MediaStreamInfo } from './player-model';
 import { JellyfinApi, peekCachedImage, releaseCachedImage, retainCachedImage } from './api';
 import type { MediaItem } from './types';
@@ -31,6 +33,41 @@ interface PlayerProps {
 
 type PlayerMenu = 'episodes' | 'chapters' | 'captions' | 'settings' | null;
 type AspectFit = 'contain' | 'cover' | 'fill';
+
+/** Hugeicons (MIT free pack) icon data plus a renderer so every player control uses one consistent stroke set. */
+const PLAYER_ICONS = {
+    back: ArrowLeft02Icon,
+    chapters: Book02Icon,
+    episodes: ListIcon,
+    previous: PreviousIcon,
+    next: NextIcon,
+    'chapter-prev': Backward02Icon,
+    'chapter-next': Forward02Icon,
+    'rewind-10': GoBackward10SecIcon,
+    'forward-10': GoForward10SecIcon,
+    play: PlayIcon,
+    pause: PauseIcon,
+    shuffle: ShuffleIcon,
+    repeat: RepeatIcon,
+    'repeat-one': RepeatOne01Icon,
+    captions: CaptionsIcon,
+    'volume-high': VolumeHighIcon,
+    'volume-mute': VolumeOffIcon,
+    settings: Settings01Icon,
+    pip: PictureInPictureIcon,
+    'pip-exit': PictureInPictureExitIcon,
+    fullscreen: FullScreenIcon,
+    'fullscreen-exit': Minimize01Icon,
+    close: Cancel01Icon
+} as const;
+
+type PlayerIconName = keyof typeof PLAYER_ICONS;
+
+const PlayerIcon = ({ name, size = 24, class: className }: { name: PlayerIconName; size?: number; class?: string }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" class={className ? `player-icon ${className}` : 'player-icon'} aria-hidden="true">
+        {PLAYER_ICONS[name].map(([tag, attrs], index) => h(tag, { ...attrs, stroke: 'currentColor', strokeWidth: 1.5, key: String(attrs.key ?? index) }))}
+    </svg>
+);
 
 const PLAYBACK_ERROR = t('Playback stopped because this browser could not play the stream.');
 
@@ -1195,7 +1232,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
 
     const onPointerDown = (event: PointerEvent) => {
         const target = event.target instanceof Element ? event.target : null;
-        if (target?.closest('.player-osd, .player-drawer, .player-error')) {
+        if (target?.closest('.player-osd, .player-drawer, .player-menu-scrim, .player-error')) {
             reveal();
             return;
         }
@@ -1258,6 +1295,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
         class="player-stage"
         tabIndex={-1}
         data-osd-open={osdOpen ? 'true' : 'false'}
+        data-menu-open={menu ? 'true' : 'false'}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onDblClick={onDoubleClick}
@@ -1343,15 +1381,16 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
             </div>}
         </div>}
         <header class="player-osd player-osd-top">
-            <button data-focusable={focusable} class="player-back" type="button" onClick={() => onBackRef.current()}><span class="dir-arrow" aria-hidden="true">←</span> <span>{t('Back')}</span></button>
+            <button data-focusable={focusable} class="player-back" type="button" onClick={() => onBackRef.current()}><span class="dir-arrow" aria-hidden="true"><PlayerIcon name="back" size={20} /></span> <span>{t('Back')}</span></button>
             <h1>{title}</h1>
             {chapters.length > 0 && <button data-focusable={focusable} class="player-control player-chapters" type="button" aria-label={t('Chapters')} aria-expanded={menu === 'chapters'} onClick={() => chooseMenu('chapters')}>
-                <svg viewBox="0 0 24 24" class="player-icon" aria-hidden="true"><path d="M5 5v14M10 5h9M10 12h9M10 19h9" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
+                <PlayerIcon name="chapters" />
             </button>}
             {isEpisode && <button data-focusable={focusable} class="player-control player-episodes" type="button" aria-label={t('Episodes')} aria-expanded={menu === 'episodes'} onClick={() => chooseMenu('episodes')}>
-                <svg viewBox="0 0 24 24" class="player-icon" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
+                <PlayerIcon name="episodes" />
             </button>}
         </header>
+        {menu && <div class="player-menu-scrim" aria-hidden="true" onPointerDown={closeMenu} />}
         <footer class="player-osd player-osd-bottom">
             {skip && <div class="player-skip-row"><button data-focusable={focusable} class="player-skip" type="button" onClick={() => seekTo(skip.end)}>{t(skip.label)}</button></div>}
             <div class="player-timeline">
@@ -1417,20 +1456,20 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
             </div>
             <div class="player-transport">
                 {queueCurrent
-                    ? <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Previous in queue')} disabled={!queuePrevious} onClick={() => playQueued(queuePrevious)}>|◀</button>
-                    : isEpisode && <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Previous episode')} disabled={!neighbours.previous} onClick={() => neighbours.previous && onPlayItemRef.current(neighbours.previous)}>|◀</button>}
-                {chapters.length > 0 && <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Previous chapter')} onClick={() => { const target = adjacentChapterStart(chapters, currentTime, -1); if (target !== null) seekTo(target); }}>⏮</button>}
-                <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Rewind 10 seconds')} onClick={() => seekBy(-10)}>−10</button>
-                <button data-focusable={focusable} class="player-control player-play" type="button" aria-label={paused ? t('Play') : t('Pause')} onClick={togglePlay}>{paused ? '▶' : '❚❚'}</button>
-                <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Fast forward 10 seconds')} onClick={() => seekBy(10)}>+10</button>
-                {chapters.length > 0 && <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Next chapter')} disabled={adjacentChapterStart(chapters, currentTime, 1) === null} onClick={() => { const target = adjacentChapterStart(chapters, currentTime, 1); if (target !== null) seekTo(target); }}>⏭</button>}
+                    ? <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Previous in queue')} disabled={!queuePrevious} onClick={() => playQueued(queuePrevious)}><PlayerIcon name="previous" /></button>
+                    : isEpisode && <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Previous episode')} disabled={!neighbours.previous} onClick={() => neighbours.previous && onPlayItemRef.current(neighbours.previous)}><PlayerIcon name="previous" /></button>}
+                {chapters.length > 0 && <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Previous chapter')} onClick={() => { const target = adjacentChapterStart(chapters, currentTime, -1); if (target !== null) seekTo(target); }}><PlayerIcon name="chapter-prev" /></button>}
+                <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Rewind 10 seconds')} onClick={() => seekBy(-10)}><PlayerIcon name="rewind-10" /></button>
+                <button data-focusable={focusable} class="player-control player-play" type="button" aria-label={paused ? t('Play') : t('Pause')} onClick={togglePlay}><PlayerIcon name={paused ? 'play' : 'pause'} size={28} /></button>
+                <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Fast forward 10 seconds')} onClick={() => seekBy(10)}><PlayerIcon name="forward-10" /></button>
+                {chapters.length > 0 && <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Next chapter')} disabled={adjacentChapterStart(chapters, currentTime, 1) === null} onClick={() => { const target = adjacentChapterStart(chapters, currentTime, 1); if (target !== null) seekTo(target); }}><PlayerIcon name="chapter-next" /></button>}
                 {queueCurrent
-                    ? <button data-focusable={focusable} class="player-control" type="button" aria-label={queueNext ? t('Next in queue: {0}', playbackTitle(queueNext.item)) : t('Next in queue')} disabled={!queueNext} onClick={() => playQueued(queueNext)}>▶|</button>
-                    : isEpisode && <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Next episode')} disabled={!neighbours.next} onClick={() => neighbours.next && onPlayItemRef.current(neighbours.next)}>▶|</button>}
-                {queueCurrent && queue.order.length > 1 && <button data-focusable={focusable} class={queue.shuffle ? 'player-control active' : 'player-control'} type="button" aria-label={t('Shuffle queue')} aria-pressed={queue.shuffle} onClick={() => playQueue.update(current => toggleShuffle(current))}>⤮</button>}
-                {queueCurrent && <button data-focusable={focusable} class={queue.repeat !== 'off' ? 'player-control active' : 'player-control'} type="button" aria-label={REPEAT_LABELS[queue.repeat]} title={t('{0} more in queue', upcoming(queue).length)} onClick={() => playQueue.update(current => ({ ...current, repeat: cycleRepeat(current.repeat) }))}>{queue.repeat === 'one' ? '🔂' : '🔁'}</button>}
+                    ? <button data-focusable={focusable} class="player-control" type="button" aria-label={queueNext ? t('Next in queue: {0}', playbackTitle(queueNext.item)) : t('Next in queue')} disabled={!queueNext} onClick={() => playQueued(queueNext)}><PlayerIcon name="next" /></button>
+                    : isEpisode && <button data-focusable={focusable} class="player-control" type="button" aria-label={t('Next episode')} disabled={!neighbours.next} onClick={() => neighbours.next && onPlayItemRef.current(neighbours.next)}><PlayerIcon name="next" /></button>}
+                {queueCurrent && queue.order.length > 1 && <button data-focusable={focusable} class={queue.shuffle ? 'player-control active' : 'player-control'} type="button" aria-label={t('Shuffle queue')} aria-pressed={queue.shuffle} onClick={() => playQueue.update(current => toggleShuffle(current))}><PlayerIcon name="shuffle" /></button>}
+                {queueCurrent && <button data-focusable={focusable} class={queue.repeat !== 'off' ? 'player-control active' : 'player-control'} type="button" aria-label={REPEAT_LABELS[queue.repeat]} title={t('{0} more in queue', upcoming(queue).length)} onClick={() => playQueue.update(current => ({ ...current, repeat: cycleRepeat(current.repeat) }))}><PlayerIcon name={queue.repeat === 'one' ? 'repeat-one' : 'repeat'} /></button>}
                 <div class="player-pop">
-                    <button data-focusable={focusable} class={menu === 'captions' ? 'player-control active' : 'player-control'} type="button" aria-label={t('Audio and subtitles')} aria-expanded={menu === 'captions'} onClick={() => chooseMenu('captions')}>CC</button>
+                    <button data-focusable={focusable} class={menu === 'captions' ? 'player-control active' : 'player-control'} type="button" aria-label={t('Audio and subtitles')} aria-expanded={menu === 'captions'} onClick={() => chooseMenu('captions')}><PlayerIcon name="captions" /></button>
                     {menu === 'captions' && <div class="player-menu" role="dialog" aria-label={t('Audio and subtitles')}>
                         <p class="player-menu-label">{t('Audio')}</p>
                         {audioStreams.length ? audioStreams.map(stream => <button data-focusable={focusable} key={stream.Index} class={audioIndex === stream.Index ? 'player-menu-item active' : 'player-menu-item'} aria-pressed={audioIndex === stream.Index} type="button" onClick={() => selectAudio(stream.Index)}>{streamLabel(stream)}</button>) : <p class="player-menu-note">{t('No alternate audio tracks were reported.')}</p>}
@@ -1455,7 +1494,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                     </div>}
                 </div>
                 <div class="player-volume-pop">
-                    <button data-focusable={focusable} class="player-control" type="button" aria-label={muted || volume === 0 ? t('Unmute') : t('Mute')} onClick={toggleMute}>{muted || volume === 0 ? '🔇' : '🔊'}</button>
+                    <button data-focusable={focusable} class="player-control" type="button" aria-label={muted || volume === 0 ? t('Unmute') : t('Mute')} onClick={toggleMute}><PlayerIcon name={muted || volume === 0 ? 'volume-mute' : 'volume-high'} /></button>
                     {!compactControls && <div class="player-volume-flyout">
                         <input
                             data-focusable={focusable}
@@ -1472,7 +1511,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                     </div>}
                 </div>
                 <div class="player-pop">
-                    <button data-focusable={focusable} class={menu === 'settings' ? 'player-control active' : 'player-control'} type="button" aria-label={t('Playback settings')} aria-expanded={menu === 'settings'} onClick={() => chooseMenu('settings')}>⚙</button>
+                    <button data-focusable={focusable} class={menu === 'settings' ? 'player-control active' : 'player-control'} type="button" aria-label={t('Playback settings')} aria-expanded={menu === 'settings'} onClick={() => chooseMenu('settings')}><PlayerIcon name="settings" /></button>
                     {menu === 'settings' && <div class="player-menu" role="dialog" aria-label={t('Playback settings')}>
                         <p class="player-menu-label">{t('Playback speed')}</p>
                         <div class="player-speed-row">
@@ -1498,14 +1537,14 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                         <p class="player-menu-note">{describeTranscode(diagnostics?.TranscodeReasons ?? playback?.transcodeReasons, playMethod === 'DirectPlay')}</p>
                     </div>}
                 </div>
-                {pipSupported && <button data-focusable={focusable} class={pip ? 'player-control active' : 'player-control'} type="button" aria-pressed={pip} aria-label={pip ? t('Exit picture-in-picture') : t('Picture-in-picture')} onClick={togglePictureInPicture}>⧉</button>}
-                {fullscreenSupported && <button data-focusable={focusable} class="player-control" type="button" aria-label={fullscreen ? t('Exit fullscreen') : t('Fullscreen')} onClick={toggleFullscreen}>{fullscreen ? '⤡' : '⛶'}</button>}
+                {pipSupported && <button data-focusable={focusable} class={pip ? 'player-control active' : 'player-control'} type="button" aria-pressed={pip} aria-label={pip ? t('Exit picture-in-picture') : t('Picture-in-picture')} onClick={togglePictureInPicture}><PlayerIcon name={pip ? 'pip-exit' : 'pip'} /></button>}
+                {fullscreenSupported && <button data-focusable={focusable} class="player-control" type="button" aria-label={fullscreen ? t('Exit fullscreen') : t('Fullscreen')} onClick={toggleFullscreen}><PlayerIcon name={fullscreen ? 'fullscreen-exit' : 'fullscreen'} /></button>}
             </div>
         </footer>
         {menu === 'chapters' && <aside class="player-drawer" role="dialog" aria-label={t('Chapters')}>
             <div class="player-drawer-head">
                 <div><p class="eyebrow">{t('CHAPTERS')}</p><h2>{title}</h2></div>
-                <button data-focusable="true" class="player-control" type="button" aria-label={t('Close chapters')} onClick={closeMenu}>×</button>
+                <button data-focusable="true" class="player-control" type="button" aria-label={t('Close chapters')} onClick={closeMenu}><PlayerIcon name="close" /></button>
             </div>
             <div class="player-episode-list">
                 {chapters.map((chapter, position) => <button data-focusable="true" key={chapter.index} class={position === chapterIndex ? 'player-episode current' : 'player-episode'} type="button" onClick={() => { seekTo(chapter.start); closeMenu(); }}>
@@ -1520,7 +1559,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                     <p class="eyebrow">{t('EPISODES')}</p>
                     <h2>{item?.SeriesName || t('This series')}</h2>
                 </div>
-                <button data-focusable="true" class="player-control" type="button" aria-label={t('Close episodes')} onClick={closeMenu}>×</button>
+                <button data-focusable="true" class="player-control" type="button" aria-label={t('Close episodes')} onClick={closeMenu}><PlayerIcon name="close" /></button>
             </div>
             {seasonList.length > 1 && <div class="player-season-row">
                 {seasonList.map(entry => <button data-focusable="true" key={entry.Id} class={entry.Id === seasonId ? 'player-season active' : 'player-season'} type="button" aria-pressed={entry.Id === seasonId} onClick={() => setSeasonId(entry.Id)}>{entry.Name || seasonLabel(entry.IndexNumber)}</button>)}

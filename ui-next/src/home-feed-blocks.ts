@@ -1,7 +1,10 @@
 import type { MediaItem, RecommendationGroup } from './types';
 import type { SeerrItem } from './seerr';
 import { arrangeRails, defaultHomePreferences, type HomePreferences } from './discovery';
+import { type ExploreTopicSpec, type RecommendationTopic, recommendationTitle } from './recommendations';
 import { t } from './i18n';
+
+export { recommendationTitle };
 
 export interface HomeFeedExtras {
     forYouMovies?: MediaItem[];
@@ -9,18 +12,15 @@ export interface HomeFeedExtras {
     audioResume?: MediaItem[];
     bookResume?: MediaItem[];
     latestByLibrary?: Array<{ library: MediaItem; items: MediaItem[] }>;
+    /** Movies premiered inside the rolling release window, for the Recently released topic. */
+    recentReleases?: MediaItem[];
+    /** Composed recommendation topics (because you watched/liked, taste picks, releases). */
+    recommendationTopics?: RecommendationTopic[];
+    /** Themed Explore pages (genre dives, actors, directors, decades) shown before the fallback pages. */
+    exploreThemes?: Array<{ spec: ExploreTopicSpec; items: MediaItem[] }>;
     beyondMovies?: SeerrItem[];
     beyondShows?: SeerrItem[];
     preferences?: HomePreferences;
-}
-
-export function recommendationTitle(group: Pick<RecommendationGroup, 'RecommendationType' | 'BaselineItemName'>): string {
-    const baseline = group.BaselineItemName;
-    return group.RecommendationType === 0 ? `Because you watched ${baseline || ''}`
-        : group.RecommendationType === 1 ? `Because you liked ${baseline || ''}`
-            : group.RecommendationType === 2 || group.RecommendationType === 4 ? `Directed by ${baseline || 'your favorites'}`
-                : group.RecommendationType === 3 || group.RecommendationType === 5 ? `Starring ${baseline || 'your favorites'}`
-                    : t('Recommended for you');
 }
 
 export interface HomeFeedBlock {
@@ -41,26 +41,40 @@ export function buildHomeFeedBlocks(resume: MediaItem[], latest: MediaItem[], gr
     if (resume.length) rails.push({ id: 'continue', kind: 'rail', title: t('Continue watching'), subtitle: t('PICK UP WHERE YOU LEFT OFF'), items: resume });
     if (audioResume.length) rails.push({ id: 'continue-listening', kind: 'rail', title: t('Continue listening'), subtitle: t('PICK UP WHERE YOU LEFT OFF'), items: audioResume });
     if (bookResume.length) rails.push({ id: 'continue-reading', kind: 'rail', title: t('Continue reading'), subtitle: t('PICK UP WHERE YOU LEFT OFF'), items: bookResume });
-    if (forYouMovies.length) rails.push({ id: 'for-you-movies', kind: 'rail', title: t('Movies for you'), subtitle: t('FROM YOUR TASTE PROFILE'), items: forYouMovies });
-    if (forYouSeries.length) rails.push({ id: 'for-you-series', kind: 'rail', title: t('Shows for you'), subtitle: t('FROM YOUR TASTE PROFILE'), items: forYouSeries });
     latestByLibrary.forEach(({ library, items }) => {
         if (items.length) rails.push({ id: `latest-library-${library.Id}`, kind: 'rail', title: t('Latest in {0}', library.Name), subtitle: t('RECENTLY ADDED'), items });
     });
     if (nextUp.length) rails.push({ id: 'next-up', kind: 'rail', title: t('Next up'), subtitle: t('UP NEXT IN YOUR SERIES'), items: nextUp });
     if (latest.length) rails.push({ id: 'latest', kind: 'rail', title: t('Just added'), subtitle: t('FRESH FROM YOUR LIBRARY'), items: latest });
     if (onNow.length) rails.push({ id: 'on-now', kind: 'rail', title: t('On Now'), subtitle: t('LIVE TV'), items: onNow });
-
-    groups.forEach((group, index) => {
-        const items = (group.Items || []).filter(item => item.Id);
-        if (!items.length) return;
-        const title = recommendationTitle(group);
-        rails.push({ id: `recommendation-${index}`, kind: 'rail', title, subtitle: t('PERSONALIZED FOR YOU'), items: items.slice(0, 24) });
-    });
+    const topics = (extras.recommendationTopics || []).filter(topic => topic.items.some(item => item.Id));
+    if (topics.length) {
+        topics.forEach(topic => {
+            const items = uniqueItems(topic.items).slice(0, 24);
+            if (items.length < (topic.kind === 'recent' ? 1 : 2)) return;
+            rails.push({ id: topic.id, kind: 'rail', title: topic.title, subtitle: topic.subtitle, items });
+        });
+    } else {
+        if (forYouMovies.length) rails.push({ id: 'for-you-movies', kind: 'rail', title: t('Movies for you'), subtitle: t('FROM YOUR TASTE PROFILE'), items: forYouMovies });
+        if (forYouSeries.length) rails.push({ id: 'for-you-series', kind: 'rail', title: t('Shows for you'), subtitle: t('FROM YOUR TASTE PROFILE'), items: forYouSeries });
+        groups.forEach((group, index) => {
+            const items = (group.Items || []).filter(item => item.Id);
+            if (!items.length) return;
+            const title = recommendationTitle(group);
+            rails.push({ id: `recommendation-${index}`, kind: 'rail', title, subtitle: t('PERSONALIZED FOR YOU'), items: items.slice(0, 24) });
+        });
+    }
 
     if (beyondMovies.length) rails.push({ id: 'beyond-movies', kind: 'requests', title: t('Movies beyond your library'), subtitle: t('REQUEST FROM SEERR'), items: [], requests: beyondMovies });
     if (beyondShows.length) rails.push({ id: 'beyond-shows', kind: 'requests', title: t('Shows beyond your library'), subtitle: t('REQUEST FROM SEERR'), items: [], requests: beyondShows });
 
-    const knownIds = new Set([ ...resume, ...nextUp, ...latest, ...onNow, ...groups.flatMap(group => group.Items || []), ...forYouMovies, ...forYouSeries, ...audioResume, ...bookResume, ...latestByLibrary.flatMap(entry => entry.items) ].map(item => item.Id));
+    const knownIds = new Set([ ...resume, ...nextUp, ...latest, ...onNow, ...(topics.length ? topics.flatMap(topic => topic.items) : groups.flatMap(group => group.Items || [])), ...forYouMovies, ...forYouSeries, ...audioResume, ...bookResume, ...(extras.exploreThemes || []).flatMap(entry => entry.items), ...latestByLibrary.flatMap(entry => entry.items) ].map(item => item.Id));
+    // Themed rails lead the Explore section; the old un-themed pages only fill in behind them.
+    (extras.exploreThemes || []).forEach(({ spec, items }) => {
+        const fresh = uniqueItems(items).slice(0, 24);
+        if (!fresh.length) return;
+        rails.push({ id: `explore-${spec.id}`, kind: 'rail', title: spec.title, subtitle: spec.eyebrow, items: fresh });
+    });
     const distinctExplore = exploreItems.filter(item => item.Id && !knownIds.has(item.Id));
     for (let offset = 0; offset < distinctExplore.length; offset += 24) {
         const page = distinctExplore.slice(offset, offset + 24);
@@ -69,7 +83,7 @@ export function buildHomeFeedBlocks(resume: MediaItem[], latest: MediaItem[], gr
 
     rails = arrangeRails(rails, extras.preferences || defaultHomePreferences());
 
-    const allItems = uniqueItems([ ...collections, ...latest, ...resume, ...groups.flatMap(group => group.Items || []) ]);
+    const allItems = uniqueItems([ ...collections, ...latest, ...resume, ...(topics.length ? topics.flatMap(topic => topic.items) : groups.flatMap(group => group.Items || [])) ]);
     const spotlights: HomeFeedBlock[] = [];
     const boxSet = allItems.find(item => item.Type === 'BoxSet' && (item.ChildCount || 0) > 0);
     if (boxSet) spotlights.push({ id: `collection-${boxSet.Id}`, kind: 'spotlight', title: boxSet.Name, subtitle: t('COLLECTION SPOTLIGHT'), description: boxSet.Overview, items: [ boxSet ], spotlightType: 'collection' });

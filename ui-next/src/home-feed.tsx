@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { JellyfinApi } from './api';
 import type { HomeFeedBlock } from './home-feed-blocks';
 import { preferredScrollBehavior } from './live-model';
-import { describeCard } from './media-labels';
+import { describeCard, homeCardHeading, homeCardSubheading, homeRailShape, resumeMinutesLeft } from './media-labels';
 import type { SeerrItem } from './seerr';
 import { SeerrCard } from './seerr-views';
 import type { MediaItem, RecommendationGroup } from './types';
@@ -213,27 +213,38 @@ function HomeRail({ block, api, onSelect, onRequest, initialScrollLeft, onScroll
         </div></div>
         <div ref={rail} class="home-feed-rail-items" onScroll={updateArrows}>{requests
             ? requests.slice(0, 24).map(item => <SeerrCard key={`${item.mediaType}:${item.mediaId}`} item={item} onOpen={next => onRequest?.(next)} />)
-            : block.items.slice(0, 24).map(item => <HomeFeedCard key={item.Id} item={item} api={api} onSelect={onSelect} />)}</div>
+            : block.items.slice(0, 24).map(item => <HomeFeedCard key={item.Id} item={item} api={api} onSelect={onSelect} shape={homeRailShape(block.items)} />)}</div>
     </section>;
 }
 
-function HomeFeedCard({ item, api, onSelect }: { item: MediaItem; api: JellyfinApi | null; onSelect: (item: MediaItem) => void }) {
+function HomeFeedCard({ item, api, onSelect, shape = 'poster' }: { item: MediaItem; api: JellyfinApi | null; onSelect: (item: MediaItem) => void; shape?: 'landscape' | 'poster' }) {
     const liveProgram = Boolean(item.ChannelId || item.IsLive || item.Type === 'Program');
-    const type = item.Type === 'Episode' || item.SeriesName || liveProgram ? 'landscape' : 'poster';
-    const src = api ? api.imageUrl(item, 'Primary', type === 'landscape' ? 420 : 300, 80) : '';
+    const landscape = shape === 'landscape';
+    // The rail decides the shape, so a row never mixes. Landscape rows use the item's own
+    // thumb (backdrop for other titles); poster rows prefer the series' cover art for
+    // episodes, since a portrait crop of a 16:9 still reads poorly.
+    const src = api
+        ? (landscape
+            ? (item.Type === 'Episode' || item.SeriesName || liveProgram
+                ? api.imageUrl(item, 'Primary', 420, 80)
+                : api.imageUrl(item, 'Backdrop', 420, 80) || api.imageUrl(item, 'Primary', 420, 80))
+            : api.seriesArt(item, 300, 80) || api.imageUrl(item, 'Primary', 300, 80))
+        : '';
     const progress = Math.max(0, Math.min(100, item.UserData?.PlayedPercentage || 0));
+    const minutes = resumeMinutesLeft(item);
     const [ imageFailed, setImageFailed ] = useState(false);
     const hasImage = Boolean(src) && !imageFailed;
     const initials = item.Name.trim().split(/\s+/).slice(0, 2).map(word => word.charAt(0)).join('').toUpperCase();
     const description = describeCard(item);
-    return <button data-focusable="true" class={`home-feed-card ${type}`} aria-label={description ? t('View {0}, {1}', item.Name, description) : t('View {0}', item.Name)} onClick={() => onSelect(item)}>
+    const subheading = [ homeCardSubheading(item), minutes !== null ? t('{0} min left', minutes) : '' ].filter(Boolean).join(' · ');
+    return <button data-focusable="true" class={`home-feed-card${landscape ? ' landscape' : ''}`} aria-label={description ? t('View {0}, {1}', item.Name, description) : t('View {0}', item.Name)} onClick={() => onSelect(item)}>
         <span class={`home-feed-card-art${hasImage ? '' : ' no-artwork'}${liveProgram ? ' live-artwork' : ''}`}>
             {hasImage
                 ? <img src={src} alt="" loading="lazy" onError={() => setImageFailed(true)} />
                 : <span class="home-feed-card-fallback" aria-hidden="true"><span class="home-feed-fallback-glow" /><span class="home-feed-fallback-icon">{liveProgram ? 'LIVE' : initials || 'J'}</span><span class="home-feed-fallback-label">{liveProgram ? item.ChannelName || t('ON NOW') : item.Type === 'Series' ? 'SERIES' : t('IN YOUR LIBRARY')}</span></span>}
             {tasteTierLabel(item.TasteTier) && <span class={`home-feed-tier tier-${item.TasteTier}`}>{tasteTierLabel(item.TasteTier)}</span>}
-            <span class="home-feed-card-overlay"><strong>{item.Name}</strong><small>{item.ProductionYear || item.SeriesName || t('In your library')}</small></span>
-            {type === 'landscape' && progress > 0 && <i style={{ width: `${progress}%` }} />}
+            <span class="home-feed-card-overlay"><strong>{homeCardHeading(item)}</strong><small>{subheading || t('In your library')}</small></span>
+            {progress > 0 && <i style={{ width: `${progress}%` }} />}
         </span>
     </button>;
 }

@@ -54,7 +54,7 @@ export const HOME_SECTIONS: Array<{ id: HomeSectionId; label: string }> = [
     { id: 'latest', label: t('Just added') },
     { id: 'latest-libraries', label: t('Latest per library') },
     { id: 'on-now', label: t('On Now (Live TV)') },
-    { id: 'recommendations', label: t('Because you watched') },
+    { id: 'recommendations', label: t('Recommendations') },
     { id: 'beyond', label: t('Beyond your library (Seerr)') },
     { id: 'explore', label: t('Explore your library') },
 ];

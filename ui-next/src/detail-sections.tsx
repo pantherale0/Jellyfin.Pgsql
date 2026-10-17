@@ -22,14 +22,15 @@ const clock = (ticks?: number) => {
 
 export function DetailFactsView({ item }: { item: MediaItem }) {
     const facts = detailFacts(item);
+    const showLinks = hostSupports('externallinks') && facts.links.length > 0;
     return <>
         {facts.tagline && <p class="detail-tagline">{facts.tagline}</p>}
-        {(facts.officialRating || facts.criticRating !== undefined || facts.tags.length > 0) && <div class="detail-badges">
+        {(facts.officialRating || facts.criticRating !== undefined || facts.tags.length > 0 || showLinks) && <div class="detail-badges">
             {facts.officialRating && <span class="detail-badge" aria-label={`Rated ${facts.officialRating}`}>{facts.officialRating}</span>}
             {facts.criticRating !== undefined && <span class="detail-badge" aria-label={`Critics ${facts.criticRating}%`}>{facts.criticRating >= 60 ? '🍅' : '🥀'} {facts.criticRating}%</span>}
             {facts.tags.map(tag => <span key={tag.label} class="detail-badge detail-media-tag" title={tag.title} aria-label={tag.title}>{tag.label}</span>)}
+            {showLinks && facts.links.map(link => <a key={link.url} data-focusable="true" class="detail-badge detail-link" href={link.url} target="_blank" rel="noopener noreferrer" onClick={event => { event.preventDefault(); openExternalUrl(link.url); }}>{t(link.label)}</a>)}
         </div>}
-        {facts.links.length > 0 && hostSupports('externallinks') && <p class="detail-links">{facts.links.map(link => <a key={link.url} data-focusable="true" href={link.url} target="_blank" rel="noopener noreferrer" onClick={event => { event.preventDefault(); openExternalUrl(link.url); }}>{t(link.label)}</a>)}</p>}
     </>;
 }
 

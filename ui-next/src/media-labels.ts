@@ -39,3 +39,33 @@ export function describeCard(item: MediaItem): string | null {
     else if (item.UserData?.Played) parts.push('Played');
     return parts.length ? parts.join(' · ') : null;
 }
+
+/** Feed card heading: the series name leads for episodes, so "which show is this?" is the first thing read. */
+export function homeCardHeading(item: MediaItem): string {
+    if (item.Type === 'Episode' || item.SeriesName) return item.SeriesName || item.Name;
+    return item.Name;
+}
+
+/** Feed card subheading: `S01E01 · Episode name` for episodes, the year for everything else. */
+export function homeCardSubheading(item: MediaItem): string {
+    if (item.Type === 'Episode' || item.SeriesName) return [ episodeCode(item), item.Name ].filter(Boolean).join(' · ');
+    return item.ProductionYear ? String(item.ProductionYear) : '';
+}
+
+/** Whole minutes left of a partially watched item, or null when unknown or nothing is left. */
+export function resumeMinutesLeft(item: MediaItem): number | null {
+    const ticks = item.RunTimeTicks;
+    if (!ticks || ticks <= 0) return null;
+    const position = item.UserData?.PlaybackPositionTicks
+        ?? (item.UserData?.PlayedPercentage !== undefined ? ticks * item.UserData.PlayedPercentage / 100 : null);
+    if (position === null || position <= 0 || position >= ticks) return null;
+    return Math.max(1, Math.round((ticks - position) / 600000000));
+}
+
+const isWideCardItem = (item: MediaItem): boolean => item.Type === 'Episode' || Boolean(item.SeriesName)
+    || item.Type === 'Program' || Boolean(item.ChannelId) || Boolean(item.IsLive);
+
+/** A rail renders 16:9 thumb cards only when every item is TV; one movie turns the row into posters. */
+export function homeRailShape(items: MediaItem[]): 'landscape' | 'poster' {
+    return items.length && items.every(isWideCardItem) ? 'landscape' : 'poster';
+}

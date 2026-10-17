@@ -67,6 +67,8 @@ export interface MediaItem {
     RunTimeTicks?: number;
     CommunityRating?: number;
     RecommendationType?: number;
+    /** Hero eyebrow label stamped by the recommendation topic composer. */
+    RecommendationLabel?: string;
     /** Pgsql taste match tier (`high` or `mid`) for For You items. */
     TasteTier?: string;
     BaselineItemName?: string;
@@ -99,7 +101,7 @@ export interface MediaItem {
     PlayCount?: number;
     ImageTags?: { [key: string]: string };
     BackdropImageTags?: string[];
-    UserData?: { PlayedPercentage?: number; Played?: boolean; PlaybackPositionTicks?: number; PlayedItemCount?: number; UnplayedItemCount?: number; IsFavorite?: boolean };
+    UserData?: { PlayedPercentage?: number; Played?: boolean; PlaybackPositionTicks?: number; PlayedItemCount?: number; UnplayedItemCount?: number; IsFavorite?: boolean; PlayCount?: number };
     MediaSources?: Array<{ Id: string; Name?: string; Container?: string; Size?: number; Bitrate?: number; SupportsDirectPlay?: boolean; TranscodingUrl?: string; MediaStreams?: MediaItem['MediaStreams'] }>;
     MediaStreams?: Array<{ Type?: string | number; Codec?: string; DisplayTitle?: string; Profile?: string; Channels?: number; Width?: number; Height?: number; VideoRange?: string; VideoRangeType?: string; IsDefault?: boolean; Language?: string; BitRate?: number; Index?: number; IsExternal?: boolean; IsForced?: boolean; IsHearingImpaired?: boolean; Title?: string }>;
     ChannelId?: string;

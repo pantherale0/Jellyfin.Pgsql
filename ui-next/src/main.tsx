@@ -13,6 +13,7 @@ import { LibraryPage } from './library';
 import { Player } from './player';
 import { ProfileScreen, type ProfileScreenName } from './profile';
 import { buildHomeFeedBlocks, type HomeFeedExtras } from './home-feed-blocks';
+import { composeExploreTopics, composeRecommendationTopics, explorePicksFromProfile, flattenRecommendationTopics, type ExploreTopicSpec } from './recommendations';
 import { defaultHomePreferences, latestLibraries, loadHomePreferences } from './discovery';
 import { EntitySearchRows, FavoritesPage } from './discovery-views';
 import { HomeFeed } from './home-feed';
@@ -39,7 +40,7 @@ import { canCommitSsoRestore, parseSsoCodeAttempt, parseSsoCodeFragment, parseSs
 import { canHandOffToClassic, classicCredentialsWithSession, comparableServer, quickConnectPollOutcome, sharedSessionChange, shouldRemoveStoredSession, usableRememberedSession, validStoredSession, type SessionPolicy } from './auth-state';
 import { canResume, resumeStartTicks, type PlaybackChoice, type PlaybackOptions, type PlayIntent } from './player-model';
 import { adjacentEpisodes, appendPage, clearLibraryBookmark, entityQuery, hasMoreResults, isContainer, itemCapabilities, markEpisodesPlayed, mergeUserData, playedUserData, popTrail, pushTrail, searchSummary, SEARCH_PAGE_SIZE } from './catalog-model';
-import type { JellyfinUser, LiveTab, MediaItem, RecommendationGroup, Session } from './types';
+import type { JellyfinUser, LiveTab, MediaItem, RecommendationGroup, Session, TasteProfile } from './types';
 import { enterShowSeason, moveShowFocus, type Context, type Direction, type EpisodeControl, type ShowBookmark, type ShowFocusResult, type ShowTarget } from './show-navigation';
 import { currentLanguage, inlineSign, readStoredLanguage, resolveLanguage, t } from './i18n';
 import { localeLoaders } from './i18n/loaders';
@@ -243,6 +244,7 @@ function App() {
     const [ latestItems, setLatestItems ] = useState<MediaItem[]>([]);
     const [ recommendations, setRecommendations ] = useState<MediaItem[]>([]);
     const [ recommendationGroups, setRecommendationGroups ] = useState<RecommendationGroup[]>([]);
+    const [ recommendationBaselines, setRecommendationBaselines ] = useState<Record<string, MediaItem>>({});
     const [ homeCollections, setHomeCollections ] = useState<MediaItem[]>([]);
     const [ homeOnNow, setHomeOnNow ] = useState<MediaItem[]>([]);
     const [ homeVaultCandidates, setHomeVaultCandidates ] = useState<MediaItem[]>([]);
@@ -251,6 +253,9 @@ function App() {
     const [ homeExploreItems, setHomeExploreItems ] = useState<MediaItem[]>([]);
     const [ homeExploreStart, setHomeExploreStart ] = useState(0);
     const [ homeExploreTotal, setHomeExploreTotal ] = useState(0);
+    const [ homeExploreThemes, setHomeExploreThemes ] = useState<Array<{ spec: ExploreTopicSpec; items: MediaItem[] }>>([]);
+    const [ homeExploreThemeIndex, setHomeExploreThemeIndex ] = useState(0);
+    const [ homeTasteProfile, setHomeTasteProfile ] = useState<TasteProfile | null>(null);
     const [ loadingHomeExplore, setLoadingHomeExplore ] = useState(false);
     const [ activeRecommendation, setActiveRecommendation ] = useState(0);
     const [ recommendationDirection, setRecommendationDirection ] = useState<'next' | 'previous'>('next');
@@ -297,6 +302,8 @@ function App() {
     const [ libraryRestore, setLibraryRestore ] = useState(false);
     const [ detailLoading, setDetailLoading ] = useState(false);
     const [ homeExploreError, setHomeExploreError ] = useState('');
+    /** Item ids already shown in an explore rail, so themed pages never repeat titles. */
+    const homeExploreSeen = useRef<Set<string>>(new Set());
     const [ searchExpanded, setSearchExpanded ] = useState(false);
     const searchInputRef = useRef<HTMLInputElement>(null);
     const lastFocusRect = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
@@ -852,11 +859,15 @@ function App() {
             if (isAccountCurrent()) setHomeExtras(current => ({ ...current, [key]: value }));
             return value;
         };
+        const tasteProfilePromise = api.getTasteProfile().then(profile => {
+            if (isAccountCurrent()) setHomeTasteProfile(profile);
+            return profile;
+        }).catch(() => { if (isAccountCurrent()) setHomeTasteProfile(null); return null; });
         void api.getSeerrStatus().then(async enabled => {
             if (!isAccountCurrent()) return;
             setSeerrEnabled(enabled);
             if (!enabled) return;
-            const personal = seerrPersonalization(await api.getTasteProfile().catch(() => null));
+            const personal = seerrPersonalization(await tasteProfilePromise);
             if (!isAccountCurrent()) return;
             const limit = window.innerWidth >= 1400 ? 24 : 16;
             await Promise.all([
@@ -869,18 +880,26 @@ function App() {
         const recommendationSources = Promise.all([
             api.getForYouRecommendations('Movie').then(saveExtra('forYouMovies')).then(items => items || []).catch(() => { noteDiscoveryFailure(); return [] as MediaItem[]; }),
             api.getForYouRecommendations('Series').then(saveExtra('forYouSeries')).then(items => items || []).catch(() => { noteDiscoveryFailure(); return [] as MediaItem[]; }),
-            api.getRecommendations().then(groups => {
-                if (!isAccountCurrent()) return [] as MediaItem[];
+            api.getRecommendations().then(async groups => {
+                if (!isAccountCurrent()) return [] as RecommendationGroup[];
                 setRecommendationGroups(groups);
-                const items: MediaItem[] = [];
-                (groups as RecommendationGroup[]).forEach(group => {
-                    (group.Items || []).forEach(item => {
-                        if (item.Id) items.push({ ...item, RecommendationType: group.RecommendationType, BaselineItemName: group.BaselineItemName });
-                    });
-                });
-                return items;
-            }).catch(() => { noteDiscoveryFailure(); if (isAccountCurrent()) setRecommendationGroups([]); return [] as MediaItem[]; })
-        ]).then(sources => deduplicateItems(sources.reduce((all, source) => all.concat(source), [] as MediaItem[])));
+                const baselineIds = Array.from(new Set(groups
+                    .filter(group => group.RecommendationType === 0 || group.RecommendationType === 1)
+                    .map(group => group.CategoryId)
+                    .filter(Boolean)));
+                const baselineItems = await api.getRecommendationBaselines(baselineIds as string[]).catch(() => [] as MediaItem[]);
+                if (isAccountCurrent()) {
+                    setRecommendationBaselines(Object.fromEntries(baselineItems.filter(item => item.Id).map(item => [ item.Id, item ])));
+                }
+                return groups;
+            }).catch(() => { noteDiscoveryFailure(); if (isAccountCurrent()) setRecommendationGroups([]); return [] as RecommendationGroup[]; }),
+            api.getRecentlyReleased().then(saveExtra('recentReleases')).then(result => result || []).catch(() => { noteDiscoveryFailure(); return [] as MediaItem[]; })
+        ]).then(([ forYouMovies, forYouSeries, groups, recentReleases ]) => {
+            if (!isAccountCurrent()) return [] as MediaItem[];
+            return flattenRecommendationTopics(composeRecommendationTopics({
+                groups, forYouMovies, forYouSeries, recentReleases, seed: dailySeed(session?.user.Id)
+            }));
+        });
         const latestPromise = api.getLatestItems();
         void api.getRecentCollections().then(collections => {
             if (isAccountCurrent()) setHomeCollections(collections);
@@ -898,6 +917,9 @@ function App() {
         setHomeExploreStart(0);
         setHomeExploreTotal(0);
         setHomeExploreError('');
+        setHomeExploreThemes([]);
+        setHomeExploreThemeIndex(0);
+        homeExploreSeen.current = new Set();
         void api.getHomeFeedPage(0, 24).then(page => {
             if (!isAccountCurrent()) return;
             setHomeExploreItems(page.Items || []);
@@ -959,12 +981,49 @@ function App() {
             .then(latestByLibrary => { if (accountGeneration.isCurrent(account)) setHomeExtras(current => ({ ...current, latestByLibrary })); });
     }, [ api, latestLibraryKey ]);
 
+    const recommendationTopics = useMemo(() => composeRecommendationTopics({
+        groups: recommendationGroups,
+        baselines: recommendationBaselines,
+        forYouMovies: homeExtras.forYouMovies,
+        forYouSeries: homeExtras.forYouSeries,
+        recentReleases: homeExtras.recentReleases,
+        seed: dailySeed(session?.user.Id)
+    }), [ recommendationGroups, recommendationBaselines, homeExtras, session ]);
+
+    const exploreTopicSpecs = useMemo(() =>
+        composeExploreTopics(explorePicksFromProfile(homeTasteProfile), dailySeed(session?.user.Id))
+    , [ homeTasteProfile, session ]);
+
     const homeFeedBlocks = useMemo(() => buildHomeFeedBlocks(resumeItems, latestItems, recommendationGroups, homeCollections, homeOnNow, homeVaultCandidates, homeExploreItems, nextUpItems, {
         ...homeExtras,
+        recommendationTopics,
+        exploreThemes: homeExploreThemes,
         beyondMovies: homeExtras.beyondMovies && withRequested(homeExtras.beyondMovies, seerrRequested),
         beyondShows: homeExtras.beyondShows && withRequested(homeExtras.beyondShows, seerrRequested),
         preferences: homePrefs
-    }), [ resumeItems, latestItems, recommendationGroups, homeCollections, homeOnNow, homeVaultCandidates, homeExploreItems, nextUpItems, homeExtras, homePrefs, seerrRequested ]);
+    }), [ resumeItems, latestItems, recommendationGroups, homeCollections, homeOnNow, homeVaultCandidates, homeExploreItems, nextUpItems, homeExtras, homePrefs, seerrRequested, recommendationTopics, homeExploreThemes ]);
+
+    // Themed explore rails load one at a time in the background, so the themed head of the
+    // Explore section is ready before anyone scrolls to it; a failure parks the loop on retry.
+    const exploreTheming = useRef(false);
+    useEffect(() => {
+        if (!api || view !== 'home' || homeExploreError || exploreTheming.current) return;
+        if (homeExploreThemeIndex >= exploreTopicSpecs.length) return;
+        const account = accountGeneration.current();
+        const spec = exploreTopicSpecs[homeExploreThemeIndex];
+        exploreTheming.current = true;
+        void api.getExploreThemeItems(spec).then(items => {
+            if (!accountGeneration.isCurrent(account)) return;
+            const fresh = items.filter(item => Boolean(item.Id) && !homeExploreSeen.current.has(item.Id)).slice(0, 24);
+            fresh.forEach(item => homeExploreSeen.current.add(item.Id));
+            setHomeExploreThemes(current => [ ...current, { spec, items: fresh } ]);
+            setHomeExploreThemeIndex(homeExploreThemeIndex + 1);
+        }).catch(error => {
+            if (accountGeneration.isCurrent(account)) setHomeExploreError(messageOf(error));
+        }).finally(() => {
+            exploreTheming.current = false;
+        });
+    }, [ api, view, homeExploreError, homeExploreThemeIndex, exploreTopicSpecs ]);
 
     const loadMoreHomeFeed = useCallback((retry = false) => {
         if (!api || loadingHomeExplore || homeExploreStart >= homeExploreTotal || view !== 'home') return;
@@ -977,7 +1036,7 @@ function App() {
             const next = page.Items || [];
             setHomeExploreItems(current => {
                 const seen = new Set(current.map(item => item.Id));
-                return current.concat(next.filter(item => !seen.has(item.Id)));
+                return current.concat(next.filter(item => item.Id && !seen.has(item.Id) && !homeExploreSeen.current.has(item.Id)));
             });
             setHomeExploreStart(homeExploreStart + next.length);
             setHomeExploreTotal(page.TotalRecordCount || homeExploreTotal);
@@ -1240,6 +1299,8 @@ function App() {
         setLatestItems([]);
         setRecommendations([]);
         setRecommendationGroups([]);
+        setRecommendationBaselines({});
+        setHomeTasteProfile(null);
         setHomeCollections([]);
         setHomeOnNow([]);
         setHomeVaultCandidates([]);
@@ -1248,6 +1309,9 @@ function App() {
         setHomeExploreStart(0);
         setHomeExploreTotal(0);
         setHomeExploreError('');
+        setHomeExploreThemes([]);
+        setHomeExploreThemeIndex(0);
+        homeExploreSeen.current = new Set();
         setActiveRecommendation(0);
         setRecommendationsLoading(false);
         setHomeErrors({ views: '', resume: '', latest: '' });
@@ -2006,8 +2070,18 @@ function App() {
         setHomeOnNow(merge);
         setHomeVaultCandidates(merge);
         setHomeExploreItems(merge);
+        setHomeExploreThemes(current => current.map(entry => ({ spec: entry.spec, items: merge(entry.items) })));
         setRecommendations(merge);
         setItems(merge);
+        setHomeExtras(current => ({
+            ...current,
+            forYouMovies: current.forYouMovies && merge(current.forYouMovies),
+            forYouSeries: current.forYouSeries && merge(current.forYouSeries),
+            audioResume: current.audioResume && merge(current.audioResume),
+            bookResume: current.bookResume && merge(current.bookResume),
+            recentReleases: current.recentReleases && merge(current.recentReleases),
+            latestByLibrary: current.latestByLibrary?.map(entry => ({ ...entry, items: merge(entry.items) }))
+        }));
         setRecommendationGroups(groups => groups.map(group => group.Items ? { ...group, Items: merge(group.Items) } : group));
         setSelected(current => current && current.Id === itemId ? { ...current, UserData: { ...current.UserData, ...userData } } : current);
     };
@@ -2040,14 +2114,17 @@ function App() {
         setLatestItems(drop);
         setHomeCollections(drop);
         setHomeExploreItems(drop);
+        setHomeExploreThemes(current => current.map(entry => ({ spec: entry.spec, items: drop(entry.items) })));
         setHomeExtras(current => ({
             ...current,
             forYouMovies: current.forYouMovies && drop(current.forYouMovies),
             forYouSeries: current.forYouSeries && drop(current.forYouSeries),
             audioResume: current.audioResume && drop(current.audioResume),
             bookResume: current.bookResume && drop(current.bookResume),
+            recentReleases: current.recentReleases && drop(current.recentReleases),
             latestByLibrary: current.latestByLibrary?.map(entry => ({ ...entry, items: drop(entry.items) }))
         }));
+        setRecommendationBaselines(current => { const next = { ...current }; delete next[item.Id]; return next; });
         setRecommendations(drop);
         setItems(drop);
         setRecommendationGroups(groups => groups.map(group => group.Items ? { ...group, Items: drop(group.Items) } : group));
@@ -2863,11 +2940,10 @@ function App() {
                         <div class="hero-copy"><p class="eyebrow">{recommendationsLoading ? t('FINDING YOUR NEXT FAVORITE') : t('A LITTLE ESCAPE, ANYTIME')}</p><h1>{recommendationsLoading ? t('Made for you.') : t('Your next great story.')}</h1><p>{recommendationsLoading ? t('Loading recommendations from your library…') : t('Explore your collection and find something to enjoy.')}</p>{!recommendationsLoading && <button data-focusable="true" class="button primary" onClick={() => views[0] && void openLibrary(views[0])}>{t('Browse your library')}{' '}<span class="dir-arrow" aria-hidden="true">→</span></button>}</div>
                         <div class="hero-shade" />
                     </section>}
-                {views.length > 0 && <section class="home-library-chips" aria-label={t('Libraries')}>{views.map(library => <button data-focusable="true" class="home-library-chip" key={library.Id} onClick={() => void openLibrary(library)}>{library.Name}</button>)}</section>}
                 {homeNotice && <div class="home-section-error" role="status"><p>{homeNotice}</p><button class="button secondary" data-focusable="true" onClick={() => void loadHome()}>{t('Retry')}</button></div>}
                 {homeLoading.views && <HomeSectionLoading label={t('Loading your libraries…')} />}
                 {homeErrors.views && <HomeSectionError title={t('Libraries could not load')} message={homeErrors.views} onRetry={() => retryHomeSection('views')} />}
-                <HomeFeed blocks={homeFeedBlocks} api={api} onSelect={selectItem} onPlay={playItem} onNeedMore={() => loadMoreHomeFeed()} hasMore={homeExploreStart < homeExploreTotal && !homeExploreError} loadingMore={loadingHomeExplore} onUserData={applyUserData} onRequest={setSeerrSheet} />
+                <HomeFeed blocks={homeFeedBlocks} api={api} onSelect={selectItem} onPlay={playItem} onNeedMore={() => loadMoreHomeFeed()} hasMore={(homeExploreThemeIndex < exploreTopicSpecs.length || homeExploreStart < homeExploreTotal) && !homeExploreError} loadingMore={loadingHomeExplore} onUserData={applyUserData} onRequest={setSeerrSheet} />
                 {homeExploreError && <HomeSectionError title={t('More titles could not load')} message={homeExploreError} onRetry={() => loadMoreHomeFeed(true)} />}
                 {homeLoading.resume && !homeFeedBlocks.some(block => block.id === 'continue') && <HomeSectionLoading label={t('Loading continue watching…')} />}
                 {homeErrors.resume && <HomeSectionError title={t('Continue watching is taking too long')} message={homeErrors.resume} onRetry={() => retryHomeSection('resume')} />}
@@ -3028,15 +3104,6 @@ function messageOf(error: unknown): string {
     return message;
 }
 
-function deduplicateItems(items: MediaItem[]): MediaItem[] {
-    const seen = new Set<string>();
-    return items.filter(item => {
-        if (!item.Id || seen.has(item.Id)) return false;
-        seen.add(item.Id);
-        return true;
-    });
-}
-
 function shuffleItems(items: MediaItem[]): MediaItem[] {
     const shuffled = items.slice();
     for (let index = shuffled.length - 1; index > 0; index--) {
@@ -3048,16 +3115,15 @@ function shuffleItems(items: MediaItem[]): MediaItem[] {
     return shuffled;
 }
 
+/** Topic rotation stays stable for a user across a calendar day ("userId:2026-10-17"). */
+function dailySeed(userId: string | null | undefined): string {
+    const today = new Date();
+    const day = `${today.getFullYear()}-${today.getMonth() + 1}-${today.getDate()}`;
+    return userId ? `${userId}:${day}` : day;
+}
+
 function recommendationLabel(item: MediaItem): string {
-    const type = item.RecommendationType;
-    if (type === 6) return t('FOR YOU · MOVIES');
-    if (type === 7) return t('FOR YOU · TV SHOWS');
-    if (type === 8) return t('FROM YOUR LIBRARY');
-    if (type === 0) return item.BaselineItemName ? `BECAUSE YOU WATCHED ${item.BaselineItemName.toUpperCase()}` : t('BECAUSE YOU WATCHED');
-    if (type === 1) return item.BaselineItemName ? `BECAUSE YOU LIKED ${item.BaselineItemName.toUpperCase()}` : t('BECAUSE YOU LIKED');
-    if (type === 2 || type === 4) return item.BaselineItemName ? `DIRECTED BY ${item.BaselineItemName.toUpperCase()}` : t('DIRECTOR PICK');
-    if (type === 3 || type === 5) return item.BaselineItemName ? `STARRING ${item.BaselineItemName.toUpperCase()}` : t('CAST PICK');
-    return t('PICKED FOR YOU');
+    return item.RecommendationLabel || (item.RecommendationType === 8 ? t('FROM YOUR LIBRARY') : t('PICKED FOR YOU'));
 }
 
 function findSection(element: Element | null): Element | null {
@@ -3545,8 +3611,15 @@ function DetailPage({ api, item, backLabel, loading, loadError, onRetry, onBack,
         <DetailExtras api={api} item={item} onOpen={onOpenItem} onPlay={onPlayItem} />
         <RelatedRows api={api} item={item} onOpen={onOpenItem} />
         {(neighbours.previous || neighbours.next) && <nav class="detail-episode-nav" aria-label={t('Episodes')}>
-            {neighbours.previous && <button data-focusable="true" class="button secondary" type="button" onClick={() => onOpenItem(neighbours.previous as MediaItem)}><span class="dir-arrow" aria-hidden="true">←</span> <span>{episodeLabel(neighbours.previous)}</span></button>}
-            {neighbours.next && <button data-focusable="true" class="button secondary" type="button" onClick={() => onOpenItem(neighbours.next as MediaItem)}><span>{episodeLabel(neighbours.next)}</span> <span class="dir-arrow" aria-hidden="true">→</span></button>}
+            <h2>{item.Type === 'Episode' && item.SeriesName ? t('More in this season') : t('Episodes')}</h2>
+            {neighbours.previous && <button data-focusable="true" class="button secondary detail-episode-chip" type="button" onClick={() => onOpenItem(neighbours.previous as MediaItem)}>
+                <small class="detail-episode-nav-tag">{t('Previous')}</small>
+                <span class="detail-episode-chip-label"><span class="dir-arrow" aria-hidden="true">←</span><span>{episodeLabel(neighbours.previous)}</span></span>
+            </button>}
+            {neighbours.next && <button data-focusable="true" class="button secondary detail-episode-chip" type="button" onClick={() => onOpenItem(neighbours.next as MediaItem)}>
+                <small class="detail-episode-nav-tag">{t('Next')}</small>
+                <span class="detail-episode-chip-label"><span>{episodeLabel(neighbours.next)}</span><span class="dir-arrow" aria-hidden="true">→</span></span>
+            </button>}
         </nav>}
         {capabilities.entity && <section class="detail-related" aria-label={`Titles with ${item.Name || t('this item')}`}>
             <h2>{t('Titles')}</h2>
