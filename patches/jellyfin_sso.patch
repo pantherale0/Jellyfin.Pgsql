@@ -1,9 +1,9 @@
 diff --git a/Jellyfin.Api/Controllers/SSOController.cs b/Jellyfin.Api/Controllers/SSOController.cs
 new file mode 100644
-index 0000000000..0149b5e3ca
+index 0000000000..dfbbbf0f3f
 --- /dev/null
 +++ b/Jellyfin.Api/Controllers/SSOController.cs
-@@ -0,0 +1,1142 @@
+@@ -0,0 +1,1143 @@
 +using System;
 +using System.Collections.Concurrent;
 +using System.Collections.Generic;
@@ -58,6 +58,7 @@ index 0000000000..0149b5e3ca
 +    {
 +        WriteIndented = true
 +    };
++
 +    private static long _lastPruneTicks;
 +    private static string? _authorizationEndpoint;
 +    private static string? _tokenEndpoint;
