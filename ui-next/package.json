@@ -17,6 +17,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@hugeicons/core-free-icons": "^4.3.5",
     "hls.js": "^1.5.20",
     "preact": "^10.26.4"
   },

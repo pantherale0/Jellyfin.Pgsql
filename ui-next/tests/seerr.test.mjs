@@ -194,7 +194,7 @@ test('Beyond rails are request blocks ordered and hidden like other sections', a
 test('main loads Seerr behind the account owner and never blocks library results', () => {
     const load = main.slice(main.indexOf('const loadHome = useCallback('), main.indexOf('}, [ api ]);', main.indexOf('const loadHome = useCallback(')));
     assert.match(load, /api\.getSeerrStatus\(\)\.then\(async enabled => \{\s*if \(!isAccountCurrent\(\)\) return;/);
-    assert.match(load, /seerrPersonalization\(await api\.getTasteProfile\(\)\.catch\(\(\) => null\)\);\s*if \(!isAccountCurrent\(\)\) return;/);
+    assert.match(load, /seerrPersonalization\(await tasteProfilePromise\);/, 'the shared taste profile promise also feeds Seerr personalization');
     assert.match(load, /saveExtra\('beyondMovies'\)\(discoverVisible\(items\)\)\)\.catch\(\(\) => undefined\)/);
     assert.match(load, /saveExtra\('beyondShows'\)\(discoverVisible\(items\)\)\)\.catch\(\(\) => undefined\)/);
     assert.doesNotMatch(load.slice(load.indexOf('getSeerrStatus'), load.indexOf("getResumeItems('Audio')")), /noteDiscoveryFailure/);

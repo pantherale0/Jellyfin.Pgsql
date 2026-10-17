@@ -6,7 +6,7 @@ import { isHlsUrl } from './live-model';
 import { mapLibraryQuery } from './library-query';
 import type { LibraryItemsOptions } from './library-query';
 import { clientVersion } from './build';
-import { recommendationTitle } from './home-feed-blocks';
+import { normalizeRecommendationType, recommendationTitle } from './recommendations';
 import { withEntityType, type EntitySearchSection, type FavoriteGroup } from './discovery';
 import { asCultures, asItemResponse, asMediaItem, type Culture } from './api-contracts';
 import { asSeerrEnabled, asSeerrItems, type SeerrItem, type SeerrMediaType } from './seerr';
@@ -703,18 +703,18 @@ export class JellyfinApi {
     /** Resume rows per media type: Video for Continue watching, Audio for listening, Book for reading. */
     async getResumeItems(mediaType: 'Video' | 'Audio' | 'Book' = 'Video'): Promise<MediaItem[]> {
         const userId = encodeURIComponent(this.session.user.Id);
-        const response = await this.bulkItems(`/UserItems/Resume?UserId=${userId}&MediaTypes=${mediaType}&Limit=12&Fields=Overview,PrimaryImageAspectRatio,UserData,SeriesName,SeriesId,IndexNumber,ParentIndexNumber,ProductionYear`);
+        const response = await this.bulkItems(`/UserItems/Resume?UserId=${userId}&MediaTypes=${mediaType}&Limit=12&Fields=Overview,PrimaryImageAspectRatio,UserData,SeriesName,SeriesId,IndexNumber,ParentIndexNumber,ProductionYear,RunTimeTicks`);
         return response.Items || [];
     }
 
     async getLatestItems(): Promise<MediaItem[]> {
         const userId = encodeURIComponent(this.session.user.Id);
-        const response = await this.bulk<MediaItem[]>(`/Items/Latest?UserId=${userId}&Limit=16&Fields=Overview,PrimaryImageAspectRatio,UserData`);
+        const response = await this.bulk<MediaItem[]>(`/Items/Latest?UserId=${userId}&Limit=16&Fields=Overview,PrimaryImageAspectRatio,UserData,ProductionYear,SeriesName,SeriesId`);
         return response || [];
     }
 
     async getLatestInLibrary(parentId: string, limit = 16): Promise<MediaItem[]> {
-        const response = await this.bulk<MediaItem[]>(`/Items/Latest?${queryString({ UserId: this.session.user.Id, ParentId: parentId, Limit: limit, Fields: 'Overview,PrimaryImageAspectRatio,UserData,ProductionYear,SeriesName' })}`);
+        const response = await this.bulk<MediaItem[]>(`/Items/Latest?${queryString({ UserId: this.session.user.Id, ParentId: parentId, Limit: limit, Fields: 'Overview,PrimaryImageAspectRatio,UserData,ProductionYear,SeriesName,SeriesId' })}`);
         return Array.isArray(response) ? response : [];
     }
 
@@ -803,14 +803,52 @@ export class JellyfinApi {
     async getRecommendations(): Promise<RecommendationGroup[]> {
         const query = queryString({
             UserId: this.session.user.Id,
-            categoryLimit: 6,
+            categoryLimit: 12,
             itemLimit: 12,
             Fields: 'Overview,PrimaryImageAspectRatio,CommunityRating,ProductionYear,RunTimeTicks,UserData',
             EnableImages: 'true',
             ImageTypeLimit: 1,
             EnableImageTypes: 'Primary,Backdrop,Logo'
         });
-        return this.bulk<RecommendationGroup[]>(`/Movies/Recommendations?${query}`);
+        const raw = await this.bulk<unknown[]>(`/Movies/Recommendations?${query}`);
+        if (!Array.isArray(raw)) return [];
+        return raw.map(group => {
+            const value = group as RecommendationGroup;
+            return { ...value, RecommendationType: normalizeRecommendationType(value.RecommendationType) };
+        });
+    }
+
+    /** Baseline items of SimilarTo* groups, to label rows "rewatched"/"favorited" accurately. */
+    async getRecommendationBaselines(ids: string[]): Promise<MediaItem[]> {
+        const wanted = Array.from(new Set(ids.filter(id => id && id.length < 80))).slice(0, 40);
+        if (!wanted.length) return [];
+        const result = await this.bulkItems(`/Items?${queryString({
+            UserId: this.session.user.Id,
+            Ids: wanted.join(','),
+            Limit: wanted.length,
+            Fields: 'Overview,PrimaryImageAspectRatio,CommunityRating,ProductionYear,RunTimeTicks,UserData'
+        })}`);
+        return result.Items || [];
+    }
+
+    /** Movies in the library whose PremiereDate falls in the rolling release window. */
+    async getRecentlyReleased(limit = 24): Promise<MediaItem[]> {
+        const since = new Date(Date.now() - 730 * 24 * 60 * 60 * 1000).toISOString();
+        const result = await this.bulkItems(`/Items?${queryString({
+            UserId: this.session.user.Id,
+            IncludeItemTypes: 'Movie',
+            Recursive: 'true',
+            IsPlayed: 'false',
+            MinPremiereDate: since,
+            SortBy: 'PremiereDate',
+            SortOrder: 'Descending',
+            Limit: limit,
+            Fields: 'Overview,PrimaryImageAspectRatio,CommunityRating,ProductionYear,RunTimeTicks,UserData,PremiereDate',
+            EnableImages: 'true',
+            ImageTypeLimit: 1,
+            EnableImageTypes: 'Primary,Backdrop,Logo'
+        })}`);
+        return result.Items || [];
     }
 
     async getForYouRecommendations(itemType: 'Movie' | 'Series'): Promise<MediaItem[]> {
@@ -841,6 +879,23 @@ export class JellyfinApi {
             if (item) ordered.push({ ...item, RecommendationType: itemType === 'Movie' ? 6 : 7, TasteTier: tiers.get(id) || undefined });
         });
         return ordered;
+    }
+
+    /** One seeded explore theme page; over-fetched so the caller can drop repeats it already showed. */
+    async getExploreThemeItems(topic: { query: Record<string, string> }): Promise<MediaItem[]> {
+        const result = await this.bulkItems(`/Items?${queryString({
+            UserId: this.session.user.Id,
+            Recursive: 'true',
+            Limit: 36,
+            SortBy: 'Random',
+            EnableImages: 'true',
+            EnableUserData: 'true',
+            ImageTypeLimit: 1,
+            EnableImageTypes: 'Primary,Backdrop',
+            Fields: 'Overview,PrimaryImageAspectRatio,ImageTags,BackdropImageTags,UserData,ProductionYear,CommunityRating,DateCreated,RunTimeTicks,SeriesName,SeriesId,MediaStreams',
+            ...topic.query
+        })}`);
+        return result.Items || [];
     }
 
     async getUser(): Promise<JellyfinUser> {
@@ -1397,6 +1452,12 @@ export class JellyfinApi {
         const tag = item.ImageTags?.[imageType] || item.BackdropImageTags?.[0];
         if (!tag) return '';
         return `${this.session.server}/Items/${encodeURIComponent(item.Id)}/Images/${imageType}?${queryString({ tag, quality, maxWidth: width })}`;
+    }
+
+    /** A series' own poster, addressed through the series id (episodes carry no poster of their own). */
+    seriesArt(item: MediaItem, width = 300, quality = 90): string {
+        if (!item.SeriesId) return '';
+        return `${this.session.server}/Items/${encodeURIComponent(item.SeriesId)}/Images/Primary?${queryString({ quality, maxWidth: width })}`;
     }
 
     async loadImage(item: MediaItem, type = 'Primary', width = 420, quality = 90, bag?: ImageCancel): Promise<string> {
