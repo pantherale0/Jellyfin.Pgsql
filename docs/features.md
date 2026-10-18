@@ -141,6 +141,8 @@ UI Next keeps an accepted playback source active while a replacement is prepared
 
 **UI Next:** Search adds a “Request from Seerr” section (requestable titles plus ones already requested or processing, with status labels); home adds “Movies/Shows beyond your library” rows personalised from the taste profile, on desktop, mobile and TV. Cards open a request sheet that calls `POST /Seerr/Request` and reports refusals (parental controls, already requested, rate limit, unavailable) with fixed wording. The rows can be reordered or hidden as “Beyond your library (Seerr)” in the Home screen editor; with the gateway disabled nothing Seerr-related is shown. See [`ui-next/README.md`](../ui-next/README.md).
 
+Home discovery treats the profile's mapped top genres as alternatives. A title can match any of them; it does not need to match every genre. Parental filtering still applies.
+
 **Where:** [`Jellyfin.Plugin.Seerr`](../Jellyfin.Plugin.Seerr/) (plugin config: Seerr URL + API key); UI Next `ui-next/src/seerr.ts`, `ui-next/src/seerr-views.tsx`; [`jellyfin_web_seerr_search`](patches.md#jellyfin_web_seerr_searchpatch); [`jellyfin_z_beyond_your_library_home`](patches.md#jellyfin_z_beyond_your_library_homepatch) + [`jellyfin_web_seerr_z_beyond_your_library_home`](patches.md#jellyfin_web_seerr_z_beyond_your_library_homepatch).
 
 **Note:** Upstream Devices.`AppVersion` length issues with Jellyseerr were discussed on JPVenson ([#25](https://github.com/JPVenson/Jellyfin.Pgsql/issues/25)); use a current image/schema if you hit `varchar(32)` errors.
