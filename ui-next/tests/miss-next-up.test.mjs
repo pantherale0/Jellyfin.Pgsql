@@ -80,11 +80,11 @@ test('MISS-01 Next Up appears after Continue watching and stays out of Explore',
 
     const blocks = buildHomeFeedBlocks(resume, [], [], [], [], [], explore, [episode]);
 
-    assert.deepEqual(blocks.map(block => block.id), ['continue', 'next-up', 'explore-0']);
+    assert.deepEqual(blocks.map(block => block.id), ['continue', 'next-up', 'explore-fallback']);
     const nextUp = blocks.find(block => block.id === 'next-up');
     assert.equal(nextUp?.title, 'Next up');
     assert.deepEqual(nextUp?.items, [episode]);
-    const exploreBlock = blocks.find(block => block.id === 'explore-0');
+    const exploreBlock = blocks.find(block => block.id === 'explore-fallback');
     assert.deepEqual(exploreBlock?.items, [{ Id: 'movie-1', Name: 'Unrelated Movie', Type: 'Movie' }]);
 });
 

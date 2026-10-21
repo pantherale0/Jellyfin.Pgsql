@@ -180,7 +180,7 @@ test('Beyond rails are request blocks ordered and hidden like other sections', a
     const rails = blocks.filter(block => block.kind !== 'spotlight').map(block => block.id);
     assert.ok(rails.indexOf('beyond-movies') > rails.indexOf('latest'));
     assert.equal(rails.indexOf('beyond-shows'), rails.indexOf('beyond-movies') + 1);
-    assert.equal(rails.indexOf('explore-0'), rails.indexOf('beyond-shows') + 1);
+    assert.equal(rails.indexOf('explore-fallback'), rails.indexOf('beyond-shows') + 1);
     const movies = blocks.find(block => block.id === 'beyond-movies');
     assert.equal(movies.kind, 'requests');
     assert.deepEqual(movies.items, []);
@@ -193,7 +193,7 @@ test('Beyond rails are request blocks ordered and hidden like other sections', a
 
 test('main loads Seerr behind the account owner and never blocks library results', () => {
     const load = main.slice(main.indexOf('const loadHome = useCallback('), main.indexOf('}, [ api ]);', main.indexOf('const loadHome = useCallback(')));
-    assert.match(load, /api\.getSeerrStatus\(\)\.then\(async enabled => \{\s*if \(!isAccountCurrent\(\)\) return;/);
+    assert.match(load, /api\.getSeerrStatus\(\)\.then\(async enabled => \{\s*if \(!isLoadCurrent\(\)\) return;/);
     assert.match(load, /seerrPersonalization\(await tasteProfilePromise\);/, 'the shared taste profile promise also feeds Seerr personalization');
     assert.match(load, /saveExtra\('beyondMovies'\)\(discoverVisible\(items\)\)\)\.catch\(\(\) => undefined\)/);
     assert.match(load, /saveExtra\('beyondShows'\)\(discoverVisible\(items\)\)\)\.catch\(\(\) => undefined\)/);

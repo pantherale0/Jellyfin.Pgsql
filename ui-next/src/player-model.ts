@@ -50,6 +50,113 @@ export interface PlaybackOptions {
     liveStreamId?: string;
 }
 
+export interface PlaybackRenegotiationOptions extends PlaybackOptions {
+    reopenLiveStream?: boolean;
+}
+
+export interface PlaybackRenegotiationPlan {
+    options: PlaybackOptions;
+    retainedLiveStreamId?: string;
+}
+
+export function playbackRenegotiationPlan(options: PlaybackRenegotiationOptions, currentLiveStreamId?: string): PlaybackRenegotiationPlan {
+    const { reopenLiveStream, liveStreamId, mediaSourceId, ...playbackOptions } = options;
+    const retainedLiveStreamId = reopenLiveStream ? undefined : liveStreamId ?? currentLiveStreamId;
+    const nextOptions: PlaybackOptions = { ...playbackOptions, liveStreamId: retainedLiveStreamId };
+    if (reopenLiveStream || mediaSourceId !== undefined) nextOptions.mediaSourceId = reopenLiveStream ? undefined : mediaSourceId;
+    return {
+        options: nextOptions,
+        retainedLiveStreamId
+    };
+}
+
+export interface PlaybackProgressWatch {
+    lastPositionSeconds: number;
+    lastProgressAtMs: number;
+    liveReopenAttempted: boolean;
+}
+
+export interface PlaybackProgressSample {
+    currentTime: number;
+    nowMs: number;
+    paused: boolean;
+    seeking: boolean;
+    isLive: boolean;
+}
+
+export interface PlaybackProgressDecision {
+    watch: PlaybackProgressWatch;
+    buffering: boolean;
+    reopenLiveStream: boolean;
+    recoveryFailed: boolean;
+}
+
+export const PLAYBACK_BUFFERING_FALLBACK_MS = 2_000;
+export const LIVE_REOPEN_AFTER_STALL_MS = 20_000;
+
+export function observePlaybackProgress(watch: PlaybackProgressWatch, sample: PlaybackProgressSample): PlaybackProgressDecision {
+    const nextWatch = { ...watch };
+    if (sample.paused || sample.seeking || sample.currentTime > watch.lastPositionSeconds + 0.05) {
+        nextWatch.lastPositionSeconds = sample.currentTime;
+        nextWatch.lastProgressAtMs = sample.nowMs;
+        return { watch: nextWatch, buffering: false, reopenLiveStream: false, recoveryFailed: false };
+    }
+
+    const stalledForMs = Math.max(0, sample.nowMs - watch.lastProgressAtMs);
+    const reopenLiveStream = sample.isLive && !watch.liveReopenAttempted && stalledForMs >= LIVE_REOPEN_AFTER_STALL_MS;
+    nextWatch.liveReopenAttempted ||= reopenLiveStream;
+    return {
+        watch: nextWatch,
+        buffering: stalledForMs >= PLAYBACK_BUFFERING_FALLBACK_MS,
+        reopenLiveStream,
+        recoveryFailed: sample.isLive && watch.liveReopenAttempted && stalledForMs >= LIVE_REOPEN_AFTER_STALL_MS
+    };
+}
+
+export type HlsRecoveryKind = 'network' | 'media' | 'other';
+export type HlsRecoveryAction = 'ignore' | 'start-load' | 'recover-media' | 'swap-audio-codec' | 'reopen-live' | 'fail';
+
+export interface HlsRecoveryAttempts {
+    networkRetries: number;
+    mediaRetries: number;
+}
+
+export interface HlsRecoveryError {
+    fatal: boolean;
+    kind: HlsRecoveryKind;
+    responseCode?: number;
+}
+
+export interface HlsRecoveryDecision {
+    action: HlsRecoveryAction;
+    attempts: HlsRecoveryAttempts;
+}
+
+export function planHlsRecovery(error: HlsRecoveryError, attempts: HlsRecoveryAttempts, isLive: boolean, liveReopenAttempted: boolean): HlsRecoveryDecision {
+    if (!error.fatal) return { action: 'ignore', attempts };
+
+    if (error.kind === 'network') {
+        if (error.responseCode === 0) {
+            return { action: isLive && !liveReopenAttempted ? 'reopen-live' : 'fail', attempts };
+        }
+        if (error.responseCode !== undefined && error.responseCode >= 400) {
+            return { action: 'fail', attempts };
+        }
+        if (attempts.networkRetries < 1) {
+            return { action: 'start-load', attempts: { ...attempts, networkRetries: attempts.networkRetries + 1 } };
+        }
+    }
+
+    if (error.kind === 'media' && attempts.mediaRetries < 2) {
+        return {
+            action: attempts.mediaRetries === 0 ? 'recover-media' : 'swap-audio-codec',
+            attempts: { ...attempts, mediaRetries: attempts.mediaRetries + 1 }
+        };
+    }
+
+    return { action: isLive && !liveReopenAttempted ? 'reopen-live' : 'fail', attempts };
+}
+
 export type PlayIntent = 'resume' | 'beginning';
 
 export function resumeStartTicks(item: Pick<MediaItem, 'UserData' | 'RunTimeTicks' | 'Type'> | null, intent: PlayIntent = 'resume'): number {

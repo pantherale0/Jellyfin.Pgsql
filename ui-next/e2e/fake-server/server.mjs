@@ -158,7 +158,7 @@ async function handleIncoming(request, response, backend) {
             send(response, 400, { 'Content-Length': '0' });
             return;
         }
-        if (itemId !== 'e2e-movie-1') {
+        if (itemId !== 'e2e-movie-1' && itemId !== 'e2e-live-channel') {
             json(response, { Message: 'Media not found.' }, 404);
             return;
         }

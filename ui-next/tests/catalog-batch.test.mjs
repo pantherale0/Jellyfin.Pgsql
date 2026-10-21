@@ -189,7 +189,7 @@ test('CAT-11 optional home and library failures are tracked independently with r
     assert.match(main, /setHomeExploreError\(messageOf\(error\)\)/, 'explore paging failures are surfaced');
     assert.match(main, /if \(homeExploreError && !retry\) return;/, 'auto-paging stops after a failure until retried');
     assert.match(main, /title="More titles could not load"/);
-    assert.match(main, /noteDiscoveryFailure\(\); if \(isAccountCurrent\(\)\) setRecommendationsLoading\(false\)/);
+    assert.match(main, /noteDiscoveryFailure\(\); if \(isLoadCurrent\(\)\) setRecommendationsLoading\(false\)/);
     const library = source('library.tsx');
     assert.match(library, /Retry genres/);
     assert.match(library, /Retry decades/);

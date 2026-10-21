@@ -1662,17 +1662,19 @@ export class JellyfinApi {
     }
 
     reportPlaybackStopped(report: PlaybackReport, keepalive = false): Promise<boolean> {
-        const payload = JSON.stringify(report);
         if (keepalive && typeof fetch === 'function') {
-            return fetch(`${this.session.server}/Sessions/Playing/Stopped`, {
+            const send = () => fetch(`${this.session.server}/Sessions/Playing/Stopped`, {
                 method: 'POST',
                 headers: {
                     'Authorization': authorization(this.session.token),
                     'Content-Type': 'application/json'
                 },
-                body: payload,
+                body: JSON.stringify(report),
                 keepalive: true
             }).then(response => response.ok).catch(() => false);
+            const delivery = this.reportTail.then(send, send);
+            this.reportTail = delivery;
+            return delivery;
         }
         return this.postPlayback('/Sessions/Playing/Stopped', report);
     }

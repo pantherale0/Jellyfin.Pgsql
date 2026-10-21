@@ -60,23 +60,24 @@ test('AUTH-01 a new account generation retires every earlier owner', async () =>
 
 test('AUTH-01 home, discovery and post-playback writes all check the account owner', () => {
     const checks = [
-        [ body('const loadHome = useCallback(', '}, [ api ]);'), 'isAccountCurrent()' ],
-        [ body('const applyReportedPlayback = async', 'const leavePlayer'), 'accountGeneration.isCurrent(account)' ]
+        [ body('const loadHome = useCallback(', '}, [ api ]);'), [ 'isLoadCurrent()', 'isSectionCurrent()' ] ],
+        [ body('const applyReportedPlayback = async', 'const leavePlayer'), [ 'accountGeneration.isCurrent(account)' ] ]
     ];
-    for (const [ source, guard ] of checks) {
+    for (const [ source, guards ] of checks) {
         const lines = source.split('\n');
         lines.forEach((line, index) => {
             // Every async continuation that writes state must be guarded on the same line or open with an early return.
             if (!/\.(then|catch|finally)\(/.test(line) && !/^\s*(const \w+ = )?await /.test(lines[index - 1] || '')) return;
             if (!/\bset[A-Z]\w*\(/.test(line)) {
                 if (/=> \{\s*$/.test(line) && /\bset[A-Z]\w*\(/.test(lines[index + 1] || '')) {
-                    assert.ok(lines[index + 1].includes(guard), `unguarded continuation: ${line.trim()} / ${lines[index + 1].trim()}`);
+                    assert.ok(guards.some(guard => lines[index + 1].includes(guard)), `unguarded continuation: ${line.trim()} / ${lines[index + 1].trim()}`);
                 }
                 return;
             }
-            assert.ok(line.includes(guard) || line.includes('saveExtra'), `unguarded write: ${line.trim()}`);
+            assert.ok(guards.some(guard => line.includes(guard)) || line.includes('saveExtra'), `unguarded write: ${line.trim()}`);
         });
     }
+    assert.match(checks[0][0], /const isSectionCurrent = \(\) => isLoadCurrent\(\) && homeSectionGenerations\[section\]\.isCurrent/);
     const playback = checks[1][0];
     assert.match(playback, /await api\.getItem\(itemId\);\s*if \(!accountGeneration\.isCurrent\(account\)\) return;/);
     assert.match(playback, /if \(accountGeneration\.isCurrent\(account\)\) setResumeItems/);

@@ -111,6 +111,7 @@ export default defineConfig(({ command, mode }) => {
             '/UserViews': backend,
             '/Shows': backend,
             '/LiveTv': backend,
+            '/LiveStreams': backend,
             '/Search': backend,
             '/Videos': backend,
             '/MediaSegments': backend,

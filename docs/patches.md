@@ -8,6 +8,17 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 
 ## 1. Auth / SSO / security
 
+### `jellyfin_zzzzzz_media_resource_security.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Requires authentication for subtitle streams and video attachments, checks subtitle item visibility, and serves attachments as downloads with `nosniff`. Generated attachment delivery URLs include the caller's escaped `ApiKey` for font loaders that cannot set headers. |
+| **Why** | A Plex2Shell-focused review found anonymous subtitle and attachment access, a subtitle library-permission bypass, and media-controlled attachment MIME types that could serve active HTML or SVG under Jellyfin's origin. No complete unauthenticated server-code-execution chain was demonstrated. |
+| **Where** | `Jellyfin.Api/Controllers/SubtitleController.cs`, `VideoAttachmentsController.cs`, `Helpers/MediaInfoHelper.cs`, API controller and helper tests. |
+| **How** | Controller-level `[Authorize]` protects both subtitle route variants and attachments. Subtitle lookup resolves the effective route/query item ID through `GetItemById<Video>(id, User.GetUserId())` before reading or extracting data. Invisible items return 404. Attachments retain their MIME type for font consumers but send `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`. HTTP tests cover absent/junk credentials, permitted captions, hidden items, and media-supplied HTML. A helper test verifies URL token escaping. |
+| **Related** | Apply after `jellyfin_zzzzz_device_playback_options.patch` and the existing Live TV patches, which modify `MediaInfoHelper` and its tests. See the [review scope and findings](known-issues.md#plex2shell-focused-security-review). No public issue. |
+
 ### `jellyfin_sso.patch`
 
 | | |

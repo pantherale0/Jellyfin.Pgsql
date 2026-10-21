@@ -6,6 +6,8 @@ import { t } from './i18n';
 
 export { recommendationTitle };
 
+export const HOME_EXPLORE_PAGE_SIZE = 24;
+
 export interface HomeFeedExtras {
     forYouMovies?: MediaItem[];
     forYouSeries?: MediaItem[];
@@ -16,8 +18,9 @@ export interface HomeFeedExtras {
     recentReleases?: MediaItem[];
     /** Composed recommendation topics (because you watched/liked, taste picks, releases). */
     recommendationTopics?: RecommendationTopic[];
-    /** Themed Explore pages (genre dives, actors, directors, decades) shown before the fallback pages. */
+    /** Themed Explore pages (genre dives, actors, directors, decades) shown before the fallback rail. */
     exploreThemes?: Array<{ spec: ExploreTopicSpec; items: MediaItem[] }>;
+    exploreHasMore?: boolean;
     beyondMovies?: SeerrItem[];
     beyondShows?: SeerrItem[];
     preferences?: HomePreferences;
@@ -25,7 +28,7 @@ export interface HomeFeedExtras {
 
 export interface HomeFeedBlock {
     id: string;
-    kind: 'rail' | 'spotlight' | 'requests';
+    kind: 'rail' | 'explore' | 'spotlight' | 'requests';
     title: string;
     subtitle?: string;
     items: MediaItem[];
@@ -76,10 +79,7 @@ export function buildHomeFeedBlocks(resume: MediaItem[], latest: MediaItem[], gr
         rails.push({ id: `explore-${spec.id}`, kind: 'rail', title: spec.title, subtitle: spec.eyebrow, items: fresh });
     });
     const distinctExplore = exploreItems.filter(item => item.Id && !knownIds.has(item.Id));
-    for (let offset = 0; offset < distinctExplore.length; offset += 24) {
-        const page = distinctExplore.slice(offset, offset + 24);
-        if (page.length) rails.push({ id: `explore-${offset}`, kind: 'rail', title: offset ? t('More from your library') : t('Explore your library'), subtitle: t('MORE TO DISCOVER'), items: page });
-    }
+    if (distinctExplore.length || extras.exploreHasMore) rails.push({ id: 'explore-fallback', kind: 'explore', title: t('Explore your library'), subtitle: t('MORE TO DISCOVER'), items: distinctExplore });
 
     rails = arrangeRails(rails, extras.preferences || defaultHomePreferences());
 

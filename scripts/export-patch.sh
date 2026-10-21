@@ -93,10 +93,9 @@ fi
 echo "Applying preceding dependency patches to $TARGET/..."
 ./scripts/apply-patches.sh "$TARGET" >/dev/null
 
-# Create baseline commit
+# Snapshot the dependency baseline without creating a submodule commit.
 git -C "$TARGET" add -A
-git -C "$TARGET" commit -q -m "baseline_deps"
-BASE_HASH=$(git -C "$TARGET" rev-parse HEAD)
+BASE_HASH=$(git -C "$TARGET" write-tree)
 
 # Restore exact working-tree files over the applied-dependency baseline.
 cp -a "$TEMP_SNAPSHOT/." "$TARGET/"
@@ -109,7 +108,7 @@ fi
 # Stage intent to add for any new files
 git -C "$TARGET" add -N . 2>/dev/null || true
 
-# Export diff against baseline_deps
+# Export diff against the dependency tree.
 echo "Generating $PATCH_FILE..."
 git -C "$TARGET" diff --binary "$BASE_HASH" > "$PATCH_FILE"
 

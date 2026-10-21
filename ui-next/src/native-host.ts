@@ -274,6 +274,7 @@ function call<T>(invoke: (shell: NativeShellBridge) => T): { called: boolean; va
 }
 
 const IDENTITY_MAX = 256;
+const DEVICE_PROFILE_TIMEOUT_MS = 3000;
 
 function identityString(value: unknown): string | null {
     if (typeof value !== 'string') return null;
@@ -370,14 +371,20 @@ function isDeviceProfile(value: unknown): boolean {
  * Jellyfin Web's `AppHost.getDeviceProfile(profileBuilder)` does. The builder handed to the host
  * ignores Jellyfin Web's builder options and returns UI Next's own profile.
  */
-export async function hostDeviceProfile<T extends object>(build: () => T, appVersion: string): Promise<T> {
+export async function hostDeviceProfile<T extends object>(build: () => T, appVersion: string, timeoutMs = DEVICE_PROFILE_TIMEOUT_MS): Promise<T> {
     const host = nativeShell()?.AppHost;
     if (!host || typeof host.getDeviceProfile !== 'function') return build();
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-        const profile = await host.getDeviceProfile(() => build(), appVersion);
+        const profile = await Promise.race([
+            host.getDeviceProfile(() => build(), appVersion),
+            new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), Math.max(1, timeoutMs)); })
+        ]);
         return isDeviceProfile(profile) ? profile as T : build();
     } catch (_error) {
         return build();
+    } finally {
+        if (timer !== undefined) clearTimeout(timer);
     }
 }
 

@@ -3,7 +3,17 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { readSource } from './source.mjs';
 
-const { AccountGeneration } = await import('../src/account-generation.ts');
+const { AccountGeneration, RequestGeneration } = await import('../src/account-generation.ts');
+
+test('request generations reject results from an earlier refresh', () => {
+    assert.equal(typeof RequestGeneration, 'function', 'async view loaders need their own refresh generation');
+    const requests = new RequestGeneration();
+    const first = requests.begin();
+    const second = requests.begin();
+
+    assert.equal(requests.isCurrent(first), false);
+    assert.equal(requests.isCurrent(second), true);
+});
 
 test('AUTH-01 only work started in the current account generation may commit', () => {
     const accounts = new AccountGeneration();
@@ -43,7 +53,7 @@ test('AUTH-01 a restarted account gets a fresh current generation', () => {
 test('AUTH-01 App identity transitions advance or retire the account generation', () => {
     const source = readSource(new URL('../src/main.tsx', import.meta.url), 'utf8');
 
-    assert.ok(source.includes("import { AccountGeneration } from './account-generation'"));
+    assert.ok(source.includes("import { AccountGeneration, RequestGeneration } from './account-generation'"));
     assert.ok(source.includes('accountGeneration.invalidate();'));
     assert.ok(source.includes('accountGeneration.begin();'));
 });

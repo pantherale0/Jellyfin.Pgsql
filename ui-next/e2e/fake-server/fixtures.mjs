@@ -126,7 +126,15 @@ const defaultState = {
         },
         episode(1, 1, 1),
         episode(2, 1, 2),
-        episode(3, 2, 1)
+        episode(3, 2, 1),
+        {
+            Id: 'e2e-live-channel',
+            Name: 'E2E Test Channel',
+            Type: 'TvChannel',
+            MediaType: 'Video',
+            ChannelNumber: '1',
+            UserData: { IsFavorite: false }
+        }
     ],
     resumeItems: [],
     latestItems: [],
@@ -165,6 +173,23 @@ const defaultState = {
                         BitRate: 96_000
                     }
                 ]
+            }
+        ]
+    },
+    livePlaybackInfo: {
+        PlaySessionId: 'e2e-live-play-session',
+        MediaSources: [
+            {
+                Id: 'e2e-live-open-source',
+                Name: 'E2E Live WebM',
+                Container: 'webm',
+                OpenToken: 'e2e-live-open-token',
+                RequiresOpening: true,
+                SupportsDirectPlay: true,
+                SupportsDirectStream: true,
+                SupportsTranscoding: true,
+                Bitrate: 500_000,
+                MediaStreams: []
             }
         ]
     }
