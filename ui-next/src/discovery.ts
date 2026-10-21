@@ -76,7 +76,7 @@ export function normalizeHomePreferences(raw: unknown): HomePreferences {
     const value = raw && typeof raw === 'object' ? raw as Partial<Record<keyof HomePreferences, unknown>> : {};
     const known = (entries: unknown) => Array.isArray(entries) ? entries.filter((entry): entry is HomeSectionId => sectionIds.includes(entry as HomeSectionId)) : null;
     const order = Array.from(new Set(known(value.order) || []));
-    // Sections added after a layout was saved follow their default predecessor, but never land behind the endless Explore rows.
+    // Sections added after a layout was saved follow their default predecessor, but never land behind Explore.
     sectionIds.forEach((id, index) => {
         if (order.includes(id)) return;
         const predecessor = sectionIds.slice(0, index).reverse().find(previous => order.includes(previous));

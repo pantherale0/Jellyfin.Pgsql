@@ -1,4 +1,4 @@
-export class AccountGeneration {
+export class RequestGeneration {
     private value = 0;
 
     current(): number {
@@ -18,3 +18,5 @@ export class AccountGeneration {
         return id === this.value;
     }
 }
+
+export class AccountGeneration extends RequestGeneration { }

@@ -6,6 +6,23 @@ Operational and tracker notes for this fork. For benefits/drawbacks framing see 
 
 This project is **highly experimental** and maintained for personal use. Expect breakage on Jellyfin upgrades until patches and migrations are re-validated. Issues and pull requests on [pantherale0/Jellyfin.Pgsql](https://github.com/pantherale0/Jellyfin.Pgsql) are **collaborator-only**; prefer [Discussions](https://github.com/pantherale0/Jellyfin.Pgsql/discussions) for public conversation.
 
+## Plex2Shell-focused security review
+
+The 2026-10-21 review covered the pinned Jellyfin `v12.1` server with this fork's server patches applied, the current `ui-next` source, and the plugin endpoints used by that client. The reference was the [researcher's Plex2Shell disclosure](https://zmain.info/blog/plex2shell), linked from the [reported exploitation](https://thehackernews.com/2026/10/cisa-orders-federal-agencies-to-patch.html).
+
+No complete unauthenticated SSRF-to-admin-token-to-server-code-execution chain was demonstrated. Jellyfin's `AuthService.Authenticate` validates token values, and configuration mutations and plugin installation require elevated authorization. The reviewed transcoding APIs resolve existing media sources rather than accepting Plex's arbitrary media `path` parameter. No confirmed matching defect was found in UI Next's playback-origin checks, external-link scheme checks, SSO return handling, or plain-text disclaimer rendering.
+
+The review did confirm these server issues. The [media resource security patch](patches.md#jellyfin_zzzzzz_media_resource_securitypatch) fixes both.
+
+| Severity | Finding and preconditions | Fix |
+|---|---|---|
+| High | `VideoAttachmentsController.GetAttachment` returned media-supplied HTML or SVG MIME types inline. A crafted media attachment must enter a scanned library, and a viewer must open its delivery URL. Before the fix, the route needed no token. Active content could run under the server's origin and access browser-stored credentials. | Require authentication and the existing user-scoped item lookup. Force download disposition and disable MIME sniffing. |
+| Medium | Both `SubtitleController.GetSubtitle` routes and video attachments allowed anonymous reads when their item/source IDs were known. Subtitle lookup also ignored the signed-in user's library visibility and could trigger extraction for hidden items. | Require authentication. Resolve the subtitle's effective item ID against the authenticated user's library permissions before reading or extracting it. |
+
+Local ASP.NET Core HTTP tests reproduced successful anonymous reads, hidden-item subtitle reads, and inline HTML responses before the fix. Afterward, the full API test project passed 159 tests, including 13 new security and delivery-URL cases. UI Next's 469 unit and fake-server tests passed. `npm audit --omit=dev --json` and the API project's NuGet vulnerability check with transitive dependencies reported no known advisories at review time.
+
+The review used targeted static searches and manual data-flow tracing. It was not a full SAST scan, a production penetration test, or an audit of FFmpeg/native codec binaries and every third-party plugin. Embedded-font behavior was checked at the authenticated HTTP-response and delivery-URL boundaries, not on physical clients. Tests ran in Release because the installed SDK's compiler could not load the newer Roslyn analyzer required by Debug builds.
+
 ## This fork’s tracker
 
 | Issue | Topic | Notes |

@@ -184,7 +184,6 @@ button:disabled { opacity: .6; cursor: wait; }
 .home-feed-blocks { display: grid; gap: 0; }
 .home-feed-block { min-width: 0; }
 .home-feed-block-placeholder { width: 100%; contain: strict; }
-.home-feed-sentinel { height: 1px; }
 .home-feed-rail { margin: 1rem 0 1.65rem; }
 .home-feed-rail .section-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 var(--page-gutter); }
 .home-feed-rail .section-heading h2 { margin: .1rem 0 0; font-size: clamp(1.15rem, 2vw, 1.65rem); }
@@ -193,6 +192,10 @@ button:disabled { opacity: .6; cursor: wait; }
 .home-feed-rail-controls button:disabled { opacity: .35; cursor: default; }
 .home-feed-rail-items { display: flex; gap: 16px; padding: .15rem 44px .7rem 32px; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; scroll-padding-left: 32px; }
 .home-feed-card { display: flex; width: clamp(145px, 14vw, 190px); flex: 0 0 clamp(145px, 14vw, 190px); flex-direction: column; padding: 0; border: 0; color: inherit; background: transparent; cursor: pointer; text-align: start; scroll-snap-align: start; }
+.home-feed-more-card:disabled { cursor: progress; opacity: .6; }
+.home-feed-more-card-content { display: grid; justify-items: center; gap: .75rem; padding: 1rem; text-align: center; }
+.home-feed-more-card-icon { display: grid; width: 62px; height: 62px; place-items: center; border: 1px solid rgba(var(--ink), .14); border-radius: 50%; color: #a3e635; background: rgba(var(--base), .42); font-size: 2rem; font-weight: 700; line-height: 1; }
+.home-feed-more-card-label { color: var(--text); font-size: .85rem; font-weight: 750; }
 .home-feed-card.landscape { width: clamp(230px, 24vw, 340px); flex-basis: clamp(230px, 24vw, 340px); }
 .home-feed-card-art { position: relative; display: block; width: 100%; aspect-ratio: 2 / 3; overflow: hidden; border: 1px solid rgba(var(--ink), .08); border-radius: 8px; background: var(--raised-2); }
 .home-feed-card.landscape .home-feed-card-art { aspect-ratio: 16 / 9; }
@@ -436,6 +439,8 @@ button:disabled { opacity: .6; cursor: wait; }
 .player-video { position: absolute; inset: 0; width: 100%; height: 100%; background: #000; object-fit: contain; }
 .player-video[data-fit="cover"] { object-fit: cover; }
 .player-video[data-fit="fill"] { object-fit: fill; }
+.player-buffering { position: absolute; z-index: 3; top: 50%; left: 50%; display: flex; align-items: center; gap: .75rem; max-width: calc(100% - 2rem); padding: .75rem 1rem; border: 1px solid rgba(var(--ink), .18); border-radius: 999px; color: var(--text); background: rgba(var(--base), .8); box-shadow: 0 8px 24px rgba(0,0,0,.32); transform: translate(-50%, -50%); pointer-events: none; }
+.player-buffering .mini-spinner { width: 24px; height: 24px; border-color: rgba(var(--ink), .3); border-top-color: var(--accent); border-width: 3px; }
 .player-error { position: absolute; z-index: 3; top: 50%; left: 50%; max-width: calc(100% - 2rem); max-width: min(36rem, calc(100% - 2rem)); margin: 0; padding: .9rem 1.1rem; border-radius: 12px; color: var(--text); background: rgba(120, 24, 24, .92); transform: translate(-50%, -50%); }
 .player-error p { margin: 0; }
 .player-error-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }

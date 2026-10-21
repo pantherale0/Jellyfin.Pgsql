@@ -57,7 +57,7 @@ That applies each patch as a commit on `--from`, `git rebase --onto` the new tag
 ./scripts/export-patch.sh jellyfin_web_<name>.patch
 ```
 
-The exporter snapshots changed **file contents** before rebuilding the dependency baseline, then diffs only the restored feature edits against it (`--binary` for SQLite snapshots). Replaying `git diff HEAD` on that baseline would duplicate already-applied dependency hunks. The web export also builds the static bundle; clean both patched submodule worktrees back to their pinned tags after validation.
+The exporter snapshots changed **file contents** before rebuilding the dependency baseline, then diffs only the restored feature edits against it (`--binary` for SQLite snapshots). It records that baseline with `git write-tree`, so export creates no submodule commits. Replaying `git diff HEAD` on that baseline would duplicate already-applied dependency hunks. The web export also builds the static bundle; clean both patched submodule worktrees back to their pinned tags after validation.
 
 ## Build composition
 

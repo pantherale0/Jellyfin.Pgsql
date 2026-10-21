@@ -174,6 +174,20 @@ test('hostDeviceProfile uses a valid host profile and falls back on malformed or
     assert.equal((await host.hostDeviceProfile(build, '1.0')).Name, 'ui-next');
 });
 
+test('hostDeviceProfile falls back when the wrapper never resolves its profile', async () => {
+    const built = { DirectPlayProfiles: [ { Type: 'Video' } ], TranscodingProfiles: [], Name: 'ui-next' };
+    const build = () => ({ ...built });
+    globalThis.NativeShell = { AppHost: { getDeviceProfile: () => new Promise(() => undefined) } };
+    let timer;
+    const result = await Promise.race([
+        host.hostDeviceProfile(build, '1.0', 5),
+        new Promise(resolve => { timer = setTimeout(() => resolve('timed out'), 50); })
+    ]);
+    clearTimeout(timer);
+
+    assert.deepEqual(result, built);
+});
+
 test('hooks forward to the host and swallow host failures', () => {
     const calls = [];
     globalThis.NativeShell = {

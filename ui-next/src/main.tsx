@@ -12,14 +12,14 @@ import { historyAction, initialRoute, routeFor, routeFromState, routeIdentity, w
 import { LibraryPage } from './library';
 import { Player } from './player';
 import { ProfileScreen, type ProfileScreenName } from './profile';
-import { buildHomeFeedBlocks, type HomeFeedExtras } from './home-feed-blocks';
+import { buildHomeFeedBlocks, HOME_EXPLORE_PAGE_SIZE, type HomeFeedExtras } from './home-feed-blocks';
 import { composeExploreTopics, composeRecommendationTopics, explorePicksFromProfile, flattenRecommendationTopics, type ExploreTopicSpec } from './recommendations';
 import { defaultHomePreferences, latestLibraries, loadHomePreferences } from './discovery';
 import { EntitySearchRows, FavoritesPage } from './discovery-views';
 import { HomeFeed } from './home-feed';
 import { discoverVisible, searchVisible, seerrKey, seerrPersonalization, type SeerrItem } from './seerr';
 import { SeerrRequestSheet, SeerrSearchResults, withRequested } from './seerr-views';
-import { AccountGeneration } from './account-generation';
+import { AccountGeneration, RequestGeneration } from './account-generation';
 import { NavigationOwner } from './navigation-owner';
 import { clearRememberedToken, getRememberedUsers, rememberUser, type RememberedUser } from './remembered-users';
 import { preferredScrollBehavior, resolvePlaybackItem } from './live-model';
@@ -38,7 +38,7 @@ import { forgotPasswordOutcome, pinRedeemMessage, userImageUrl, type PublicUser 
 import { queryParameter as parseQueryParameter } from './query-params';
 import { canCommitSsoRestore, parseSsoCodeAttempt, parseSsoCodeFragment, parseSsoHandoff, SSO_HANDOFF_KEY, UI_NEXT_SIGNED_OUT_KEY, type SsoHandoff } from './sso-session';
 import { canHandOffToClassic, classicCredentialsWithSession, comparableServer, quickConnectPollOutcome, sharedSessionChange, shouldRemoveStoredSession, usableRememberedSession, validStoredSession, type SessionPolicy } from './auth-state';
-import { canResume, resumeStartTicks, type PlaybackChoice, type PlaybackOptions, type PlayIntent } from './player-model';
+import { canResume, playbackRenegotiationPlan, resumeStartTicks, type PlaybackChoice, type PlaybackRenegotiationOptions, type PlayIntent } from './player-model';
 import { adjacentEpisodes, appendPage, clearLibraryBookmark, entityQuery, hasMoreResults, isContainer, itemCapabilities, markEpisodesPlayed, mergeUserData, playedUserData, popTrail, pushTrail, searchSummary, SEARCH_PAGE_SIZE } from './catalog-model';
 import type { JellyfinUser, LiveTab, MediaItem, RecommendationGroup, Session, TasteProfile } from './types';
 import { enterShowSeason, moveShowFocus, type Context, type Direction, type EpisodeControl, type ShowBookmark, type ShowFocusResult, type ShowTarget } from './show-navigation';
@@ -256,6 +256,7 @@ function App() {
     const [ homeExploreThemes, setHomeExploreThemes ] = useState<Array<{ spec: ExploreTopicSpec; items: MediaItem[] }>>([]);
     const [ homeExploreThemeIndex, setHomeExploreThemeIndex ] = useState(0);
     const [ homeTasteProfile, setHomeTasteProfile ] = useState<TasteProfile | null>(null);
+    const [ homeLoad, setHomeLoad ] = useState<{ api: JellyfinApi; generation: number } | null>(null);
     const [ loadingHomeExplore, setLoadingHomeExplore ] = useState(false);
     const [ activeRecommendation, setActiveRecommendation ] = useState(0);
     const [ recommendationDirection, setRecommendationDirection ] = useState<'next' | 'previous'>('next');
@@ -382,6 +383,9 @@ function App() {
     const switchReturnSession = useRef<Session | null>(null);
     const authAttempt = useRef(new AuthAttemptTracker()).current;
     const accountGeneration = useRef(new AccountGeneration()).current;
+    const homeLoadGeneration = useRef(new RequestGeneration()).current;
+    const homeSectionGenerations = useRef({ views: new RequestGeneration(), resume: new RequestGeneration(), latest: new RequestGeneration() }).current;
+    const latestLibraryGeneration = useRef(new RequestGeneration()).current;
     const navigation = useRef(new NavigationOwner(accountGeneration)).current;
     const playbackSessions = useRef(new PlaybackSessionTracker(accountGeneration, navigation)).current;
     useEffect(() => listenForNativePlayerReturn(() => {
@@ -844,75 +848,83 @@ function App() {
     const loadHome = useCallback(async () => {
         if (!api) return;
         const account = accountGeneration.current();
-        const isAccountCurrent = () => accountGeneration.isCurrent(account);
+        const generation = homeLoadGeneration.begin();
+        const isLoadCurrent = () => homeLoadGeneration.isCurrent(generation) && accountGeneration.isCurrent(account);
+        const sectionGenerations = {
+            views: homeSectionGenerations.views.begin(),
+            resume: homeSectionGenerations.resume.begin(),
+            latest: homeSectionGenerations.latest.begin()
+        };
+        setHomeLoad({ api, generation });
         setLoading(true);
         setError('');
         setHomeLoading({ views: true, resume: true, latest: true });
         setHomeErrors({ views: '', resume: '', latest: '' });
         setRecommendationsLoading(true);
         setHomeNotice('');
+        setLoadingHomeExplore(false);
         const noteDiscoveryFailure = () => {
-            if (isAccountCurrent()) setHomeNotice(current => current || t('Some discovery rows could not load.'));
+            if (isLoadCurrent()) setHomeNotice(current => current || t('Some discovery rows could not load.'));
         };
         setHomeExtras({});
         const saveExtra = <K extends keyof HomeFeedExtras>(key: K) => (value: HomeFeedExtras[K]) => {
-            if (isAccountCurrent()) setHomeExtras(current => ({ ...current, [key]: value }));
+            if (isLoadCurrent()) setHomeExtras(current => ({ ...current, [key]: value }));
             return value;
         };
         const tasteProfilePromise = api.getTasteProfile().then(profile => {
-            if (isAccountCurrent()) setHomeTasteProfile(profile);
+            if (isLoadCurrent()) setHomeTasteProfile(profile);
             return profile;
-        }).catch(() => { if (isAccountCurrent()) setHomeTasteProfile(null); return null; });
+        }).catch(() => { if (isLoadCurrent()) setHomeTasteProfile(null); return null; });
         void api.getSeerrStatus().then(async enabled => {
-            if (!isAccountCurrent()) return;
+            if (!isLoadCurrent()) return;
             setSeerrEnabled(enabled);
             if (!enabled) return;
             const personal = seerrPersonalization(await tasteProfilePromise);
-            if (!isAccountCurrent()) return;
+            if (!isLoadCurrent()) return;
             const limit = window.innerWidth >= 1400 ? 24 : 16;
             await Promise.all([
                 api.discoverSeerr({ mediaType: 'movie', ...personal, limit }).then(items => saveExtra('beyondMovies')(discoverVisible(items))).catch(() => undefined),
                 api.discoverSeerr({ mediaType: 'tv', ...personal, limit }).then(items => saveExtra('beyondShows')(discoverVisible(items))).catch(() => undefined)
             ]);
-        }).catch(() => { if (isAccountCurrent()) setSeerrEnabled(false); });
+        }).catch(() => { if (isLoadCurrent()) setSeerrEnabled(false); });
         void api.getResumeItems('Audio').then(saveExtra('audioResume')).catch(noteDiscoveryFailure);
         void api.getResumeItems('Book').then(saveExtra('bookResume')).catch(noteDiscoveryFailure);
         const recommendationSources = Promise.all([
             api.getForYouRecommendations('Movie').then(saveExtra('forYouMovies')).then(items => items || []).catch(() => { noteDiscoveryFailure(); return [] as MediaItem[]; }),
             api.getForYouRecommendations('Series').then(saveExtra('forYouSeries')).then(items => items || []).catch(() => { noteDiscoveryFailure(); return [] as MediaItem[]; }),
             api.getRecommendations().then(async groups => {
-                if (!isAccountCurrent()) return [] as RecommendationGroup[];
+                if (!isLoadCurrent()) return [] as RecommendationGroup[];
                 setRecommendationGroups(groups);
                 const baselineIds = Array.from(new Set(groups
                     .filter(group => group.RecommendationType === 0 || group.RecommendationType === 1)
                     .map(group => group.CategoryId)
                     .filter(Boolean)));
                 const baselineItems = await api.getRecommendationBaselines(baselineIds as string[]).catch(() => [] as MediaItem[]);
-                if (isAccountCurrent()) {
+                if (isLoadCurrent()) {
                     setRecommendationBaselines(Object.fromEntries(baselineItems.filter(item => item.Id).map(item => [ item.Id, item ])));
                 }
                 return groups;
-            }).catch(() => { noteDiscoveryFailure(); if (isAccountCurrent()) setRecommendationGroups([]); return [] as RecommendationGroup[]; }),
+            }).catch(() => { noteDiscoveryFailure(); if (isLoadCurrent()) setRecommendationGroups([]); return [] as RecommendationGroup[]; }),
             api.getRecentlyReleased().then(saveExtra('recentReleases')).then(result => result || []).catch(() => { noteDiscoveryFailure(); return [] as MediaItem[]; })
         ]).then(([ forYouMovies, forYouSeries, groups, recentReleases ]) => {
-            if (!isAccountCurrent()) return [] as MediaItem[];
+            if (!isLoadCurrent()) return [] as MediaItem[];
             return flattenRecommendationTopics(composeRecommendationTopics({
                 groups, forYouMovies, forYouSeries, recentReleases, seed: dailySeed(session?.user.Id)
             }));
         });
         const latestPromise = api.getLatestItems();
         void api.getRecentCollections().then(collections => {
-            if (isAccountCurrent()) setHomeCollections(collections);
-        }).catch(() => { noteDiscoveryFailure(); if (isAccountCurrent()) setHomeCollections([]); });
+            if (isLoadCurrent()) setHomeCollections(collections);
+        }).catch(() => { noteDiscoveryFailure(); if (isLoadCurrent()) setHomeCollections([]); });
         void api.getAiringPrograms(24).then(result => {
-            if (isAccountCurrent()) setHomeOnNow(result.Items || []);
-        }).catch(() => { noteDiscoveryFailure(); if (isAccountCurrent()) setHomeOnNow([]); });
+            if (isLoadCurrent()) setHomeOnNow(result.Items || []);
+        }).catch(() => { noteDiscoveryFailure(); if (isLoadCurrent()) setHomeOnNow([]); });
         void api.getVaultCandidates(48).then(candidates => {
-            if (isAccountCurrent()) setHomeVaultCandidates(candidates);
-        }).catch(() => { noteDiscoveryFailure(); if (isAccountCurrent()) setHomeVaultCandidates([]); });
+            if (isLoadCurrent()) setHomeVaultCandidates(candidates);
+        }).catch(() => { noteDiscoveryFailure(); if (isLoadCurrent()) setHomeVaultCandidates([]); });
         void api.getNextUpItems().then(items => {
-            if (isAccountCurrent()) setNextUpItems(items);
-        }).catch(() => { noteDiscoveryFailure(); if (isAccountCurrent()) setNextUpItems([]); });
+            if (isLoadCurrent()) setNextUpItems(items);
+        }).catch(() => { noteDiscoveryFailure(); if (isLoadCurrent()) setNextUpItems([]); });
         setHomeExploreItems([]);
         setHomeExploreStart(0);
         setHomeExploreTotal(0);
@@ -920,35 +932,38 @@ function App() {
         setHomeExploreThemes([]);
         setHomeExploreThemeIndex(0);
         homeExploreSeen.current = new Set();
-        void api.getHomeFeedPage(0, 24).then(page => {
-            if (!isAccountCurrent()) return;
+        void api.getHomeFeedPage(0, HOME_EXPLORE_PAGE_SIZE).then(page => {
+            if (!isLoadCurrent()) return;
             setHomeExploreItems(page.Items || []);
             setHomeExploreStart((page.Items || []).length);
             setHomeExploreTotal(page.TotalRecordCount || 0);
         }).catch(() => { noteDiscoveryFailure(); });
         void recommendationSources.then(recommended => {
-            if (!isAccountCurrent()) return;
+            if (!isLoadCurrent()) return;
             setRecommendations(recommended);
             setActiveRecommendation(0);
             setRecommendationsLoading(false);
             if (!recommended.length) {
                 void latestPromise.then(latest => {
-                    if (!isAccountCurrent()) return;
+                    if (!isLoadCurrent()) return;
                     setRecommendations(shuffleItems(latest).map(item => ({ ...item, RecommendationType: 8 })));
                     setActiveRecommendation(0);
-                }).catch(() => { noteDiscoveryFailure(); if (isAccountCurrent()) setRecommendations([]); });
+                }).catch(() => { noteDiscoveryFailure(); if (isLoadCurrent()) setRecommendations([]); });
             }
-        }).catch(() => { noteDiscoveryFailure(); if (isAccountCurrent()) setRecommendationsLoading(false); });
-        const finish = (section: 'views' | 'resume' | 'latest', promise: Promise<MediaItem[]>, save: (items: MediaItem[]) => void) => promise
-            .then(items => { if (isAccountCurrent()) save(items); })
-            .catch(error => { if (isAccountCurrent()) setHomeErrors(current => ({ ...current, [section]: messageOf(error) })); })
-            .finally(() => { if (isAccountCurrent()) setHomeLoading(current => ({ ...current, [section]: false })); });
+        }).catch(() => { noteDiscoveryFailure(); if (isLoadCurrent()) setRecommendationsLoading(false); });
+        const finish = (section: 'views' | 'resume' | 'latest', promise: Promise<MediaItem[]>, save: (items: MediaItem[]) => void) => {
+            const isSectionCurrent = () => isLoadCurrent() && homeSectionGenerations[section].isCurrent(sectionGenerations[section]);
+            return promise
+                .then(items => { if (isSectionCurrent()) save(items); })
+                .catch(error => { if (isSectionCurrent()) setHomeErrors(current => ({ ...current, [section]: messageOf(error) })); })
+                .finally(() => { if (isSectionCurrent()) setHomeLoading(current => ({ ...current, [section]: false })); });
+        };
         await Promise.all([
             finish('views', api.getViews(), setViews),
             finish('resume', api.getResumeItems(), setResumeItems),
             finish('latest', latestPromise, setLatestItems)
         ]);
-        if (isAccountCurrent()) setLoading(false);
+        if (isLoadCurrent()) setLoading(false);
     }, [ api ]);
 
     const stepRecommendation = useCallback((step: number) => {
@@ -973,12 +988,18 @@ function App() {
 
     const latestLibraryKey = homePrefs.hidden.includes('latest-libraries') ? '' : latestLibraries(views, homePrefs.excludedLatest).map(library => library.Id).join(',');
     useEffect(() => {
+        const generation = latestLibraryGeneration.begin();
         setHomeExtras(current => current.latestByLibrary ? { ...current, latestByLibrary: undefined } : current);
-        if (!api || !latestLibraryKey) return;
+        if (!api || !latestLibraryKey) return () => latestLibraryGeneration.invalidate();
         const account = accountGeneration.current();
         const libraries = latestLibraries(views, homePrefs.excludedLatest);
         void Promise.all(libraries.map(library => api.getLatestInLibrary(library.Id).then(items => ({ library, items })).catch(() => ({ library, items: [] as MediaItem[] }))))
-            .then(latestByLibrary => { if (accountGeneration.isCurrent(account)) setHomeExtras(current => ({ ...current, latestByLibrary })); });
+            .then(latestByLibrary => {
+                if (accountGeneration.isCurrent(account) && latestLibraryGeneration.isCurrent(generation)) {
+                    setHomeExtras(current => ({ ...current, latestByLibrary }));
+                }
+            });
+        return () => latestLibraryGeneration.invalidate();
     }, [ api, latestLibraryKey ]);
 
     const recommendationTopics = useMemo(() => composeRecommendationTopics({
@@ -994,45 +1015,53 @@ function App() {
         composeExploreTopics(explorePicksFromProfile(homeTasteProfile), dailySeed(session?.user.Id))
     , [ homeTasteProfile, session ]);
 
+    const homeExploreHasMore = homeExploreStart < homeExploreTotal && !homeExploreError;
     const homeFeedBlocks = useMemo(() => buildHomeFeedBlocks(resumeItems, latestItems, recommendationGroups, homeCollections, homeOnNow, homeVaultCandidates, homeExploreItems, nextUpItems, {
         ...homeExtras,
         recommendationTopics,
         exploreThemes: homeExploreThemes,
+        exploreHasMore: homeExploreHasMore,
         beyondMovies: homeExtras.beyondMovies && withRequested(homeExtras.beyondMovies, seerrRequested),
         beyondShows: homeExtras.beyondShows && withRequested(homeExtras.beyondShows, seerrRequested),
         preferences: homePrefs
-    }), [ resumeItems, latestItems, recommendationGroups, homeCollections, homeOnNow, homeVaultCandidates, homeExploreItems, nextUpItems, homeExtras, homePrefs, seerrRequested, recommendationTopics, homeExploreThemes ]);
+    }), [ resumeItems, latestItems, recommendationGroups, homeCollections, homeOnNow, homeVaultCandidates, homeExploreItems, homeExploreHasMore, nextUpItems, homeExtras, homePrefs, seerrRequested, recommendationTopics, homeExploreThemes ]);
 
-    // Themed explore rails load one at a time in the background, so the themed head of the
-    // Explore section is ready before anyone scrolls to it; a failure parks the loop on retry.
-    const exploreTheming = useRef(false);
+    // A generation/index key lets a new refresh start without an older response moving its cursor.
+    const exploreTheming = useRef<{ generation: number; index: number } | null>(null);
     useEffect(() => {
-        if (!api || view !== 'home' || homeExploreError || exploreTheming.current) return;
+        const load = homeLoad;
+        if (!api || view !== 'home' || homeExploreError || !load || load.api !== api || !homeLoadGeneration.isCurrent(load.generation)) return;
         if (homeExploreThemeIndex >= exploreTopicSpecs.length) return;
+        if (exploreTheming.current?.generation === load.generation && exploreTheming.current.index === homeExploreThemeIndex) return;
         const account = accountGeneration.current();
+        const generation = load.generation;
+        const index = homeExploreThemeIndex;
         const spec = exploreTopicSpecs[homeExploreThemeIndex];
-        exploreTheming.current = true;
+        exploreTheming.current = { generation, index };
         void api.getExploreThemeItems(spec).then(items => {
-            if (!accountGeneration.isCurrent(account)) return;
+            if (!accountGeneration.isCurrent(account) || !homeLoadGeneration.isCurrent(generation)) return;
             const fresh = items.filter(item => Boolean(item.Id) && !homeExploreSeen.current.has(item.Id)).slice(0, 24);
             fresh.forEach(item => homeExploreSeen.current.add(item.Id));
             setHomeExploreThemes(current => [ ...current, { spec, items: fresh } ]);
-            setHomeExploreThemeIndex(homeExploreThemeIndex + 1);
+            setHomeExploreThemeIndex(index + 1);
         }).catch(error => {
-            if (accountGeneration.isCurrent(account)) setHomeExploreError(messageOf(error));
+            if (accountGeneration.isCurrent(account) && homeLoadGeneration.isCurrent(generation)) setHomeExploreError(messageOf(error));
         }).finally(() => {
-            exploreTheming.current = false;
+            if (exploreTheming.current?.generation === generation && exploreTheming.current.index === index) exploreTheming.current = null;
         });
-    }, [ api, view, homeExploreError, homeExploreThemeIndex, exploreTopicSpecs ]);
+    }, [ api, view, homeExploreError, homeExploreThemeIndex, exploreTopicSpecs, homeLoad ]);
 
     const loadMoreHomeFeed = useCallback((retry = false) => {
-        if (!api || loadingHomeExplore || homeExploreStart >= homeExploreTotal || view !== 'home') return;
+        const load = homeLoad;
+        if (!api || !load || load.api !== api || !homeLoadGeneration.isCurrent(load.generation)
+            || loadingHomeExplore || homeExploreStart >= homeExploreTotal || view !== 'home') return;
         if (homeExploreError && !retry) return;
         const account = accountGeneration.current();
+        const generation = load.generation;
         setHomeExploreError('');
         setLoadingHomeExplore(true);
-        void api.getHomeFeedPage(homeExploreStart, 24).then(page => {
-            if (!accountGeneration.isCurrent(account)) return;
+        void api.getHomeFeedPage(homeExploreStart, HOME_EXPLORE_PAGE_SIZE).then(page => {
+            if (!accountGeneration.isCurrent(account) || !homeLoadGeneration.isCurrent(generation)) return;
             const next = page.Items || [];
             setHomeExploreItems(current => {
                 const seen = new Set(current.map(item => item.Id));
@@ -1041,9 +1070,11 @@ function App() {
             setHomeExploreStart(homeExploreStart + next.length);
             setHomeExploreTotal(page.TotalRecordCount || homeExploreTotal);
         }).catch(error => {
-            if (accountGeneration.isCurrent(account)) setHomeExploreError(messageOf(error));
-        }).finally(() => { if (accountGeneration.isCurrent(account)) setLoadingHomeExplore(false); });
-    }, [ api, loadingHomeExplore, homeExploreStart, homeExploreTotal, homeExploreError, view ]);
+            if (accountGeneration.isCurrent(account) && homeLoadGeneration.isCurrent(generation)) setHomeExploreError(messageOf(error));
+        }).finally(() => {
+            if (accountGeneration.isCurrent(account) && homeLoadGeneration.isCurrent(generation)) setLoadingHomeExplore(false);
+        });
+    }, [ api, homeLoad, homeLoadGeneration, loadingHomeExplore, homeExploreStart, homeExploreTotal, homeExploreError, view ]);
 
     useEffect(() => {
         const activeDot = recommendationPaginationRef.current?.querySelector<HTMLElement>('.recommendation-dot.active');
@@ -1064,14 +1095,19 @@ function App() {
     const retryHomeSection = useCallback((section: 'views' | 'resume' | 'latest') => {
         if (!api) return;
         const account = accountGeneration.current();
+        const generation = homeLoadGeneration.current();
+        const sectionGeneration = homeSectionGenerations[section].begin();
+        const isCurrent = () => accountGeneration.isCurrent(account)
+            && homeLoadGeneration.isCurrent(generation)
+            && homeSectionGenerations[section].isCurrent(sectionGeneration);
         setHomeErrors(current => ({ ...current, [section]: '' }));
         setHomeLoading(current => ({ ...current, [section]: true }));
         const request = section === 'views' ? api.getViews() : section === 'resume' ? api.getResumeItems() : api.getLatestItems();
         const save = section === 'views' ? setViews : section === 'resume' ? setResumeItems : setLatestItems;
-        void request.then(items => { if (accountGeneration.isCurrent(account)) save(items); })
-            .catch(error => { if (accountGeneration.isCurrent(account)) setHomeErrors(current => ({ ...current, [section]: messageOf(error) })); })
-            .finally(() => { if (accountGeneration.isCurrent(account)) setHomeLoading(current => ({ ...current, [section]: false })); });
-    }, [ api ]);
+        void request.then(items => { if (isCurrent()) save(items); })
+            .catch(error => { if (isCurrent()) setHomeErrors(current => ({ ...current, [section]: messageOf(error) })); })
+            .finally(() => { if (isCurrent()) setHomeLoading(current => ({ ...current, [section]: false })); });
+    }, [ api, homeLoadGeneration, homeSectionGenerations ]);
 
     useEffect(() => {
         if (session) void loadHome();
@@ -1311,6 +1347,7 @@ function App() {
         setHomeExploreError('');
         setHomeExploreThemes([]);
         setHomeExploreThemeIndex(0);
+        setHomeLoad(null);
         homeExploreSeen.current = new Set();
         setActiveRecommendation(0);
         setRecommendationsLoading(false);
@@ -2327,16 +2364,16 @@ function App() {
         }
     };
     /** Re-requests the current item at the player's position; a newer play/leave fences out stale results. */
-    const renegotiate = async (options: PlaybackOptions): Promise<PlaybackChoice | null> => {
+    const renegotiate = async (options: PlaybackRenegotiationOptions): Promise<PlaybackChoice | null> => {
         if (!api || !playerItem) return null;
         const active = playbackSessions.active();
         if (!active || !playbackSessions.isCurrent(active)) return null;
         const playbackSession = playbackSessions.begin(playerItem.Id);
-        const retainedLiveStreamId = playbackSessions.liveStreamFor(active);
+        const plan = playbackRenegotiationPlan(options, playbackSessions.liveStreamFor(active));
         try {
-            const result = await api.play(playerItem, { ...options, liveStreamId: retainedLiveStreamId });
-            if (!playbackSessions.commit(playbackSession, result, retainedLiveStreamId)) {
-                await api.releasePlayback(result, retainedLiveStreamId);
+            const result = await api.play(playerItem, plan.options);
+            if (!playbackSessions.commit(playbackSession, result, plan.retainedLiveStreamId)) {
+                await api.releasePlayback(result, plan.retainedLiveStreamId);
                 return null;
             }
             setPlayback(result);
@@ -2943,7 +2980,7 @@ function App() {
                 {homeNotice && <div class="home-section-error" role="status"><p>{homeNotice}</p><button class="button secondary" data-focusable="true" onClick={() => void loadHome()}>{t('Retry')}</button></div>}
                 {homeLoading.views && <HomeSectionLoading label={t('Loading your libraries…')} />}
                 {homeErrors.views && <HomeSectionError title={t('Libraries could not load')} message={homeErrors.views} onRetry={() => retryHomeSection('views')} />}
-                <HomeFeed blocks={homeFeedBlocks} api={api} onSelect={selectItem} onPlay={playItem} onNeedMore={() => loadMoreHomeFeed()} hasMore={(homeExploreThemeIndex < exploreTopicSpecs.length || homeExploreStart < homeExploreTotal) && !homeExploreError} loadingMore={loadingHomeExplore} onUserData={applyUserData} onRequest={setSeerrSheet} />
+                <HomeFeed blocks={homeFeedBlocks} api={api} onSelect={selectItem} onPlay={playItem} onNeedMore={() => loadMoreHomeFeed()} hasMore={homeExploreHasMore} loadingMore={loadingHomeExplore} onUserData={applyUserData} onRequest={setSeerrSheet} />
                 {homeExploreError && <HomeSectionError title={t('More titles could not load')} message={homeExploreError} onRetry={() => loadMoreHomeFeed(true)} />}
                 {homeLoading.resume && !homeFeedBlocks.some(block => block.id === 'continue') && <HomeSectionLoading label={t('Loading continue watching…')} />}
                 {homeErrors.resume && <HomeSectionError title={t('Continue watching is taking too long')} message={homeErrors.resume} onRetry={() => retryHomeSection('resume')} />}

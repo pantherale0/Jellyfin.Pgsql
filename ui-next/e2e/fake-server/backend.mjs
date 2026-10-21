@@ -155,6 +155,8 @@ function decodePathSegment(value) {
 export function createFakeBackend() {
     let state = createFixtureState();
     let requests = [];
+    let nextLiveStreamSequence = 1;
+    const liveStreams = new Set();
 
     async function route(request, url, parsedBody) {
         const { pathname } = url;
@@ -207,9 +209,14 @@ export function createFakeBackend() {
             const seasonId = url.searchParams.get('SeasonId');
             return { response: jsonResponse(paginate(state.items.filter(item => item.Type === 'Episode' && item.SeriesId === episodesSeries && (!seasonId || item.ParentId === seasonId)), url)) };
         }
+        if (pathname === '/LiveTv/GuideInfo' && isGet) return { response: jsonResponse({}) };
+        if (pathname === '/LiveTv/Channels' && isGet) {
+            return { response: jsonResponse(paginate(state.items.filter(item => item.Type === 'TvChannel'), url)) };
+        }
         if (pathname === '/LiveTv/Programs' && isGet) return { response: jsonResponse({ Items: [], TotalRecordCount: 0 }) };
         if (pathname === '/Items/Filters' && isGet) return { response: jsonResponse({ Tags: [], OfficialRatings: [] }) };
         if (pathname === '/Movies/Recommendations' && isGet) return { response: jsonResponse(state.recommendationGroups) };
+        if (pathname === '/Pgsql/Taste/Users/e2e-user-id' && isGet) return { response: jsonResponse({ HasProfile: false, Genres: [], People: [] }) };
         if (pathname === '/Pgsql/Taste/Recommendations' && isGet) return { response: jsonResponse({ Items: [] }) };
         if (pathname === '/Localization/Cultures' && isGet) return { response: jsonResponse([]) };
         if (pathname === '/Sessions' && isGet) return { response: jsonResponse([]) };
@@ -218,16 +225,53 @@ export function createFakeBackend() {
             if (request.method !== 'POST') return { response: errorResponse(405, 'Method not allowed.') };
             if (parsedBody.kind === 'malformed') return { response: errorResponse(400, 'Invalid JSON request body.') };
             if (parsedBody.kind === 'too-large') return { response: errorResponse(413, 'Request body is too large.') };
+            if (pathname === '/Sessions/Playing/Stopped' && typeof parsedBody.value?.LiveStreamId === 'string') {
+                liveStreams.delete(parsedBody.value.LiveStreamId);
+            }
             return { response: emptyResponse() };
         }
+        if (pathname === '/Videos/ActiveEncodings' && request.method === 'DELETE') return { response: emptyResponse() };
 
         const playbackId = playbackItemPath(pathname);
         if (playbackId !== null) {
             if (request.method !== 'POST') return { response: errorResponse(405, 'Method not allowed.') };
-            if (!state.items.some(item => item.Id === playbackId)) return { response: errorResponse(404, 'Item not found.') };
+            const item = state.items.find(entry => entry.Id === playbackId);
+            if (!item) return { response: errorResponse(404, 'Item not found.') };
             if (parsedBody.kind === 'malformed') return { response: errorResponse(400, 'Invalid JSON request body.') };
             if (parsedBody.kind === 'too-large') return { response: errorResponse(413, 'Request body is too large.') };
-            return { response: jsonResponse(state.playbackInfo) };
+            return { response: jsonResponse(item.Type === 'TvChannel' ? state.livePlaybackInfo : state.playbackInfo) };
+        }
+
+        if (pathname === '/LiveStreams/Open') {
+            if (request.method !== 'POST') return { response: errorResponse(405, 'Method not allowed.') };
+            if (parsedBody.kind === 'malformed') return { response: errorResponse(400, 'Invalid JSON request body.') };
+            if (parsedBody.kind === 'too-large') return { response: errorResponse(413, 'Request body is too large.') };
+            const sequence = nextLiveStreamSequence++;
+            const liveStreamId = `e2e-live-stream-${sequence}`;
+            liveStreams.add(liveStreamId);
+            return {
+                response: jsonResponse({
+                    MediaSource: {
+                        Id: `e2e-live-media-source-${sequence}`,
+                        Name: 'E2E Live WebM',
+                        Container: 'webm',
+                        LiveStreamId: liveStreamId,
+                        IsInfiniteStream: true,
+                        SupportsDirectPlay: true,
+                        SupportsDirectStream: true,
+                        SupportsTranscoding: true,
+                        Bitrate: 500_000,
+                        MediaStreams: []
+                    }
+                })
+            };
+        }
+
+        if (pathname === '/LiveStreams/Close') {
+            if (request.method !== 'POST') return { response: errorResponse(405, 'Method not allowed.') };
+            const liveStreamId = url.searchParams.get('liveStreamId');
+            if (!liveStreamId || !liveStreams.delete(liveStreamId)) return { response: errorResponse(404, 'Live stream not found.') };
+            return { response: emptyResponse() };
         }
 
         const userItem = userItemPath(pathname);
@@ -272,6 +316,8 @@ export function createFakeBackend() {
         reset() {
             state = createFixtureState();
             requests = [];
+            nextLiveStreamSequence = 1;
+            liveStreams.clear();
         },
         getRequests() {
             return structuredClone(requests);

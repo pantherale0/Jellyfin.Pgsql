@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { JellyfinApi } from './api';
+import { RequestGeneration } from './account-generation';
 import { useDialogFocus } from './dialog-focus';
 import { userMessage } from './ui-errors';
 import { GuideToolbar, LiveGuide, LiveThumb, ProgramSummary } from './live-guide';
@@ -83,7 +84,8 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
     const [ jump, setJump ] = useState({ id: restored?.channelId || '', nonce: restored ? 1 : 0 });
     const [ digits, setDigits ] = useState('');
     const guideCount = useRef(0);
-    const guideGeneration = useRef(0);
+    const guideGeneration = useRef(new RequestGeneration()).current;
+    const programGeneration = useRef(new RequestGeneration()).current;
     const directoryCount = useRef(0);
     const loadedChunks = useRef(new Set<string>());
     const programQueue = useRef<MediaItem[]>([]);
@@ -94,6 +96,18 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
     const sheetRef = useRef<HTMLElement>(null);
     const sheetOrigin = useRef<HTMLElement | null>(null);
     const sheetOpen = Boolean(sheet);
+
+    useLayoutEffect(() => {
+        guideGeneration.begin();
+        guideLoadingMore.current = false;
+    }, [ api, tab, filter ]);
+
+    useLayoutEffect(() => {
+        programGeneration.begin();
+        if (programFrame.current) window.cancelAnimationFrame(programFrame.current);
+        programFrame.current = 0;
+        programQueue.current = [];
+    }, [ api, tab, filter, dayStart ]);
 
     const openSheet = (program: MediaItem, channel: MediaItem, origin: HTMLElement) => {
         sheetOrigin.current = origin;
@@ -163,7 +177,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
 
     useEffect(() => {
         if (tab !== 'guide') return;
-        const generation = ++guideGeneration.current;
+        const generation = guideGeneration.current();
         loadedChunks.current = new Set();
         guideCount.current = 0;
         setPrograms({});
@@ -173,19 +187,20 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
         const limit = Math.max(CHANNEL_PAGE_SIZE, restoreCount.current);
         restoreCount.current = 0;
         void api.getLiveChannels(0, limit, filter).then(response => {
-            if (generation !== guideGeneration.current) return;
+            if (!guideGeneration.isCurrent(generation)) return;
             const items = response.Items || [];
             guideCount.current = items.length;
             setGuideChannels(items);
             setGuideTotal(response.TotalRecordCount ?? items.length);
         }).catch(error => {
-            if (generation === guideGeneration.current) setGuideError(liveError(error, t('The guide could not load.')));
+            if (guideGeneration.isCurrent(generation)) setGuideError(liveError(error, t('The guide could not load.')));
         }).finally(() => {
-            if (generation === guideGeneration.current) setGuideLoading(false);
+            if (guideGeneration.isCurrent(generation)) setGuideLoading(false);
         });
     }, [ api, tab, filter ]);
 
-    const queuePrograms = (items: MediaItem[]) => {
+    const queuePrograms = (items: MediaItem[], generation: number) => {
+        if (!programGeneration.isCurrent(generation)) return;
         if (!items.length) return;
         programQueue.current = programQueue.current.concat(items);
         if (programFrame.current) return;
@@ -193,11 +208,12 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             programFrame.current = 0;
             const buffered = programQueue.current;
             programQueue.current = [];
-            if (buffered.length) setPrograms(current => mergePrograms(current, buffered));
+            if (buffered.length && programGeneration.isCurrent(generation)) setPrograms(current => mergePrograms(current, buffered));
         });
     };
 
     const ensurePrograms = async (ids: string[], start: number, end: number) => {
+        const generation = programGeneration.current();
         const jobs: Array<{ ids: string[]; chunk: number }> = [];
         chunkStarts(start, end).forEach(chunk => {
             const missing = ids.filter(id => id && !loadedChunks.current.has(`${id}:${chunk}`));
@@ -210,8 +226,9 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
         await Promise.all(jobs.map(async job => {
             try {
                 const response = await api.getLivePrograms(job.ids, isoTime(job.chunk), isoTime(job.chunk + GUIDE_CHUNK_MS));
-                queuePrograms(response.Items || []);
+                queuePrograms(response.Items || [], generation);
             } catch (error) {
+                if (!programGeneration.isCurrent(generation)) return;
                 job.ids.forEach(id => loadedChunks.current.delete(`${id}:${job.chunk}`));
                 setGuideError(liveError(error, t('The guide could not load.')));
             }
@@ -221,19 +238,19 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
     const loadMoreGuide = async () => {
         if (guideLoadingMore.current || guideCount.current >= guideTotal) return;
         guideLoadingMore.current = true;
-        const generation = guideGeneration.current;
+        const generation = guideGeneration.current();
         try {
             const response = await api.getLiveChannels(guideCount.current, CHANNEL_PAGE_SIZE, filter);
-            if (generation !== guideGeneration.current) return;
+            if (!guideGeneration.isCurrent(generation)) return;
             const items = response.Items || [];
             guideCount.current += items.length;
             setGuideTotal(response.TotalRecordCount ?? guideCount.current);
             setGuideChannels(current => current.concat(items.filter(item => !current.some(existing => existing.Id === item.Id))));
             if (!items.length) setGuideTotal(guideCount.current);
         } catch (error) {
-            setGuideError(liveError(error, t('The guide could not load.')));
+            if (guideGeneration.isCurrent(generation)) setGuideError(liveError(error, t('The guide could not load.')));
         } finally {
-            guideLoadingMore.current = false;
+            if (guideGeneration.isCurrent(generation)) guideLoadingMore.current = false;
         }
     };
 

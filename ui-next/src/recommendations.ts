@@ -320,10 +320,7 @@ function slug(value: string): string {
     return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
 }
 
-/**
- * Rounds the themes through the daily seed: a genre row, then an actor row, a decade row, and so
- * on, so scrolling Explore never feels like one repeated "More from your library" stack.
- */
+/** Rotates theme types so Explore has varied rows before the generic fallback. */
 export function composeExploreTopics(picks: ExplorePicks, seed: string, now = Date.now()): ExploreTopicSpec[] {
     const rotation = (values: string[], theme: ExploreTheme): string[] =>
         shuffled(values.filter(Boolean), seedRandom(`explore:${seed}:${theme}`)).slice(0, EXPLORE_BUDGETS[theme]);

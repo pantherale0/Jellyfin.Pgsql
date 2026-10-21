@@ -148,10 +148,10 @@ test('recommendations: the home feed renders topic rails and keeps explore dedup
         seed: 'user:2026-10-17'
     });
     const blocks = buildHomeFeedBlocks([ movie('r') ], [], [], [], [], [], [ movie('fya'), movie('new') ], [], { recommendationTopics: topics });
-    const ids = blocks.filter(block => block.kind === 'rail').map(block => block.id);
-    assert.deepEqual(ids, [ 'continue', 'for-you-movies', 'recommendation-recent', 'explore-0' ]);
+    const ids = blocks.filter(block => block.kind === 'rail' || block.kind === 'explore').map(block => block.id);
+    assert.deepEqual(ids, [ 'continue', 'for-you-movies', 'recommendation-recent', 'explore-fallback' ]);
     assert.equal(blocks.find(block => block.id === 'recommendation-recent').title, 'Recently released');
-    assert.equal(blocks.find(block => block.id === 'explore-0').items.map(item => item.Id).join(), 'new', 'explore skips titles already recommended');
+    assert.equal(blocks.find(block => block.id === 'explore-fallback').items.map(item => item.Id).join(), 'new', 'explore skips titles already recommended');
 
     // fallback path: without topics the legacy group rails still work
     const legacy = buildHomeFeedBlocks([ movie('r') ], [], [ { Items: [ movie('g1') ], RecommendationType: 0, BaselineItemName: 'Coco' } ], [], [], [], [], []);
@@ -239,21 +239,35 @@ test('recommendations: home feed leads Explore with themed rails and hides repea
         ],
         exploreItems: [ movie('p6'), movie('p7') ]
     });
-    const explore = blocks.filter(block => block.kind === 'rail').filter(block => block.id.startsWith('explore'));
-    assert.deepEqual(explore.map(block => block.id), [ `explore-${action.id}`, 'explore-critic', 'explore-0' ], 'themes lead, an empty theme is skipped, then the fallback page');
+    const explore = blocks.filter(block => block.id.startsWith('explore'));
+    assert.deepEqual(explore.map(block => block.id), [ `explore-${action.id}`, 'explore-critic', 'explore-fallback' ], 'themes lead, an empty theme is skipped, then the fallback rail');
     assert.equal(explore[0].title, 'Dive into Action');
     assert.equal(explore[0].subtitle, 'MORE ACTION');
     assert.equal(explore[0].items.map(item => item.Id).join(), 'p2,p3', 'repeat ids are pruned inside the rail');
-    assert.equal(explore[2].items.map(item => item.Id).join(), 'p1', 'the fallback page drops titles a themed rail already showed');
+    assert.equal(explore[2].items.map(item => item.Id).join(), 'p1', 'the fallback rail drops titles a themed rail already showed');
     assert.ok(blocks.every(block => block.id !== 'explore-decade-2010s'), 'empty themes render nothing');
 
     const main = source('main.tsx');
     assert.match(main, /composeExploreTopics\(explorePicksFromProfile\(homeTasteProfile\)/);
     assert.match(main, /getExploreThemeItems\(spec\)/, 'themed pages ride their own queries');
     assert.match(main, /homeExploreSeen\.current\.has\(item\.Id\)/, 'themed pages and fallback pages share one seen-set');
-    assert.match(main, /homeExploreThemeIndex < exploreTopicSpecs\.length \|\| homeExploreStart < homeExploreTotal/, 'the endless feed waits until a theme is done');
+    assert.match(main, /if \(homeExploreThemeIndex >= exploreTopicSpecs\.length\) return;/, 'the theme loader stops after its configured topics');
 
     const api = source('api.ts');
     assert.match(api, /async getExploreThemeItems\(/);
     assert.match(api, /Limit: 36/, 'themed pages over-fetch so the caller can drop repeats');
+});
+
+test('recommendations: generic Explore pages share one rail', () => {
+    const items = Array.from({ length: 49 }, (_item, index) => movie(`explore-${index}`));
+    const blocks = buildHomeFeedBlocks([], [], [], [], [], [], items, []);
+    const explore = blocks.filter(block => block.kind === 'explore');
+
+    assert.equal(explore.length, 1);
+    assert.equal(explore[0].id, 'explore-fallback');
+    assert.equal(explore[0].title, 'Explore your library');
+    assert.deepEqual(explore[0].items.map(item => item.Id), items.map(item => item.Id));
+
+    const loading = buildHomeFeedBlocks([], [], [], [], [], [], [], [], { exploreHasMore: true });
+    assert.equal(loading.find(block => block.kind === 'explore')?.items.length, 0, 'the paging rail exists before its first page arrives');
 });

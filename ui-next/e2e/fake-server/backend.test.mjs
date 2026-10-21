@@ -42,6 +42,17 @@ test('Quick Connect availability is disabled for the fake server without authent
     assert.equal(backend.getRequests()[0].unexpected, false);
 });
 
+test('taste profile lookup returns the empty profile used by home discovery', async () => {
+    const backend = requireBackend();
+    const response = await backend.handle(new Request('http://127.0.0.1/Pgsql/Taste/Users/e2e-user-id', {
+        headers: { Authorization: auth(accessToken) }
+    }));
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { HasProfile: false, Genres: [], People: [] });
+    assert.equal(backend.getRequests()[0].unexpected, false);
+});
+
 test('Live TV airing-program probe returns an empty Jellyfin item page', async () => {
     const backend = requireBackend();
     const response = await backend.handle(new Request('http://127.0.0.1/LiveTv/Programs?IsAiring=true', {

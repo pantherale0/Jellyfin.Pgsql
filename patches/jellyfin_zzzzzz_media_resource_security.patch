@@ -1,0 +1,403 @@
+diff --git a/Jellyfin.Api/Controllers/SubtitleController.cs b/Jellyfin.Api/Controllers/SubtitleController.cs
+index c4851091c1..051c809415 100644
+--- a/Jellyfin.Api/Controllers/SubtitleController.cs
++++ b/Jellyfin.Api/Controllers/SubtitleController.cs
+@@ -38,6 +38,7 @@ namespace Jellyfin.Api.Controllers;
+ /// Subtitle controller.
+ /// </summary>
+ [Route("")]
++[Authorize]
+ public class SubtitleController : BaseJellyfinApiController
+ {
+     private readonly IServerConfigurationManager _serverConfigurationManager;
+@@ -228,6 +229,12 @@ public class SubtitleController : BaseJellyfinApiController
+         index ??= routeIndex;
+         format ??= routeFormat;
+ 
++        var item = _libraryManager.GetItemById<Video>(itemId.Value, User.GetUserId());
++        if (item is null)
++        {
++            return NotFound();
++        }
++
+         if (string.Equals(format, "js", StringComparison.OrdinalIgnoreCase))
+         {
+             format = "json";
+@@ -235,8 +242,6 @@ public class SubtitleController : BaseJellyfinApiController
+ 
+         if (string.IsNullOrEmpty(format))
+         {
+-            var item = _libraryManager.GetItemById<Video>(itemId.Value);
+-
+             var idString = itemId.Value.ToString("N", CultureInfo.InvariantCulture);
+             var mediaSource = _mediaSourceManager.GetStaticMediaSources(item, false)
+                 .First(i => string.Equals(i.Id, mediaSourceId ?? idString, StringComparison.Ordinal));
+@@ -249,7 +254,7 @@ public class SubtitleController : BaseJellyfinApiController
+ 
+         if (string.Equals(format, "vtt", StringComparison.OrdinalIgnoreCase) && addVttTimeMap)
+         {
+-            Stream stream = await EncodeSubtitles(itemId.Value, mediaSourceId, index.Value, format, startPositionTicks, endPositionTicks, copyTimestamps).ConfigureAwait(false);
++            Stream stream = await EncodeSubtitles(item, mediaSourceId, index.Value, format, startPositionTicks, endPositionTicks, copyTimestamps).ConfigureAwait(false);
+             await using (stream.ConfigureAwait(false))
+             {
+                 using var reader = new StreamReader(stream);
+@@ -264,7 +269,7 @@ public class SubtitleController : BaseJellyfinApiController
+ 
+         return File(
+             await EncodeSubtitles(
+-                itemId.Value,
++                item,
+                 mediaSourceId,
+                 index.Value,
+                 format,
+@@ -459,7 +464,7 @@ public class SubtitleController : BaseJellyfinApiController
+     /// <summary>
+     /// Encodes a subtitle in the specified format.
+     /// </summary>
+-    /// <param name="id">The media id.</param>
++    /// <param name="item">The authorized media item.</param>
+     /// <param name="mediaSourceId">The source media id.</param>
+     /// <param name="index">The subtitle index.</param>
+     /// <param name="format">The format to convert to.</param>
+@@ -468,7 +473,7 @@ public class SubtitleController : BaseJellyfinApiController
+     /// <param name="copyTimestamps">Whether to copy the timestamps.</param>
+     /// <returns>A <see cref="Task{Stream}"/> with the new subtitle file.</returns>
+     private Task<Stream> EncodeSubtitles(
+-        Guid id,
++        BaseItem item,
+         string? mediaSourceId,
+         int index,
+         string format,
+@@ -476,8 +481,6 @@ public class SubtitleController : BaseJellyfinApiController
+         long? endPositionTicks,
+         bool copyTimestamps)
+     {
+-        var item = _libraryManager.GetItemById<BaseItem>(id);
+-
+         return _subtitleEncoder.GetSubtitles(
+             item,
+             mediaSourceId,
+diff --git a/Jellyfin.Api/Controllers/VideoAttachmentsController.cs b/Jellyfin.Api/Controllers/VideoAttachmentsController.cs
+index 2c8b452c35..771e49d924 100644
+--- a/Jellyfin.Api/Controllers/VideoAttachmentsController.cs
++++ b/Jellyfin.Api/Controllers/VideoAttachmentsController.cs
+@@ -10,6 +10,7 @@ using MediaBrowser.Common.Extensions;
+ using MediaBrowser.Controller.Entities;
+ using MediaBrowser.Controller.Library;
+ using MediaBrowser.Controller.MediaEncoding;
++using Microsoft.AspNetCore.Authorization;
+ using Microsoft.AspNetCore.Http;
+ using Microsoft.AspNetCore.Mvc;
+ 
+@@ -20,6 +21,7 @@ namespace Jellyfin.Api.Controllers;
+ /// </summary>
+ [Route("Videos")]
+ [Tags("Video")]
++[Authorize]
+ public class VideoAttachmentsController : BaseJellyfinApiController
+ {
+     private readonly ILibraryManager _libraryManager;
+@@ -75,6 +77,8 @@ public class VideoAttachmentsController : BaseJellyfinApiController
+                 ? MediaTypeNames.Application.Octet
+                 : attachment.MimeType;
+ 
++            Response.Headers.ContentDisposition = "attachment";
++            Response.Headers.XContentTypeOptions = "nosniff";
+             return new FileStreamResult(stream, contentType);
+         }
+         catch (ResourceNotFoundException e)
+diff --git a/Jellyfin.Api/Helpers/MediaInfoHelper.cs b/Jellyfin.Api/Helpers/MediaInfoHelper.cs
+index 0e28dbf20d..da4c2519a2 100644
+--- a/Jellyfin.Api/Helpers/MediaInfoHelper.cs
++++ b/Jellyfin.Api/Helpers/MediaInfoHelper.cs
+@@ -414,10 +414,11 @@ public class MediaInfoHelper
+         {
+             attachment.DeliveryUrl = string.Format(
+                 CultureInfo.InvariantCulture,
+-                "/Videos/{0}/{1}/Attachments/{2}",
++                "/Videos/{0}/{1}/Attachments/{2}?ApiKey={3}",
+                 item.Id,
+-                mediaSource.Id,
+-                attachment.Index);
++                Uri.EscapeDataString(mediaSource.Id),
++                attachment.Index,
++                Uri.EscapeDataString(claimsPrincipal.GetToken()!));
+         }
+     }
+ 
+diff --git a/tests/Jellyfin.Api.Tests/Controllers/MediaResourceSecurityTests.cs b/tests/Jellyfin.Api.Tests/Controllers/MediaResourceSecurityTests.cs
+new file mode 100644
+index 0000000000..2159e3b438
+--- /dev/null
++++ b/tests/Jellyfin.Api.Tests/Controllers/MediaResourceSecurityTests.cs
+@@ -0,0 +1,157 @@
++using System;
++using System.IO;
++using System.Net;
++using System.Net.Http;
++using System.Text;
++using System.Threading;
++using System.Threading.Tasks;
++using Jellyfin.Api.Auth;
++using Jellyfin.Api.Controllers;
++using Jellyfin.Database.Implementations.Entities;
++using MediaBrowser.Controller.Configuration;
++using MediaBrowser.Controller.Entities;
++using MediaBrowser.Controller.Entities.Movies;
++using MediaBrowser.Controller.Library;
++using MediaBrowser.Controller.MediaEncoding;
++using MediaBrowser.Controller.Net;
++using MediaBrowser.Controller.Providers;
++using MediaBrowser.Controller.Subtitles;
++using MediaBrowser.Model.Entities;
++using MediaBrowser.Model.IO;
++using Microsoft.AspNetCore.Authentication;
++using Microsoft.AspNetCore.Builder;
++using Microsoft.AspNetCore.Hosting;
++using Microsoft.AspNetCore.TestHost;
++using Microsoft.Extensions.DependencyInjection;
++using Microsoft.Extensions.Hosting;
++using Moq;
++using Xunit;
++
++namespace Jellyfin.Api.Tests.Controllers;
++
++public sealed class MediaResourceSecurityTests : IAsyncLifetime
++{
++    private const string SourceId = "22222222222222222222222222222222";
++    private const string SubtitleBody = "WEBVTT\n\n00:00.000 --> 00:01.000\nCaption\n";
++    private const string AttachmentBody = "<!doctype html><title>Untrusted attachment</title>";
++    private static readonly Guid _itemId = Guid.Parse("11111111-1111-1111-1111-111111111111");
++    private readonly Mock<ILibraryManager> _library = new();
++    private readonly IHost _host;
++
++    public MediaResourceSecurityTests()
++    {
++        var user = new User("reader", "authentication", "reset");
++        var movie = new Movie { Id = _itemId };
++        _library.Setup(l => l.GetItemById<BaseItem>(_itemId)).Returns(movie);
++        _library.Setup(l => l.GetItemById<Video>(_itemId)).Returns(movie);
++        _library.Setup(l => l.GetItemById<BaseItem>(_itemId, It.IsAny<Guid>())).Returns(movie);
++        _library.Setup(l => l.GetItemById<Video>(_itemId, It.IsAny<Guid>())).Returns(movie);
++
++        var encoder = new Mock<ISubtitleEncoder>();
++        encoder.Setup(e => e.GetSubtitles(
++                It.IsAny<BaseItem>(), SourceId, 0, "vtt", It.IsAny<long>(), It.IsAny<long>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
++            .Returns(() => Task.FromResult<Stream>(new MemoryStream(Encoding.UTF8.GetBytes(SubtitleBody))));
++        var extractor = new Mock<IAttachmentExtractor>();
++        extractor.Setup(e => e.GetAttachment(It.IsAny<BaseItem>(), SourceId, 0, It.IsAny<CancellationToken>()))
++            .Returns(() => Task.FromResult((
++                new MediaAttachment { MimeType = "text/html", FileName = "untrusted.html", Index = 0 },
++                (Stream)new MemoryStream(Encoding.UTF8.GetBytes(AttachmentBody)))));
++
++        var auth = new Mock<IAuthService>();
++        auth.Setup(a => a.Authenticate(It.IsAny<Microsoft.AspNetCore.Http.HttpRequest>()))
++            .Returns((Microsoft.AspNetCore.Http.HttpRequest request) =>
++                Task.FromResult(request.Query["api_key"] == "reader-token"
++                    ? new AuthorizationInfo { Token = "reader-token", User = user, IsAuthenticated = true }
++                    : new AuthorizationInfo()));
++
++        _host = new HostBuilder().ConfigureWebHost(web => web.UseTestServer()
++            .ConfigureServices(services =>
++            {
++                services.AddSingleton(_library.Object);
++                services.AddSingleton(encoder.Object);
++                services.AddSingleton(extractor.Object);
++                services.AddSingleton(auth.Object);
++                services.AddSingleton(Mock.Of<IServerConfigurationManager>());
++                services.AddSingleton(Mock.Of<ISubtitleManager>());
++                services.AddSingleton(Mock.Of<IMediaSourceManager>());
++                services.AddSingleton(Mock.Of<IProviderManager>());
++                services.AddSingleton(Mock.Of<IFileSystem>());
++                services.AddAuthentication("Test")
++                    .AddScheme<AuthenticationSchemeOptions, CustomAuthenticationHandler>("Test", _ => { });
++                services.AddAuthorization();
++                services.AddControllers().AddApplicationPart(typeof(SubtitleController).Assembly);
++            })
++            .Configure(app =>
++            {
++                app.UseRouting();
++                app.UseAuthentication();
++                app.UseAuthorization();
++                app.UseEndpoints(endpoints => endpoints.MapControllers());
++            })).Build();
++    }
++
++    public async ValueTask InitializeAsync() => await _host.StartAsync(TestContext.Current.CancellationToken);
++
++    [Theory]
++    [InlineData("Subtitles/0/Stream.vtt")]
++    [InlineData("Subtitles/0/0/Stream.vtt")]
++    [InlineData("Attachments/0")]
++    public async Task MediaResource_AnonymousRequest_IsUnauthorized(string resource)
++    {
++        using var client = _host.GetTestClient();
++        using var response = await client.GetAsync($"/Videos/{_itemId}/{SourceId}/{resource}", TestContext.Current.CancellationToken);
++        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
++    }
++
++    [Theory]
++    [InlineData("Subtitles/0/Stream.vtt")]
++    [InlineData("Subtitles/0/0/Stream.vtt")]
++    [InlineData("Attachments/0")]
++    public async Task MediaResource_JunkToken_IsUnauthorized(string resource)
++    {
++        using var client = _host.GetTestClient();
++        using var response = await client.GetAsync($"/Videos/{_itemId}/{SourceId}/{resource}?api_key=junk", TestContext.Current.CancellationToken);
++        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
++    }
++
++    [Theory]
++    [InlineData("Subtitles/0/Stream.vtt")]
++    [InlineData("Subtitles/0/0/Stream.vtt")]
++    public async Task Subtitle_VisibleItem_ReturnsCaptionsWithQueryToken(string resource)
++    {
++        using var client = _host.GetTestClient();
++        using var response = await client.GetAsync($"/Videos/{_itemId}/{SourceId}/{resource}?api_key=reader-token", TestContext.Current.CancellationToken);
++        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
++        Assert.Equal(SubtitleBody, await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
++    }
++
++    [Theory]
++    [InlineData("Subtitles/0/Stream.vtt")]
++    [InlineData("Subtitles/0/0/Stream.vtt")]
++    [InlineData("Attachments/0")]
++    public async Task MediaResource_HiddenItem_IsNotFound(string resource)
++    {
++        _library.Setup(l => l.GetItemById<BaseItem>(_itemId, It.IsAny<Guid>())).Returns((BaseItem?)null);
++        _library.Setup(l => l.GetItemById<Video>(_itemId, It.IsAny<Guid>())).Returns((Video?)null);
++        using var client = _host.GetTestClient();
++        using var response = await client.GetAsync($"/Videos/{_itemId}/{SourceId}/{resource}?api_key=reader-token", TestContext.Current.CancellationToken);
++        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
++    }
++
++    [Fact]
++    public async Task Attachment_MediaSuppliedHtml_IsDownloadOnly()
++    {
++        using var client = _host.GetTestClient();
++        using var response = await client.GetAsync($"/Videos/{_itemId}/{SourceId}/Attachments/0?api_key=reader-token", TestContext.Current.CancellationToken);
++        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
++        Assert.Equal(AttachmentBody, await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
++        Assert.Equal("attachment", response.Content.Headers.ContentDisposition?.DispositionType);
++        Assert.Equal("nosniff", Assert.Single(response.Headers.GetValues("X-Content-Type-Options")));
++    }
++
++    public async ValueTask DisposeAsync()
++    {
++        await _host.StopAsync(TestContext.Current.CancellationToken);
++        _host.Dispose();
++    }
++}
+diff --git a/tests/Jellyfin.Api.Tests/Helpers/MediaInfoHelperTests.cs b/tests/Jellyfin.Api.Tests/Helpers/MediaInfoHelperTests.cs
+index 025d4d63a7..97a0a301a1 100644
+--- a/tests/Jellyfin.Api.Tests/Helpers/MediaInfoHelperTests.cs
++++ b/tests/Jellyfin.Api.Tests/Helpers/MediaInfoHelperTests.cs
+@@ -1,10 +1,16 @@
+ using System;
+ using System.Globalization;
++using System.Net;
++using System.Security.Claims;
+ using System.Text.Json;
+ using System.Threading;
+ using System.Threading.Tasks;
++using Jellyfin.Api.Constants;
+ using Jellyfin.Api.Helpers;
++using Jellyfin.Data;
++using Jellyfin.Data.Queries;
+ using Jellyfin.Database.Implementations.Entities;
++using Jellyfin.Database.Implementations.Entities.Security;
+ using MediaBrowser.Common.Net;
+ using MediaBrowser.Controller;
+ using MediaBrowser.Controller.Configuration;
+@@ -14,8 +20,11 @@ using MediaBrowser.Controller.Entities.Movies;
+ using MediaBrowser.Controller.Library;
+ using MediaBrowser.Controller.LiveTv;
+ using MediaBrowser.Controller.MediaEncoding;
++using MediaBrowser.Model.Dlna;
+ using MediaBrowser.Model.Dto;
++using MediaBrowser.Model.Entities;
+ using MediaBrowser.Model.MediaInfo;
++using MediaBrowser.Model.Querying;
+ using Microsoft.AspNetCore.Http;
+ using Microsoft.Extensions.Logging;
+ using Moq;
+@@ -30,22 +39,26 @@ namespace Jellyfin.Api.Tests.Helpers
+         private static MediaInfoHelper CreateHelper(
+             IMediaSourceManager? mediaSourceManager = null,
+             IServerApplicationHost? appHost = null,
+-            string baseUrl = "")
++            string baseUrl = "",
++            IUserManager? userManager = null)
+         {
+             var serverConfigurationManager = new Mock<IServerConfigurationManager>();
+             serverConfigurationManager
+                 .Setup(x => x.GetConfiguration(It.IsAny<string>()))
+                 .Returns(new NetworkConfiguration { BaseUrl = baseUrl });
+ 
++            var devices = new Mock<IDeviceManager>();
++            devices.Setup(d => d.GetDevices(It.IsAny<DeviceQuery>())).Returns(new QueryResult<Device>());
++
+             return new MediaInfoHelper(
+-                Mock.Of<IUserManager>(),
++                userManager ?? Mock.Of<IUserManager>(),
+                 Mock.Of<ILibraryManager>(),
+                 mediaSourceManager ?? Mock.Of<IMediaSourceManager>(),
+                 Mock.Of<IMediaEncoder>(),
+                 serverConfigurationManager.Object,
+                 Mock.Of<ILogger<MediaInfoHelper>>(),
+                 Mock.Of<INetworkManager>(),
+-                Mock.Of<IDeviceManager>(),
++                devices.Object,
+                 appHost ?? Mock.Of<IServerApplicationHost>());
+         }
+ 
+@@ -62,6 +75,49 @@ namespace Jellyfin.Api.Tests.Helpers
+             };
+         }
+ 
++        [Fact]
++        public void SetDeviceSpecificData_AttachmentUrl_CarriesEscapedCallerToken()
++        {
++            var itemId = Guid.Parse("11111111-1111-1111-1111-111111111111");
++            var user = new User("reader", "authentication", "reset") { RemoteClientBitrateLimit = 1_000_000 };
++            user.AddDefaultPermissions();
++            var users = new Mock<IUserManager>();
++            users.Setup(u => u.GetUserById(user.Id)).Returns(user);
++            var source = CreateSource(itemId, 1_000_000);
++            source.MediaAttachments = [new MediaAttachment { Index = 3 }];
++            var principal = new ClaimsPrincipal(new ClaimsIdentity(
++                [
++                    new Claim(InternalClaimTypes.Token, "reader&token"),
++                    new Claim(InternalClaimTypes.UserId, user.Id.ToString("N", CultureInfo.InvariantCulture))
++                ],
++                "Test"));
++
++            CreateHelper(userManager: users.Object).SetDeviceSpecificData(
++                new Movie { Id = itemId },
++                source,
++                new DeviceProfile(),
++                principal,
++                null,
++                0,
++                source.Id,
++                null,
++                null,
++                null,
++                "play-session",
++                user.Id,
++                true,
++                true,
++                true,
++                true,
++                true,
++                false,
++                IPAddress.Loopback);
++
++            Assert.Equal(
++                "/Videos/11111111-1111-1111-1111-111111111111/11111111111111111111111111111111/Attachments/3?ApiKey=reader%26token",
++                source.MediaAttachments[0].DeliveryUrl);
++        }
++
+         [Fact]
+         public void SortMediaSources_PreferredItemExceedsBitrate_StaysDefault()
+         {

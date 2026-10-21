@@ -128,6 +128,107 @@ test('PLAY-01 resume intent and progressive-transcode offsets', async () => {
     assert.match(main, /api\.play\(playbackItem, \{ startTicks: resumeStartTicks\(playbackItem, intent\) \}\)/);
 });
 
+test('live playback watchdog shows buffering and requests only one fresh stream', async () => {
+    const model = await import('../src/player-model.ts');
+    const watch = { lastPositionSeconds: 42, lastProgressAtMs: 1_000, liveReopenAttempted: false };
+    const observe = model.observePlaybackProgress;
+
+    assert.deepEqual(observe?.(watch, { currentTime: 42, nowMs: 3_000, paused: false, seeking: false, isLive: true }), {
+        watch,
+        buffering: true,
+        reopenLiveStream: false,
+        recoveryFailed: false
+    });
+
+    const reopen = observe?.(watch, { currentTime: 42, nowMs: 21_000, paused: false, seeking: false, isLive: true });
+    assert.deepEqual(reopen, {
+        watch: { ...watch, liveReopenAttempted: true },
+        buffering: true,
+        reopenLiveStream: true,
+        recoveryFailed: false
+    });
+    const reopenedWatch = { ...reopen.watch, lastProgressAtMs: 21_000 };
+    assert.deepEqual(observe?.(reopenedWatch, { currentTime: 42, nowMs: 22_000, paused: false, seeking: false, isLive: true }), {
+        watch: reopenedWatch,
+        buffering: false,
+        reopenLiveStream: false,
+        recoveryFailed: false
+    });
+    assert.deepEqual(observe?.(reopenedWatch, { currentTime: 42, nowMs: 41_000, paused: false, seeking: false, isLive: true }), {
+        watch: reopenedWatch,
+        buffering: true,
+        reopenLiveStream: false,
+        recoveryFailed: true
+    });
+});
+
+test('live playback watchdog resets on progress and ignores pause or seek', async () => {
+    const model = await import('../src/player-model.ts');
+    const watch = { lastPositionSeconds: 42, lastProgressAtMs: 1_000, liveReopenAttempted: false };
+    const observe = model.observePlaybackProgress;
+
+    assert.deepEqual(observe?.(watch, { currentTime: 43, nowMs: 5_000, paused: false, seeking: false, isLive: true }), {
+        watch: { ...watch, lastPositionSeconds: 43, lastProgressAtMs: 5_000 },
+        buffering: false,
+        reopenLiveStream: false,
+        recoveryFailed: false
+    });
+    assert.deepEqual(observe?.(watch, { currentTime: 42, nowMs: 30_000, paused: true, seeking: false, isLive: true }), {
+        watch: { ...watch, lastProgressAtMs: 30_000 },
+        buffering: false,
+        reopenLiveStream: false,
+        recoveryFailed: false
+    });
+    assert.deepEqual(observe?.(watch, { currentTime: 42, nowMs: 30_000, paused: false, seeking: true, isLive: true }), {
+        watch: { ...watch, lastProgressAtMs: 30_000 },
+        buffering: false,
+        reopenLiveStream: false,
+        recoveryFailed: false
+    });
+    assert.deepEqual(observe?.(watch, { currentTime: 42, nowMs: 3_000, paused: false, seeking: false, isLive: false }), {
+        watch,
+        buffering: true,
+        reopenLiveStream: false,
+        recoveryFailed: false
+    }, 'VOD shows buffering but never opens a Live TV stream');
+});
+
+test('fresh live recovery omits the previous LiveStreamId while ordinary renegotiation retains it', async () => {
+    const model = await import('../src/player-model.ts');
+
+    assert.deepEqual(model.playbackRenegotiationPlan?.({ startTicks: 12, mediaSourceId: 'old-source', reopenLiveStream: true }, 'old-live-id'), {
+        options: { startTicks: 12, mediaSourceId: undefined, liveStreamId: undefined },
+        retainedLiveStreamId: undefined
+    });
+    assert.deepEqual(model.playbackRenegotiationPlan?.({ forceTranscode: true }, 'current-live-id'), {
+        options: { forceTranscode: true, liveStreamId: 'current-live-id' },
+        retainedLiveStreamId: 'current-live-id'
+    });
+});
+
+test('HLS recovery ignores nonfatal events and bounds live media recovery', async () => {
+    const model = await import('../src/player-model.ts');
+    const noAttempts = { networkRetries: 0, mediaRetries: 0 };
+    const nonfatal = model.planHlsRecovery?.({ fatal: false, kind: 'media' }, noAttempts, true, false);
+    assert.deepEqual(nonfatal, { action: 'ignore', attempts: noAttempts });
+
+    const recover = model.planHlsRecovery?.({ fatal: true, kind: 'media' }, noAttempts, true, false);
+    assert.deepEqual(recover, { action: 'recover-media', attempts: { networkRetries: 0, mediaRetries: 1 } });
+    const swap = model.planHlsRecovery?.({ fatal: true, kind: 'media' }, recover.attempts, true, false);
+    assert.deepEqual(swap, { action: 'swap-audio-codec', attempts: { networkRetries: 0, mediaRetries: 2 } });
+    const reopen = model.planHlsRecovery?.({ fatal: true, kind: 'media' }, swap.attempts, true, false);
+    assert.deepEqual(reopen, { action: 'reopen-live', attempts: swap.attempts });
+    assert.deepEqual(model.planHlsRecovery?.({ fatal: true, kind: 'media' }, swap.attempts, true, true), { action: 'fail', attempts: swap.attempts });
+
+    const retryNetwork = model.planHlsRecovery?.({ fatal: true, kind: 'network' }, noAttempts, true, false);
+    assert.deepEqual(retryNetwork, { action: 'start-load', attempts: { networkRetries: 1, mediaRetries: 0 } });
+    assert.deepEqual(model.planHlsRecovery?.({ fatal: true, kind: 'network' }, retryNetwork.attempts, true, false), { action: 'reopen-live', attempts: retryNetwork.attempts });
+    assert.deepEqual(model.planHlsRecovery?.({ fatal: true, kind: 'network', responseCode: 0 }, noAttempts, true, false), { action: 'reopen-live', attempts: noAttempts });
+    assert.deepEqual(model.planHlsRecovery?.({ fatal: true, kind: 'network', responseCode: 0 }, noAttempts, true, true), { action: 'fail', attempts: noAttempts });
+    assert.deepEqual(model.planHlsRecovery?.({ fatal: true, kind: 'network', responseCode: 0 }, noAttempts, false, false), { action: 'fail', attempts: noAttempts });
+    assert.deepEqual(model.planHlsRecovery?.({ fatal: true, kind: 'network', responseCode: 404 }, noAttempts, true, false), { action: 'fail', attempts: noAttempts });
+});
+
 test('PLAY-04 tuner sources are opened and the live stream id is retained and reported', async () => {
     const { JellyfinApi } = await import('../src/api.ts');
     const api = new JellyfinApi(session);
@@ -211,6 +312,49 @@ test('PLAY-18 playback reports resolve with delivery status instead of assuming 
     responses.push({ status: 204, body: '' });
     assert.equal(await api.reportPlaybackStopped({ ItemId: 'i', PositionTicks: 1 }), true);
     assert.match(source('player.tsx'), /if \(saved && !keepalive && owner\.canRefresh\(session\)\) onReported\?\.\(itemId\)/);
+});
+
+test('PLAY-18 a keepalive stop waits behind an in-flight start report', async () => {
+    const { JellyfinApi } = await import('../src/api.ts');
+    const api = new JellyfinApi(session);
+    const BrowserXhr = globalThis.XMLHttpRequest;
+    const browserFetch = globalThis.fetch;
+    const order = [];
+    let finishStart;
+    globalThis.XMLHttpRequest = class extends BrowserXhr {
+        send(body) {
+            if (this.url.endsWith('/Sessions/Playing')) {
+                order.push('start');
+                requests.push({ method: this.method, url: this.url, body: JSON.parse(body) });
+                finishStart = () => {
+                    this.status = 204;
+                    this.responseText = '';
+                    this.onload();
+                };
+                return;
+            }
+            super.send(body);
+        }
+    };
+    globalThis.fetch = async () => {
+        order.push('stop');
+        return { ok: true };
+    };
+
+    try {
+        const start = api.reportPlaybackStart({ ItemId: 'i', PositionTicks: 0 });
+        const stop = api.reportPlaybackStopped({ ItemId: 'i', PositionTicks: 0 }, true);
+        await Promise.resolve();
+        assert.deepEqual(order, [ 'start' ], 'the unload stop must not bypass an outstanding start report');
+
+        finishStart();
+        assert.equal(await start, true);
+        assert.equal(await stop, true);
+        assert.deepEqual(order, [ 'start', 'stop' ]);
+    } finally {
+        globalThis.XMLHttpRequest = BrowserXhr;
+        globalThis.fetch = browserFetch;
+    }
 });
 
 test('PLAY-19 live seeking uses the seekable window', async () => {

@@ -2,7 +2,7 @@ import { tasteTierLabel } from './discovery';
 import { h } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { JellyfinApi } from './api';
-import type { HomeFeedBlock } from './home-feed-blocks';
+import { HOME_EXPLORE_PAGE_SIZE, type HomeFeedBlock } from './home-feed-blocks';
 import { preferredScrollBehavior } from './live-model';
 import { describeCard, homeCardHeading, homeCardSubheading, homeRailShape, resumeMinutesLeft } from './media-labels';
 import type { SeerrItem } from './seerr';
@@ -27,12 +27,17 @@ export function HomeFeed({ blocks, api, onSelect, onPlay, onNeedMore, hasMore, l
     const container = useRef<HTMLDivElement>(null);
     const previousBlocks = useRef(blocks);
     const activeRef = useRef(activeBlock);
-    const paging = useRef({ hasMore, loadingMore, onNeedMore });
+    const [ exploreVisibleCount, setExploreVisibleCount ] = useState(HOME_EXPLORE_PAGE_SIZE);
     const previousId = previousBlocks.current[activeBlock]?.id;
     const matchingIndex = previousBlocks.current === blocks ? activeBlock : blocks.findIndex(block => block.id === previousId);
     const renderedActiveBlock = Math.max(0, matchingIndex);
     activeRef.current = renderedActiveBlock;
-    paging.current = { hasMore, loadingMore, onNeedMore };
+    const showMoreExplore = (items: MediaItem[]) => {
+        if (loadingMore) return;
+        const shouldLoadPage = exploreVisibleCount >= items.length;
+        setExploreVisibleCount(count => count + HOME_EXPLORE_PAGE_SIZE);
+        if (shouldLoadPage && hasMore) onNeedMore();
+    };
     const windowRange = useMemo(() => ({ start: Math.max(0, renderedActiveBlock - 1), end: Math.min(blocks.length, renderedActiveBlock + 2) }), [ renderedActiveBlock, blocks.length ]);
     useLayoutEffect(() => {
         if (previousBlocks.current === blocks) return;
@@ -70,12 +75,6 @@ export function HomeFeed({ blocks, api, onSelect, onPlay, onNeedMore, hasMore, l
                         focusFrame = 0;
                         root.querySelector<HTMLElement>(`[data-block-index="${nextIndex}"] .home-spotlight-primary, [data-block-index="${nextIndex}"] .home-feed-rail-items [data-focusable="true"]`)?.focus();
                     });
-                    return;
-                }
-                if (nextIndex === blocks.length && paging.current.hasMore) {
-                    event.preventDefault();
-                    event.stopImmediatePropagation();
-                    if (!paging.current.loadingMore) paging.current.onNeedMore();
                     return;
                 }
             }
@@ -149,20 +148,6 @@ export function HomeFeed({ blocks, api, onSelect, onPlay, onNeedMore, hasMore, l
         };
     }, [ blocks.length, measure, windowRange.start, windowRange.end ]);
 
-    useEffect(() => {
-        const sentinel = container.current?.querySelector('.home-feed-sentinel');
-        if (!sentinel || !hasMore || loadingMore || typeof IntersectionObserver === 'undefined') return;
-        // Remote users navigate by focus, not scroll position, so the feed
-        // can sit pinned at its rendered edge while the sentinel is still
-        // far below. Pull early so the next page is usually rendered before
-        // focus runs out of targets.
-        const observer = new IntersectionObserver(entries => {
-            if (entries.some(entry => entry.isIntersecting)) onNeedMore();
-        }, { rootMargin: '2000px 0px' });
-        observer.observe(sentinel);
-        return () => observer.disconnect();
-    }, [ hasMore, loadingMore, onNeedMore, blocks.length ]);
-
     if (!blocks.length) return null;
     return <div class="home-feed-blocks" ref={container}>
         {blocks.map((block, index) => {
@@ -172,18 +157,18 @@ export function HomeFeed({ blocks, api, onSelect, onPlay, onNeedMore, hasMore, l
             return rendered
                 ? <div key={block.id} data-block-index={index} data-block-id={block.id} class="home-feed-block">
                     {block.kind !== 'spotlight'
-                        ? <HomeRail block={block} api={api} onSelect={onSelect} onRequest={onRequest} initialScrollLeft={railOffsets.current[block.id] || 0} onScrollLeft={value => { railOffsets.current[block.id] = value; }} />
+                        ? <HomeRail block={block} api={api} onSelect={onSelect} onRequest={onRequest} initialScrollLeft={railOffsets.current[block.id] || 0} onScrollLeft={value => { railOffsets.current[block.id] = value; }} exploreVisibleCount={exploreVisibleCount} hasMoreExplore={hasMore} loadingMore={loadingMore} onShowMore={showMoreExplore} />
                         : <Spotlight block={block} api={api} onSelect={onSelect} onPlay={onPlay} onUserData={onUserData} nextBlockId={blocks[index + 1]?.id} />}
                 </div>
                 : <div key={block.id} data-block-index={index} data-block-id={block.id} data-placeholder="true" class="home-feed-block-placeholder" style={{ height: `${height}px` }} />;
         })}
-        <div class="home-feed-sentinel" aria-hidden="true" />
-        {loadingMore && <div class="home-feed-more-status" role="status"><span class="mini-spinner" aria-hidden="true" />{t('Finding more to explore…')}</div>}
     </div>;
 }
 
-function HomeRail({ block, api, onSelect, onRequest, initialScrollLeft, onScrollLeft }: { block: HomeFeedBlock; api: JellyfinApi | null; onSelect: (item: MediaItem) => void; onRequest?: (item: SeerrItem) => void; initialScrollLeft: number; onScrollLeft: (value: number) => void }) {
+function HomeRail({ block, api, onSelect, onRequest, initialScrollLeft, onScrollLeft, exploreVisibleCount, hasMoreExplore, loadingMore, onShowMore }: { block: HomeFeedBlock; api: JellyfinApi | null; onSelect: (item: MediaItem) => void; onRequest?: (item: SeerrItem) => void; initialScrollLeft: number; onScrollLeft: (value: number) => void; exploreVisibleCount: number; hasMoreExplore: boolean; loadingMore: boolean; onShowMore: (items: MediaItem[]) => void }) {
     const requests = block.kind === 'requests' ? block.requests || [] : null;
+    const visibleItems = block.items.slice(0, block.kind === 'explore' ? exploreVisibleCount : 24);
+    const canShowMore = block.kind === 'explore' && (exploreVisibleCount < block.items.length || hasMoreExplore);
     const rail = useRef<HTMLDivElement>(null);
     const [ canScrollLeft, setCanScrollLeft ] = useState(false);
     const [ canScrollRight, setCanScrollRight ] = useState(false);
@@ -205,7 +190,7 @@ function HomeRail({ block, api, onSelect, onRequest, initialScrollLeft, onScroll
             restoring.current = false;
         });
         return () => window.cancelAnimationFrame(frame);
-    }, [ initialScrollLeft, block.id, requests ? requests.length : block.items.length ]);
+    }, [ initialScrollLeft, block.id, requests ? requests.length : visibleItems.length ]);
     return <section class="section-block home-feed-rail">
         <div class="section-heading home-feed-rail-heading"><div><p class="eyebrow">{block.subtitle}</p><h2>{block.title}</h2></div><div class="home-feed-rail-controls" aria-label={t('{0} horizontal scrolling', block.title)}>
             <button data-focusable="true" type="button" aria-label={t('Scroll {0} left', block.title)} disabled={!canScrollLeft} onClick={() => rail.current?.scrollBy({ left: -Math.max(300, rail.current.clientWidth * .8) * inlineSign(), behavior: preferredScrollBehavior() })}>‹</button>
@@ -213,7 +198,9 @@ function HomeRail({ block, api, onSelect, onRequest, initialScrollLeft, onScroll
         </div></div>
         <div ref={rail} class="home-feed-rail-items" onScroll={updateArrows}>{requests
             ? requests.slice(0, 24).map(item => <SeerrCard key={`${item.mediaType}:${item.mediaId}`} item={item} onOpen={next => onRequest?.(next)} />)
-            : block.items.slice(0, 24).map(item => <HomeFeedCard key={item.Id} item={item} api={api} onSelect={onSelect} shape={homeRailShape(block.items)} />)}</div>
+            : <>{visibleItems.map(item => <HomeFeedCard key={item.Id} item={item} api={api} onSelect={onSelect} shape={homeRailShape(block.items)} />)}{canShowMore && <button key="explore-load-more" data-focusable="true" class="home-feed-card home-feed-more-card" type="button" aria-label={loadingMore ? t('Loading…') : t('Show more')} disabled={loadingMore} onClick={() => onShowMore(block.items)}>
+                <span class="home-feed-card-art home-feed-more-card-art no-artwork"><span class="home-feed-more-card-content"><span class="home-feed-more-card-icon" aria-hidden="true">{loadingMore ? '…' : '+'}</span><span class="home-feed-more-card-label">{loadingMore ? t('Loading…') : t('Show more')}</span></span></span>
+            </button>}</>}</div>
     </section>;
 }
 
