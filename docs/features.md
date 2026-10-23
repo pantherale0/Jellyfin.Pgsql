@@ -175,6 +175,8 @@ Home discovery treats the profile's mapped top genres as alternatives. A title c
 
 **Where:** [Playback / encoding group](patches.md#3-playback--encoding). Codec fallback: [`jellyfin_z_transcode_codec_fallback`](patches.md#jellyfin_z_transcode_codec_fallbackpatch) + [`jellyfin_web_z_transcode_codec_fallback`](patches.md#jellyfin_web_z_transcode_codec_fallbackpatch). Upstream: [jellyfin#13668](https://github.com/jellyfin/jellyfin/issues/13668), [jellyfin#16823](https://github.com/jellyfin/jellyfin/issues/16823), [jellyfin-web#7651](https://github.com/jellyfin/jellyfin-web/issues/7651).
 
+**HLS playback:** [`jellyfin_zzzzzzz_hls_remux_segment_restart`](patches.md#jellyfin_zzzzzzz_hls_remux_segment_restartpatch) preserves keyframe-aware timing for video stream copy and prevents retired transcode jobs from deleting replacement output. Segment deletion follows actual downloaded segment timestamps and the configured retention window. Missing past segments are regenerated; segment-readiness waits have a 30-second limit and respect disconnects. Unavailable output returns the existing `StreamUnavailable` playback code. These corrections apply automatically and need no new configuration.
+
 **How (codec fallback):** Enabled by default (`EnableTranscodeCodecFallback`, `EnableParallelCodecRace` in Dashboard → Playback → Transcoding). When AV1 encode fails at HLS init, the server races or falls back to H.264 (etc.), 302-redirects the client to the winning playlist, and writes deduplicated Activity Log entries. Devices → playback info shows an `AV1 → H.264 fallback` badge when active.
 
 ### Per-device playback and transcoding options

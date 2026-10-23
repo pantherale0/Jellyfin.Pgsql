@@ -14,7 +14,7 @@ index b31c3e36e8..df1a67b769 100644
              serviceCollection.AddScoped<MediaInfoHelper>();
              serviceCollection.AddScoped<AudioHelper>();
 diff --git a/Jellyfin.Api/Controllers/DynamicHlsController.cs b/Jellyfin.Api/Controllers/DynamicHlsController.cs
-index fd54aa797f..56043d553c 100644
+index 154e327bc8..416f13c46d 100644
 --- a/Jellyfin.Api/Controllers/DynamicHlsController.cs
 +++ b/Jellyfin.Api/Controllers/DynamicHlsController.cs
 @@ -15,12 +15,14 @@ using Jellyfin.Api.Models.StreamingDtos;
@@ -124,13 +124,13 @@ index fd54aa797f..56043d553c 100644
  
              if (segmentId == -1)
              {
-                 _logger.LogInformation("Starting HLS transcoding because fmp4 init file is being requested");
+                 _logger.LogDebug("Starting transcoding because fmp4 init file is being requested");
                  startTranscoding = true;
 +                isInitSegmentRequest = true;
                  segmentId = 0;
              }
              else if (currentTranscodingIndex is null)
-@@ -1567,14 +1591,54 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -1542,14 +1566,54 @@ public class DynamicHlsController : BaseJellyfinApiController
  
                      streamingRequest.StartTimeTicks = streamingRequest.CurrentRuntimeTicks;
  
@@ -193,7 +193,7 @@ index fd54aa797f..56043d553c 100644
                  }
                  catch
                  {
-@@ -1599,6 +1663,217 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -1574,6 +1638,217 @@ public class DynamicHlsController : BaseJellyfinApiController
          }
      }
  

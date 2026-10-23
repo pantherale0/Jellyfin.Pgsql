@@ -324,7 +324,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Why** | GPUs may list `av1_nvenc` in ffmpeg `-encoders` but fail at runtime (exit 218 / `-38 Function not implemented` on pre-Ada NVIDIA). Without fallback, HLS init fails hard when `AllowAv1Encoding` is enabled. |
 | **Where** | `TranscodeCodecRaceCoordinator`, `TranscodeCodecFallbackChain`, `TranscodeSessionBinding`, `TranscodeFallbackNotifier`, `DynamicHlsController.GetDynamicSegment`, `TranscodeManager.StartFfMpegAttempt`, `EncodingOptions`, `TranscodingInfo` |
 | **How** | On fmp4 init (`segmentId == -1`), optionally race AV1 + H.264; first init segment wins; losers killed and artifacts cleaned. If no winner, walk chain `av1 hw → h264 hw → hevc hw → h264 sw → hevc sw → av1 sw`. Redirect client when winning codec differs from URL. Deduped Activity Log entries. |
-| **Related** | Requires [`jellyfin_transcoding_pipeline`](#jellyfin_transcoding_pipelinepatch) (pipeline fields on `TranscodingInfo`) and [`jellyfin_hls_remux_segment_restart`](#jellyfin_hls_remux_segment_restartpatch) (`GetFirstTranscodingFile` / segment-index helpers on `DynamicHlsController`). Companion [`jellyfin_web_z_transcode_codec_fallback`](#jellyfin_web_z_transcode_codec_fallbackpatch). No public issue. |
+| **Related** | Requires [`jellyfin_transcoding_pipeline`](#jellyfin_transcoding_pipelinepatch) for pipeline fields on `TranscodingInfo`. [`jellyfin_zzzzzzz_hls_remux_segment_restart`](#jellyfin_zzzzzzz_hls_remux_segment_restartpatch) applies afterward and owns HLS timing and lifecycle fixes; this patch's context is refreshed for that order. Companion [`jellyfin_web_z_transcode_codec_fallback`](#jellyfin_web_z_transcode_codec_fallbackpatch). No public issue. |
 
 ### `jellyfin_web_z_transcode_codec_fallback.patch`
 
@@ -359,16 +359,16 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **How** | React Query hook + form wiring. |
 | **Related** | `jellyfin_hwa_capabilities`. Prerequisite for Live TV keep-seconds UI layering. |
 
-### `jellyfin_hls_remux_segment_restart.patch`
+### `jellyfin_zzzzzzz_hls_remux_segment_restart.patch`
 
 | | |
 |---|---|
 | **Target** | `jellyfin` |
-| **What** | Avoids thrash-restarting ffmpeg near EOF and keeps HLS seek generations distinct. |
-| **Why** | Clients requesting late segments caused repeated `-ss`/`-start_number` restarts. Older files left beside a restarted playlist could also make a missing segment look like part of the active range, leaving requests waiting forever while healthy ffmpeg output went unused. |
-| **Where** | `DynamicHlsController.cs`, `TranscodingJob.cs`, `TranscodeManager.cs`, `EncodingHelper.cs`, `DynamicHlsPlaylistGenerator.cs`, tests |
-| **How** | Records the active job's `-start_number` on `TranscodingJob`; backward/missing-segment decisions use that generation boundary instead of the directory-wide minimum across stale files. Retains the smarter remux playlist/restart logic. |
-| **Related** | [jellyfin#13668](https://github.com/jellyfin/jellyfin/issues/13668); fork [pantherale0#17](https://github.com/pantherale0/Jellyfin.Pgsql/issues/17). |
+| **What** | HLS generation tracking, correct remux playlist timing, generation-safe transcode cleanup, and bounded segment waits. |
+| **Why** | Stream-copy segments follow source keyframes rather than a fixed `hls_time`. Delayed cleanup and queued segment-cleaner callbacks could delete replacement output. Cancelled requests could leave active-request counts elevated and block seeks. |
+| **Where** | `DynamicHlsController.cs`, `EncodingHelper.cs`, `TranscodingJob.cs`, `TranscodingSegmentCleaner.cs`, `TranscodeManager.cs`, `DynamicHlsPlaylistGenerator.cs`, HLS/API/media-encoding tests |
+| **How** | Preserves upstream keyframe-aware playlists and read-rate pacing only when segment deletion is enabled. Records each job's `-start_number` and excludes fMP4 initialization files from media-index detection. Missing past segments trigger regeneration. Readiness waits stop after 30 seconds or request cancellation and return `StreamUnavailable` for unavailable output. Completion and disconnect release each request once; only successful downloads advance progress. Segment deletion uses recorded segment-ending timestamps. Per-output artifact locks coordinate startup, stop, and cleanup; delayed cleanup checks for replacement jobs, duplicate stops do nothing, and stopped cleaners cannot delete files. |
+| **Related** | The original HLS patch is consolidated here in the final `zzzzzzz` band, after [`jellyfin_z_transcode_codec_fallback`](#jellyfin_z_transcode_codec_fallbackpatch), [`jellyfin_zzz_playback_errors`](#jellyfin_zzz_playback_errorspatch), [`jellyfin_zzzzz_device_playback_options`](#jellyfin_zzzzz_device_playback_optionspatch), and [`jellyfin_zzzzzz_media_resource_security`](#jellyfin_zzzzzz_media_resource_securitypatch). [jellyfin#13668](https://github.com/jellyfin/jellyfin/issues/13668); fork [pantherale0#17](https://github.com/pantherale0/Jellyfin.Pgsql/issues/17). No public issue for the cleanup races. |
 
 ### `jellyfin_hdr10plus_mpegts_sei.patch`
 
