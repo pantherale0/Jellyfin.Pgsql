@@ -9,7 +9,7 @@ export interface SsoHandoffAttempt {
     server: string;
     startedAt: number;
     previousAccessToken: string | null;
-    /** Present when the server returns a one-time code to this UI instead of writing classic credentials. */
+    /** Present when the server returns a one-time code to this UI instead of using the same-origin credential callback. */
     verifier?: string;
     returnUrl?: string;
 }
@@ -48,7 +48,7 @@ export async function createSsoChallenge(): Promise<{ verifier: string; challeng
     return { verifier, challenge: base64Url(new Uint8Array(digest)) };
 }
 
-/** A fresh code-exchange attempt, or null when the marker is stale, malformed or for the legacy handoff. */
+/** A fresh code-exchange attempt, or null when the marker is stale, malformed or uses the same-origin callback. */
 export function parseSsoCodeAttempt(attempt: string | null, now: number): (SsoHandoffAttempt & { verifier: string }) | null {
     if (!attempt) return null;
     let parsed: unknown;

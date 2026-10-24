@@ -1,8 +1,8 @@
-diff --git a/Jellyfin.Server/Migrations/Routines/20260910120000_MigrateRatingLevels.cs b/Jellyfin.Server/Migrations/Routines/20260910120000_MigrateRatingLevels.cs
-index 13b5addccb..4a09acbe92 100644
---- a/Jellyfin.Server/Migrations/Routines/20260910120000_MigrateRatingLevels.cs
-+++ b/Jellyfin.Server/Migrations/Routines/20260910120000_MigrateRatingLevels.cs
-@@ -37,7 +37,7 @@ internal class MigrateRatingLevels : IDatabaseMigrationRoutine
+diff --git a/Jellyfin.Server/Migrations/Routines/20260915120000_MigrateRatingLevels.cs b/Jellyfin.Server/Migrations/Routines/20260915120000_MigrateRatingLevels.cs
+index 903d91e046..69273ae8ac 100644
+--- a/Jellyfin.Server/Migrations/Routines/20260915120000_MigrateRatingLevels.cs
++++ b/Jellyfin.Server/Migrations/Routines/20260915120000_MigrateRatingLevels.cs
+@@ -36,7 +36,7 @@ internal class MigrateRatingLevels : IDatabaseMigrationRoutine
          _logger.LogInformation("Recalculating parental rating levels based on rating string.");
          using var context = _provider.CreateDbContext();
          using var transaction = context.Database.BeginTransaction();

@@ -2,14 +2,14 @@
 # Export a patch from modified submodule files against preceding dependencies.
 #
 # Usage: ./scripts/export-patch.sh <patch_name_or_path>
-# Example: ./scripts/export-patch.sh jellyfin_web_zzz_livetv_multiview.patch
+# Example: ./scripts/export-patch.sh jellyfin_zzz_livetv_multiview.patch
 
 set -eu
 
 PATCH_ARG="${1:-}"
 if [ -z "$PATCH_ARG" ]; then
     echo "Usage: $0 <patch_name_or_path>"
-    echo "Example: $0 jellyfin_web_zzz_livetv_multiview.patch"
+    echo "Example: $0 jellyfin_zzz_livetv_multiview.patch"
     exit 1
 fi
 
@@ -21,16 +21,17 @@ PATCH_BASE=$(basename "$PATCH_ARG")
 PATCH_FILE="patches/$PATCH_BASE"
 STATE_FILE="$REPO_ROOT/.github/jellyfin-sync-state.json"
 
-# Determine target submodule based on naming convention
+# Server patches use the jellyfin_ prefix.
 case "$PATCH_BASE" in
     jellyfin_web*.patch)
-        TARGET="jellyfin-web"
+        echo "Error: web patches are no longer supported"
+        exit 1
         ;;
     jellyfin_*.patch|jellyfin.patch)
         TARGET="jellyfin"
         ;;
     *)
-        echo "Error: Patch filename must start with jellyfin_web_ or jellyfin_"
+        echo "Error: Patch filename must start with jellyfin_"
         exit 1
         ;;
 esac
@@ -130,10 +131,5 @@ echo "-----------------------------------------------------------------"
 echo "Resetting $TARGET submodule to clean $BASE_TAG..."
 git -C "$TARGET" reset --hard "$BASE_TAG" >/dev/null
 git -C "$TARGET" clean -fd >/dev/null
-
-if [ "$TARGET" = "jellyfin-web" ]; then
-    echo "Rebuilding web static bundle..."
-    ./scripts/build-web.sh
-fi
 
 echo "Done!"

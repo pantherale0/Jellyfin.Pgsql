@@ -507,7 +507,7 @@ export class JellyfinApi {
     /**
      * Starts SSO. With `codeExchange` (the server allows this UI's address) the callback returns a
      * one-time code to this page, which works across origins and base paths; otherwise the callback
-     * writes Jellyfin Web credentials on the server origin, which UI Next can only read same-origin.
+     * writes fresh session credentials on the server origin, which this page can only read same-origin.
      */
     static async beginSso(serverInput: string, codeExchange = false): Promise<void> {
         const server = normalizeServer(serverInput);
@@ -515,7 +515,7 @@ export class JellyfinApi {
         let previousAccessToken: string | null = null;
         try {
             previousAccessToken = localStorage.getItem('api_key');
-        } catch (_error) { /* A callback can still be parsed if there was no saved classic session. */ }
+        } catch (_error) { /* A callback can still be parsed if there was no saved prior token. */ }
         const returnUrl = codeExchange ? ssoReturnUrl(currentHref()) : null;
         const pkce = returnUrl ? await createSsoChallenge() : null;
         const attempt: SsoHandoffAttempt = {

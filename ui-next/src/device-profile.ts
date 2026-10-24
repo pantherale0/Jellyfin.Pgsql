@@ -154,7 +154,7 @@ function supportedAudioCodecs(caps: BrowserCapabilities): string[] {
 export function canDirectPlayMkv(caps: BrowserCapabilities): boolean {
     const family = browserFamily(caps.userAgent);
     if (family.tv) return true;
-    // Chrome/Opera claim Matroska but fail DirectPlay silently (jellyfin_web_chrome_mkv_directplay.patch).
+    // Chrome/Opera can claim Matroska support but fail DirectPlay silently.
     if (family.chrome || family.opera) return false;
     return caps.canPlay('video/x-matroska') || caps.canPlay('video/mkv');
 }

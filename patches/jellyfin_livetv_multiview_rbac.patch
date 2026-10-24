@@ -11,7 +11,7 @@ index c6468daa2e..10c76da026 100644
          entity.Permissions.Add(new Permission(PermissionKind.EnableSharedDeviceControl, true));
          entity.Permissions.Add(new Permission(PermissionKind.EnableVideoPlaybackTranscoding, true));
 diff --git a/Jellyfin.Server.Implementations/Users/UserManager.cs b/Jellyfin.Server.Implementations/Users/UserManager.cs
-index e27793876d..a782fb82ea 100644
+index bb41fbec11..a5de6cea8f 100644
 --- a/Jellyfin.Server.Implementations/Users/UserManager.cs
 +++ b/Jellyfin.Server.Implementations/Users/UserManager.cs
 @@ -501,6 +501,7 @@ namespace Jellyfin.Server.Implementations.Users

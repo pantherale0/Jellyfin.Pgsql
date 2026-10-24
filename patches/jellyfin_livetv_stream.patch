@@ -504,7 +504,7 @@ index e9bba05839..0ca08536f2 100644
          }
      }
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 08e2578867..d3b9617e89 100644
+index dd71f843e8..0c3b172be3 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -317,10 +317,56 @@ namespace Emby.Server.Implementations.Session
@@ -729,7 +729,7 @@ index 08e2578867..d3b9617e89 100644
          private BaseItem GetNowPlayingItem(SessionInfo session, Guid itemId)
          {
              if (session is null)
-@@ -1068,6 +1186,10 @@ namespace Emby.Server.Implementations.Session
+@@ -1079,6 +1197,10 @@ namespace Emby.Server.Implementations.Session
                  {
                      await CloseLiveStreamIfNeededAsync(info.LiveStreamId, session.Id).ConfigureAwait(false);
                  }
@@ -740,7 +740,7 @@ index 08e2578867..d3b9617e89 100644
  
                  throw new ArgumentOutOfRangeException(nameof(info), "The PlaybackStopInfo's PositionTicks was negative.");
              }
-@@ -1141,6 +1263,10 @@ namespace Emby.Server.Implementations.Session
+@@ -1152,6 +1274,10 @@ namespace Emby.Server.Implementations.Session
              {
                  await CloseLiveStreamIfNeededAsync(info.LiveStreamId, session.Id).ConfigureAwait(false);
              }
@@ -752,7 +752,7 @@ index 08e2578867..d3b9617e89 100644
              var eventArgs = new PlaybackStopEventArgs
              {
 diff --git a/Jellyfin.Api/Controllers/DynamicHlsController.cs b/Jellyfin.Api/Controllers/DynamicHlsController.cs
-index 4c11fdec1a..fd54aa797f 100644
+index 6df76de0b4..662846fc12 100644
 --- a/Jellyfin.Api/Controllers/DynamicHlsController.cs
 +++ b/Jellyfin.Api/Controllers/DynamicHlsController.cs
 @@ -16,6 +16,7 @@ using Jellyfin.Data.Enums;
@@ -921,10 +921,10 @@ index 2b6781a197..9464ee3cdc 100644
          /// Gets the media sources for an active recording.
          /// </summary>
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-index b2d4f8c35a..60d2dc510f 100644
+index 01784781cf..e83a529b73 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-@@ -1308,7 +1308,7 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -1309,7 +1309,7 @@ namespace MediaBrowser.Controller.MediaEncoding
                  }
  
                  // Apply probesize, too, if configured
@@ -933,7 +933,7 @@ index b2d4f8c35a..60d2dc510f 100644
                  if (!string.IsNullOrEmpty(ffmpegProbeSizeArgument))
                  {
                      arg.Append(' ').Append(ffmpegProbeSizeArgument);
-@@ -7346,13 +7346,15 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -7388,13 +7388,15 @@ namespace MediaBrowser.Controller.MediaEncoding
              return analyzeDurationArgument;
          }
  
@@ -953,7 +953,7 @@ index b2d4f8c35a..60d2dc510f 100644
              }
  
              return string.Empty;
-@@ -7371,7 +7373,7 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -7413,7 +7415,7 @@ namespace MediaBrowser.Controller.MediaEncoding
              inputModifier = inputModifier.Trim();
  
              // Apply -probesize if configured
@@ -963,7 +963,7 @@ index b2d4f8c35a..60d2dc510f 100644
              if (!string.IsNullOrEmpty(ffmpegProbeSizeArgument))
              {
 diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-index f567279880..ee9afbe143 100644
+index 0a7a86599d..f25b5521a0 100644
 --- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 +++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 @@ -476,9 +476,12 @@ namespace MediaBrowser.MediaEncoding.Encoder

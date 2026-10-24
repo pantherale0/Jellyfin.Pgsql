@@ -40,11 +40,11 @@ const handoffInput = (overrides = {}) => ({
 });
 
 function parseHandoff(input) {
-    assert.equal(typeof ssoSession.parseSsoHandoff, 'function', 'classic SSO handoff parser must exist');
+    assert.equal(typeof ssoSession.parseSsoHandoff, 'function', 'same-origin SSO handoff parser must exist');
     return ssoSession.parseSsoHandoff(input);
 }
 
-test('parses a fresh classic web SSO callback for this origin', () => {
+test('parses a fresh same-origin SSO callback for UI Next', () => {
     assert.deepEqual(parseHandoff(handoffInput()), {
         server: origin,
         token: accessToken,
@@ -124,7 +124,7 @@ test('creates a UI Next session only for the authenticated user and server', () 
     assert.equal(ssoSession.createSsoSession(handoff, { Id: 'user-id' }, { Id: serverId }), null);
 });
 
-test('restores the patched callback with its hyphenated GUID and the API compact GUID', () => {
+test('restores the server callback with its hyphenated GUID and the API compact GUID', () => {
     const patch = readFileSync(new URL('../../patches/jellyfin_sso.patch', import.meta.url), 'utf8');
     const addedSource = patch.split('\n').filter(line => line.startsWith('+') && !line.startsWith('+++')).map(line => line.slice(1)).join('\n');
     const script = addedSource.match(/<script>\n([\s\S]*?)<\/script>/)?.[1];

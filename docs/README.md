@@ -1,15 +1,14 @@
 # Documentation
 
-Guides for the [pantherale0/Jellyfin.Pgsql](https://github.com/pantherale0/Jellyfin.Pgsql) fork: PostgreSQL-backed Jellyfin with a large patch stack and companion plugins.
+Guides for the [pantherale0/Jellyfin.Pgsql](https://github.com/pantherale0/Jellyfin.Pgsql) fork: PostgreSQL-backed Jellyfin, UI Next, and companion plugins.
 
 | Doc | Audience | Contents |
 |---|---|---|
 | [Overview](overview.md) | Everyone | What this fork is; **benefits** and **drawbacks** |
-| [Architecture](architecture.md) | Maintainers | Plugins, submodules, patch routing, Docker composition |
+| [Architecture](architecture.md) | Maintainers | Plugins, server patches, UI Next, and Docker composition |
 | [Features](features.md) | Operators | Feature → config → patch/plugin map |
 | [Patches](patches.md) | Maintainers | Full **what / why / where / how** catalog (all `patches/*.patch` files) + issue links |
 | [Known issues](known-issues.md) | Everyone | Fork tracker, operational caveats, inherited upstream issues |
-| [UI Next review](../UI_NEXT_REVIEW.md) | Maintainers and operators | Prioritized UI Next design, implementation, and standard-web feature-parity review |
 
 Quick start, env vars, SSO setup, SQLite migration, and release flow remain in the root [README](../README.md).
 

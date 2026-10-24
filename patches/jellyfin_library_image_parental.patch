@@ -56,49 +56,36 @@ index c31bb4fb97..a99c739313 100644
  
          /// <inheritdoc />
 diff --git a/Emby.Server.Implementations/Images/CollectionFolderImageProvider.cs b/Emby.Server.Implementations/Images/CollectionFolderImageProvider.cs
-index 7cae2a671b..e6781d970c 100644
+index 1d3cc3d383..c6866697a2 100644
 --- a/Emby.Server.Implementations/Images/CollectionFolderImageProvider.cs
 +++ b/Emby.Server.Implementations/Images/CollectionFolderImageProvider.cs
-@@ -5,6 +5,7 @@
- using System;
- using System.Collections.Generic;
- using System.IO;
-+using System.Linq;
- using Jellyfin.Api.Extensions;
- using Jellyfin.Data.Enums;
- using Jellyfin.Database.Implementations.Enums;
-@@ -12,6 +13,7 @@ using MediaBrowser.Common.Configuration;
- using MediaBrowser.Controller.Drawing;
- using MediaBrowser.Controller.Dto;
- using MediaBrowser.Controller.Entities;
-+using MediaBrowser.Controller.Library;
- using MediaBrowser.Controller.Providers;
- using MediaBrowser.Model.Entities;
- using MediaBrowser.Model.IO;
-@@ -20,8 +22,20 @@ namespace Emby.Server.Implementations.Images
+@@ -22,11 +22,23 @@ namespace Emby.Server.Implementations.Images
  {
      public class CollectionFolderImageProvider : BaseDynamicImageProvider<CollectionFolder>
      {
--        public CollectionFolderImageProvider(IFileSystem fileSystem, IProviderManager providerManager, IApplicationPaths applicationPaths, IImageProcessor imageProcessor) : base(fileSystem, providerManager, applicationPaths, imageProcessor)
 +        private const int CandidateLimit = 48;
 +        private const int CollageItemLimit = 8;
 +
+         private readonly ILibraryManager _libraryManager;
 +        private readonly IUserManager _userManager;
-+
+ 
+-        public CollectionFolderImageProvider(IFileSystem fileSystem, IProviderManager providerManager, IApplicationPaths applicationPaths, IImageProcessor imageProcessor, ILibraryManager libraryManager) : base(fileSystem, providerManager, applicationPaths, imageProcessor)
 +        public CollectionFolderImageProvider(
 +            IFileSystem fileSystem,
 +            IProviderManager providerManager,
 +            IApplicationPaths applicationPaths,
 +            IImageProcessor imageProcessor,
++            ILibraryManager libraryManager,
 +            IUserManager userManager)
 +            : base(fileSystem, providerManager, applicationPaths, imageProcessor)
          {
+             _libraryManager = libraryManager;
 +            _userManager = userManager;
          }
  
          protected override IReadOnlyList<BaseItem> GetItemsWithImages(BaseItem item)
-@@ -37,16 +51,20 @@ namespace Emby.Server.Implementations.Images
-                 includeItemTypes = [BaseItemKind.MusicArtist];
+@@ -45,16 +57,20 @@ namespace Emby.Server.Implementations.Images
+                 return GetArtistsWithImages(view);
              }
  
 -            return view.GetItemList(new InternalItemsQuery
@@ -119,7 +106,7 @@ index 7cae2a671b..e6781d970c 100644
 +                .ToList();
          }
  
-         protected override bool Supports(BaseItem item)
+         private IReadOnlyList<BaseItem> GetArtistsWithImages(CollectionFolder view)
 diff --git a/Emby.Server.Implementations/Images/LibraryImageParentalFilter.cs b/Emby.Server.Implementations/Images/LibraryImageParentalFilter.cs
 new file mode 100644
 index 0000000000..8a9c86a5d6
@@ -343,10 +330,10 @@ index 87de4ed79c..26e7250cf6 100644
              // Security consumers
              collection.AddScoped<IEventConsumer<AuthenticationRequestEventArgs>, AuthenticationFailedLogger>();
 diff --git a/Jellyfin.Server.Implementations/Users/UserManager.cs b/Jellyfin.Server.Implementations/Users/UserManager.cs
-index b15f6b98b2..e27793876d 100644
+index 790e4fd48b..76b7607ddb 100644
 --- a/Jellyfin.Server.Implementations/Users/UserManager.cs
 +++ b/Jellyfin.Server.Implementations/Users/UserManager.cs
-@@ -867,6 +867,12 @@ namespace Jellyfin.Server.Implementations.Users
+@@ -885,6 +885,12 @@ namespace Jellyfin.Server.Implementations.Users
                          _ => policy.LoginAttemptsBeforeLockout
                      };
  
@@ -359,7 +346,7 @@ index b15f6b98b2..e27793876d 100644
                      user.MaxParentalRatingScore = policy.MaxParentalRating;
                      user.MaxParentalRatingSubScore = policy.MaxParentalSubRating;
                      user.EnableUserPreferenceAccess = policy.EnableUserPreferenceAccess;
-@@ -919,6 +925,20 @@ namespace Jellyfin.Server.Implementations.Users
+@@ -938,6 +944,20 @@ namespace Jellyfin.Server.Implementations.Users
  
                      dbContext.Update(user);
                      await dbContext.SaveChangesAsync().ConfigureAwait(false);

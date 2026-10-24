@@ -6,4 +6,3 @@ ui-next/dist/
 **/obj/
 .git/
 jellyfin/.git/
-jellyfin-web/.git/

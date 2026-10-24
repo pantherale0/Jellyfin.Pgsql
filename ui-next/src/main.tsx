@@ -3,7 +3,6 @@ import { h, render, type ComponentChildren } from 'preact';
 import { memo, lazy, Suspense } from 'preact/compat';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { JellyfinApi, JellyfinRequestError, clearImageCache, peekCachedImage, releaseCachedImage, retainCachedImage } from './api';
-import { classicWebAvailable } from './build-features';
 import { LiveTvPage } from './live-tv';
 import { nativeControlOwnsKey, tabbableWithin, useDialogFocus, virtualTabTarget } from './dialog-focus';
 import { errorDiagnostic, signInMessage, userMessage } from './ui-errors';
@@ -37,7 +36,7 @@ import { DetailChildren, DetailExtras, DetailFactsView, ItemActionsBar, LinkedMe
 import { forgotPasswordOutcome, pinRedeemMessage, userImageUrl, type PublicUser } from './account';
 import { queryParameter as parseQueryParameter } from './query-params';
 import { canCommitSsoRestore, parseSsoCodeAttempt, parseSsoCodeFragment, parseSsoHandoff, SSO_HANDOFF_KEY, UI_NEXT_SIGNED_OUT_KEY, type SsoHandoff } from './sso-session';
-import { canHandOffToClassic, classicCredentialsWithSession, comparableServer, quickConnectPollOutcome, sharedSessionChange, shouldRemoveStoredSession, usableRememberedSession, validStoredSession, type SessionPolicy } from './auth-state';
+import { comparableServer, quickConnectPollOutcome, sharedSessionChange, shouldRemoveStoredSession, usableRememberedSession, validStoredSession, type SessionPolicy } from './auth-state';
 import { canResume, playbackRenegotiationPlan, resumeStartTicks, type PlaybackChoice, type PlaybackRenegotiationOptions, type PlayIntent } from './player-model';
 import { adjacentEpisodes, appendPage, clearLibraryBookmark, entityQuery, hasMoreResults, isContainer, itemCapabilities, markEpisodesPlayed, mergeUserData, playedUserData, popTrail, pushTrail, searchSummary, SEARCH_PAGE_SIZE } from './catalog-model';
 import type { JellyfinUser, LiveTab, MediaItem, RecommendationGroup, Session, TasteProfile } from './types';
@@ -55,7 +54,6 @@ const LANGUAGE_RELOAD_KEY = 'ui-next-language-reload';
 const SAVED_SERVER_KEY = 'jellyfin-ui-next-server';
 const SIGNED_OUT_KEY = UI_NEXT_SIGNED_OUT_KEY;
 const configuredServer = import.meta.env.VITE_JELLYFIN_SERVER_URL?.trim() || '';
-const classicWebLinksAvailable = classicWebAvailable(import.meta.env.VITE_CLASSIC_WEB_AVAILABLE);
 
 const sessionPolicy = (): SessionPolicy => ({ configuredServer, pageOrigin: window.location.origin, allowInsecureHttp: Boolean(import.meta.env.DEV) });
 
@@ -1382,19 +1380,6 @@ function App() {
         setRememberedUsers(session ? getRememberedUsers(session) : []);
         try { localStorage.setItem(SIGNED_OUT_KEY, 'true'); } catch (_error) { /* The current page remains signed out even when storage is blocked. */ }
         clearSignedInState();
-    };
-
-    const classicHandoff = Boolean(session && canHandOffToClassic(session, window.location.origin));
-    const openClassic = (route: 'dashboard' | 'metadata') => {
-        if (!session) return;
-        setProfileMenuOpen(false);
-        if (classicHandoff) {
-            try {
-                const credentials = classicCredentialsWithSession(localStorage.getItem('jellyfin_credentials'), session, Date.now());
-                if (credentials) localStorage.setItem('jellyfin_credentials', credentials);
-            } catch (_error) { /* Classic web falls back to its own sign-in. */ }
-        }
-        window.location.assign(`${session.server}/web/index.html#!/${route}`);
     };
 
     useEffect(() => {
@@ -2886,7 +2871,6 @@ function App() {
                             <p class="profile-menu-label">{t('Server administration')}</p>
                             <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); window.location.hash = 'admin/overview'; setView('admin'); profileReturnView.current = 'home'; }}>{t('Admin workspace')}</button>
                             <button data-focusable="true" role="menuitem" type="button" onClick={() => { setProfileMenuOpen(false); window.location.hash = 'admin/metadata'; setView('admin'); profileReturnView.current = 'home'; }}>{t('Metadata manager')}</button>
-                            {classicWebLinksAvailable && <button data-focusable="true" role="menuitem" type="button" onClick={() => openClassic('dashboard')}>{classicHandoff ? t('Classic dashboard') : t('Classic dashboard (separate sign-in)')}</button>}
                         </>}
                     </>}
                     {(hostSupports('clientsettings') || hostSupports('downloadmanagement')) && <>

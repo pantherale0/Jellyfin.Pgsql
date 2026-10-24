@@ -15,9 +15,8 @@ Deep documentation (benefits/drawbacks, architecture, features, full patch catal
 | [Features](docs/features.md) | Operator feature map (SSO, cache, taste, Seerr, …) |
 | [Patches](docs/patches.md) | What / why / where / how for every file in `patches/` |
 | [Known issues](docs/known-issues.md) | Fork tracker items and inherited Postgres caveats |
-| [UI Next review](UI_NEXT_REVIEW.md) | Prioritized design, implementation, administration, and standard-web feature-parity findings |
 
-The experimental frontend in [`ui-next/`](ui-next/) has its own [development and security notes](ui-next/README.md). The standard image still serves the patched classic web UI; an opt-in `ui-next-test` image is available for early testing.
+The standard image serves UI Next at `/web`. See the [UI Next guide](ui-next/README.md) for its features, development steps, and security notes. UI Next remains experimental, and support on physical TV and wrapper devices needs testing.
 
 ## Contributing, issues, and pull requests
 
@@ -29,14 +28,14 @@ If you want to discuss a bug, idea, or change, please use [GitHub Discussions](h
 
 Use your existing Jellyfin Compose file and point the image at this repository’s container registry:
 
-`ghcr.io/pantherale0/jellyfin.pgsql:12.1`
+`ghcr.io/pantherale0/jellyfin.pgsql:12.3`
 
 Add the connection parameters as environment variables in your compose file:
 
 ```yaml
 services:
   jellyfin:
-    image: ghcr.io/pantherale0/jellyfin.pgsql:12.1
+    image: ghcr.io/pantherale0/jellyfin.pgsql:12.3
     volumes:
       - /path/to/config:/config
       - /path/to/cache:/cache
@@ -54,28 +53,18 @@ services:
 
 Images are built and published automatically on every push to `master`, when a release is cut, or on the daily schedule when a new Jellyfin version tag is needed. See [Release flow](#release-flow) below.
 
-### Early UI Next test image
+### UI Next image
 
-To test UI Next without changing the standard image tags, run the **Build & Publish Docker Image** workflow manually and set **Web UI** to `ui-next`. Enter the Jellyfin version from `.github/jellyfin-sync-state.json`.
+The normal Jellyfin-version tag and `latest` both serve UI Next at `/web`. For example, use `ghcr.io/pantherale0/jellyfin.pgsql:12.3`. UI Next remains experimental, so test it on target devices before deployment.
 
-The workflow publishes `ghcr.io/pantherale0/jellyfin.pgsql:ui-next-test` and a versioned tag such as `ghcr.io/pantherale0/jellyfin.pgsql:ui-next-test-12.1`. Neither tag changes the normal version tag or `latest`.
-
-Use the versioned test tag in Compose:
-
-```yaml
-services:
-  jellyfin:
-    image: ghcr.io/pantherale0/jellyfin.pgsql:ui-next-test-12.1
-```
-
-To return to the classic web UI, change the image back to the matching standard Jellyfin-version tag, such as `ghcr.io/pantherale0/jellyfin.pgsql:12.1`. The UI Next test image hides links to the classic dashboard and Metadata manager. In the official Jellyfin Android app, select ExoPlayer in the app's video-player settings to hand supported video playback to its native player. UI Next verifies the same server and user with the app before handoff; the app's controls appear during playback. webOS keeps UI Next's controls and uses the TV media pipeline through HTML video when supported. Test both paths on the target device and WebView/TV versions.
+In the official Jellyfin Android app, enable ExoPlayer to hand supported video playback to the native player. UI Next verifies that the app uses the same server and user before handing playback over. The Android app then owns the playback controls. On webOS, UI Next uses HTML video and the TV media pipeline when available. Other TV and wrapper behavior remains unverified.
 
 Android native handoff requires a Jellyfin Android build that includes the companion `NativePlayer.syncSession` bridge; unmodified releases fall back to UI Next's browser player.
 
 To confirm a deployment serves the expected frontend, compare the image digest with the profile menu build revision. The menu shows the short commit the image was built from:
 
 ```bash
-docker inspect ghcr.io/pantherale0/jellyfin.pgsql:ui-next-test-12.1 --format '{{.RepoDigests}}'
+  docker inspect ghcr.io/pantherale0/jellyfin.pgsql:12.3 --format '{{.RepoDigests}}'
 ```
 
 ## Query cache and optimisation (optional, experimental)
@@ -140,14 +129,15 @@ Every response carries `X-Jellyfin-Ha-Role` (`single`, `leader` or `standby`) an
 To build the image locally instead:
 
 ```bash
-docker build -f docker/Dockerfile --build-arg JELLYFIN_VERSION=12.1 -t jellyfin.pgsql .
+docker build -f docker/Dockerfile --build-arg JELLYFIN_VERSION=12.3 -t jellyfin.pgsql .
 ```
 
 ## Remote YouTube trailers
 
-The bundled web client plays remote YouTube trailers through Jellyfin's normal HTML5
-player. The server resolves a progressive MP4 with the pinned yt-dlp binary and relays
-the bytes, including seek/Range requests. This consumes Jellyfin server bandwidth.
+The plugin resolves remote YouTube trailers with the pinned yt-dlp binary and relays the
+bytes through a Jellyfin endpoint that supports seek and HTTP Range requests. This consumes
+Jellyfin server bandwidth. UI Next currently lists local trailers only; it does not expose
+the remote YouTube trailer action.
 
 Trailer playback—both local trailer files and remote YouTube trailers—is deliberately
 excluded from resume state, played status, playback statistics, and taste/neural
@@ -192,15 +182,13 @@ Configure the OIDC integration using the following environment variables in your
 
 Sign-in must start on the same host as `JELLYFIN_SSO_OIDC_REDIRECT_URI`: the login sets a short-lived `jellyfin_sso_state` cookie that the callback must receive, so starting from a LAN address while the redirect URI uses a public domain fails with "This sign-in was not started in this browser". Sign-ins must also complete within 10 minutes.
 
-UI Next on a separate origin (or a custom base path) uses a one-time code instead of Jellyfin Web's stored credentials. List its address in `JELLYFIN_SSO_UI_RETURN_URLS`: `/sso/config?returnUrl=` then reports `codeExchange: true`, the callback redirects to that address with `#sso_code=...` (single use, valid 60 seconds), and UI Next redeems it with `POST /sso/exchange` together with a PKCE-style verifier only that tab holds. The token never appears in a URL. A separate UI origin must also be listed in Jellyfin's CORS hosts. Without an allowlisted address UI Next falls back to the same-origin handoff. The classic callback returns to `<BaseUrl>/web/index.html`, so same-origin deployments under a base path also work.
+UI Next on a separate origin (or a custom base path) uses a one-time code. List its address in `JELLYFIN_SSO_UI_RETURN_URLS`: `/sso/config?returnUrl=` then reports `codeExchange: true`, the callback redirects to that address with `#sso_code=...` (single use, valid 60 seconds), and UI Next redeems it with `POST /sso/exchange` together with a PKCE-style verifier only that tab holds. The token never appears in a URL. A separate UI origin must also be listed in Jellyfin's CORS hosts. Without an allowlisted address, the same-origin callback returns to `<BaseUrl>/web/index.html`; the server serves UI Next there.
 
 Startup environment logging redacts values whose names indicate credentials (including secrets, passwords, tokens, API keys, private keys, and connection strings). This only protects future logs: rotate any credential that appeared in logs produced by an older image.
 
-### How it is Built
-To maintain a clean upstream repository, changes to the `jellyfin` server and `jellyfin-web` client are packaged as patches under [`patches/`](patches/):
-1. `jellyfin_*.patch` files (e.g. [`patches/jellyfin_sso.patch`](patches/jellyfin_sso.patch)) are applied to the `jellyfin` submodule.
-2. `jellyfin_web_*.patch` files (e.g. [`patches/jellyfin_web_rbac.patch`](patches/jellyfin_web_rbac.patch)) are applied to the `jellyfin-web` submodule.
-3. During `docker build`, [`scripts/apply-patches.sh`](scripts/apply-patches.sh) scans `patches/` and applies every matching patch before compiling the server and web client from source.
+### How the image is built
+
+Server changes are stored as `jellyfin_*.patch` files in [`patches/`](patches/) and applied to the `jellyfin` submodule by [`scripts/apply-patches.sh`](scripts/apply-patches.sh). Docker builds the patched server and plugins, builds UI Next from `ui-next/`, and sets `JELLYFIN_WEB_DIR=/jellyfin/ui-next`.
 
 ## Local Development & Debugging (Fast Loop)
 
@@ -216,16 +204,16 @@ Instead of running full Docker image builds (`start-dev.sh`), use the fast local
    ```bash
    ./scripts/dev-backend.sh
    ```
-4. **CLI Web UI Watch (Instant HMR on frontend save):**
+4. **UI Next dev server (instant HMR on frontend save):**
    ```bash
-   ./scripts/dev-web.sh
+   npm --prefix ui-next run dev
    ```
 
 ## Build (from source)
 
-1. Check out the Jellyfin submodule: `git submodule update --init jellyfin`
-2. Build the plugin: `dotnet build`
-3. Place the plugin in Jellyfin’s plugin folder.
+1. Check out the Jellyfin submodule: `git submodule update --init jellyfin`.
+2. Build UI Next with `npm --prefix ui-next ci && npm --prefix ui-next run build`.
+3. Build the plugin with `dotnet build` and place it in Jellyfin's plugin folder.
 4. Update `database.xml` to use the plugin as the database provider:
 
 ```xml
@@ -246,7 +234,7 @@ Instead of running full Docker image builds (`start-dev.sh`), use the fast local
 ## Add migration (manual)
 
 ```bash
-dotnet ef migrations add {MIGRATION_NAME} --project Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj -- --migration-provider Jellyfin-PgSql
+dotnet ef migrations add {MIGRATION_NAME} --project Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj --configuration Release -- --migration-provider Jellyfin-PgSql
 ```
 
 ## Release flow
@@ -256,8 +244,8 @@ dotnet ef migrations add {MIGRATION_NAME} --project Jellyfin.Plugin.Pgsql/Jellyf
 A scheduled GitHub Actions workflow ([`.github/workflows/sync-migrations.yaml`](.github/workflows/sync-migrations.yaml)) runs daily and:
 
 1. Detects new Jellyfin releases and SQLite schema migrations via the GitHub API
-2. Bumps NuGet refs, the Docker base image version, and both `jellyfin` / `jellyfin-web` submodule gitlinks to the same tag
-3. Rebases `patches/` from the previous tag onto the new one (`scripts/rebase-patches.sh`), verifies they apply, builds the solution against patched jellyfin (catches new API surface even when no schema migration is needed), then leaves submodules clean
+2. Bumps NuGet refs, the Docker base image version, and the `jellyfin` server submodule gitlink
+3. Rebases server patches from the previous tag onto the new one (`scripts/rebase-patches.sh`), verifies they apply, builds the four plugin and test projects individually in Release against patched Jellyfin, then leaves the server submodule clean
 4. **Only if** Jellyfin’s latest SQLite migration advanced: generates a PostgreSQL `Update_*` via model diff (SQLite migrations are **not** copied), post-processes PG-specific fixes, and validates against Postgres
 5. Opens a collaborator-only PR for review and merge
 
@@ -279,7 +267,7 @@ git submodule update --init jellyfin
 
 CI already provides Postgres (`POSTGRES_PASSWORD=jellyfin`). Local compose uses `jellyfin_secure_pass`. Override `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_PASSWORD` if your database is not that default.
 
-Options: `--force` to re-run when state appears current, `--dry-run` to check drift and NuGet/TFM compatibility without modifying the repo, `--skip-rebase` to leave `patches/` unchanged (apply-only, old behaviour).
+Options: `--force` to re-run when state appears current, `--dry-run` to check drift and NuGet/TFM compatibility without modifying the repo, and `--skip-rebase` to leave `patches/` unchanged (apply-only, old behaviour).
 
 Standalone patch rebase (same machinery sync uses):
 
@@ -326,7 +314,7 @@ services:
       - /path/to/redis-data:/data
 
   jellyfin:
-    image: ghcr.io/pantherale0/jellyfin.pgsql:12.1
+    image: ghcr.io/pantherale0/jellyfin.pgsql:12.3
     depends_on:
       - postgres
       - redis
@@ -358,7 +346,7 @@ docker run --rm \
   -e POSTGRES_HOST=postgres -e POSTGRES_DB=jellyfin \
   -e POSTGRES_USER=jellyfin -e POSTGRES_PASSWORD=secret \
   -v /path/to/config:/config \
-  ghcr.io/pantherale0/jellyfin.pgsql:12.1 \
+  ghcr.io/pantherale0/jellyfin.pgsql:12.3 \
   /jellyfin-pgsql/migrate-sqlite-to-postgres.sh --dry-run --sqlite-db /config/data/jellyfin.db
 ```
 
