@@ -4,6 +4,7 @@ An experimental Jellyfin web client built with Preact and Vite. UI Next is the o
 
 ## Current capabilities
 
+- Playback → Live sessions details shows server-reported pipeline stages for active transcodes. Playback → Transcoding opens the same session details from the active-transcodes list. The diagram shows stage order and format labels; it does not infer branches.
 - Jellyfin username/password sign-in
 - Public-user picker, Forgot password? (Jellyfin PIN reset) and server branding (login disclaimer, splash screen, custom CSS) on the sign-in screen
 - Account screen for your own password and profile image; device-local Controls (game controller navigation, smooth scrolling)

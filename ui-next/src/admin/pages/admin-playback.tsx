@@ -4,6 +4,7 @@ import type { JellyfinSession, JellyfinUserInfo } from '../types';
 import { PageShell, Card, StatusChip, FilterPills, Empty, Tabs, SearchInput, DataTable, playbackMethod, SessionControls, ConfigSection, InfoRow } from '../ui';
 import { RESUME_FIELDS, STREAMING_FIELDS, TRICKPLAY_FIELDS } from '../server-settings';
 import { TranscodingSettings } from './admin-transcoding';
+import { TranscodingPipelineGraph } from '../transcoding-pipeline';
 import { STAT_DIMENSIONS, formatPlayed, hourlyGrid, userTotals } from '../playback-stats';
 import { t } from '../../i18n';
 
@@ -154,8 +155,15 @@ export function AdminPlayback({ adminApi: api }: { adminApi: AdminApi }) {
         {tab === 'Transcoding' && <><Card title={t('Active transcodes')}>
             {playing.filter(s => s.TranscodingInfo?.IsVideoDirect === false || s.TranscodingInfo?.IsAudioDirect === false).length === 0
                 ? <Empty muted>{t('No active transcodes')}</Empty>
-                : playing.filter(s => s.TranscodingInfo?.IsVideoDirect === false || s.TranscodingInfo?.IsAudioDirect === false).map(s => <div class="ad-info" key={s.Id}><span class="ad-info-k">{s.UserName} · {s.NowPlayingItem?.Name}</span><span class="ad-info-v">{s.TranscodingInfo?.Container || t('Transcode')} · {s.TranscodingInfo?.VideoCodec || '—'}</span></div>)}
+                : playing.filter(s => s.TranscodingInfo?.IsVideoDirect === false || s.TranscodingInfo?.IsAudioDirect === false).map(s => <div class="ad-info" key={s.Id}>
+                    <span class="ad-info-k">{s.UserName} · {s.NowPlayingItem?.Name}</span>
+                    <span class="ad-info-v ad-pipeline-transcode-summary">
+                        <span>{s.TranscodingInfo?.Container || t('Transcode')} · {s.TranscodingInfo?.VideoCodec || '—'}</span>
+                        <button class="ad-btn" aria-expanded={detailId === s.Id} onClick={() => setDetailId(current => current === s.Id ? '' : s.Id)}>{detailId === s.Id ? t('Hide details') : t('Details')}</button>
+                    </span>
+                </div>)}
         </Card>
+        {detail && <SessionDetail session={detail} />}
         <TranscodingSettings api={api} /></>}
     </PageShell>;
 }
@@ -163,7 +171,9 @@ export function AdminPlayback({ adminApi: api }: { adminApi: AdminApi }) {
 function SessionDetail({ session }: { session: JellyfinSession }) {
     const transcode = session.TranscodingInfo;
     const play = session.PlayState;
-    return <Card title={`Session details · ${session.UserName || t('Unknown user')}`}>
+    const showPipeline = playbackMethod(session) === 'Transcode' || transcode?.Pipeline?.kind === 'available';
+    return <>
+    <Card title={`Session details · ${session.UserName || t('Unknown user')}`}>
         <div class="ad-grid2"><div>
             <InfoRow k={t('Client')} v={`${session.Client || '—'} ${session.ApplicationVersion || ''}`.trim()} />
             <InfoRow k={t('Device')} v={session.DeviceName || '—'} />
@@ -182,7 +192,9 @@ function SessionDetail({ session }: { session: JellyfinSession }) {
             {transcode.CompletionPercentage != null && <InfoRow k={t('Transcode progress')} v={`${transcode.CompletionPercentage.toFixed(0)}%`} />}
             <InfoRow k={t('Transcode reasons')} v={(transcode.TranscodeReasons || []).join(', ') || t('None reported')} />
         </div> : <Empty muted>{t('No transcoding for this session.')}</Empty>}</div>
-    </Card>;
+    </Card>
+    {showPipeline && <TranscodingPipelineGraph pipeline={transcode?.Pipeline || { kind: 'unavailable', reason: 'not-reported' }} />}
+    </>;
 }
 
 function HourlyHeatmap({ grid, max }: { grid: number[][]; max: number }) {

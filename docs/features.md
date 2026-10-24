@@ -8,7 +8,7 @@ This page maps the operator-facing features in the fork to the plugin, UI Next, 
 
 **Where:** Client source, tests, and translations live in [`ui-next/`](../ui-next/). The [`Dockerfile`](../docker/Dockerfile) builds UI Next and sets `JELLYFIN_WEB_DIR=/jellyfin/ui-next`.
 
-**What it includes:** UI Next supports password, OIDC, and Quick Connect sign-in. It includes home and library browsing, search, details, video and music playback, Live TV, DVR, playlists, favorites, and metadata editing. Seerr requests and taste features are also available. The administrator workspace covers users, libraries, playback, Live TV, metadata, infrastructure, activity, and system settings. Its System page edits per-device playback overrides. The [UI Next guide](../ui-next/README.md) lists current capabilities, development steps, security notes, and compatibility limits.
+**What it includes:** UI Next supports password, OIDC, and Quick Connect sign-in. It includes home and library browsing, search, details, video and music playback, Live TV, DVR, playlists, favorites, and metadata editing. Seerr requests and taste features are also available. The administrator workspace covers users, libraries, playback, Live TV, metadata, infrastructure, activity, and system settings. Its System page edits per-device playback overrides, and Playback shows active transcoding pipelines when the server reports them. The [UI Next guide](../ui-next/README.md) lists current capabilities, development steps, security notes, and compatibility limits.
 
 The administrator workspace includes its own Metadata manager. The image does not include Jellyfin Web, and the custom Jellyfin Web patch stack has been removed. See the [confirmed UI Next gaps](#features-not-yet-in-ui-next) below.
 
@@ -20,7 +20,6 @@ This non-exhaustive list covers confirmed gaps against the removed fork-specific
 
 - **Live TV Multiview player:** UI Next can display and edit the server's Multiview permission, but it cannot play several Live TV channels at once. The server permission and APIs remain available to clients that implement Multiview.
 - **Remote YouTube trailer playback:** The trailer plugin can resolve and relay public YouTube trailers, but UI Next lists local trailers only. It has no action to start remote trailer playback. See [Remote YouTube trailers](#remote-youtube-trailers).
-- **Transcoding pipeline graph:** UI Next shows summary fields for active transcodes, including codecs, bitrate, hardware acceleration, progress, and reasons. It does not display the per-stage pipeline graph exposed by [`jellyfin_transcoding_pipeline`](patches.md#jellyfin_transcoding_pipelinepatch).
 
 ## PostgreSQL database provider
 
@@ -102,11 +101,11 @@ Server query patches include [`jellyfin_home_api_performance`](patches.md#jellyf
 
 ## Playback and transcoding
 
-**What:** Server patches add transcoding diagnostics, hardware capability reporting, codec fallback, playback error codes, device-specific playback settings, and HLS lifecycle fixes. UI Next includes a player and an administrator Transcoding page for server-wide settings.
+**What:** Server patches add transcoding diagnostics, hardware capability reporting, codec fallback, playback error codes, device-specific playback settings, and HLS lifecycle fixes. UI Next includes a player, an administrator Transcoding page, and a stage graph for active transcoding sessions.
 
 **Where:** See the [Playback and encoding patch group](patches.md#3-playback--encoding), including [`jellyfin_transcoding_pipeline`](patches.md#jellyfin_transcoding_pipelinepatch), [`jellyfin_z_transcode_codec_fallback`](patches.md#jellyfin_z_transcode_codec_fallbackpatch), and [`jellyfin_zzzzzzz_hls_remux_segment_restart`](patches.md#jellyfin_zzzzzzz_hls_remux_segment_restartpatch).
 
-**Limits:** UI Next shows session-level transcode details but not the server's per-stage pipeline graph; see [Features not yet in UI Next](#features-not-yet-in-ui-next). See [known issues](known-issues.md) for client compatibility and transcoding caveats.
+**Limits:** The graph follows the server's ordered stage list and edge labels; it does not infer branch connections. Pipeline details are unavailable when the server cannot report them. See [known issues](known-issues.md) for client compatibility and transcoding caveats.
 
 ## Media resource security
 

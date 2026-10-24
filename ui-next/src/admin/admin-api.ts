@@ -11,6 +11,7 @@ import { applyPatch, type TaskTrigger } from './server-settings';
 import { asPackages, asRepositories } from './plugin-catalog';
 import { asCountries, asCultures, asSystemStorage, type Country, type Culture } from '../api-contracts';
 import { t } from '../i18n';
+import { parseTranscodingPipeline } from './pipeline-model';
 
 const CAMEL_CASE = { Accept: 'application/json; profile="CamelCase"' };
 
@@ -18,6 +19,10 @@ export interface PlaybackStatsFilter { startDate?: string; endDate?: string }
 export interface RecentPlayback { Id?: string; UserId?: string; ItemId?: string; ItemName?: string; SeriesName?: string; MediaType?: string; PlayedTicks?: number; DatePlayed?: string; PlaybackMethod?: string; TranscodeReasons?: string; ClientName?: string; DeviceName?: string }
 export interface BackupManifest { ServerVersion?: string; BackupEngineVersion?: string; DateCreated?: string; Path?: string; Options?: Record<string, boolean> }
 export interface UserAdminTransferResponse { counts: Record<string, number | boolean>; previewToken?: string; warning?: string }
+
+type RawJellyfinSession = Omit<JellyfinSession, 'TranscodingInfo'> & {
+    TranscodingInfo?: (Omit<NonNullable<JellyfinSession['TranscodingInfo']>, 'Pipeline'> & { Pipeline?: unknown }) | null;
+};
 
 export function createAdminApi(api: JellyfinApi) {
     const get = <T>(path: string, priority = 1): Promise<T> => api.request<T>(path, {}, false, priority);
@@ -54,7 +59,17 @@ export function createAdminApi(api: JellyfinApi) {
             return (error as { status?: unknown } | null)?.status === 503 ? 'not-ready' : 'unknown';
         }
     };
-    const getSessions = (): Promise<JellyfinSession[]> => get<JellyfinSession[]>('/Sessions', 2);
+    const getSessions = (): Promise<JellyfinSession[]> => get<RawJellyfinSession[]>('/Sessions', 2).then(sessions => sessions.map(session => {
+        const { TranscodingInfo, ...sessionFields } = session;
+        if (!TranscodingInfo) return sessionFields;
+        return {
+            ...sessionFields,
+            TranscodingInfo: {
+                ...TranscodingInfo,
+                Pipeline: parseTranscodingPipeline(TranscodingInfo.Pipeline),
+            },
+        };
+    }));
     const getScheduledTasks = (): Promise<ScheduledTask[]> => get<ScheduledTask[]>('/ScheduledTasks');
     const getActivityLog = (start = 0, limit = 50, filters: Record<string, string> = {}): Promise<{ Items: ServerActivityEntry[]; TotalRecordCount?: number }> =>
         get<{ Items: ServerActivityEntry[]; TotalRecordCount?: number }>(`/System/ActivityLog/Entries?${new URLSearchParams({ StartIndex: String(start), Limit: String(limit), SortBy: 'DateCreated', SortOrder: 'Descending', ...filters })}`);

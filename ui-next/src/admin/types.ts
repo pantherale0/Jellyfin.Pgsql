@@ -1,5 +1,25 @@
 import type { LibraryOptions } from './library-options';
 
+export type PipelineLabel<T extends string> = { kind: 'known'; value: T } | { kind: 'unknown'; label: string | null };
+
+export type KnownPipelineStageType = 'Decode' | 'Scale' | 'Deinterlace' | 'ToneMap' | 'Subtitle' | 'Format' | 'Encode';
+export type KnownPipelineFramework = 'Software' | 'Qsv' | 'Cuda' | 'Vaapi' | 'D3D11Va' | 'VideoToolbox' | 'Amf' | 'OpenCl' | 'Vulkan' | 'Rkmpp' | 'AudioToolbox' | 'V4l2m2m';
+export type PipelineMediaType = PipelineLabel<'Video' | 'Audio'> | null;
+
+export interface PipelineStage {
+    type: PipelineLabel<KnownPipelineStageType>;
+    mediaType: PipelineMediaType;
+    framework: PipelineLabel<KnownPipelineFramework>;
+    name: string | null;
+    detail: string | null;
+    isHardware: boolean | null;
+    edgeLabel: string | null;
+}
+
+export type PipelineView =
+    | { kind: 'available'; stages: [PipelineStage, ...PipelineStage[]] }
+    | { kind: 'unavailable'; reason: 'not-reported' | 'empty' | 'invalid' };
+
 export type AdminSection = 'overview' | 'users' | 'libraries' | 'playback' | 'live-tv' | 'metadata' | 'recommendations' | 'infrastructure' | 'activity' | 'system';
 
 export type ServerHealth = 'healthy' | 'degraded' | 'critical';
@@ -29,7 +49,7 @@ export interface JellyfinSession {
     PlayState?: { PositionTicks?: number; PlayMethod?: string | number; IsPaused?: boolean; IsMuted?: boolean; MediaSourceId?: string; AudioStreamIndex?: number; SubtitleStreamIndex?: number };
     NowPlayingItem?: { Name?: string; Type?: string; Id?: string; RunTimeTicks?: number; ProductionYear?: number };
     TranscodingInfo?: { IsVideoDirect?: boolean; IsAudioDirect?: boolean; Container?: string; BitRate?: number; Width?: number; Height?: number; VideoCodec?: string; AudioCodec?: string;
-        AudioChannels?: number; Framerate?: number; CompletionPercentage?: number; HardwareAccelerationType?: string; TranscodeReasons?: string[] };
+        AudioChannels?: number; Framerate?: number; CompletionPercentage?: number; HardwareAccelerationType?: string; TranscodeReasons?: string[]; Pipeline?: PipelineView };
 }
 
 export interface ScheduledTask {
