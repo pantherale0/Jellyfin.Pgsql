@@ -1,9 +1,9 @@
 diff --git a/Jellyfin.Api/Controllers/SSOController.cs b/Jellyfin.Api/Controllers/SSOController.cs
 new file mode 100644
-index 0000000000..2cdd37248d
+index 0000000000..dfbbbf0f3f
 --- /dev/null
 +++ b/Jellyfin.Api/Controllers/SSOController.cs
-@@ -0,0 +1,930 @@
+@@ -0,0 +1,1143 @@
 +using System;
 +using System.Collections.Concurrent;
 +using System.Collections.Generic;
@@ -11,7 +11,10 @@ index 0000000000..2cdd37248d
 +using System.IO;
 +using System.Linq;
 +using System.Net.Http;
++using System.Security.Cryptography;
++using System.Text;
 +using System.Text.Encodings.Web;
++using System.Threading;
 +using System.Threading.Tasks;
 +using Jellyfin.Api.Constants;
 +using Jellyfin.Api.Models.SsoDtos;
@@ -21,6 +24,7 @@ index 0000000000..2cdd37248d
 +using Jellyfin.Database.Implementations.Entities;
 +using Jellyfin.Database.Implementations.Enums;
 +using MediaBrowser.Common.Api;
++using MediaBrowser.Common.Net;
 +using MediaBrowser.Controller.Authentication;
 +using MediaBrowser.Controller.Configuration;
 +using MediaBrowser.Controller.Entities;
@@ -40,24 +44,32 @@ index 0000000000..2cdd37248d
 +[Route("[controller]")]
 +public class SSOController : ControllerBase
 +{
++    private const string StateCookieName = "jellyfin_sso_state";
++    private const int MaxPendingStates = 1000;
++    private const int MaxPendingCodes = 1000;
 +    private static readonly HttpClient _httpClient = new HttpClient();
-+    private static readonly ConcurrentDictionary<string, (string DeviceId, DateTime CreatedAt)> _stateStore = new();
++    private static readonly TimeSpan _stateLifetime = TimeSpan.FromMinutes(10);
++    private static readonly TimeSpan _pruneInterval = TimeSpan.FromSeconds(30);
++    private static readonly ConcurrentDictionary<string, (string DeviceId, DateTime CreatedAt, string BrowserNonce, string ReturnUrl, string Challenge)> _stateStore = new();
++    private static readonly TimeSpan _codeLifetime = TimeSpan.FromSeconds(60);
++    private static readonly ConcurrentDictionary<string, (string AccessToken, string UserId, string ServerId, string Challenge, DateTime CreatedAt)> _codeStore = new();
 +    private static readonly object _configLock = new object();
 +    private static readonly System.Text.Json.JsonSerializerOptions _jsonOptions = new System.Text.Json.JsonSerializerOptions
 +    {
 +        WriteIndented = true
 +    };
 +
++    private static long _lastPruneTicks;
++    private static string? _authorizationEndpoint;
++    private static string? _tokenEndpoint;
++    private static string? _userinfoEndpoint;
++    private static string? _cachedAuthority;
++
 +    private readonly IUserManager _userManager;
 +    private readonly ISessionManager _sessionManager;
 +    private readonly ILogger<SSOController> _logger;
 +    private readonly IServerConfigurationManager _config;
 +    private readonly ILibraryManager _libraryManager;
-+
-+    private static string? _authorizationEndpoint;
-+    private static string? _tokenEndpoint;
-+    private static string? _userinfoEndpoint;
-+    private static string? _cachedAuthority;
 +
 +    /// <summary>
 +    /// Initializes a new instance of the <see cref="SSOController"/> class.
@@ -115,14 +127,123 @@ index 0000000000..2cdd37248d
 +        }
 +    }
 +
-+    private static void PruneStates()
++    private static void PruneStates(bool force = false)
 +    {
 +        var now = DateTime.UtcNow;
-+        var expired = _stateStore.Where(kvp => now - kvp.Value.CreatedAt > TimeSpan.FromMinutes(10)).Select(kvp => kvp.Key).ToList();
-+        foreach (var key in expired)
++        var last = Interlocked.Read(ref _lastPruneTicks);
++        if (!force && now.Ticks - last < _pruneInterval.Ticks)
 +        {
-+            _stateStore.TryRemove(key, out _);
++            return;
 +        }
++
++        if (Interlocked.CompareExchange(ref _lastPruneTicks, now.Ticks, last) != last)
++        {
++            return;
++        }
++
++        foreach (var kvp in _stateStore)
++        {
++            if (now - kvp.Value.CreatedAt > _stateLifetime)
++            {
++                _stateStore.TryRemove(kvp.Key, out _);
++            }
++        }
++
++        foreach (var kvp in _codeStore)
++        {
++            if (now - kvp.Value.CreatedAt > _codeLifetime)
++            {
++                _codeStore.TryRemove(kvp.Key, out _);
++            }
++        }
++    }
++
++    private static bool IsAllowedScheme(Uri uri)
++    {
++        return uri.Scheme == Uri.UriSchemeHttps || (uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback);
++    }
++
++    /// <summary>
++    /// Accepts a UI return URL only when it matches an entry of <c>JELLYFIN_SSO_UI_RETURN_URLS</c>
++    /// (same scheme, host and port, and a path under the allowed path).
++    /// </summary>
++    private static string? NormalizeReturnUrl(string? returnUrl)
++    {
++        if (string.IsNullOrWhiteSpace(returnUrl)
++            || returnUrl.Length > 2048
++            || !Uri.TryCreate(returnUrl.Trim(), UriKind.Absolute, out var candidate)
++            || !IsAllowedScheme(candidate)
++            || !string.IsNullOrEmpty(candidate.UserInfo)
++            || !string.IsNullOrEmpty(candidate.Query)
++            || !string.IsNullOrEmpty(candidate.Fragment))
++        {
++            return null;
++        }
++
++        var allowed = GetEnv("JELLYFIN_SSO_UI_RETURN_URLS");
++        if (string.IsNullOrWhiteSpace(allowed))
++        {
++            return null;
++        }
++
++        foreach (var entry in allowed.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
++        {
++            if (!Uri.TryCreate(entry, UriKind.Absolute, out var allowedUri)
++                || !IsAllowedScheme(allowedUri)
++                || Uri.Compare(candidate, allowedUri, UriComponents.SchemeAndServer, UriFormat.Unescaped, StringComparison.OrdinalIgnoreCase) != 0)
++            {
++                continue;
++            }
++
++            var allowedPath = allowedUri.AbsolutePath.EndsWith('/') ? allowedUri.AbsolutePath : allowedUri.AbsolutePath + "/";
++            var candidatePath = candidate.AbsolutePath;
++            if (candidatePath + "/" == allowedPath || candidatePath.StartsWith(allowedPath, StringComparison.Ordinal))
++            {
++                return candidate.GetLeftPart(UriPartial.Path);
++            }
++        }
++
++        return null;
++    }
++
++    private static bool IsChallenge(string? challenge)
++    {
++        return challenge is { Length: 43 } && challenge.All(c => char.IsAsciiLetterOrDigit(c) || c == '-' || c == '_');
++    }
++
++    private static bool IsVerifier(string? verifier)
++    {
++        return verifier is { Length: >= 43 and <= 128 } && verifier.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '.' or '_' or '~');
++    }
++
++    private static string Base64Url(byte[] bytes)
++    {
++        return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
++    }
++
++    private static bool NonceMatches(string? presented, string expected)
++    {
++        if (string.IsNullOrEmpty(presented) || string.IsNullOrEmpty(expected))
++        {
++            return false;
++        }
++
++        return CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(presented), Encoding.UTF8.GetBytes(expected));
++    }
++
++    private CookieOptions StateCookieOptions(DateTimeOffset? expires)
++    {
++        var redirectUri = GetRequiredRedirectUri();
++        var secure = Request.IsHttps || (redirectUri?.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ?? false);
++        return new CookieOptions
++        {
++            HttpOnly = true,
++            Secure = secure,
++            SameSite = SameSiteMode.Lax,
++            Path = "/",
++            IsEssential = true,
++            Expires = expires
++        };
 +    }
 +
 +    private static string? GetRequiredRedirectUri()
@@ -144,27 +265,42 @@ index 0000000000..2cdd37248d
 +    /// <summary>
 +    /// Checks OIDC configuration status.
 +    /// </summary>
-+    /// <returns>An object indicating if SSO is enabled.</returns>
++    /// <param name="returnUrl">Optional UI address; <c>codeExchange</c> is true only when it is allowed by <c>JELLYFIN_SSO_UI_RETURN_URLS</c>.</param>
++    /// <returns>An object indicating if SSO is enabled and whether the one-time code handoff is available.</returns>
 +    [HttpGet("config")]
 +    [AllowAnonymous]
-+    public ActionResult GetConfig()
++    public ActionResult GetConfig([FromQuery] string? returnUrl)
 +    {
 +        var authority = GetEnv("JELLYFIN_SSO_OIDC_AUTHORITY");
 +        var clientId = GetEnv("JELLYFIN_SSO_OIDC_CLIENT_ID");
 +        var enabled = !string.IsNullOrEmpty(authority) && !string.IsNullOrEmpty(clientId);
 +
-+        return Ok(new { enabled });
++        return Ok(new { enabled, codeExchange = enabled && NormalizeReturnUrl(returnUrl) is not null });
 +    }
 +
 +    /// <summary>
 +    /// Redirects the user to the OIDC authorization endpoint.
 +    /// </summary>
 +    /// <param name="deviceId">The client device ID.</param>
++    /// <param name="returnUrl">Optional UI address to return to with a one-time code; must match <c>JELLYFIN_SSO_UI_RETURN_URLS</c>.</param>
++    /// <param name="challenge">Base64url SHA-256 of the client's code verifier; required with <paramref name="returnUrl"/>.</param>
 +    /// <returns>A redirect action to the OIDC authorization endpoint.</returns>
 +    [HttpGet("login")]
 +    [AllowAnonymous]
-+    public async Task<ActionResult> Login([FromQuery] string? deviceId)
++    public async Task<ActionResult> Login([FromQuery] string? deviceId, [FromQuery] string? returnUrl, [FromQuery] string? challenge)
 +    {
++        string normalizedReturnUrl = string.Empty;
++        if (!string.IsNullOrEmpty(returnUrl) || !string.IsNullOrEmpty(challenge))
++        {
++            var normalized = NormalizeReturnUrl(returnUrl);
++            if (normalized is null || !IsChallenge(challenge))
++            {
++                return PlainText("This sign-in return address is not allowed by the server.", StatusCodes.Status400BadRequest);
++            }
++
++            normalizedReturnUrl = normalized;
++        }
++
 +        var authority = GetEnv("JELLYFIN_SSO_OIDC_AUTHORITY");
 +        var clientId = GetEnv("JELLYFIN_SSO_OIDC_CLIENT_ID");
 +
@@ -190,8 +326,19 @@ index 0000000000..2cdd37248d
 +        }
 +
 +        PruneStates();
-+        var state = Guid.NewGuid().ToString("N");
-+        _stateStore[state] = (deviceId ?? string.Empty, DateTime.UtcNow);
++        if (_stateStore.Count >= MaxPendingStates)
++        {
++            PruneStates(force: true);
++            if (_stateStore.Count >= MaxPendingStates)
++            {
++                return StatusCode(StatusCodes.Status503ServiceUnavailable, "Too many sign-in attempts are in progress. Try again shortly.");
++            }
++        }
++
++        var state = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
++        var browserNonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
++        _stateStore[state] = (deviceId ?? string.Empty, DateTime.UtcNow, browserNonce, normalizedReturnUrl, normalizedReturnUrl.Length > 0 ? challenge! : string.Empty);
++        Response.Cookies.Append(StateCookieName, browserNonce, StateCookieOptions(DateTimeOffset.UtcNow.Add(_stateLifetime)));
 +
 +        var scope = GetEnv("JELLYFIN_SSO_OIDC_SCOPE", "openid profile email");
 +
@@ -230,9 +377,18 @@ index 0000000000..2cdd37248d
 +            return BadRequest("Missing code or state.");
 +        }
 +
-+        if (!_stateStore.TryRemove(state, out var cachedState))
++        if (!_stateStore.TryRemove(state, out var cachedState)
++            || DateTime.UtcNow - cachedState.CreatedAt > _stateLifetime)
 +        {
 +            return BadRequest("Invalid or expired state.");
++        }
++
++        var presentedNonce = Request.Cookies[StateCookieName];
++        Response.Cookies.Delete(StateCookieName, StateCookieOptions(null));
++        if (!NonceMatches(presentedNonce, cachedState.BrowserNonce))
++        {
++            _logger.LogWarning("SSO callback rejected: state was not started by this browser.");
++            return BadRequest("This sign-in was not started in this browser. Start the sign-in again.");
 +        }
 +
 +        var authority = GetEnv("JELLYFIN_SSO_OIDC_AUTHORITY");
@@ -543,6 +699,27 @@ index 0000000000..2cdd37248d
 +                Username = username
 +            }).ConfigureAwait(false);
 +
++            if (cachedState.ReturnUrl.Length > 0)
++            {
++                PruneStates();
++                if (_codeStore.Count >= MaxPendingCodes)
++                {
++                    PruneStates(force: true);
++                    if (_codeStore.Count >= MaxPendingCodes)
++                    {
++                        return StatusCode(StatusCodes.Status503ServiceUnavailable, "Too many sign-in attempts are in progress. Try again shortly.");
++                    }
++                }
++
++                var oneTimeCode = Base64Url(RandomNumberGenerator.GetBytes(32));
++                _codeStore[oneTimeCode] = (authResult.AccessToken, authResult.User.Id.ToString("N", CultureInfo.InvariantCulture), authResult.ServerId, cachedState.Challenge, DateTime.UtcNow);
++                Response.Headers.CacheControl = "no-store";
++                Response.Headers["Referrer-Policy"] = "no-referrer";
++                return Redirect(cachedState.ReturnUrl + "#sso_code=" + oneTimeCode);
++            }
++
++            var webIndex = JavaScriptEncoder.Default.Encode(_config.GetNetworkConfiguration().BaseUrl.TrimEnd('/') + "/web/index.html");
++
 +            // Generate response HTML that writes details to localStorage and redirects
 +            var html = $@"<!DOCTYPE html>
 +<html>
@@ -586,7 +763,7 @@ index 0000000000..2cdd37248d
 +        localStorage.setItem('userId', userId);
 +        localStorage.setItem('serverId', serverId);
 +
-+        window.location.href = '/web/index.html';
++        window.location.href = ""{webIndex}"";
 +    </script>
 +</body>
 +</html>";
@@ -598,6 +775,42 @@ index 0000000000..2cdd37248d
 +            _logger.LogError(ex, "SSO callback error processing login for state {State}", state);
 +            return StatusCode(500, "An error occurred during SSO callback.");
 +        }
++    }
++
++    /// <summary>
++    /// Exchanges a one-time sign-in code for the session created by <see cref="Callback"/>.
++    /// </summary>
++    /// <param name="request">The code and the verifier whose SHA-256 was sent to <see cref="Login"/>.</param>
++    /// <returns>The access token, user id and server id, or a generic 400.</returns>
++    [HttpPost("exchange")]
++    [AllowAnonymous]
++    public ActionResult<SsoCodeExchangeResultDto> Exchange([FromBody] SsoCodeExchangeDto request)
++    {
++        Response.Headers.CacheControl = "no-store";
++        var invalid = PlainText("The sign-in code is invalid or has expired. Start the sign-in again.", StatusCodes.Status400BadRequest);
++        if (string.IsNullOrEmpty(request?.Code) || request.Code.Length > 64 || !IsVerifier(request.Verifier))
++        {
++            return invalid;
++        }
++
++        if (!_codeStore.TryRemove(request.Code, out var entry) || DateTime.UtcNow - entry.CreatedAt > _codeLifetime)
++        {
++            return invalid;
++        }
++
++        var presented = Base64Url(SHA256.HashData(Encoding.ASCII.GetBytes(request.Verifier!)));
++        if (!NonceMatches(presented, entry.Challenge))
++        {
++            _logger.LogWarning("SSO code exchange rejected: verifier did not match.");
++            return invalid;
++        }
++
++        return new SsoCodeExchangeResultDto
++        {
++            AccessToken = entry.AccessToken,
++            UserId = entry.UserId,
++            ServerId = entry.ServerId
++        };
 +    }
 +
 +    /// <summary>
@@ -933,6 +1146,66 @@ index 0000000000..2cdd37248d
 +
 +        return age;
 +    }
++}
+diff --git a/Jellyfin.Api/Models/SsoDtos/SsoCodeExchangeDto.cs b/Jellyfin.Api/Models/SsoDtos/SsoCodeExchangeDto.cs
+new file mode 100644
+index 0000000000..d001aacca0
+--- /dev/null
++++ b/Jellyfin.Api/Models/SsoDtos/SsoCodeExchangeDto.cs
+@@ -0,0 +1,21 @@
++using System.Text.Json.Serialization;
++
++namespace Jellyfin.Api.Models.SsoDtos;
++
++/// <summary>
++/// One-time SSO code exchange request.
++/// </summary>
++public sealed class SsoCodeExchangeDto
++{
++    /// <summary>
++    /// Gets or sets the one-time code returned in the UI redirect fragment.
++    /// </summary>
++    [JsonPropertyName("code")]
++    public string? Code { get; set; }
++
++    /// <summary>
++    /// Gets or sets the verifier whose base64url SHA-256 was sent as the login challenge.
++    /// </summary>
++    [JsonPropertyName("verifier")]
++    public string? Verifier { get; set; }
++}
+diff --git a/Jellyfin.Api/Models/SsoDtos/SsoCodeExchangeResultDto.cs b/Jellyfin.Api/Models/SsoDtos/SsoCodeExchangeResultDto.cs
+new file mode 100644
+index 0000000000..d06676a630
+--- /dev/null
++++ b/Jellyfin.Api/Models/SsoDtos/SsoCodeExchangeResultDto.cs
+@@ -0,0 +1,27 @@
++using System.Text.Json.Serialization;
++
++namespace Jellyfin.Api.Models.SsoDtos;
++
++/// <summary>
++/// Session handed to a UI after a successful one-time code exchange.
++/// </summary>
++public sealed class SsoCodeExchangeResultDto
++{
++    /// <summary>
++    /// Gets or sets the Jellyfin access token.
++    /// </summary>
++    [JsonPropertyName("accessToken")]
++    public string AccessToken { get; set; } = string.Empty;
++
++    /// <summary>
++    /// Gets or sets the user id (N format).
++    /// </summary>
++    [JsonPropertyName("userId")]
++    public string UserId { get; set; } = string.Empty;
++
++    /// <summary>
++    /// Gets or sets the server id.
++    /// </summary>
++    [JsonPropertyName("serverId")]
++    public string ServerId { get; set; } = string.Empty;
 +}
 diff --git a/Jellyfin.Api/Models/SsoDtos/SsoLiveTvAllowlistDto.cs b/Jellyfin.Api/Models/SsoDtos/SsoLiveTvAllowlistDto.cs
 new file mode 100644

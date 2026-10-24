@@ -19,7 +19,7 @@ internal static class QueryFallback
     /// <param name="message">The warning message.</param>
     /// <param name="onFailure">Optional callback invoked before logging.</param>
     /// <returns>The operation result, or <c>null</c> on recoverable failure.</returns>
-    public static T? TryDatabase<T>(Func<T> action, ILogger logger, string message, Action? onFailure = null)
+    public static T? TryDatabase<T>(Func<T?> action, ILogger logger, string message, Action? onFailure = null)
         where T : class
     {
         try

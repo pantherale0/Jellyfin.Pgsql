@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rebase the patches/ series from one Jellyfin tag onto another.
+# Rebase the server patch series from one Jellyfin tag onto another.
 #
 # Each matching patch is applied as a commit on --from, then the series is
 # rebased onto --to. Successful commits are written back to patches/*.patch
@@ -7,7 +7,6 @@
 #
 # Usage:
 #   ./scripts/rebase-patches.sh --from v12.0-rc4 --to v12.0-rc5
-#   ./scripts/rebase-patches.sh --from v12.0-rc4 --to v12.0-rc5 --target jellyfin
 #
 # Does not update git config. Submodule is left clean at --to on success or
 # after a conflict abort. True merge conflicts are not auto-resolved.
@@ -18,7 +17,6 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PATCHES_DIR="${REPO_ROOT}/patches"
 FROM_TAG=""
 TO_TAG=""
-TARGET="all"
 CONFLICT_REPORT=""
 
 GIT_NAME="patch-rebase"
@@ -34,7 +32,6 @@ then rewrite the patch files.
 Options:
   --from TAG          Source Jellyfin tag (e.g. v12.0-rc4)
   --to TAG            Destination Jellyfin tag (e.g. v12.0-rc5)
-  --target TARGET     jellyfin, jellyfin-web, or all (default: all)
   --patches-dir DIR   Patch directory (default: patches/)
   --conflict-report FILE
                       Write a conflict/failure report to FILE
@@ -50,10 +47,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --to)
             TO_TAG="$2"
-            shift 2
-            ;;
-        --target)
-            TARGET="$2"
             shift 2
             ;;
         --patches-dir)
@@ -202,7 +195,7 @@ True merge conflicts are not auto-resolved. Fix by checking out ${FROM_TAG},
 applying the series as commits, rebasing onto ${TO_TAG}, and exporting with
 \`./scripts/export-patch.sh\`, or re-run:
 
-  ./scripts/rebase-patches.sh --from ${FROM_TAG} --to ${TO_TAG} --target ${name}
+  ./scripts/rebase-patches.sh --from ${FROM_TAG} --to ${TO_TAG}
 "
 }
 
@@ -354,18 +347,4 @@ fi
 
 cd "${REPO_ROOT}"
 
-case "${TARGET}" in
-    all)
-        rebase_one_target jellyfin
-        if [[ -d "${REPO_ROOT}/jellyfin-web/.git" ]] || [[ -f "${REPO_ROOT}/jellyfin-web/.git" ]]; then
-            rebase_one_target jellyfin-web
-        fi
-        ;;
-    jellyfin|jellyfin-web)
-        rebase_one_target "${TARGET}"
-        ;;
-    *)
-        echo "Unknown target: ${TARGET} (expected jellyfin, jellyfin-web, or all)" >&2
-        exit 1
-        ;;
-esac
+rebase_one_target jellyfin

@@ -14,7 +14,7 @@ index 1a54565863..acc6dc7849 100644
              serviceCollection.AddSingleton<ILimitedConcurrencyLibraryScheduler, LimitedConcurrencyLibraryScheduler>();
  
 diff --git a/Emby.Server.Implementations/Chapters/ChapterManager.cs b/Emby.Server.Implementations/Chapters/ChapterManager.cs
-index 69cbe533c6..658d2431ce 100644
+index 2938170d1b..8dfac94f82 100644
 --- a/Emby.Server.Implementations/Chapters/ChapterManager.cs
 +++ b/Emby.Server.Implementations/Chapters/ChapterManager.cs
 @@ -33,6 +33,7 @@ public class ChapterManager : IChapterManager
@@ -50,7 +50,7 @@ index 69cbe533c6..658d2431ce 100644
      }
  
      /// <summary>
-@@ -142,83 +146,101 @@ public class ChapterManager : IChapterManager
+@@ -143,84 +147,102 @@ public class ChapterManager : IChapterManager
  
          var currentImages = GetSavedChapterImages(video, directoryService);
  
@@ -102,7 +102,7 @@ index 69cbe533c6..658d2431ce 100644
 -                        };
 +                var path = _pathManager.GetChapterImagePath(video, chapter.StartPositionTicks);
  
--                        _logger.LogInformation("Extracting chapter image for {Name} at {Path}", video.Name, inputPath);
+-                        _logger.LogDebug("Extracting chapter image for {Name} at {Time}", video.Name, time);
 -                        var tempFile = await _encoder.ExtractVideoImage(inputPath, container, mediaSource, video.GetDefaultVideoStream(), video.Video3DFormat, time, cancellationToken).ConfigureAwait(false);
 -                        File.Copy(tempFile, path, true);
 +                if (!currentImages.Contains(path, StringComparison.OrdinalIgnoreCase))
@@ -132,7 +132,7 @@ index 69cbe533c6..658d2431ce 100644
 +                                Protocol = video.PathProtocol ?? MediaProtocol.File,
 +                            };
 +
-+                            _logger.LogInformation("Extracting chapter image for {Name} at {Path}", video.Name, inputPath);
++                            _logger.LogDebug("Extracting chapter image for {Name} at {Time}", video.Name, time);
 +                            var tempFile = await _encoder.ExtractVideoImage(inputPath, container, mediaSource, video.GetDefaultVideoStream(), video.Video3DFormat, time, cancellationToken).ConfigureAwait(false);
 +                            File.Copy(tempFile, path, true);
 +
@@ -148,6 +148,7 @@ index 69cbe533c6..658d2431ce 100644
 +                            chapter.ImagePath = path;
 +                            chapter.ImageDateModified = _fileSystem.GetLastWriteTimeUtc(path);
 +                            changesMade = true;
++                            extractedCount++;
                          }
 -                        catch (IOException ex)
 +                        catch (Exception ex)
@@ -161,6 +162,7 @@ index 69cbe533c6..658d2431ce 100644
 -                        chapter.ImagePath = path;
 -                        chapter.ImageDateModified = _fileSystem.GetLastWriteTimeUtc(path);
 -                        changesMade = true;
+-                        extractedCount++;
                      }
 -                    catch (Exception ex)
 +                    else if (!string.IsNullOrEmpty(chapter.ImagePath))
@@ -631,7 +633,7 @@ index be75117b6f..2ec440a8a2 100644
  
          return fanoutConcurrency;
 diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-index fa43d756a4..f7c92d7095 100644
+index a751baf8b4..c8fbd3f111 100644
 --- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 +++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 @@ -133,7 +133,8 @@ namespace MediaBrowser.MediaEncoding.Encoder

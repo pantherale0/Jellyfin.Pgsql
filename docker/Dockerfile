@@ -1,29 +1,37 @@
-ARG JELLYFIN_VERSION=12.1
+ARG JELLYFIN_VERSION=12.3
 ARG YTDLP_VERSION=2026.08.19
 ARG YTDLP_SHA256=58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a
 
-# Web build stage
-FROM node:24-alpine AS web-build
-WORKDIR /src
+# UI Next build stage
+FROM node:24-alpine AS ui-next-build
+WORKDIR /src/ui-next
 
-# Install git
-RUN apk add --no-cache git
+ARG UI_NEXT_BUILD=unknown
+ENV UI_NEXT_BUILD=${UI_NEXT_BUILD}
 
-# Copy web submodule, patches, and apply-patches helper
-COPY jellyfin-web/ ./jellyfin-web/
-COPY patches/ ./patches/
-COPY scripts/apply-patches.sh ./scripts/apply-patches.sh
+COPY ui-next/package.json ui-next/package-lock.json ./
+RUN npm ci
 
-# Apply all jellyfin-web patches and build web client
-RUN chmod +x scripts/apply-patches.sh && \
-    scripts/apply-patches.sh jellyfin-web && \
-    cd jellyfin-web && \
-    npm config set fetch-retries 5 && \
-    npm config set fetch-retry-mintimeout 20000 && \
-    npm config set fetch-retry-maxtimeout 120000 && \
-    npm config set fetch-timeout 300000 && \
-    npm ci && \
-    npm run build:production
+COPY ui-next/index.html ./index.html
+COPY ui-next/README.md ./README.md
+COPY ui-next/tsconfig.json ./tsconfig.json
+COPY ui-next/vite.config.ts ./vite.config.ts
+COPY ui-next/src/ ./src/
+COPY ui-next/tests/ ./tests/
+COPY ui-next/e2e/fake-server/ ./e2e/fake-server/
+
+# UI Next tests assert against repository sources outside ui-next/ (server
+# contracts, plugin configuration, patches, CI workflow). The paths resolve
+# to /src/<path>, so stage those files here before running the suite.
+COPY jellyfin/MediaBrowser.Model/System/SystemInfo.cs jellyfin/MediaBrowser.Model/System/PublicSystemInfo.cs /src/jellyfin/MediaBrowser.Model/System/
+COPY jellyfin/MediaBrowser.Providers/Plugins/Tmdb/Configuration/PluginConfiguration.cs /src/jellyfin/MediaBrowser.Providers/Plugins/Tmdb/Configuration/PluginConfiguration.cs
+COPY Jellyfin.Plugin.Pgsql/Configuration/PluginConfiguration.cs /src/Jellyfin.Plugin.Pgsql/Configuration/PluginConfiguration.cs
+COPY Jellyfin.Plugin.Seerr/Configuration/PluginConfiguration.cs /src/Jellyfin.Plugin.Seerr/Configuration/PluginConfiguration.cs
+COPY patches/jellyfin_sso.patch patches/jellyfin_zz_last_admin_invariant.patch /src/patches/
+COPY .github/workflows/test.yaml /src/.github/workflows/test.yaml
+COPY docker/Dockerfile /src/docker/Dockerfile
+
+RUN npm test && npm run build
 
 # Build stage
 # Context hint: project root ../
@@ -74,11 +82,12 @@ RUN dotnet ef migrations bundle \
     --self-contained \
     --project ./Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj \
     --startup-project ./Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj \
+    --configuration Release \
     --force \
     -- --migration-provider Jellyfin-PgSql
 
-# Final stage - Jellyfin with plugin
-FROM jellyfin/jellyfin:${JELLYFIN_VERSION}
+# Shared runtime stage - Jellyfin server and plugins
+FROM jellyfin/jellyfin:${JELLYFIN_VERSION} AS runtime
 ARG YTDLP_VERSION
 ARG YTDLP_SHA256
 
@@ -95,14 +104,8 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy custom compiled Jellyfin web client
-COPY --from=web-build /src/jellyfin-web/dist/ /jellyfin/jellyfin-web/
-
 # Copy custom compiled Jellyfin server
 COPY --from=build /app/jellyfin-server/ /jellyfin/
-
-# Inject SSO script into index.html
-RUN sed -i 's|</body>|<script src="/sso/login-script.js"></script></body>|g' /jellyfin/jellyfin-web/index.html
 
 # Copy the published plugin and config files
 COPY --from=build /app/publish/ /jellyfin-pgsql/plugin/
@@ -117,3 +120,8 @@ COPY scripts/migrate-sqlite-to-postgres.sh /jellyfin-pgsql/migrate-sqlite-to-pos
 RUN chmod +x /entrypoint.sh /jellyfin-pgsql/migrate-sqlite-to-postgres.sh /jellyfin-pgsql/jellyfin.PgsqlMigrator
 
 ENTRYPOINT ["/entrypoint.sh"]
+
+# UI Next is the only web client served by this image.
+FROM runtime AS ui-next
+COPY --from=ui-next-build /src/ui-next/dist/ /jellyfin/ui-next/
+ENV JELLYFIN_WEB_DIR=/jellyfin/ui-next

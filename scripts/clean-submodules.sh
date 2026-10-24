@@ -3,9 +3,7 @@ set -e
 
 cd "$(dirname "$0")/.."
 
-echo "Cleaning submodules back to original unpatched tag..."
+echo "Cleaning the jellyfin submodule back to its pinned tag..."
 git -C jellyfin checkout -- .
 git -C jellyfin clean -fd
-git -C jellyfin-web checkout -- .
-git -C jellyfin-web clean -fd
-echo "Submodules are clean!"
+echo "The jellyfin submodule is clean!"

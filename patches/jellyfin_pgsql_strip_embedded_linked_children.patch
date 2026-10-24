@@ -1,5 +1,5 @@
 diff --git a/Jellyfin.Server/Migrations/Routines/20260911120000_StripEmbeddedLinkedChildren.cs b/Jellyfin.Server/Migrations/Routines/20260911120000_StripEmbeddedLinkedChildren.cs
-index f61e42337a..0e8ae094d1 100644
+index f61e42337a..871d142f78 100644
 --- a/Jellyfin.Server/Migrations/Routines/20260911120000_StripEmbeddedLinkedChildren.cs
 +++ b/Jellyfin.Server/Migrations/Routines/20260911120000_StripEmbeddedLinkedChildren.cs
 @@ -26,18 +26,29 @@ internal class StripEmbeddedLinkedChildren : IDatabaseMigrationRoutine

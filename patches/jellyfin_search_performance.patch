@@ -340,10 +340,10 @@ index a8ee416b31..4cb5110f02 100644
          };
      }
 diff --git a/Emby.Server.Implementations/Library/Search/SqlSearchProvider.cs b/Emby.Server.Implementations/Library/Search/SqlSearchProvider.cs
-index 2cbfb6a4fa..0dc150c520 100644
+index a5ea02df51..5ec7b07263 100644
 --- a/Emby.Server.Implementations/Library/Search/SqlSearchProvider.cs
 +++ b/Emby.Server.Implementations/Library/Search/SqlSearchProvider.cs
-@@ -28,6 +28,7 @@ public class SqlSearchProvider : IInternalSearchProvider
+@@ -29,6 +29,7 @@ public class SqlSearchProvider : IInternalSearchProvider
      private const float PrefixMatchScore = 80f;
      private const float WordPrefixMatchScore = 75f;
      private const float ContainsMatchScore = 50f;
@@ -351,7 +351,7 @@ index 2cbfb6a4fa..0dc150c520 100644
  
      private static readonly Guid _placeholderId = Guid.Parse("00000000-0000-0000-0000-000000000001");
  
-@@ -76,7 +77,7 @@ public class SqlSearchProvider : IInternalSearchProvider
+@@ -81,7 +82,7 @@ public class SqlSearchProvider : IInternalSearchProvider
      }
  
      /// <inheritdoc/>
@@ -360,7 +360,7 @@ index 2cbfb6a4fa..0dc150c520 100644
      {
          ArgumentNullException.ThrowIfNull(query);
          ArgumentException.ThrowIfNullOrWhiteSpace(query.SearchTerm);
-@@ -84,32 +85,34 @@ public class SqlSearchProvider : IInternalSearchProvider
+@@ -89,32 +90,34 @@ public class SqlSearchProvider : IInternalSearchProvider
          var rawSearchTerm = query.SearchTerm.Trim().RemoveDiacritics();
          if (string.IsNullOrEmpty(rawSearchTerm))
          {
@@ -380,10 +380,19 @@ index 2cbfb6a4fa..0dc150c520 100644
 -        // so match it via a case-insensitive LIKE rather than a per-row case conversion
 -        // that may not translate to SQL on every provider.
 -        var likeOriginal = $"%{rawSearchTerm}%";
+-
+         // Great benefit for users with metadata in non-latin script
+         // since SortName is among other things stored transliterated.
+         var sortNameShape = BaseItem.GetSortName(rawSearchTerm, true, _configurationManager.Configuration);
+-        var likeSortName = string.IsNullOrWhiteSpace(sortNameShape) ? null : $"%{sortNameShape}%";
+-
 +        // Escape LIKE metacharacters so user input is treated as a literal substring.
 +        // Patterns are EF parameters (not SQL text), but %/_ would still widen matches.
 +        var likeClean = "%" + EscapeLikeLiteral(cleanSearchTerm) + "%";
 +        var likeOriginal = "%" + EscapeLikeLiteral(rawSearchTerm) + "%";
++        var likeSortName = string.IsNullOrWhiteSpace(sortNameShape)
++            ? null
++            : "%" + EscapeLikeLiteral(sortNameShape) + "%";
          var limit = query.Limit ?? DefaultSearchLimit;
 +        var startIndex = Math.Max(query.StartIndex ?? 0, 0);
  
@@ -395,15 +404,31 @@ index 2cbfb6a4fa..0dc150c520 100644
              var dbQuery = dbContext.BaseItems
                  .AsNoTracking()
                  .Where(e => e.Id != _placeholderId)
-                 .Where(e => !e.IsVirtualItem)
--                .Where(e => e.CleanName!.Contains(cleanSearchTerm)
--                    || (e.OriginalTitle != null && EF.Functions.Like(e.OriginalTitle, likeOriginal)));
-+                .Where(e => EF.Functions.Like(e.CleanName!, likeClean, LikeEscapeChar)
-+                    || (e.OriginalTitle != null && EF.Functions.Like(e.OriginalTitle, likeOriginal, LikeEscapeChar)));
+@@ -122,16 +125,16 @@ public class SqlSearchProvider : IInternalSearchProvider
+ 
+             if (likeSortName is null)
+             {
+-                dbQuery = dbQuery
+-                    .Where(e => e.CleanName!.Contains(cleanSearchTerm)
+-                        || (e.OriginalTitle != null && EF.Functions.Like(e.OriginalTitle, likeOriginal)));
++                    dbQuery = dbQuery
++                        .Where(e => EF.Functions.Like(e.CleanName!, likeClean, LikeEscapeChar)
++                            || (e.OriginalTitle != null && EF.Functions.Like(e.OriginalTitle, likeOriginal, LikeEscapeChar)));
+             }
+             else
+             {
+-                dbQuery = dbQuery
+-                    .Where(e => e.CleanName!.Contains(cleanSearchTerm)
+-                        || (e.OriginalTitle != null && EF.Functions.Like(e.OriginalTitle, likeOriginal))
+-                        || (e.SortName != null && EF.Functions.Like(e.SortName, likeSortName)));
++                    dbQuery = dbQuery
++                        .Where(e => EF.Functions.Like(e.CleanName!, likeClean, LikeEscapeChar)
++                            || (e.OriginalTitle != null && EF.Functions.Like(e.OriginalTitle, likeOriginal, LikeEscapeChar))
++                            || (e.SortName != null && EF.Functions.Like(e.SortName, likeSortName, LikeEscapeChar)));
+             }
  
              dbQuery = ApplyTypeFilter(dbQuery, query.IncludeItemTypes, query.ExcludeItemTypes);
-             dbQuery = ApplyMediaTypeFilter(dbQuery, query.MediaTypes);
-@@ -117,11 +120,21 @@ public class SqlSearchProvider : IInternalSearchProvider
+@@ -140,11 +143,21 @@ public class SqlSearchProvider : IInternalSearchProvider
              dbQuery = ApplyUserAccessFilter(dbContext, dbQuery, query);
              dbQuery = ExcludeVersionsOfMatchedPrimaries(dbQuery);
  
@@ -426,7 +451,7 @@ index 2cbfb6a4fa..0dc150c520 100644
              // satisfies EF Core's row-limiting-with-OrderBy requirement.
              var scored = dbQuery.Select(e => new
              {
-@@ -133,16 +146,33 @@ public class SqlSearchProvider : IInternalSearchProvider
+@@ -156,16 +169,33 @@ public class SqlSearchProvider : IInternalSearchProvider
                      : ContainsMatchScore
              });
  
@@ -569,7 +594,7 @@ index 385795e9f7..525396b7ee 100644
              }
          }
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-index d726f0f143..4c16c2979f 100644
+index e66f18bc6e..dc3920028c 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 @@ -269,8 +269,14 @@ public sealed partial class BaseItemRepository
@@ -609,7 +634,7 @@ index d726f0f143..4c16c2979f 100644
  
              var personTypes = filter.PersonTypes;
              baseQuery = baseQuery
-@@ -498,10 +504,11 @@ public sealed partial class BaseItemRepository
+@@ -490,10 +496,11 @@ public sealed partial class BaseItemRepository
              }
              else
              {
@@ -624,7 +649,7 @@ index d726f0f143..4c16c2979f 100644
              }
          }
  
-@@ -1298,4 +1305,12 @@ public sealed partial class BaseItemRepository
+@@ -1292,4 +1299,12 @@ public sealed partial class BaseItemRepository
  
          return baseQuery;
      }

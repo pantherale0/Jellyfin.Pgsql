@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Jellyfin.Plugin.Pgsql.Admin;
 
 namespace Jellyfin.Plugin.Pgsql.Api;
@@ -16,6 +17,12 @@ public sealed class UserAdminTransferResponse
     /// Gets or sets operation counts.
     /// </summary>
     public required UserMergeCounts Counts { get; set; }
+
+    /// <summary>
+    /// Gets or sets the token required to execute this preview.
+    /// </summary>
+    [JsonPropertyName("previewToken")]
+    public string? PreviewToken { get; set; }
 
     /// <summary>
     /// Gets or sets an optional note about in-memory UserData cache staleness.
