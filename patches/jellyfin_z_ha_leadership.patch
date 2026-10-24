@@ -366,10 +366,10 @@ index 4ec2c9c786..8bda08bc01 100644
          ScheduledTasks = ScheduledTasks.Concat(list).ToArray();
      }
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 3fcda061eb..509ab5756f 100644
+index cda4be664c..8ee163a99b 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
-@@ -59,6 +59,7 @@ namespace Emby.Server.Implementations.Session
+@@ -60,6 +60,7 @@ namespace Emby.Server.Implementations.Session
  
          private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
          private readonly ITranscodingPipelineProbe _pipelineProbe;
@@ -377,7 +377,7 @@ index 3fcda061eb..509ab5756f 100644
          private readonly IUserDataManager _userDataManager;
          private readonly IServerConfigurationManager _config;
          private readonly ILogger<SessionManager> _logger;
-@@ -114,6 +115,7 @@ namespace Emby.Server.Implementations.Session
+@@ -115,6 +116,7 @@ namespace Emby.Server.Implementations.Session
          /// <param name="hostApplicationLifetime">Instance of <see cref="IHostApplicationLifetime"/> interface.</param>
          /// <param name="dbProvider">Instance of <see cref="IDbContextFactory{JellyfinDbContext}"/> interface.</param>
          /// <param name="pipelineProbe">Instance of <see cref="ITranscodingPipelineProbe"/> interface.</param>
@@ -385,7 +385,7 @@ index 3fcda061eb..509ab5756f 100644
          public SessionManager(
              ILogger<SessionManager> logger,
              IEventManager eventManager,
-@@ -129,7 +131,8 @@ namespace Emby.Server.Implementations.Session
+@@ -130,7 +132,8 @@ namespace Emby.Server.Implementations.Session
              IMediaSourceManager mediaSourceManager,
              IHostApplicationLifetime hostApplicationLifetime,
              IDbContextFactory<JellyfinDbContext> dbProvider,
@@ -395,7 +395,7 @@ index 3fcda061eb..509ab5756f 100644
          {
              _logger = logger;
              _eventManager = eventManager;
-@@ -148,6 +151,7 @@ namespace Emby.Server.Implementations.Session
+@@ -149,6 +152,7 @@ namespace Emby.Server.Implementations.Session
              _deviceManager.DeviceOptionsUpdated += OnDeviceManagerDeviceOptionsUpdated;
              _dbProvider = dbProvider;
              _pipelineProbe = pipelineProbe;
@@ -403,7 +403,7 @@ index 3fcda061eb..509ab5756f 100644
          }
  
          /// <summary>
-@@ -1004,6 +1008,12 @@ namespace Emby.Server.Implementations.Session
+@@ -1005,6 +1009,12 @@ namespace Emby.Server.Implementations.Session
          {
              var data = _userDataManager.GetUserData(user, item);
  
@@ -414,9 +414,9 @@ index 3fcda061eb..509ab5756f 100644
 +            }
 +
              data.PlayCount++;
-             data.LastPlayedDate = DateTime.UtcNow;
  
-@@ -1164,7 +1174,7 @@ namespace Emby.Server.Implementations.Session
+             // Re-watching a played item only counts once a progress or stop report gets past the resume threshold,
+@@ -1176,7 +1186,7 @@ namespace Emby.Server.Implementations.Session
                  if (!forcePersist && positionTicks.HasValue
                      && !ShouldPersistPlaybackProgress(user.Id, item.Id, positionTicks.Value))
                  {
@@ -425,7 +425,7 @@ index 3fcda061eb..509ab5756f 100644
                  }
                  else
                  {
-@@ -1181,6 +1191,7 @@ namespace Emby.Server.Implementations.Session
+@@ -1193,6 +1203,7 @@ namespace Emby.Server.Implementations.Session
                      if (positionTicks.HasValue)
                      {
                          _lastProgressPersist[(user.Id, item.Id)] = (DateTime.UtcNow, positionTicks.Value);
@@ -433,7 +433,7 @@ index 3fcda061eb..509ab5756f 100644
                      }
                  }
              }
-@@ -2828,6 +2839,29 @@ namespace Emby.Server.Implementations.Session
+@@ -2845,6 +2856,29 @@ namespace Emby.Server.Implementations.Session
                  _logger.LogError(ex, "Error sending server shutdown notifications");
              }
  
@@ -685,10 +685,10 @@ index 0000000000..1456942986
 +    }
 +}
 diff --git a/Jellyfin.Server/Migrations/JellyfinMigrationService.cs b/Jellyfin.Server/Migrations/JellyfinMigrationService.cs
-index a5b6bc4604..c0d56e0b5c 100644
+index 21ffab8dd6..db4eb71712 100644
 --- a/Jellyfin.Server/Migrations/JellyfinMigrationService.cs
 +++ b/Jellyfin.Server/Migrations/JellyfinMigrationService.cs
-@@ -197,6 +197,13 @@ internal class JellyfinMigrationService
+@@ -253,6 +253,13 @@ internal class JellyfinMigrationService
          var dbContext = await _dbContextFactory.CreateDbContextAsync().ConfigureAwait(false);
          await using (dbContext.ConfigureAwait(false))
          {
@@ -702,12 +702,9 @@ index a5b6bc4604..c0d56e0b5c 100644
              var historyRepository = dbContext.GetService<IHistoryRepository>();
              var migrationsAssembly = dbContext.GetService<IMigrationsAssembly>();
              var completedMigrations = 0;
-@@ -303,8 +310,16 @@ internal class JellyfinMigrationService
- 
-                 completedMigrations++;
+@@ -361,6 +368,14 @@ internal class JellyfinMigrationService
              }
--
-+
+ 
              return completedMigrations > 0;
 +            }
 +            finally
@@ -954,10 +951,10 @@ index 5b144b0296..7217677013 100644
      {
          job.DisposeKillTimer();
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/IJellyfinDatabaseProvider.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/IJellyfinDatabaseProvider.cs
-index 0a72287ba9..e30ac4880b 100644
+index 6efced6556..67428a1fbf 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/IJellyfinDatabaseProvider.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/IJellyfinDatabaseProvider.cs
-@@ -84,4 +84,19 @@ public interface IJellyfinDatabaseProvider
+@@ -93,4 +93,19 @@ public interface IJellyfinDatabaseProvider
      /// <param name="tableNames">The names of the tables to purge or null for all tables to be purged.</param>
      /// <returns>A Task.</returns>
      Task PurgeDatabase(JellyfinDbContext dbContext, IEnumerable<string>? tableNames);
@@ -1044,10 +1041,10 @@ index f4daa09756..f0c2e27507 100644
 +    }
  }
 diff --git a/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs b/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs
-index e9ad2ef30e..58f185cb09 100644
+index fc38ff0914..06c5bde979 100644
 --- a/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs
 +++ b/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs
-@@ -377,6 +377,46 @@ public class EncodingHelperTests
+@@ -437,6 +437,46 @@ public class EncodingHelperTests
          };
      }
  

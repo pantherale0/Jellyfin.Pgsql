@@ -1,9 +1,10 @@
-# Applies after jellyfin_z_transcode_codec_fallback.patch, jellyfin_zzz_playback_errors.patch,
-# jellyfin_zzzzz_device_playback_options.patch, and jellyfin_zzzzzz_media_resource_security.patch.
-# The final zzzzzzz band keeps HLS timing and lifecycle fixes together in this single patch.
+# Applies after jellyfin_z_transcode_codec_fallback.patch,
+# jellyfin_zzz_playback_errors.patch, jellyfin_zzzzz_device_playback_options.patch,
+# and jellyfin_zzzzzz_media_resource_security.patch.
+# Keep all HLS timing and lifecycle fixes in this final server patch.
 
 diff --git a/Jellyfin.Api/Controllers/DynamicHlsController.cs b/Jellyfin.Api/Controllers/DynamicHlsController.cs
-index 3f25780f5b..83dd91a291 100644
+index 57da48f62e..34e305febe 100644
 --- a/Jellyfin.Api/Controllers/DynamicHlsController.cs
 +++ b/Jellyfin.Api/Controllers/DynamicHlsController.cs
 @@ -1,6 +1,7 @@
@@ -93,7 +94,7 @@ index 3f25780f5b..83dd91a291 100644
          }
      }
  
-@@ -2227,89 +2240,90 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -2236,90 +2249,93 @@ public class DynamicHlsController : BaseJellyfinApiController
          TranscodingJob? transcodingJob,
          CancellationToken cancellationToken)
      {
@@ -110,46 +111,50 @@ index 3f25780f5b..83dd91a291 100644
              {
 -                // Transcoding job is over, so assume all existing files are ready
 -                _logger.LogDebug("serving up {0} as transcode is over", segmentPath);
--                return GetSegmentResult(state, segmentPath, transcodingJob);
-+                if (transcodingJob is null || transcodingJob.HasExited
-+                    || segmentIndex < GetCurrentTranscodingIndex(playlistPath, segmentExtension))
+-                return GetSegmentResult(state, segmentPath, segmentIndex, transcodingJob);
+-            }
+-
+-            var currentTranscodingIndex = GetCurrentTranscodingIndex(playlistPath, segmentExtension);
++                if (transcodingJob is null || transcodingJob.HasExited)
++                {
++                    return GetSegmentResult(state, segmentPath, segmentIndex, transcodingJob);
++                }
+ 
+-            // If requested segment is less than transcoding position, we can't transcode backwards, so assume it's ready
+-            if (segmentIndex < currentTranscodingIndex)
+-            {
+-                _logger.LogDebug("serving up {0} as transcode index {1} is past requested point {2}", segmentPath, currentTranscodingIndex, segmentIndex);
+-                return GetSegmentResult(state, segmentPath, segmentIndex, transcodingJob);
++                var currentTranscodingIndex = GetCurrentTranscodingIndex(playlistPath, segmentExtension);
++                if (currentTranscodingIndex.HasValue && segmentIndex < currentTranscodingIndex.Value)
 +                {
 +                    return GetSegmentResult(state, segmentPath, segmentIndex, transcodingJob);
 +                }
              }
- 
--            var currentTranscodingIndex = GetCurrentTranscodingIndex(playlistPath, segmentExtension);
--
--            // If requested segment is less than transcoding position, we can't transcode backwards, so assume it's ready
--            if (segmentIndex < currentTranscodingIndex)
-+            var nextSegmentPath = GetSegmentPath(state, playlistPath, segmentIndex + 1);
-+            while (true)
-             {
--                _logger.LogDebug("serving up {0} as transcode index {1} is past requested point {2}", segmentPath, currentTranscodingIndex, segmentIndex);
--                return GetSegmentResult(state, segmentPath, transcodingJob);
--            }
 -        }
--
+ 
 -        var nextSegmentPath = GetSegmentPath(state, playlistPath, segmentIndex + 1);
 -        if (transcodingJob is not null)
 -        {
 -            while (!cancellationToken.IsCancellationRequested && !transcodingJob.HasExited)
--            {
++            var nextSegmentPath = GetSegmentPath(state, playlistPath, segmentIndex + 1);
++            while (true)
+             {
 -                // To be considered ready, the segment file has to exist AND
 -                // either the transcoding job should be done or next segment should also exist
+-                if (segmentExists)
 +                waitToken.ThrowIfCancellationRequested();
 +                var segmentExists = System.IO.File.Exists(segmentPath);
 +                var laterSegmentExists = System.IO.File.Exists(nextSegmentPath);
 +                var producerStopped = transcodingJob is null || transcodingJob.HasExited;
-                 if (segmentExists)
++                if (segmentExists && (producerStopped || laterSegmentExists))
                  {
 -                    if (transcodingJob.HasExited || System.IO.File.Exists(nextSegmentPath))
-+                    if (producerStopped || laterSegmentExists)
-                     {
+-                    {
 -                        _logger.LogDebug("Serving up {SegmentPath} as it deemed ready", segmentPath);
--                        return GetSegmentResult(state, segmentPath, transcodingJob);
-+                        return GetSegmentResult(state, segmentPath, segmentIndex, transcodingJob);
-                     }
+-                        return GetSegmentResult(state, segmentPath, segmentIndex, transcodingJob);
+-                    }
++                    return GetSegmentResult(state, segmentPath, segmentIndex, transcodingJob);
                  }
 -                else
 +                else if (producerStopped || laterSegmentExists)
@@ -188,18 +193,17 @@ index 3f25780f5b..83dd91a291 100644
              }
  
 -            cancellationToken.ThrowIfCancellationRequested();
-+            throw;
-         }
+-        }
 -        else
 -        {
 -            _logger.LogWarning("cannot serve {0} as it doesn't exist and no transcode is running", segmentPath);
--        }
++            throw;
+         }
 -
--        return GetSegmentResult(state, segmentPath, transcodingJob);
+-        return GetSegmentResult(state, segmentPath, segmentIndex, transcodingJob);
      }
  
--    private ActionResult GetSegmentResult(StreamState state, string segmentPath, TranscodingJob? transcodingJob)
-+    private ActionResult GetSegmentResult(StreamState state, string segmentPath, int segmentIndex, TranscodingJob? transcodingJob)
+     private ActionResult GetSegmentResult(StreamState state, string segmentPath, int segmentIndex, TranscodingJob? transcodingJob)
      {
          var segmentEndingPositionTicks = state.Request.CurrentRuntimeTicks + state.Request.ActualSegmentLengthTicks;
 +        var result = FileStreamResponseHelpers.GetStaticFileResult(segmentPath, MimeTypes.GetMimeType(segmentPath));
@@ -213,9 +217,11 @@ index 3f25780f5b..83dd91a291 100644
 +            if (Interlocked.Exchange(ref requestEnded, 1) == 0 && transcodingJob is not null)
              {
 -                transcodingJob.DownloadPositionTicks = Math.Max(transcodingJob.DownloadPositionTicks ?? segmentEndingPositionTicks, segmentEndingPositionTicks);
+-                transcodingJob.ReportSegmentDownloaded(segmentIndex, segmentEndingPositionTicks);
 +                if (downloaded)
 +                {
-+                    transcodingJob.RecordDownloadedSegment(segmentIndex, segmentEndingPositionTicks);
++                    transcodingJob.DownloadPositionTicks = Math.Max(transcodingJob.DownloadPositionTicks ?? segmentEndingPositionTicks, segmentEndingPositionTicks);
++                    transcodingJob.ReportSegmentDownloaded(segmentIndex, segmentEndingPositionTicks);
 +                }
 +
                  _transcodeManager.OnTranscodeEndRequest(transcodingJob);
@@ -236,7 +242,7 @@ index 3f25780f5b..83dd91a291 100644
      }
  
      private int? GetCurrentTranscodingIndex(string playlist, string segmentExtension)
-@@ -2328,11 +2342,47 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -2338,11 +2354,47 @@ public class DynamicHlsController : BaseJellyfinApiController
              return null;
          }
  
@@ -286,7 +292,7 @@ index 3f25780f5b..83dd91a291 100644
      }
  
      private static FileSystemMetadata? GetLastTranscodingFile(string playlist, string segmentExtension, IFileSystem fileSystem)
-@@ -2343,8 +2393,10 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -2353,8 +2405,10 @@ public class DynamicHlsController : BaseJellyfinApiController
  
          try
          {
@@ -297,7 +303,7 @@ index 3f25780f5b..83dd91a291 100644
                  .MaxBy(fileSystem.GetLastWriteTimeUtc);
          }
          catch (IOException)
-@@ -2353,6 +2405,26 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -2363,6 +2417,26 @@ public class DynamicHlsController : BaseJellyfinApiController
          }
      }
  
@@ -325,10 +331,10 @@ index 3f25780f5b..83dd91a291 100644
      {
          var file = GetLastTranscodingFile(playlistPath, segmentExtension, _fileSystem);
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-index d1840b82cd..22ef426151 100644
+index e83a529b73..9b50612dc4 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-@@ -7429,8 +7429,7 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -7471,8 +7471,7 @@ namespace MediaBrowser.Controller.MediaEncoding
                  && IsCopyCodec(state.OutputVideoCodec)
                  && _mediaEncoder.EncoderVersion >= _minFFmpegReadrateOption)
              {
@@ -339,26 +345,18 @@ index d1840b82cd..22ef426151 100644
                  inputModifier += $" -readrate {readrate}";
              }
 diff --git a/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs b/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
-index 2566da33ae..b764092bff 100644
+index 6805984a25..5935344569 100644
 --- a/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
-@@ -1,5 +1,7 @@
+@@ -1,6 +1,7 @@
  using System;
-+using System.Collections.Generic;
+ using System.Collections.Concurrent;
  using System.Diagnostics;
 +using System.Linq;
  using System.Threading;
  using Jellyfin.Data.Dtos;
  using MediaBrowser.Model.Configuration;
-@@ -16,6 +18,7 @@ public sealed class TranscodingJob : IDisposable
-     private readonly ILogger<TranscodingJob> _logger;
-     private readonly Lock _processLock = new();
-     private readonly Lock _timerLock = new();
-+    private readonly Dictionary<int, long> _downloadedSegments = new();
- 
-     private int _activeRequestCount;
-     private Timer? _killTimer;
-@@ -54,6 +57,11 @@ public sealed class TranscodingJob : IDisposable
+@@ -56,6 +57,11 @@ public sealed class TranscodingJob : IDisposable
      /// </summary>
      public string? Path { get; set; }
  
@@ -370,57 +368,8 @@ index 2566da33ae..b764092bff 100644
      /// <summary>
      /// Gets or sets the type.
      /// </summary>
-@@ -160,6 +168,48 @@ public sealed class TranscodingJob : IDisposable
-     /// </summary>
-     public long? DownloadPositionTicks { get; set; }
- 
-+    /// <summary>
-+    /// Records the actual ending timestamp of a downloaded HLS media segment.
-+    /// </summary>
-+    /// <param name="segmentIndex">The media segment index, or -1 for initialization.</param>
-+    /// <param name="endingPositionTicks">The ending position from the client playlist.</param>
-+    public void RecordDownloadedSegment(int segmentIndex, long endingPositionTicks)
-+    {
-+        lock (_downloadedSegments)
-+        {
-+            DownloadPositionTicks = Math.Max(DownloadPositionTicks ?? 0, endingPositionTicks);
-+            if (segmentIndex >= 0 && TranscodingSegmentCleaner is not null && EffectiveEncodingOptions?.EnableSegmentDeletion == true)
-+            {
-+                _downloadedSegments[segmentIndex] = endingPositionTicks;
-+            }
-+        }
-+    }
-+
-+    /// <summary>
-+    /// Gets downloaded segments whose actual ending positions precede the retention boundary.
-+    /// </summary>
-+    /// <param name="positionTicks">The retention boundary.</param>
-+    /// <returns>The segment indices eligible for deletion.</returns>
-+    public int[] GetDownloadedSegmentsBefore(long positionTicks)
-+    {
-+        lock (_downloadedSegments)
-+        {
-+            return _downloadedSegments.Where(segment => segment.Value <= positionTicks).Select(segment => segment.Key).ToArray();
-+        }
-+    }
-+
-+    /// <summary>
-+    /// Removes timing metadata after a downloaded segment has been deleted.
-+    /// </summary>
-+    /// <param name="segmentIndex">The segment index.</param>
-+    public void ForgetDownloadedSegment(int segmentIndex)
-+    {
-+        lock (_downloadedSegments)
-+        {
-+            _downloadedSegments.Remove(segmentIndex);
-+        }
-+    }
-+
-     /// <summary>
-     /// Gets or sets transcoding throttler.
-     /// </summary>
 diff --git a/MediaBrowser.Controller/MediaEncoding/TranscodingSegmentCleaner.cs b/MediaBrowser.Controller/MediaEncoding/TranscodingSegmentCleaner.cs
-index 67bfcb02fd..bd87e8ef04 100644
+index 924fc2e659..b79de3cfd7 100644
 --- a/MediaBrowser.Controller/MediaEncoding/TranscodingSegmentCleaner.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/TranscodingSegmentCleaner.cs
 @@ -1,5 +1,6 @@
@@ -430,34 +379,16 @@ index 67bfcb02fd..bd87e8ef04 100644
  using System.IO;
  using System.Linq;
  using System.Threading;
-@@ -22,7 +23,8 @@ public class TranscodingSegmentCleaner : IDisposable
+@@ -21,6 +22,8 @@ public class TranscodingSegmentCleaner : IDisposable
+     private readonly IConfigurationManager _config;
      private readonly IFileSystem _fileSystem;
      private readonly IMediaEncoder _mediaEncoder;
-     private Timer? _timer;
--    private int _segmentLength;
 +    private readonly Lock _deleteLock = new();
 +    private bool _stopped;
+     private Timer? _timer;
  
      /// <summary>
-     /// Initializes a new instance of the <see cref="TranscodingSegmentCleaner"/> class.
-@@ -32,15 +34,13 @@ public class TranscodingSegmentCleaner : IDisposable
-     /// <param name="config">Instance of the <see cref="IConfigurationManager"/> interface.</param>
-     /// <param name="fileSystem">Instance of the <see cref="IFileSystem"/> interface.</param>
-     /// <param name="mediaEncoder">Instance of the <see cref="IMediaEncoder"/> interface.</param>
--    /// <param name="segmentLength">The segment length of this transcoding job.</param>
--    public TranscodingSegmentCleaner(TranscodingJob job, ILogger<TranscodingSegmentCleaner> logger, IConfigurationManager config, IFileSystem fileSystem, IMediaEncoder mediaEncoder, int segmentLength)
-+    public TranscodingSegmentCleaner(TranscodingJob job, ILogger<TranscodingSegmentCleaner> logger, IConfigurationManager config, IFileSystem fileSystem, IMediaEncoder mediaEncoder)
-     {
-         _job = job;
-         _logger = logger;
-         _config = config;
-         _fileSystem = fileSystem;
-         _mediaEncoder = mediaEncoder;
--        _segmentLength = segmentLength;
-     }
- 
-     /// <summary>
-@@ -56,6 +56,11 @@ public class TranscodingSegmentCleaner : IDisposable
+@@ -54,6 +57,11 @@ public class TranscodingSegmentCleaner : IDisposable
      /// </summary>
      public void Stop()
      {
@@ -469,7 +400,7 @@ index 67bfcb02fd..bd87e8ef04 100644
          DisposeTimer();
      }
  
-@@ -76,7 +81,7 @@ public class TranscodingSegmentCleaner : IDisposable
+@@ -74,7 +82,7 @@ public class TranscodingSegmentCleaner : IDisposable
      {
          if (disposing)
          {
@@ -478,36 +409,18 @@ index 67bfcb02fd..bd87e8ef04 100644
          }
      }
  
-@@ -100,33 +105,31 @@ public class TranscodingSegmentCleaner : IDisposable
+@@ -98,9 +106,7 @@ public class TranscodingSegmentCleaner : IDisposable
          if (enableSegmentDeletion)
          {
              var downloadPositionTicks = _job.DownloadPositionTicks ?? 0;
 -            var downloadPositionSeconds = Convert.ToInt64(TimeSpan.FromTicks(downloadPositionTicks).TotalSeconds);
 -
 -            if (downloadPositionSeconds > 0 && segmentKeepSeconds > 0 && downloadPositionSeconds > segmentKeepSeconds)
-+            var cutoffTicks = downloadPositionTicks - TimeSpan.FromSeconds(segmentKeepSeconds).Ticks;
-+            if (cutoffTicks > 0)
++            if (downloadPositionTicks > TimeSpan.FromSeconds(segmentKeepSeconds).Ticks)
              {
--                var idxMaxToDelete = (downloadPositionSeconds - segmentKeepSeconds) / _segmentLength;
--
--                if (idxMaxToDelete > 0)
--                {
--                    await DeleteSegmentFiles(_job, 0, idxMaxToDelete, 1500).ConfigureAwait(false);
--                }
-+                await DeleteSegmentFiles(_job, cutoffTicks, 1500).ConfigureAwait(false);
-             }
-         }
-     }
+                 var idxMaxToDelete = _job.GetHighestServedSegmentIndexEndingAtOrBefore(downloadPositionTicks - TimeSpan.FromSeconds(segmentKeepSeconds).Ticks);
  
--    private async Task DeleteSegmentFiles(TranscodingJob job, long idxMin, long idxMax, int delayMs)
-+    private async Task DeleteSegmentFiles(TranscodingJob job, long cutoffTicks, int delayMs)
-     {
-         var path = job.Path ?? throw new ArgumentException("Path can't be null.");
- 
--        _logger.LogDebug("Deleting segment file(s) index {Min} to {Max} from {Path}", idxMin, idxMax, path);
-+        _logger.LogDebug("Deleting downloaded HLS segments ending before {CutoffTicks} from {Path}", cutoffTicks, path);
- 
-         await Task.Delay(delayMs).ConfigureAwait(false);
+@@ -122,9 +128,13 @@ public class TranscodingSegmentCleaner : IDisposable
  
          try
          {
@@ -518,25 +431,12 @@ index 67bfcb02fd..bd87e8ef04 100644
 +                // Timer.Dispose does not drain async callbacks already past their first await.
 +                if (!_stopped && !job.HasExited && job.Type == TranscodingJobType.Hls)
 +                {
-+                    DeleteHlsSegmentFiles(path, job.GetDownloadedSegmentsBefore(cutoffTicks).ToHashSet());
++                    DeleteHlsSegmentFiles(path, idxMin, idxMax);
 +                }
              }
          }
          catch (Exception ex)
-@@ -135,24 +138,34 @@ public class TranscodingSegmentCleaner : IDisposable
-         }
-     }
- 
--    private void DeleteHlsSegmentFiles(string outputFilePath, long idxMin, long idxMax)
-+    private void DeleteHlsSegmentFiles(string outputFilePath, HashSet<int> downloadedSegments)
-     {
-+        if (downloadedSegments.Count == 0)
-+        {
-+            return;
-+        }
-+
-         var directory = Path.GetDirectoryName(outputFilePath)
-                         ?? throw new ArgumentException("Path can't be a root directory.", nameof(outputFilePath));
+@@ -140,13 +150,18 @@ public class TranscodingSegmentCleaner : IDisposable
  
          var name = Path.GetFileNameWithoutExtension(outputFilePath);
  
@@ -550,8 +450,9 @@ index 67bfcb02fd..bd87e8ef04 100644
          {
 +            var filename = Path.GetFileNameWithoutExtension(file);
 +            if (!filename.StartsWith(name, StringComparison.OrdinalIgnoreCase)
-+                || !int.TryParse(filename.AsSpan(name.Length), NumberStyles.None, CultureInfo.InvariantCulture, out var index)
-+                || !downloadedSegments.Contains(index))
++                || !long.TryParse(filename.AsSpan(name.Length), NumberStyles.Integer, CultureInfo.InvariantCulture, out var index)
++                || index < idxMin
++                || index > idxMax)
 +            {
 +                continue;
 +            }
@@ -559,13 +460,8 @@ index 67bfcb02fd..bd87e8ef04 100644
              try
              {
                  _logger.LogDebug("Deleting HLS segment file {0}", file);
-                 _fileSystem.DeleteFile(file);
-+                _job.ForgetDownloadedSegment(index);
-             }
-             catch (IOException ex)
-             {
 diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
-index ba555bf204..b03cfc2989 100644
+index ba555bf204..44e4c67e69 100644
 --- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
 +++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
 @@ -233,36 +233,42 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
@@ -898,15 +794,6 @@ index ba555bf204..b03cfc2989 100644
      }
  
      /// <inheritdoc />
-@@ -694,7 +737,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
-     {
-         if (EnableSegmentCleaning(state))
-         {
--            transcodingJob.TranscodingSegmentCleaner = new TranscodingSegmentCleaner(transcodingJob, _loggerFactory.CreateLogger<TranscodingSegmentCleaner>(), _serverConfigurationManager, _fileSystem, _mediaEncoder, state.SegmentLength);
-+            transcodingJob.TranscodingSegmentCleaner = new TranscodingSegmentCleaner(transcodingJob, _loggerFactory.CreateLogger<TranscodingSegmentCleaner>(), _serverConfigurationManager, _fileSystem, _mediaEncoder);
-             transcodingJob.TranscodingSegmentCleaner.Start();
-         }
-     }
 @@ -706,6 +749,27 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
             && state.RunTimeTicks.HasValue
             && state.RunTimeTicks.Value >= TimeSpan.FromMinutes(5).Ticks;
@@ -1001,10 +888,10 @@ index c970fd8a61..5bbbb990b7 100644
          return false;
 diff --git a/tests/Jellyfin.Api.Tests/Controllers/HlsSegmentReadinessTests.cs b/tests/Jellyfin.Api.Tests/Controllers/HlsSegmentReadinessTests.cs
 new file mode 100644
-index 0000000000..b2eab43b09
+index 0000000000..c3019248bf
 --- /dev/null
 +++ b/tests/Jellyfin.Api.Tests/Controllers/HlsSegmentReadinessTests.cs
-@@ -0,0 +1,204 @@
+@@ -0,0 +1,205 @@
 +using System;
 +using System.Collections.Generic;
 +using System.IO;
@@ -1159,7 +1046,8 @@ index 0000000000..b2eab43b09
 +            NullLogger<TranscodingSegmentCleaner>.Instance,
 +            Mock.Of<IConfigurationManager>(),
 +            Mock.Of<IFileSystem>(),
-+            Mock.Of<IMediaEncoder>());
++            Mock.Of<IMediaEncoder>(),
++            6);
 +        job.TranscodingSegmentCleaner = cleaner;
 +        job.EffectiveEncodingOptions = new EncodingOptions { EnableSegmentDeletion = true };
 +        var response = new CompletingResponseFeature();
@@ -1173,7 +1061,7 @@ index 0000000000..b2eab43b09
 +
 +        Assert.IsAssignableFrom<FileResult>(result);
 +        Assert.Equal(0, job.ActiveRequestCount);
-+        Assert.Empty(job.GetDownloadedSegmentsBefore(long.MaxValue));
++        Assert.Null(job.GetHighestServedSegmentIndexEndingAtOrBefore(long.MaxValue));
 +    }
 +
 +    public void Dispose()
@@ -1300,10 +1188,10 @@ index 0000000000..d706f5c877
 +}
 diff --git a/tests/Jellyfin.MediaEncoding.Tests/Transcoding/TranscodingLifecycleTests.cs b/tests/Jellyfin.MediaEncoding.Tests/Transcoding/TranscodingLifecycleTests.cs
 new file mode 100644
-index 0000000000..5464d72df8
+index 0000000000..92551116ac
 --- /dev/null
 +++ b/tests/Jellyfin.MediaEncoding.Tests/Transcoding/TranscodingLifecycleTests.cs
-@@ -0,0 +1,229 @@
+@@ -0,0 +1,232 @@
 +using System;
 +using System.Collections.Generic;
 +using System.ComponentModel;
@@ -1460,14 +1348,15 @@ index 0000000000..5464d72df8
 +            NullLogger<TranscodingSegmentCleaner>.Instance,
 +            _config.Object,
 +            _fileSystem.Object,
-+            Mock.Of<IMediaEncoder>());
++            Mock.Of<IMediaEncoder>(),
++            6);
 +        job.TranscodingSegmentCleaner = cleaner;
 +        job.EffectiveEncodingOptions = new EncodingOptions { EnableSegmentDeletion = true };
-+        job.RecordDownloadedSegment(0, TimeSpan.FromSeconds(6).Ticks);
-+        var output = Path.Combine(_directory, "stream0.mp4");
++        job.ReportSegmentDownloaded(1, TimeSpan.FromSeconds(30).Ticks);
++        var output = Path.Combine(_directory, "stream1.mp4");
 +        await File.WriteAllTextAsync(output, "replacement", TestContext.Current.CancellationToken);
 +        var method = typeof(TranscodingSegmentCleaner).GetMethod("DeleteSegmentFiles", BindingFlags.Instance | BindingFlags.NonPublic)!;
-+        var pending = (Task)method.Invoke(cleaner, new object[] { job, TimeSpan.FromSeconds(40).Ticks, 100 })!;
++        var pending = (Task)method.Invoke(cleaner, new object[] { job, 0L, 1L, 100 })!;
 +
 +        cleaner.Stop();
 +        await pending;
@@ -1491,17 +1380,19 @@ index 0000000000..5464d72df8
 +            NullLogger<TranscodingSegmentCleaner>.Instance,
 +            _config.Object,
 +            _fileSystem.Object,
-+            Mock.Of<IMediaEncoder>());
++            Mock.Of<IMediaEncoder>(),
++            6);
 +        job.TranscodingSegmentCleaner = cleaner;
 +        job.EffectiveEncodingOptions = new EncodingOptions { EnableSegmentDeletion = true };
-+        job.RecordDownloadedSegment(3, TimeSpan.FromSeconds(40).Ticks);
-+        job.RecordDownloadedSegment(5, TimeSpan.FromSeconds(60).Ticks);
++        job.ReportSegmentDownloaded(3, TimeSpan.FromSeconds(40).Ticks);
++        job.ReportSegmentDownloaded(5, TimeSpan.FromSeconds(60).Ticks);
 +        var keep = Path.Combine(_directory, "stream5.mp4");
 +        var expired = Path.Combine(_directory, "stream3.mp4");
 +        await File.WriteAllTextAsync(expired, "segment ends at retention boundary", TestContext.Current.CancellationToken);
 +        await File.WriteAllTextAsync(keep, "segment covers 50 to 60 seconds", TestContext.Current.CancellationToken);
-+        var method = typeof(TranscodingSegmentCleaner).GetMethod("DeleteSegmentFiles", BindingFlags.Instance | BindingFlags.NonPublic)!;
-+        await (Task)method.Invoke(cleaner, new object[] { job, TimeSpan.FromSeconds(40).Ticks, 0 })!;
++        var method = typeof(TranscodingSegmentCleaner).GetMethod("TimerCallback", BindingFlags.Instance | BindingFlags.NonPublic)!;
++        method.Invoke(cleaner, new object?[] { null });
++        await Task.Delay(1700, TestContext.Current.CancellationToken);
 +
 +        Assert.True(File.Exists(keep));
 +        Assert.False(File.Exists(expired));

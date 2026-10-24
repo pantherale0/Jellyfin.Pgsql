@@ -59,7 +59,7 @@ index 6405c8c45d..416bcb0aee 100644
      /// Gets the type from a type name string.
      /// </summary>
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-index 1a4c9da41c..20665e1650 100644
+index 4cd02bcd8d..81f2c756fd 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 @@ -26,7 +26,15 @@ public sealed partial class BaseItemRepository
@@ -120,7 +120,7 @@ index 1a4c9da41c..20665e1650 100644
  
      private static IQueryable<BaseItemEntity> ApplyNameFilters(IQueryable<BaseItemEntity> dbQuery, InternalItemsQuery filter)
 diff --git a/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs b/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs
-index a7b0b1c1fc..d8bf341e5b 100644
+index 3bf33b969e..419ee22535 100644
 --- a/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs
 +++ b/Jellyfin.Server.Implementations/Item/ItemPersistenceService.cs
 @@ -2,6 +2,7 @@
@@ -131,7 +131,9 @@ index a7b0b1c1fc..d8bf341e5b 100644
  using System.Globalization;
  using System.Linq;
  using System.Threading;
-@@ -15,4 +16,5 @@ using MediaBrowser.Controller.Playlists;
+@@ -15,6 +16,7 @@ using MediaBrowser.Controller.Entities.Audio;
+ using MediaBrowser.Controller.Persistence;
+ using MediaBrowser.Controller.Playlists;
  using Microsoft.EntityFrameworkCore;
 +using Microsoft.EntityFrameworkCore.Storage;
  using Microsoft.Extensions.Logging;
@@ -162,7 +164,10 @@ index a7b0b1c1fc..d8bf341e5b 100644
 +                    .Where(e => e.ItemId == item.Id)
 +                    .ExecuteDeleteAsync(cancellationToken)
 +                    .ConfigureAwait(false);
-+
+ 
+-            await context.BaseItemImageInfos
+-                .AddRangeAsync(images, cancellationToken)
+-                .ConfigureAwait(false);
 +                bool itemExists;
 +                if (isPostgres)
 +                {
@@ -188,16 +193,6 @@ index a7b0b1c1fc..d8bf341e5b 100644
 +                        .ConfigureAwait(false);
 +                }
  
--            await context.BaseItemImageInfos
--                .AddRangeAsync(images, cancellationToken)
--                .ConfigureAwait(false);
-+                if (!itemExists)
-+                {
-+                    _logger.LogWarning("Unable to save ImageInfo for non existing BaseItem {ItemId}", item.Id);
-+                    await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-+                    return;
-+                }
- 
 -            try
 -            {
 -                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -212,10 +207,14 @@ index a7b0b1c1fc..d8bf341e5b 100644
 -                if (await context.BaseItems
 -                    .AnyAsync(bi => bi.Id == item.Id, cancellationToken)
 -                    .ConfigureAwait(false))
--                {
++                if (!itemExists)
+                 {
 -                    throw;
--                }
--
++                    _logger.LogWarning("Unable to save ImageInfo for non existing BaseItem {ItemId}", item.Id);
++                    await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
++                    return;
+                 }
+ 
 -                _logger.LogWarning("Unable to save ImageInfo for non existing BaseItem {ItemId}", item.Id);
 +                await context.BaseItemImageInfos
 +                    .AddRangeAsync(images, cancellationToken)
@@ -225,7 +224,7 @@ index a7b0b1c1fc..d8bf341e5b 100644
              }
          }
      }
-@@ -292,7 +315,7 @@ public class ItemPersistenceService : IItemPersistenceService
+@@ -349,7 +372,7 @@ public class ItemPersistenceService : IItemPersistenceService
              {
                  if (entity.Images is { Count: > 0 })
                  {

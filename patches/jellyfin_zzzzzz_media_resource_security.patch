@@ -1,5 +1,5 @@
 diff --git a/Jellyfin.Api/Controllers/SubtitleController.cs b/Jellyfin.Api/Controllers/SubtitleController.cs
-index c4851091c1..051c809415 100644
+index 6721cd6c7e..fcf233161a 100644
 --- a/Jellyfin.Api/Controllers/SubtitleController.cs
 +++ b/Jellyfin.Api/Controllers/SubtitleController.cs
 @@ -38,6 +38,7 @@ namespace Jellyfin.Api.Controllers;
@@ -23,16 +23,7 @@ index c4851091c1..051c809415 100644
          if (string.Equals(format, "js", StringComparison.OrdinalIgnoreCase))
          {
              format = "json";
-@@ -235,8 +242,6 @@ public class SubtitleController : BaseJellyfinApiController
- 
-         if (string.IsNullOrEmpty(format))
-         {
--            var item = _libraryManager.GetItemById<Video>(itemId.Value);
--
-             var idString = itemId.Value.ToString("N", CultureInfo.InvariantCulture);
-             var mediaSource = _mediaSourceManager.GetStaticMediaSources(item, false)
-                 .First(i => string.Equals(i.Id, mediaSourceId ?? idString, StringComparison.Ordinal));
-@@ -249,7 +254,7 @@ public class SubtitleController : BaseJellyfinApiController
+@@ -248,7 +255,7 @@ public class SubtitleController : BaseJellyfinApiController
  
          if (string.Equals(format, "vtt", StringComparison.OrdinalIgnoreCase) && addVttTimeMap)
          {
@@ -41,7 +32,7 @@ index c4851091c1..051c809415 100644
              await using (stream.ConfigureAwait(false))
              {
                  using var reader = new StreamReader(stream);
-@@ -264,7 +269,7 @@ public class SubtitleController : BaseJellyfinApiController
+@@ -263,7 +270,7 @@ public class SubtitleController : BaseJellyfinApiController
  
          return File(
              await EncodeSubtitles(
@@ -50,7 +41,7 @@ index c4851091c1..051c809415 100644
                  mediaSourceId,
                  index.Value,
                  format,
-@@ -459,7 +464,7 @@ public class SubtitleController : BaseJellyfinApiController
+@@ -498,7 +505,7 @@ public class SubtitleController : BaseJellyfinApiController
      /// <summary>
      /// Encodes a subtitle in the specified format.
      /// </summary>
@@ -59,7 +50,7 @@ index c4851091c1..051c809415 100644
      /// <param name="mediaSourceId">The source media id.</param>
      /// <param name="index">The subtitle index.</param>
      /// <param name="format">The format to convert to.</param>
-@@ -468,7 +473,7 @@ public class SubtitleController : BaseJellyfinApiController
+@@ -507,7 +514,7 @@ public class SubtitleController : BaseJellyfinApiController
      /// <param name="copyTimestamps">Whether to copy the timestamps.</param>
      /// <returns>A <see cref="Task{Stream}"/> with the new subtitle file.</returns>
      private Task<Stream> EncodeSubtitles(
@@ -68,7 +59,7 @@ index c4851091c1..051c809415 100644
          string? mediaSourceId,
          int index,
          string format,
-@@ -476,8 +481,6 @@ public class SubtitleController : BaseJellyfinApiController
+@@ -515,8 +522,6 @@ public class SubtitleController : BaseJellyfinApiController
          long? endPositionTicks,
          bool copyTimestamps)
      {
@@ -288,6 +279,40 @@ index 0000000000..2159e3b438
 +        _host.Dispose();
 +    }
 +}
+diff --git a/tests/Jellyfin.Api.Tests/Controllers/SubtitleControllerTests.cs b/tests/Jellyfin.Api.Tests/Controllers/SubtitleControllerTests.cs
+index 77321f0b05..10557c5bb0 100644
+--- a/tests/Jellyfin.Api.Tests/Controllers/SubtitleControllerTests.cs
++++ b/tests/Jellyfin.Api.Tests/Controllers/SubtitleControllerTests.cs
+@@ -115,6 +115,7 @@ public class SubtitleControllerTests
+ 
+         var libraryManager = new Mock<ILibraryManager>();
+         libraryManager.Setup(l => l.GetItemById<BaseItem>(_itemId)).Returns(item);
++        libraryManager.Setup(l => l.GetItemById<Video>(_itemId, Guid.Empty)).Returns(item);
+ 
+         var mediaSourceManager = new Mock<IMediaSourceManager>();
+         mediaSourceManager.Setup(m => m.GetStaticMediaSources(item, false, null)).Returns([mediaSource]);
+@@ -124,7 +125,7 @@ public class SubtitleControllerTests
+ 
+         fileSystem = new Mock<IFileSystem>();
+ 
+-        return new SubtitleController(
++        var controller = new SubtitleController(
+             Mock.Of<IServerConfigurationManager>(),
+             libraryManager.Object,
+             Mock.Of<ISubtitleManager>(),
+@@ -132,6 +133,11 @@ public class SubtitleControllerTests
+             mediaSourceManager.Object,
+             Mock.Of<IProviderManager>(),
+             fileSystem.Object,
+-            NullLogger<SubtitleController>.Instance);
++            NullLogger<SubtitleController>.Instance)
++        {
++            ControllerContext = new ControllerContext { HttpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext() }
++        };
++
++        return controller;
+     }
+ }
 diff --git a/tests/Jellyfin.Api.Tests/Helpers/MediaInfoHelperTests.cs b/tests/Jellyfin.Api.Tests/Helpers/MediaInfoHelperTests.cs
 index 025d4d63a7..97a0a301a1 100644
 --- a/tests/Jellyfin.Api.Tests/Helpers/MediaInfoHelperTests.cs

@@ -1,5 +1,5 @@
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-index cb1571092a..cf90763238 100644
+index 9bdb422ffc..321358c834 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 @@ -7,6 +7,7 @@ using System;
@@ -48,17 +48,19 @@ index cb1571092a..cf90763238 100644
          }
  
          // Apply excluded tags filtering (blocked tags).
-@@ -818,20 +835,81 @@ public sealed partial class BaseItemRepository
+@@ -819,17 +836,32 @@ public sealed partial class BaseItemRepository
              var allowedTagItemIds = context.ItemValuesMap
                  .Where(f => f.ItemValue.Type == ItemValueType.Tags && includeTags.Contains(f.ItemValue.CleanValue))
                  .Select(f => f.ItemId);
 +            var liveTvChannelUnrated = UnratedItem.LiveTvChannel.ToString();
 +            var liveTvProgramUnrated = UnratedItem.LiveTvProgram.ToString();
  
+             var allowedByAncestor = ItemsBelowTaggedAncestor(context, allowedTagItemIds);
+-
 -            baseQuery = baseQuery.Where(e =>
 -                allowedTagItemIds.Contains(e.Id)
 -                || (e.SeriesId.HasValue && allowedTagItemIds.Contains(e.SeriesId.Value))
--                || e.Parents!.Any(p => allowedTagItemIds.Contains(p.ParentItemId))
+-                || allowedByAncestor.Contains(e.Id)
 -                || (e.TopParentId.HasValue && allowedTagItemIds.Contains(e.TopParentId.Value))
 -
 -                // People don't carry the tags of the media they appear in and would never match
@@ -68,7 +70,7 @@ index cb1571092a..cf90763238 100644
 +                baseQuery = baseQuery.Where(e =>
 +                    allowedTagItemIds.Contains(e.Id)
 +                    || (e.SeriesId.HasValue && allowedTagItemIds.Contains(e.SeriesId.Value))
-+                    || e.Parents!.Any(p => allowedTagItemIds.Contains(p.ParentItemId))
++                    || allowedByAncestor.Contains(e.Id)
 +                    || (e.TopParentId.HasValue && allowedTagItemIds.Contains(e.TopParentId.Value))
 +                    || e.Type == personTypeName
 +                    || (e.UnratedType == liveTvChannelUnrated && allowedLiveTvChannelIds.Contains(e.Id))
@@ -79,7 +81,7 @@ index cb1571092a..cf90763238 100644
 +                baseQuery = baseQuery.Where(e =>
 +                    allowedTagItemIds.Contains(e.Id)
 +                    || (e.SeriesId.HasValue && allowedTagItemIds.Contains(e.SeriesId.Value))
-+                    || e.Parents!.Any(p => allowedTagItemIds.Contains(p.ParentItemId))
++                    || allowedByAncestor.Contains(e.Id)
 +                    || (e.TopParentId.HasValue && allowedTagItemIds.Contains(e.TopParentId.Value))
 +
 +                    // People don't carry the tags of the media they appear in and would never match
@@ -88,7 +90,9 @@ index cb1571092a..cf90763238 100644
          }
  
          return baseQuery;
-     }
+@@ -846,6 +878,51 @@ public sealed partial class BaseItemRepository
+             .Where(a => taggedItemIds.Contains(a.ParentItemId))
+             .Select(a => a.ItemId);
  
 +    /// <summary>
 +    /// Expands Live TV channel/category allowlist preferences into concrete channel IDs.
@@ -139,7 +143,7 @@ index cb1571092a..cf90763238 100644
      /// Builds a filter expression for max parental rating that handles both rated items
      /// and unrated BoxSets/Playlists (which check linked children's ratings).
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-index 4c16c2979f..c592295fa4 100644
+index dc3920028c..a9dc0bb62d 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 @@ -10,13 +10,16 @@ using System.Collections.Generic;
@@ -159,7 +163,7 @@ index 4c16c2979f..c592295fa4 100644
  using MediaBrowser.Model.Entities;
  using Microsoft.EntityFrameworkCore;
  using BaseItemEntity = Jellyfin.Database.Implementations.Entities.BaseItemEntity;
-@@ -736,7 +739,15 @@ public sealed partial class BaseItemRepository
+@@ -728,7 +731,15 @@ public sealed partial class BaseItemRepository
          else if (filter.BlockUnratedItems.Length > 0)
          {
              var unratedItemTypes = filter.BlockUnratedItems.Select(f => f.ToString()).ToArray();
@@ -176,10 +180,10 @@ index 4c16c2979f..c592295fa4 100644
  
              if (minParentalRatingFilter != null && maxParentalRatingFilter != null)
              {
-@@ -1163,18 +1174,36 @@ public sealed partial class BaseItemRepository
-             var allowedTagItemIds = context.ItemValuesMap
+@@ -1157,18 +1168,36 @@ public sealed partial class BaseItemRepository
                  .Where(f => f.ItemValue.Type == ItemValueType.Tags && includeTags.Contains(f.ItemValue.CleanValue))
                  .Select(f => f.ItemId);
+             var allowedByAncestor = ItemsBelowTaggedAncestor(context, allowedTagItemIds);
 +            var allowedLiveTvChannelIds = ExpandAllowedLiveTvChannelIds(context, filter.User);
 +            var liveTvChannelUnrated = UnratedItem.LiveTvChannel.ToString();
 +            var liveTvProgramUnrated = UnratedItem.LiveTvProgram.ToString();
@@ -187,14 +191,14 @@ index 4c16c2979f..c592295fa4 100644
 -            baseQuery = baseQuery.Where(e =>
 -                allowedTagItemIds.Contains(e.Id)
 -                || (e.SeriesId.HasValue && allowedTagItemIds.Contains(e.SeriesId.Value))
--                || e.Parents!.Any(p => allowedTagItemIds.Contains(p.ParentItemId))
+-                || allowedByAncestor.Contains(e.Id)
 -                || (e.TopParentId.HasValue && allowedTagItemIds.Contains(e.TopParentId.Value))
 +            if (allowedLiveTvChannelIds.Length > 0)
 +            {
 +                baseQuery = baseQuery.Where(e =>
 +                    allowedTagItemIds.Contains(e.Id)
 +                    || (e.SeriesId.HasValue && allowedTagItemIds.Contains(e.SeriesId.Value))
-+                    || e.Parents!.Any(p => allowedTagItemIds.Contains(p.ParentItemId))
++                    || allowedByAncestor.Contains(e.Id)
 +                    || (e.TopParentId.HasValue && allowedTagItemIds.Contains(e.TopParentId.Value))
 +                    || e.Type == personTypeName
 +                    || (isPlaylistOnlyQuery && e.Data!.Contains($"OwnerUserId\":\"{filter.User!.Id:N}\""))
@@ -206,7 +210,7 @@ index 4c16c2979f..c592295fa4 100644
 +                baseQuery = baseQuery.Where(e =>
 +                    allowedTagItemIds.Contains(e.Id)
 +                    || (e.SeriesId.HasValue && allowedTagItemIds.Contains(e.SeriesId.Value))
-+                    || e.Parents!.Any(p => allowedTagItemIds.Contains(p.ParentItemId))
++                    || allowedByAncestor.Contains(e.Id)
 +                    || (e.TopParentId.HasValue && allowedTagItemIds.Contains(e.TopParentId.Value))
  
 -                // People don't carry the tags of the media they appear in and would never match
@@ -223,10 +227,10 @@ index 4c16c2979f..c592295fa4 100644
  
          if (filter.SeriesStatuses.Length > 0)
 diff --git a/MediaBrowser.Controller/Entities/BaseItem.cs b/MediaBrowser.Controller/Entities/BaseItem.cs
-index 70e7da8932..b7390914ee 100644
+index a1e955f33f..2356ff792d 100644
 --- a/MediaBrowser.Controller/Entities/BaseItem.cs
 +++ b/MediaBrowser.Controller/Entities/BaseItem.cs
-@@ -1862,7 +1862,7 @@ namespace MediaBrowser.Controller.Entities
+@@ -1895,7 +1895,7 @@ namespace MediaBrowser.Controller.Entities
          /// <param name="skipAllowedTagsCheck">Don't check for allowed tags.</param>
          /// <returns><c>true</c> if [is parental allowed] [the specified user]; otherwise, <c>false</c>.</returns>
          /// <exception cref="ArgumentNullException">If user is null.</exception>

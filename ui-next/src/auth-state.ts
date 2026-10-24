@@ -69,31 +69,6 @@ export function quickConnectPollOutcome(status: number | undefined, failures: nu
     return failures < QUICK_CONNECT_MAX_TRANSIENT_FAILURES ? 'retry' : 'stop';
 }
 
-/** Writes the active account into classic web's credential store so classic links open the same account. */
-export function classicCredentialsWithSession(raw: string | null, session: Session, now: number): string | null {
-    if (!session.serverId) return null;
-    let store: { Servers?: Array<Record<string, unknown>> } = {};
-    try {
-        const parsed: unknown = raw ? JSON.parse(raw) : {};
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) store = parsed as typeof store;
-    } catch (_error) { store = {}; }
-    const servers = Array.isArray(store.Servers) ? store.Servers.filter(s => s && typeof s === 'object') : [];
-    const existing = servers.find(s => s.Id === session.serverId) || {};
-    const entry = {
-        ...existing,
-        Id: session.serverId,
-        ManualAddress: session.server,
-        AccessToken: session.token,
-        UserId: session.user.Id,
-        DateLastAccessed: now,
-    };
-    return JSON.stringify({ ...store, Servers: [entry, ...servers.filter(s => s.Id !== session.serverId)] });
-}
-
-export function canHandOffToClassic(session: Session, pageOrigin: string): boolean {
-    try { return new URL(session.server).origin === pageOrigin && Boolean(session.serverId); } catch (_error) { return false; }
-}
-
 /** Applies only the fields this screen edited onto a freshly read configuration. */
 export function mergeEditedFields<T extends Record<string, unknown>>(fresh: T | undefined, draft: T, edited: Iterable<keyof T>): T {
     const merged = { ...(fresh || {}) } as T;

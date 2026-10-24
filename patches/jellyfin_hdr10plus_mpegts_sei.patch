@@ -1,5 +1,5 @@
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-index 6f010c0242..681db9d826 100644
+index ebfa78176a..524f4e7ea6 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 @@ -20,6 +20,7 @@ using Jellyfin.Extensions;
@@ -10,7 +10,7 @@ index 6f010c0242..681db9d826 100644
  using MediaBrowser.Model.Configuration;
  using MediaBrowser.Model.Dlna;
  using MediaBrowser.Model.Dto;
-@@ -1415,6 +1416,29 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -1416,6 +1417,29 @@ namespace MediaBrowser.Controller.MediaEncoding
                         or VideoRangeType.DOVIWithELHDR10Plus;
          }
  
@@ -40,7 +40,7 @@ index 6f010c0242..681db9d826 100644
          /// <summary>
          /// Check if dynamic HDR metadata should be removed during stream copy.
          /// Please note this check assumes the range check has already been done
-@@ -1429,10 +1453,17 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -1430,10 +1454,17 @@ namespace MediaBrowser.Controller.MediaEncoding
                  return DynamicHdrMetadataRemovalPlan.None;
              }
  
@@ -59,7 +59,7 @@ index 6f010c0242..681db9d826 100644
              }
  
              var requestHasHDR10 = requestedRangeTypes.Contains(VideoRangeType.HDR10.ToString(), StringComparison.OrdinalIgnoreCase);
-@@ -1464,6 +1495,10 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -1465,6 +1496,10 @@ namespace MediaBrowser.Controller.MediaEncoding
  
              // If the client is a Dolby Vision Player, remove the HDR10+ metadata to avoid playback issues
              shouldRemoveHdr10Plus = shouldRemoveHdr10Plus || (requestHasDOVI && videoStream.VideoRangeType == VideoRangeType.DOVIWithHDR10Plus);
@@ -71,11 +71,11 @@ index 6f010c0242..681db9d826 100644
          }
  
 diff --git a/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs b/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs
-index 2b009b4673..e9ad2ef30e 100644
+index aca55fbcc1..fc38ff0914 100644
 --- a/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs
 +++ b/tests/Jellyfin.Controller.Tests/MediaEncoding/EncodingHelperTests.cs
-@@ -261,6 +261,56 @@ public class EncodingHelperTests
-         Assert.Contains("-ar 48000", args, StringComparison.Ordinal);
+@@ -321,6 +321,56 @@ public class EncodingHelperTests
+         Assert.Contains("pan=stereo", args, StringComparison.Ordinal);
      }
  
 +    [Fact]
@@ -131,7 +131,7 @@ index 2b009b4673..e9ad2ef30e 100644
      private static EncodingJobInfo BuildAudioState(string audioCodec, int requestedSampleRate, string? outputContainer = null)
      {
          var audio = new MediaStream { Index = 0, Type = MediaStreamType.Audio, Codec = "flac", SampleRate = 96000 };
-@@ -287,6 +337,46 @@ public class EncodingHelperTests
+@@ -347,6 +397,46 @@ public class EncodingHelperTests
          };
      }
  
@@ -178,7 +178,7 @@ index 2b009b4673..e9ad2ef30e 100644
      private static EncodingJobInfo BuildState(
          MediaStream? subtitle,
          SubtitleDeliveryMethod? deliveryMethod,
-@@ -322,10 +412,13 @@ public class EncodingHelperTests
+@@ -382,10 +472,13 @@ public class EncodingHelperTests
          };
      }
  

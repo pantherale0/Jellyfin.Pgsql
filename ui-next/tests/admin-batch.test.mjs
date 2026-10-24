@@ -99,6 +99,10 @@ test('ADMIN-01: plugin drafts are saveable only once their own configuration loa
     assert.match(router, /let active = true;\s*setPlugin\(null\);/);
 });
 
+test('ADMIN-21: plugin settings do not link to the classic dashboard', () => {
+    assert.doesNotMatch(source('src/admin/plugin-shell.tsx'), /\/web\/index\.html#!\/dashboard/);
+});
+
 test('ADMIN-12/14: failed reads reject instead of becoming empty inventory', async () => {
     const api = adminApi();
     responses.push({ status: 500, body: 'Plugin manager failed' });

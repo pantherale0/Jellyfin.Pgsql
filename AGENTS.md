@@ -1,53 +1,50 @@
 # Agent instructions
 
-PostgreSQL adapter for Jellyfin. Core work lives in `Jellyfin.Plugin.Pgsql/`. Jellyfin server and web UI are **git submodules** (`jellyfin/`, `jellyfin-web/`) customized only via patches.
+PostgreSQL adapter for Jellyfin. Core work lives in `Jellyfin.Plugin.Pgsql/`. The Jellyfin server is the only submodule (`jellyfin/`) and is customized through patches. UI Next lives in `ui-next/`.
 
 ## Hard rules
 
 ### 1. Never commit submodule working-tree changes
 
-`jellyfin/` and `jellyfin-web/` must stay clean of committed local edits.
+`jellyfin/` must stay clean of committed local edits.
 
-- Do **not** commit modified files inside either submodule.
-- Implement all server/web customizations as patch files under `patches/`.
-- After making edits to a submodule, export the patch for the edits and always clean the submodules back to their original tag.
-- Submodule pointer updates (same feature/release tag on both) are allowed when intentionally bumping Jellyfin versions.
+- Do **not** commit modified files inside `jellyfin/`.
+- Implement server customizations as patch files under `patches/`. Implement UI Next changes in `ui-next/`.
+- After editing `jellyfin/`, export the patch and reset the submodule to its original tag.
+- Update the server submodule pointer when intentionally bumping Jellyfin versions.
 
 ### 2. Patch naming and routing
 
-Patches live in a flat `patches/` directory. `scripts/apply-patches.sh` routes them by filename:
+Server patches live in a flat `patches/` directory. `scripts/apply-patches.sh` applies them to `jellyfin/`:
 
 | Pattern | Target | Examples |
 |---|---|---|
-| `jellyfin_web*.patch` | `jellyfin-web/` | `jellyfin_web_rbac.patch` |
 | `jellyfin_*.patch` (and `jellyfin.patch`) | `jellyfin/` | `jellyfin_sso.patch` |
 
-**Web is matched first.** A name starting with `jellyfin_web` is never applied to core, even though it also matches `jellyfin_*`.
+Names beginning with `jellyfin_web` are rejected. The web submodule and its patch stack have been removed.
 
 ```bash
 # Apply (used by Docker builds)
 ./scripts/apply-patches.sh jellyfin
-./scripts/apply-patches.sh jellyfin-web
 
 # Typical workflow after editing a submodule checkout
 ./scripts/export-patch.sh jellyfin_<name>.patch
-./scripts/export-patch.sh jellyfin_web_<name>.patch
 ```
 
 #### Submodule Patch Export Script (`./scripts/export-patch.sh`)
 
-When creating or updating a patch in `jellyfin/` or `jellyfin-web/`, run:
+When creating or updating a patch in `jellyfin/`, run:
 
 ```bash
-# Automatically snapshots edits, isolates dependency baseline, generates full diff, and rebuilds web
-./scripts/export-patch.sh jellyfin_web_zzz_livetv_multiview.patch
+# Snapshots edits, applies the preceding server patches, and exports the diff
+./scripts/export-patch.sh jellyfin_zzz_livetv_multiview.patch
 ```
 
 It performs the following steps automatically:
-1. **Snapshots Working Edits:** Saves all modified and untracked files currently in `jellyfin/` or `jellyfin-web/`.
+1. **Snapshots working edits:** Saves modified, untracked, and deleted files in `jellyfin/`.
 2. **Isolates Baseline:** Resets the submodule to the current release tag (from `JELLYFIN_PATCH_BASE_TAG`, [`.github/jellyfin-sync-state.json`](.github/jellyfin-sync-state.json), or `git describe --exact-match`), removes the target patch file, applies dependency patches (`./scripts/apply-patches.sh <target>`), and records the baseline with `git write-tree` without creating a commit.
 3. **Restores & Diffs:** Restores all feature edits onto the dependency baseline, stages untracked files (`git add -N`), and exports the complete multi-file diff to `patches/<patch_name>`.
-4. **Validates & Rebuilds:** Appends a trailing newline `\n` to prevent `git apply` EOF errors, resets the submodule back to the same release tag, and runs `./scripts/build-web.sh`.
+4. **Finishes the export:** Adds a trailing newline to avoid `git apply` EOF errors, then resets `jellyfin/` to the same release tag. Apply the patch and build or test the affected server code separately.
 
 When bumping Jellyfin versions, rebase the whole series instead of editing hunks by hand:
 
@@ -68,16 +65,16 @@ When a local image or stack is needed, **prompt the user** to run:
 
 That script starts the OIDC/RBAC dev environment via `docker-compose.dev.yaml`.
 
-### 4. Keep `jellyfin` and `jellyfin-web` on the same feature branch / tag
+### 4. Keep the server and plugin versions aligned
 
-Both submodules must track the **same** Jellyfin release (e.g. both at `v12.0-rc2`). Do not advance one without the other.
+The `jellyfin/` submodule, plugin package references, and `.github/jellyfin-sync-state.json` must track the same Jellyfin release.
 
 - Migration / version drift between plugin and core: `./scripts/sync-jellyfin-migrations.sh` (prefer `--dry-run` first).
 - GitHub workflows sync and publish automatically; do not reinvent that flow locally unless asked.
 
 ```bash
 ./scripts/sync-jellyfin-migrations.sh --dry-run
-./scripts/sync-jellyfin-migrations.sh --version 12.0-rc2
+./scripts/sync-jellyfin-migrations.sh --version 12.3
 ```
 
 ### 5. Never auto-commit
@@ -92,11 +89,11 @@ Jellyfin’s default JSON output is **PascalCase** (`SessionId`, `Users`). Camel
 Accept: application/json; profile="CamelCase"
 ```
 
-Raw `api.axiosInstance` calls from dashboard patches do **not** get this header automatically (unlike generated SDK methods). Reading `response.data.sessionId` against a PascalCase body silently yields `undefined` and looks like a no-op UI bug.
+Custom `api.axiosInstance` calls do **not** get this header automatically (unlike generated SDK methods). Reading `response.data.sessionId` against a PascalCase body silently yields `undefined` and looks like a no-op UI bug.
 
 When adding plugin admin APIs + web clients:
 
-- **Web:** always set `Accept: application/json; profile="CamelCase"` on custom axios calls (same pattern as Emby import / merge helpers).
+- **UI Next:** set `Accept: application/json; profile="CamelCase"` on custom axios calls when the client expects camelCase (same pattern as Emby import / merge helpers).
 - **Plugin DTOs:** prefer `[JsonPropertyName("camelCaseName")]` on response properties so payloads stay camelCase even without the Accept profile.
 - **Requests:** System.Text.Json property matching is case-insensitive, so camelCase request bodies usually bind; still keep client/server names aligned.
 - **Multipart uploads:** do not force `Content-Type: application/json` on `FormData`; let the browser set the multipart boundary.
@@ -160,7 +157,7 @@ Docs are part of the change, not a follow-up. When you add, rename, remove, or m
 
 - Every file under `patches/` must have a catalog entry; removing a patch removes its entry.
 - Prefer verified issue/PR links only; otherwise write “No public issue.”
-- When a server and web patch are companions, cross-link them under **Related**.
+- When server patches are companions, cross-link them under **Related**.
 - If apply order / `z_` / `zz_` layering matters, note prerequisites (and mirror any `#` preamble in the patch).
 
 **Features rules** (`docs/features.md`):
@@ -184,12 +181,13 @@ Docs are part of the change, not a follow-up. When you add, rename, remove, or m
 | Path | Role |
 |---|---|
 | `Jellyfin.Plugin.Pgsql/` | Plugin source, EF migrations, PostgreSQL provider |
-| `jellyfin/`, `jellyfin-web/` | Upstream submodules (patch targets only) |
-| `patches/` | All committed Jellyfin/Jellyfin-web diffs |
+| `ui-next/` | Web client source and tests; the Docker image serves this client at `/web` |
+| `jellyfin/` | Upstream server submodule (patch target only) |
+| `patches/` | Committed Jellyfin server diffs |
 | `docs/` | Overview, architecture, features, patch catalog, known issues |
 | `scripts/apply-patches.sh` | Applies patches by naming convention |
 | `scripts/rebase-patches.sh` | Rebases the patch series onto a new Jellyfin tag and rewrites `patches/` |
-| `scripts/export-patch.sh` | Snapshots submodule edits into patches & rebuilds web |
+| `scripts/export-patch.sh` | Snapshots server submodule edits into patches |
 | `scripts/start-dev.sh` | Dev stack entrypoint (user-run) |
 | `scripts/sync-jellyfin-migrations.sh` | Align plugin migrations with a Jellyfin release |
 | `docker/` | Production image build |
@@ -198,6 +196,7 @@ Docs are part of the change, not a follow-up. When you add, rename, remove, or m
 ## Preferred change locations
 
 - Plugin behavior, migrations, caching → `Jellyfin.Plugin.Pgsql/`
-- Server or web UI behavior → edit submodule locally, then refresh the matching `patches/*.patch`; leave submodules clean
+- Server behavior → edit `jellyfin/` locally, then refresh the matching `patches/*.patch`; leave the submodule clean
+- Web UI behavior → implement it in `ui-next/`
 - Dev/runtime wiring → `docker-compose.dev.yaml`, `scripts/`, `docker/` (not submodule trees)
 - Docs for the above → `docs/` (+ root `README.md` for operator how-to); see hard rule 8

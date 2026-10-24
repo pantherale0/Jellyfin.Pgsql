@@ -69,12 +69,12 @@ test('setLocale lazy-loads the best table and survives a failing loader', async 
     assert.equal(i18n.locale(), 'en-US');
 });
 
-test('RTL languages match Jellyfin Web (ar, fa, ur, he) including regional codes', () => {
+test('RTL layout follows the four supported language bases, including regional codes', () => {
     for (const code of [ 'ar', 'ar-sa', 'fa', 'ur-pk', 'he', 'he_IL' ]) assert.equal(i18n.isRtlLanguage(code), true, code);
     for (const code of [ 'en-us', 'fr', 'zh-cn', '' ]) assert.equal(i18n.isRtlLanguage(code), false, code);
 });
 
-test('the language is stored per user under Jellyfin Web key', () => {
+test('the language is stored per user under Jellyfin language key', () => {
     i18n.storeLanguage('user-1', 'pt_BR');
     assert.equal(storage.get('user-1-language'), 'pt-br');
     assert.equal(i18n.readStoredLanguage('user-1'), 'pt-br');
@@ -91,8 +91,8 @@ test('Intl formatting follows the active language', () => {
     assert.equal(i18n.formatDate('not a date'), '');
 });
 
-test('every literal t() message is catalogued (run scripts/sync-ui-next-strings.mjs after adding text)', () => {
-    const known = new Set([ ...Object.keys(catalog('jellyfin-keys.json')), ...Object.keys(catalog('en-ui-next.json')) ]);
+test('every literal t() message is in the English catalog', () => {
+    const known = new Set(Object.keys(catalog('en-ui-next.json')));
     const missing = [];
     for (const file of sourceFiles) {
         if (file.includes(`${join('src', 'i18n')}/`)) continue;
@@ -110,15 +110,15 @@ test('every literal t() message is catalogued (run scripts/sync-ui-next-strings.
 });
 
 test('locale tables only translate catalogued messages and keep their placeholders', () => {
-    const keys = catalog('jellyfin-keys.json');
+    const english = catalog('en-ui-next.json');
     const placeholders = text => [ ...text.matchAll(/\{(\d+)\}/g) ].map(match => match[1]).sort().join(',');
     const locales = readdirSync(new URL('../src/i18n/locales/', import.meta.url));
-    assert.ok(locales.length > 50, 'Jellyfin Web translations are committed');
+    assert.ok(locales.length > 50, 'locale catalogs are committed');
     assert.ok(!locales.some(name => name.startsWith('en')), 'English variants are not shipped');
     for (const name of [ 'fr.json', 'de.json', 'ar.json', 'zh-cn.json' ]) {
         const table = JSON.parse(readFileSync(new URL(`../src/i18n/locales/${name}`, import.meta.url), 'utf8'));
         for (const [ message, translated ] of Object.entries(table)) {
-            assert.ok(message in keys, `${name}: ${message}`);
+            assert.ok(message in english, `${name}: ${message}`);
             assert.equal(placeholders(translated), placeholders(message), `${name}: ${message}`);
         }
     }

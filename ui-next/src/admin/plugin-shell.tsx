@@ -1,10 +1,8 @@
 import { useState, useEffect } from 'preact/hooks';
-import { classicWebAvailable } from '../build-features';
 import { ConfirmButton, StatusChip } from './ui';
 import { registerUnsavedGuard } from './admin-state';
 import { t } from '../i18n';
 
-const classicWebLinksAvailable = classicWebAvailable(import.meta.env.VITE_CLASSIC_WEB_AVAILABLE);
 
 interface PluginShellProps {
     name: string;
@@ -58,7 +56,6 @@ export function PluginPageShell({ name, description, status, session, onSave, on
             <div class="ad-flex">
                 {message && <span role="status" class={`ad-note${message.includes('fail') ? ' ad-error' : ''}`}>{message}</span>}
                 {onSave && loaded && <ConfirmButton label={saving ? t('Saving…') : t('Save settings')} onConfirm={doSave} />}
-                {classicWebLinksAvailable && <a class="ad-btn" href={`${session.server}/web/index.html#!/dashboard`} target="_blank" rel="noopener">{t('Classic dashboard')}</a>}
             </div>
         </div>
         <div class="admin-plugin-body">

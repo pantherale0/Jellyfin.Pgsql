@@ -1,36 +1,11 @@
-ARG JELLYFIN_VERSION=12.1
+ARG JELLYFIN_VERSION=12.3
 ARG YTDLP_VERSION=2026.08.19
 ARG YTDLP_SHA256=58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a
 
-# Web build stage
-FROM node:24-alpine AS web-build
-WORKDIR /src
-
-# Install git
-RUN apk add --no-cache git
-
-# Copy web submodule, patches, and apply-patches helper
-COPY jellyfin-web/ ./jellyfin-web/
-COPY patches/ ./patches/
-COPY scripts/apply-patches.sh ./scripts/apply-patches.sh
-
-# Apply all jellyfin-web patches and build web client
-RUN chmod +x scripts/apply-patches.sh && \
-    scripts/apply-patches.sh jellyfin-web && \
-    cd jellyfin-web && \
-    npm config set fetch-retries 5 && \
-    npm config set fetch-retry-mintimeout 20000 && \
-    npm config set fetch-retry-maxtimeout 120000 && \
-    npm config set fetch-timeout 300000 && \
-    npm ci && \
-    npm run build:production
-
-# UI Next build stage for the opt-in test image
+# UI Next build stage
 FROM node:24-alpine AS ui-next-build
 WORKDIR /src/ui-next
 
-ARG VITE_CLASSIC_WEB_AVAILABLE=false
-ENV VITE_CLASSIC_WEB_AVAILABLE=${VITE_CLASSIC_WEB_AVAILABLE}
 ARG UI_NEXT_BUILD=unknown
 ENV UI_NEXT_BUILD=${UI_NEXT_BUILD}
 
@@ -43,6 +18,7 @@ COPY ui-next/tsconfig.json ./tsconfig.json
 COPY ui-next/vite.config.ts ./vite.config.ts
 COPY ui-next/src/ ./src/
 COPY ui-next/tests/ ./tests/
+COPY ui-next/e2e/fake-server/ ./e2e/fake-server/
 
 # UI Next tests assert against repository sources outside ui-next/ (server
 # contracts, plugin configuration, patches, CI workflow). The paths resolve
@@ -106,6 +82,7 @@ RUN dotnet ef migrations bundle \
     --self-contained \
     --project ./Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj \
     --startup-project ./Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj \
+    --configuration Release \
     --force \
     -- --migration-provider Jellyfin-PgSql
 
@@ -144,12 +121,7 @@ RUN chmod +x /entrypoint.sh /jellyfin-pgsql/migrate-sqlite-to-postgres.sh /jelly
 
 ENTRYPOINT ["/entrypoint.sh"]
 
-# UI Next is opt-in and leaves the classic web directory in the base image intact.
-FROM runtime AS ui-next-test
+# UI Next is the only web client served by this image.
+FROM runtime AS ui-next
 COPY --from=ui-next-build /src/ui-next/dist/ /jellyfin/ui-next/
 ENV JELLYFIN_WEB_DIR=/jellyfin/ui-next
-
-# The default Docker target remains the patched classic Jellyfin web client.
-FROM runtime AS classic
-COPY --from=web-build /src/jellyfin-web/dist/ /jellyfin/jellyfin-web/
-RUN sed -i 's|</body>|<script src="/sso/login-script.js"></script></body>|g' /jellyfin/jellyfin-web/index.html

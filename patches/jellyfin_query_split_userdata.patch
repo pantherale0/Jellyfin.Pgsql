@@ -1,5 +1,5 @@
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
-index 20665e1650..f9a2491f48 100644
+index 81f2c756fd..8898df2890 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs
 @@ -274,7 +274,14 @@ public sealed partial class BaseItemRepository

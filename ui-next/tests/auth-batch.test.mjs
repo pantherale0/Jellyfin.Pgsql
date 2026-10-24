@@ -108,21 +108,6 @@ test('AUTH-11: preference feedback is bound to the current screen and operation'
     assert.match(profile, /saveOp\.current === op && screenRef\.current === savedScreen/);
 });
 
-test('AUTH-12: classic links hand over the active account on the same origin and are labelled otherwise', () => {
-    const s = session('tok');
-    const existing = JSON.stringify({ Servers: [{ Id: 'srv', AccessToken: 'other', UserId: 'u9', Name: 'Home' }, { Id: 'srv2', AccessToken: 'x' }] });
-    const next = JSON.parse(auth.classicCredentialsWithSession(existing, s, 42));
-    assert.deepEqual(next.Servers[0], { Id: 'srv', Name: 'Home', ManualAddress: 'https://media.example.test', AccessToken: 'tok', UserId: 'u1', DateLastAccessed: 42 });
-    assert.equal(next.Servers.length, 2);
-    assert.equal(JSON.parse(auth.classicCredentialsWithSession('broken', s, 1)).Servers.length, 1);
-    assert.equal(auth.classicCredentialsWithSession(null, { ...s, serverId: '' }, 1), null);
-    assert.equal(auth.canHandOffToClassic(s, 'https://media.example.test'), true);
-    assert.equal(auth.canHandOffToClassic(s, 'https://ui.example.test'), false);
-    const main = source('src/main.tsx');
-    assert.match(main, /classicHandoff \? 'Classic dashboard' : 'Classic dashboard \(separate sign-in\)'/);
-    assert.match(main, /localStorage\.setItem\('jellyfin_credentials', credentials\)/);
-});
-
 test('SSO-01/02/03: OIDC state is browser-bound, aged on consumption and bounded', () => {
     const patch = repo('patches/jellyfin_sso.patch');
     assert.match(patch, /\+\s+Response\.Cookies\.Append\(StateCookieName, browserNonce/);

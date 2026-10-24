@@ -1,6 +1,6 @@
 # Architecture
 
-How this repository builds a PostgreSQL-backed Jellyfin image without committing edits into the upstream submodules.
+How this repository builds a PostgreSQL-backed Jellyfin image with UI Next as its web client.
 
 ## Repository map
 
@@ -8,12 +8,12 @@ How this repository builds a PostgreSQL-backed Jellyfin image without committing
 |---|---|
 | [`Jellyfin.Plugin.Pgsql/`](../Jellyfin.Plugin.Pgsql/) | PostgreSQL EF provider, migrations, query cache, fuzzy search, taste, Emby import, admin APIs, optional active-standby HA |
 | [`Jellyfin.Plugin.Seerr/`](../Jellyfin.Plugin.Seerr/) | Seerr/Jellyseerr client plugin (search, request, parental filtering) |
-| [`ui-next/`](../ui-next/) | Experimental Preact/Vite web client, built by the opt-in Docker `ui-next-test` target; independent of the upstream web submodule |
-| [`jellyfin/`](../jellyfin/), [`jellyfin-web/`](../jellyfin-web/) | Upstream git submodules — **patch targets only**; keep working trees clean of committed local edits |
-| [`patches/`](../patches/) | All server/web customizations as flat `*.patch` files |
+| [`ui-next/`](../ui-next/) | Preact/Vite web client, tests, and static build served by the Docker image |
+| [`jellyfin/`](../jellyfin/) | Upstream server git submodule; keep its working tree clean after patch work |
+| [`patches/`](../patches/) | Server customizations as flat `*.patch` files |
 | [`scripts/apply-patches.sh`](../scripts/apply-patches.sh) | Routes and applies patches by filename |
 | [`scripts/rebase-patches.sh`](../scripts/rebase-patches.sh) | Replays the patch series onto a new Jellyfin tag and rewrites `patches/` |
-| [`scripts/sync-jellyfin-migrations.sh`](../scripts/sync-jellyfin-migrations.sh) | Align plugin EF migrations with a Jellyfin release; starts compose `postgres` locally when needed |
+| [`scripts/sync-jellyfin-migrations.sh`](../scripts/sync-jellyfin-migrations.sh) | Align server patches and plugin EF migrations with a Jellyfin release |
 | [`scripts/start-dev.sh`](../scripts/start-dev.sh) | Local OIDC/RBAC stack via `docker-compose.dev.yaml` |
 | [`docker/`](../docker/) | Production image build (Dockerfile, entrypoint, migrator) |
 
@@ -21,21 +21,20 @@ Agent-oriented rules (never commit submodule dirt, auth checklist, JSON casing) 
 
 ## Patch routing and apply order
 
-[`scripts/apply-patches.sh`](../scripts/apply-patches.sh) takes a target (`jellyfin` or `jellyfin-web`) and applies matching files from `patches/`:
+[`scripts/apply-patches.sh`](../scripts/apply-patches.sh) applies server patches from `patches/` to `jellyfin/`:
 
 | Filename pattern | Applied to |
 |---|---|
-| `jellyfin_web*.patch` | `jellyfin-web/` |
-| `jellyfin_*.patch` or `jellyfin.patch` | `jellyfin/` (web names excluded) |
+| `jellyfin_*.patch` or `jellyfin.patch` | `jellyfin/` |
 
-**Web is matched first.** A name starting with `jellyfin_web` is never applied to core.
+Names beginning with `jellyfin_web` are rejected. The web submodule and its patch stack have been removed.
 
-Patches are applied in **byte-order lexicographic order** (`LC_ALL=C sort`). Locale collation must not be used: under `en_GB`/`en_US`, underscore can sort before dot, so `jellyfin_web_z_tv_ux_perf.patch` would run before `jellyfin_web_z_tv_ux.patch` and break prerequisites. Prefixes encode layering:
+Patches are applied in byte-order lexicographic order (`LC_ALL=C sort`). Locale collation can change the order of filenames, so the script fixes the locale before sorting. Prefixes encode layering:
 
 - Unprefixed thematic names apply in alphabetical order among themselves.
-- `jellyfin_z_*` / `jellyfin_web_z_*` run late so they can edit files already touched by earlier patches (HA leadership, Live TV RBAC allowlist, taste impressions).
-- `jellyfin_zz_*` / `jellyfin_web_zz_*` run late (for example person identity, Emby import UI).
-- `jellyfin_zzz_*` / `jellyfin_zzzz_*` run late (by-name access semi-join, people name search / batched `HasSegments`). `jellyfin_zzzzz_*` and `jellyfin_web_zzzzz_*` follow those dependencies for exact-device playback settings.
+- `jellyfin_z_*` runs late so it can edit files already touched by earlier patches (HA leadership, Live TV RBAC allowlist, taste impressions).
+- `jellyfin_zz_*` runs late (for example, person identity).
+- `jellyfin_zzz_*` and later prefixes run after their dependencies (for example, by-name access, people queries, device playback options, and HLS lifecycle fixes).
 
 Some patches document explicit prerequisites in a `#` preamble when apply order matters beyond lexicographic sort. Those comments are authoritative when refreshing patches.
 
@@ -45,23 +44,23 @@ When bumping Jellyfin tags, do **not** hand-edit hunk line numbers. Replay the s
 ./scripts/rebase-patches.sh --from v12.0-rc6 --to v12.0-rc7
 ```
 
+The sync script rebases the server patch series when the Jellyfin tag changes, then builds the four plugin and test projects individually in Release. EF design-time commands also specify Release so they use the installed SDK's compiler configuration.
+
 That applies each patch as a commit on `--from`, `git rebase --onto` the new tag, and writes updated `patches/*.patch` files. Hunks that only fail because surrounding lines moved are merged automatically. Remaining **content** conflicts are reported (patch name + files) and must be resolved with `export-patch.sh`. SQLite `*ModelSnapshot.cs` conflicts are skipped by keeping the new upstream snapshot (this fork’s schema lives in plugin migrations). `sync-jellyfin-migrations.sh` runs this automatically when the target tag differs from [`.github/jellyfin-sync-state.json`](../.github/jellyfin-sync-state.json).
 
 ```bash
 # Used by Docker / CI
 ./scripts/apply-patches.sh jellyfin
-./scripts/apply-patches.sh jellyfin-web
 
 # After editing the submodule with existing patches applied
 ./scripts/export-patch.sh jellyfin_<name>.patch
-./scripts/export-patch.sh jellyfin_web_<name>.patch
 ```
 
-The exporter snapshots changed **file contents** before rebuilding the dependency baseline, then diffs only the restored feature edits against it (`--binary` for SQLite snapshots). It records that baseline with `git write-tree`, so export creates no submodule commits. Replaying `git diff HEAD` on that baseline would duplicate already-applied dependency hunks. The web export also builds the static bundle; clean both patched submodule worktrees back to their pinned tags after validation.
+The exporter snapshots changed file contents, rebuilds the baseline with preceding server patches, then diffs the restored edits against that baseline. It records the baseline with `git write-tree`, so export creates no submodule commits. Replaying `git diff HEAD` on that baseline would duplicate already-applied dependency hunks. The script resets `jellyfin/` to its pinned tag after export.
 
 ## Build composition
 
-`ui-next/` builds a static site into `ui-next/dist/`. The Dockerfile has two final targets. `classic` is the default and serves the patched `jellyfin-web` build. `ui-next-test` serves the UI Next bundle at `/web` by setting `JELLYFIN_WEB_DIR=/jellyfin/ui-next`. The manual Docker workflow can publish the test target without changing the normal Jellyfin-version or `latest` tags.
+`ui-next/` builds a static site into `ui-next/dist/`. The Dockerfile's `ui-next` target is also the default target. It serves the bundle at `/web` by setting `JELLYFIN_WEB_DIR=/jellyfin/ui-next`. The standard Jellyfin-version and `latest` image tags both use this target.
 
 At runtime, UI Next routes supported Android video playback to the official Jellyfin Android app's injected `window.NativePlayer` bridge before starting its own PlaybackInfo negotiation or session tracker. The bridge verifies the requested server and user against Jellyfin before updating the app's `ApiClient`, then returns a readiness event. Jellyfin Android opens its native ExoPlayer screen and owns playback reporting; the WebView remains underneath and becomes visible again when the native player closes. Hosts without an enabled bridge or a matching account use UI Next's HTML player. webOS also uses the HTML player path, relying on the platform media pipeline through `<video>` with Hls.js fallback when native HLS is unavailable.
 
@@ -69,42 +68,34 @@ The `syncSession` readiness method is supplied by the companion Jellyfin Android
 
 ## UI Next end-to-end tests
 
-`ui-next/e2e/` runs Playwright Chromium against UI Next and a local fake Jellyfin HTTP server. The browser sends API requests to the app origin, and Vite forwards the configured Jellyfin paths to the fake server. The server generates deterministic PascalCase fixtures, serves the checked-in WebM and placeholder image, and records sanitized API requests. It writes only the method, path, and error type to stderr on internal failures. Vite 6 uses `server.proxy` as the default `preview.proxy`, so local dev and CI preview use the same proxy map. CI builds the static bundle, serves it with `vite preview`, and runs the same login, browse, details, detail-actions (More menu and `?item=` deep link), and playback-report tests. A second Playwright project emulates a webOS user agent at 1920×1080 to exercise the TV layout and D-pad focus paths. The suite does not start Docker or PostgreSQL.
+`ui-next/e2e/` runs Playwright Chromium against UI Next and a local fake Jellyfin HTTP server. The browser sends API requests to the app origin, and Vite forwards the configured Jellyfin paths to the fake server. The server generates deterministic PascalCase fixtures, serves the checked-in WebM and placeholder image, and records sanitized API requests. It writes only the method, path, and error type to stderr on internal failures. Vite 6 uses `server.proxy` as the default `preview.proxy`, so local dev and CI preview use the same proxy map. CI builds the static bundle, serves it with `vite preview`, and runs sign-in, browse, details, detail-actions, playback-report, profile-menu, and plugin-settings tests. A second Playwright project emulates a webOS user agent at 1920×1080 to exercise the TV layout and D-pad focus paths. The suite does not start Docker or PostgreSQL.
 
 ```mermaid
 flowchart LR
   patches[patches/*.patch]
   apply[apply-patches.sh]
   core[jellyfin submodule]
-  web[jellyfin-web submodule]
   ui[ui-next source]
   plugin[Jellyfin.Plugin.Pgsql]
   seerr[Jellyfin.Plugin.Seerr]
-  classic[classic Docker target]
-  test[ui-next-test Docker target]
   patches --> apply
   apply --> core
-  apply --> web
-  core --> classic
-  web --> classic
-  core --> test
-  ui --> test
-  plugin --> classic
-  plugin --> test
-  seerr --> classic
-  seerr --> test
+  ui --> image[UI Next Docker image]
+  core --> image
+  plugin --> image
+  seerr --> image
 ```
 
 During `docker build` ([`docker/Dockerfile`](../docker/Dockerfile)):
 
-1. Submodules are checked out at the pinned Jellyfin tag. Server and classic web stay on the **same** feature/release tag.
-2. Both targets compile the patched server and package the plugins.
-3. `classic` also applies and builds `jellyfin-web` patches, then injects the SSO login script. `ui-next-test` builds `ui-next` with Node and selects its output as `JELLYFIN_WEB_DIR`.
+1. The `jellyfin` server submodule is checked out at the pinned tag, and `scripts/apply-patches.sh` applies its server patches.
+2. Docker builds UI Next, including its tests, then builds the patched server and packages the plugins.
+3. The runtime stage copies the UI Next bundle to `/jellyfin/ui-next` and sets `JELLYFIN_WEB_DIR` to that path.
 4. The entrypoint wires `POSTGRES_*`, optional Redis, and optional SSO environment variables. It can also run SQLite-to-PostgreSQL migration.
 
-Push, release, scheduled, and default manual Docker workflow events build `classic` and publish the Jellyfin-version and `latest` tags. A manual `web_ui=ui-next` dispatch builds `ui-next-test` and publishes `ui-next-test` plus `ui-next-test-<JELLYFIN_VERSION>` only. It does not update stable tags. The plugin build and test workflows continue to apply server patches as before.
+Push, release, scheduled, and manual Docker workflow events build `ui-next` and publish the Jellyfin-version and `latest` tags. The plugin build and test workflows also apply server patches.
 
-**Migration sync and patches:** fork schema (playback activity, taste entities, people provider key, indexes, …) belongs in **dedicated** plugin migrations authored with the patch. Sync does **not** use `Update_*` to capture patch schema. On each version bump it rebases `patches/` onto the new tag, applies server patches, builds the solution (API surface check), optionally generates `Update_*` when core SQLite migrations advanced, then resets the submodule.
+**Migration sync and patches:** fork schema (playback activity, taste entities, people provider key, indexes, and other plugin-owned changes) belongs in dedicated plugin migrations authored with the patch. Sync does not use `Update_*` to capture patch schema. On each version bump it rebases server patches onto the new tag, applies them, builds the four plugin and test projects individually in Release, optionally generates `Update_*` when core SQLite migrations advance, then resets the server submodule.
 
 ## Plugin modules (high level)
 
@@ -121,7 +112,7 @@ Inside `Jellyfin.Plugin.Pgsql`:
 | `Admin/EmbyImport/` | Emby SQLite userdata import pipeline |
 | `Playback/` | Playback-reporting import helpers (where applicable) |
 
-`Jellyfin.Plugin.Seerr` talks to an external Seerr/Jellyseerr instance (URL + API key in plugin config) and is consumed by web search / Beyond Your Library patches.
+`Jellyfin.Plugin.Seerr` talks to an external Seerr/Jellyseerr instance (URL + API key in plugin config). UI Next uses it for search and Beyond Your Library.
 
 ### Candidate-first Resume selection
 
@@ -133,14 +124,14 @@ Inside `Jellyfin.Plugin.Pgsql`:
 
 ## Migration sync (summary)
 
-A scheduled workflow detects new Jellyfin releases, bumps refs (including **both** `jellyfin` and `jellyfin-web` to the same tag), rebases `patches/` onto that tag, verifies they apply, and opens a collaborator-only PR. Docker publish is blocked until sync state matches the target version; after merge, every push to `master` rebuilds and republishes the GHCR image for that pinned version. Failures open/update issues labeled `migration-sync-failure` (see [known issues](known-issues.md)).
+A scheduled workflow detects new Jellyfin releases, updates server and plugin references, rebases server patches onto that tag, verifies they apply, and opens a collaborator-only PR. Docker publish is blocked until sync state matches the target version; after merge, every push to `master` rebuilds and republishes the GHCR image for that pinned version. Failures open or update issues labeled `migration-sync-failure` (see [known issues](known-issues.md)).
 
-`Update_*` PostgreSQL migrations are generated **only when Jellyfin’s SQLite migration set advances**. Tag-only bumps (same latest core migration id) update version refs and submodule pointers, verify patches, and **build the solution** against patched jellyfin (so new interface members and other API breaks fail sync early), but skip EF. When an `Update_*` is needed, SQLite migrations are **not** copied — EF diffs the patched design-time model against the existing PG snapshot (upstream delta only, assuming fork schema already has dedicated migrations), then post-processes PG-specific fixes and validates against Postgres. Local sync starts `docker-compose.dev.yaml` postgres (not Jellyfin or Keycloak) if nothing is listening, **before** bumping refs or generating the migration, so a missing database does not generate `Update_*` and then roll it back. CI uses the workflow Postgres service instead.
+`Update_*` PostgreSQL migrations are generated only when Jellyfin's SQLite migration set advances. Tag-only bumps update version references and the server submodule pointer, verify patches, and build the four plugin and test projects individually in Release, but skip EF. When an `Update_*` is needed, EF diffs the patched design-time model against the PostgreSQL snapshot. It does not copy SQLite migrations. The sync then applies PostgreSQL-specific fixes and validates against PostgreSQL. EF commands use Release configuration. Local sync starts the `postgres` service from `docker-compose.dev.yaml` if nothing is listening, before it changes references or generates a migration. CI uses the workflow PostgreSQL service.
 
 Operator-facing sync and release steps: [README — Release flow](../README.md#release-flow).
 
 ## Submodule hygiene
 
-- Do **not** commit modified files inside `jellyfin/` or `jellyfin-web/`.
-- Always export diffs to `patches/` and reset submodule trees after editing.
-- Bumping Jellyfin versions means advancing **both** submodule pointers to the same tag.
+- Do not commit modified files inside `jellyfin/`.
+- Export server diffs to `patches/` and reset the submodule after editing.
+- The `jellyfin/` pointer, plugin package references, and migration sync state track the same Jellyfin release.

@@ -237,7 +237,7 @@ export const UNRATED_ITEM_KINDS: Array<[string, string]> = [
     [ 'Music', 'Music' ], [ 'Trailer', 'Trailers' ], [ 'Series', 'Shows' ],
 ];
 
-/** The permission set the SSO RBAC server patch accepts (mirrors jellyfin_web_rbac). */
+/** The permission set accepted by the SSO RBAC server patch. */
 export const RBAC_PERMISSIONS: Array<[string, string]> = [
     [ 'IsAdministrator', 'Administrator' ], [ 'EnableContentDeletion', 'Content deletion' ], [ 'EnableSubtitleManagement', 'Subtitle management' ],
     [ 'EnableLyricManagement', 'Lyric management' ], [ 'EnableLiveTvAccess', 'Live TV access' ], [ 'EnableLiveTvManagement', 'Live TV management' ],
