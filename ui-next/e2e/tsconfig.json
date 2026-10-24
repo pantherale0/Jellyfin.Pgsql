@@ -2,7 +2,7 @@
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "target": "ES2022",
-    "types": ["node"]
+    "types": ["node", "vite/client"]
   },
   "include": ["playwright.config.ts", "support/**/*.ts", "tests/**/*.ts", "fixtures/**/*.tsx"]
 }
