@@ -1304,6 +1304,7 @@ function App() {
     };
 
     const clearSignedInState = (showLogin = false) => {
+        clearImageCache();
         accountGeneration.invalidate();
         showGeneration.current++;
         episodeRequests.current = {};
@@ -2429,8 +2430,9 @@ function App() {
             if (view === 'player') {
                 const stage = document.querySelector<HTMLElement>('.player-stage');
                 const osdOpen = stage?.getAttribute('data-osd-open') === 'true';
+                const endScreenOpen = stage?.getAttribute('data-end-screen-open') === 'true';
                 const arrow = event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'ArrowUp' || event.key === 'ArrowDown';
-                if (isTvClient() && osdOpen && arrow && stage) {
+                if (isTvClient() && (osdOpen || endScreenOpen) && arrow && stage) {
                     const directions: Record<string, [number, number]> = {
                         ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1]
                     };

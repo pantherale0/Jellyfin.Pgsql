@@ -67,6 +67,125 @@ test('PLAY-09 codec profiles constrain H.264 level, bit depth and SDR/HDR ranges
     assert.equal(nothing.DirectPlayProfiles.filter(entry => entry.Type === 'Video').length, 0, 'unsupported codecs must not be advertised');
 });
 
+test('HLS buffer policy applies device memory tiers and bitrate-aware VOD limits', async () => {
+    const model = await import('../src/player-model.ts');
+    assert.equal(typeof model.hlsBufferPolicy, 'function', 'the HLS buffer policy must be a reusable model function');
+
+    const limits = model.hlsBufferPolicy;
+    const unavailable = limits({ deviceMemoryGiB: undefined, sourceBitrate: undefined, maxBitrate: undefined, isLive: false });
+    assert.deepEqual(unavailable, { maxBufferSize: 64 * 1024 * 1024, maxBufferLength: 30, maxMaxBufferLength: 30, backBufferLength: 90 });
+    const invalidMemory = limits({ deviceMemoryGiB: Number.NaN, sourceBitrate: 1_000_000, maxBitrate: undefined, isLive: false });
+    assert.equal(invalidMemory.maxBufferSize + invalidMemory.backBufferLength * 1_000_000 / 8, 64 * 1024 * 1024);
+    const lowMemory = limits({ deviceMemoryGiB: 2, sourceBitrate: 1_000_000, maxBitrate: undefined, isLive: false });
+    assert.equal(lowMemory.maxBufferSize + lowMemory.backBufferLength * 1_000_000 / 8, 64 * 1024 * 1024);
+
+    const middle = limits({ deviceMemoryGiB: 4, sourceBitrate: 8_000_000, maxBitrate: undefined, isLive: false });
+    assert.equal(middle.maxBufferSize, 44_217_728, 'reserve the bytes used by the back buffer');
+    assert.equal(middle.maxBufferLength, 30, 'the forward floor stays separate from its maximum');
+    assert.ok(Math.abs(middle.maxMaxBufferLength - 44.217728) < 0.000001, 'maxMaxBufferLength caps HLS.js effective forward buffering');
+    assert.equal(middle.backBufferLength, 90);
+    const hlsEffectiveTarget = (policy, levelBitrate) => Math.min(Math.max(8 * policy.maxBufferSize / levelBitrate, policy.maxBufferLength), policy.maxMaxBufferLength);
+    assert.ok(Math.abs(hlsEffectiveTarget(middle, 8_000_000) - 44.217728) < 0.000001);
+
+    const highMemory = limits({ deviceMemoryGiB: 8, sourceBitrate: 500_000, maxBitrate: undefined, isLive: false });
+    assert.equal(highMemory.maxBufferSize, 262_810_456);
+    assert.equal(highMemory.maxBufferLength, 30);
+    assert.equal(highMemory.maxMaxBufferLength, 600);
+    assert.equal(hlsEffectiveTarget(highMemory, 500_000), 600);
+
+    const highBitrate = limits({ deviceMemoryGiB: 2, sourceBitrate: 60_000_000, maxBitrate: undefined, isLive: false });
+    assert.ok(highBitrate.maxBufferLength > 0 && highBitrate.maxBufferLength < 30);
+    assert.ok(highBitrate.maxMaxBufferLength > 0 && highBitrate.maxMaxBufferLength < 30);
+    assert.equal(highBitrate.backBufferLength, 0);
+
+    const capped = limits({ deviceMemoryGiB: 4, sourceBitrate: 8_000_000, maxBitrate: 20_000_000, isLive: false });
+    assert.equal(capped.maxBufferLength, 30);
+    assert.equal(capped.maxBufferSize, 75_000_000);
+    assert.equal(capped.maxMaxBufferLength, 30);
+    assert.ok(Math.abs(capped.backBufferLength - 23.6870912) < 0.000001, 'the higher negotiated limit is the conservative estimate');
+
+    const manifestCapped = limits({ deviceMemoryGiB: 4, sourceBitrate: 8_000_000, maxBitrate: undefined, manifestBitrates: [ 8_000_000, 20_000_000 ], isLive: false });
+    assert.equal(manifestCapped.maxBufferSize, 75_000_000, 'the highest HLS variant must be included in the memory estimate');
+    assert.equal(manifestCapped.maxMaxBufferLength, 30);
+    assert.equal(hlsEffectiveTarget(manifestCapped, 20_000_000), 30);
+
+    const live = limits({ deviceMemoryGiB: 2, sourceBitrate: 8_000_000, maxBitrate: undefined, isLive: true });
+    assert.equal(live.maxBufferLength, 30, 'Live TV keeps the default forward target');
+    assert.equal(live.maxBufferSize, 30_000_000);
+    assert.equal(live.maxMaxBufferLength, 30, 'Live TV caps the effective HLS.js target at 30 seconds');
+    assert.equal(hlsEffectiveTarget(live, 1_000_000), 30, 'a low-bitrate live playlist cannot expand the forward target');
+
+    for (const sourceBitrate of [ 0, Number.NaN, Number.POSITIVE_INFINITY, -1 ]) {
+        const fallback = limits({ deviceMemoryGiB: 4, sourceBitrate, maxBitrate: undefined, isLive: false });
+        assert.equal(fallback.maxBufferLength, 30, 'invalid bitrate retains the safe default target');
+        assert.ok(Number.isFinite(fallback.maxBufferLength));
+    }
+});
+
+test('HLS manifest policy is applied before fragment loading and preserves the Live TV cap', async () => {
+    const { hlsBufferPolicy } = await import('../src/player-model.ts');
+    const { registerHlsManifestBufferPolicy } = await import('../src/hls-buffer-policy.ts');
+    const effectiveTarget = (policy, levelBitrate) => Math.min(Math.max(8 * policy.maxBufferSize / levelBitrate, policy.maxBufferLength), policy.maxMaxBufferLength);
+    const createManifestController = input => {
+        const config = { ...hlsBufferPolicy(input) };
+        let onManifestParsed = () => undefined;
+        registerHlsManifestBufferPolicy(config, listener => { onManifestParsed = listener; }, input);
+        return {
+            config,
+            loadManifest: levels => onManifestParsed(levels),
+            startLoad: () => ({ ...config })
+        };
+    };
+
+    const vod = createManifestController({ deviceMemoryGiB: 4, sourceBitrate: 8_000_000, maxBitrate: undefined, isLive: false });
+    vod.loadManifest([ { maxBitrate: 8_000_000 }, { maxBitrate: 20_000_000 } ]);
+    const vodAtStart = vod.startLoad();
+    assert.equal(vodAtStart.maxBufferSize, 75_000_000);
+    assert.equal(effectiveTarget(vodAtStart, 20_000_000), 30);
+
+    const live = createManifestController({ deviceMemoryGiB: 4, sourceBitrate: 8_000_000, maxBitrate: undefined, isLive: true });
+    live.loadManifest([ { maxBitrate: 1_000_000 } ]);
+    const liveAtStart = live.startLoad();
+    assert.ok(effectiveTarget(liveAtStart, 1_000_000) <= 30);
+});
+
+test('HLS player config disables interstitial playback and keeps the selected start position', async () => {
+    const { createHlsPlayerConfig } = await import('../src/hls-buffer-policy.ts');
+    const config = createHlsPlayerConfig({
+        deviceMemoryGiB: 4,
+        sourceBitrate: 8_000_000,
+        maxBitrate: undefined,
+        isLive: false
+    }, 123);
+
+    assert.equal(config.enableInterstitialPlayback, false, 'the dependency upgrade must not add interstitial playback by default');
+    assert.equal(config.startPosition, 123);
+    assert.equal(config.maxMaxBufferLength, 44.217728);
+});
+
+test('seek-bar projection clips buffered ranges and preserves gaps in the seek window', async () => {
+    const model = await import('../src/player-model.ts');
+    assert.equal(typeof model.seekBarProgress, 'function', 'the seek bar needs a reusable buffered-range projection');
+
+    const project = model.seekBarProgress;
+    assert.deepEqual(project({ start: 0, end: 100, live: false, seekable: true }, [ [ -10, 25 ], [ 50, 80 ], [ 95, 120 ] ], 40, 0), {
+        playedPercent: 40,
+        buffered: [ { leftPercent: 0, widthPercent: 25 }, { leftPercent: 50, widthPercent: 30 }, { leftPercent: 95, widthPercent: 5 } ]
+    });
+    assert.deepEqual(project({ start: 100, end: 200, live: true, seekable: true }, [ [ 10, 40 ], [ 60, 130 ] ], 140, 100), {
+        playedPercent: 40,
+        buffered: [ { leftPercent: 10, widthPercent: 30 }, { leftPercent: 60, widthPercent: 40 } ]
+    }, 'media-time ranges are shifted and clipped to the live seek window');
+    assert.deepEqual(project({ start: 0, end: 100, live: false, seekable: true }, [ [ Number.NaN, 30 ], [ 60, Number.POSITIVE_INFINITY ] ], 120, 0), {
+        playedPercent: 100,
+        buffered: []
+    }, 'invalid buffered endpoints are discarded');
+    assert.deepEqual(project({ start: 0, end: 0, live: true, seekable: false }, [ [ 0, 10 ] ], 0, 0), {
+        playedPercent: 0,
+        buffered: []
+    });
+});
+
 test('PLAY-07 subtitle profiles route text as external and image formats through burn-in', async () => {
     const { buildDeviceProfile } = await import('../src/device-profile.ts');
     const profile = buildDeviceProfile({ ...everything, userAgent: CHROME });
@@ -191,6 +310,31 @@ test('live playback watchdog resets on progress and ignores pause or seek', asyn
         reopenLiveStream: false,
         recoveryFailed: false
     }, 'VOD shows buffering but never opens a Live TV stream');
+});
+
+test('repeated playback stalls step down through bitrate choices and cap automatic retries', async () => {
+    const { playbackStallFallback } = await import('../src/player-model.ts');
+    const choices = [ 60_000_000, 20_000_000, 10_000_000, 8_000_000, 4_000_000, 2_000_000, 1_000_000, 0 ];
+    let state = { confirmedAtMs: [], attempts: 0 };
+    for (const nowMs of [ 1_000, 5_000 ]) {
+        const decision = playbackStallFallback(state, nowMs, undefined, 8_000_000, choices);
+        assert.equal(decision.maxBitrate, undefined);
+        state = decision.state;
+    }
+
+    const firstFallback = playbackStallFallback(state, 9_000, undefined, 8_000_000, choices);
+    assert.deepEqual(firstFallback, { state: { confirmedAtMs: [], attempts: 1 }, maxBitrate: 4_000_000 });
+
+    state = firstFallback.state;
+    for (const nowMs of [ 13_000, 17_000 ]) state = playbackStallFallback(state, nowMs, 4_000_000, 8_000_000, choices).state;
+    const secondFallback = playbackStallFallback(state, 21_000, 4_000_000, 8_000_000, choices);
+    assert.deepEqual(secondFallback, { state: { confirmedAtMs: [], attempts: 2 }, maxBitrate: 2_000_000 });
+
+    state = secondFallback.state;
+    for (const nowMs of [ 25_000, 29_000 ]) state = playbackStallFallback(state, nowMs, 2_000_000, 8_000_000, choices).state;
+    const exhausted = playbackStallFallback(state, 33_000, 2_000_000, 8_000_000, choices);
+    assert.equal(exhausted.maxBitrate, undefined);
+    assert.equal(exhausted.state.attempts, 2);
 });
 
 test('fresh live recovery omits the previous LiveStreamId while ordinary renegotiation retains it', async () => {

@@ -131,6 +131,18 @@ test('WebM route serves the checked-in media and supports a byte range', async (
     }
 });
 
+test('WebM route serves similar movie entries for recommendation playback', async () => {
+    const { server, baseUrl } = await openServer();
+    try {
+        const response = await fetch(`${baseUrl}/Videos/e2e-movie-2/stream?ApiKey=${FIXTURE_CREDENTIALS.accessToken}`);
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get('Content-Type'), 'video/webm');
+        assert.ok(Buffer.from(await response.arrayBuffer()).length > 100);
+    } finally {
+        await closeServer(server);
+    }
+});
+
 test('unsatisfiable media ranges return 416 and the resource size', async () => {
     const { server, baseUrl } = await openServer();
     try {

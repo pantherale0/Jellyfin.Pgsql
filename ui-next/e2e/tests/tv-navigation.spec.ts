@@ -89,3 +89,35 @@ test('the player OSD takes D-pad focus while playing', async ({ page }) => {
     await expect.poll(async () => (await tv.active()).inPlayerStage).toBe(true);
     await expect.poll(async () => (await tv.active()).focusable).toBe(true);
 });
+
+test('movie end recommendations take D-pad focus while the player controls are hidden', async ({ page }) => {
+    await resetFakeServer();
+    await page.route(url => url.pathname === '/Items/e2e-movie-1/Similar', route => route.fulfill({
+        json: {
+            Items: [
+                { Id: 'e2e-movie-2', Name: 'E2E Movie Two', Type: 'Movie', MediaType: 'Video', ImageTags: { Primary: 'movie-2-image' } },
+                { Id: 'e2e-movie-3', Name: 'E2E Movie Three', Type: 'Movie', MediaType: 'Video', ImageTags: { Primary: 'movie-3-image' } }
+            ],
+            TotalRecordCount: 2
+        }
+    }));
+
+    const tv = new TvPage(page);
+    await tv.open();
+    await tv.openLibrary('Movies');
+    await page.getByRole('button', { name: /^View E2E Movie One/ }).click();
+    await page.getByRole('button', { name: /^▶ Play$/ }).click();
+
+    const video = page.locator('video');
+    await expect.poll(() => video.evaluate(element => element instanceof HTMLVideoElement && !element.paused && element.currentTime > 0)).toBe(true);
+    await video.evaluate(element => {
+        if (!(element instanceof HTMLVideoElement)) throw new Error('The player video element is missing.');
+        element.dispatchEvent(new Event('ended'));
+    });
+
+    await expect(page.locator('.player-end-screen')).toBeVisible();
+    await expect(page.locator('.player-stage')).toHaveAttribute('data-osd-open', 'false');
+    await expect.poll(async () => (await tv.active()).label).toBe('Play E2E Movie Two');
+    await page.keyboard.press('ArrowRight');
+    await expect.poll(async () => (await tv.active()).label).toBe('Play E2E Movie Three');
+});

@@ -120,7 +120,8 @@ test('UX-03 a reload reopens the page recorded in this history entry', async () 
 
 test('UX-04 the player keeps keyboard focus on visible controls', () => {
     const player = source('player.tsx');
-    assert.match(player, /if \(event\.key === 'Tab' && rootRef\.current\) \{\s*\/\/ Keyboard focus must never land on controls the user cannot see\.\s*if \(!osdRef\.current\) \{\s*event\.preventDefault\(\);\s*reveal\(\);/);
+    assert.match(player, /if \(event\.key === 'Tab' && rootRef\.current\) \{\s*const endScreen = rootRef\.current\.querySelector<HTMLElement>\('\.player-end-screen'\);\s*if \(endScreen && !osdRef\.current\) \{\s*const controls = Array\.from\(endScreen\.querySelectorAll/);
+    assert.match(player, /\/\/ Keyboard focus must never land on controls the user cannot see\.\s*if \(!osdRef\.current\) \{\s*event\.preventDefault\(\);\s*reveal\(\);/);
     const main = source('main.tsx');
     assert.match(main, /if \(view === 'player'\) shell\.setAttribute\('inert', ''\)/, 'the background is inert, not just aria-hidden');
 });

@@ -8,10 +8,11 @@ import type { MediaItem } from './types';
 import { PlaybackReporter } from './playback-report';
 import type { PlaybackSessionSnapshot, PlaybackSessionTracker } from './playback-session';
 import { isHlsUrl } from './live-model';
+import { createHlsPlayerConfig, registerHlsManifestBufferPolicy } from './hls-buffer-policy';
 import { adjacentEpisodes } from './catalog-model';
 import { userMessage } from './ui-errors';
-import { advance, AUTOPLAY_COUNTDOWN_SECONDS, currentItem, cycleRepeat, playQueue, previous as previousInQueue, syncQueue, toggleShuffle, upcoming, upNext, type PlayQueue, type RepeatMode } from './play-queue';
-import { activeCue, adjacentChapterStart, chapterList, cueKey, currentChapterIndex, loadSegmentActions, rememberVersion, SEGMENT_LABELS, segmentDecision, skipPromptVisible, type Chapter, clampSeek, classifyPlayerKey, cueBox, describePlayMethod, describeTranscode, formatBitrate, initialAudioIndex, initialSubtitleIndex, pickTrickplay, planAudioSelection, planSubtitleSelection, playbackTitle, rangesOf, seasonLabel, seekBounds, sessionPlayMethod, streamKind, streamLabel, timelineCues, trickplayFrame, type PlaybackChoice, type PlayMethod, type SessionTranscodingInfo, type TimelineCue, type TrickplayLevel, type TrickplayPreview } from './player-model';
+import { advance, AUTOPLAY_COUNTDOWN_SECONDS, currentItem, cycleRepeat, playQueue, previous as previousInQueue, queueable, syncQueue, toggleShuffle, upcoming, upNext, type PlayQueue, type RepeatMode } from './play-queue';
+import { activeCue, adjacentChapterStart, chapterList, cueKey, currentChapterIndex, loadSegmentActions, playbackStallFallback, rememberVersion, seekBarProgress, SEGMENT_LABELS, segmentDecision, skipPromptVisible, type Chapter, clampSeek, classifyPlayerKey, cueBox, describePlayMethod, describeTranscode, formatBitrate, initialAudioIndex, initialSubtitleIndex, pickTrickplay, planAudioSelection, planSubtitleSelection, playbackTitle, rangesOf, seasonLabel, seekBounds, sessionPlayMethod, streamKind, streamLabel, timelineCues, trickplayFrame, type HlsBufferPolicyInput, type PlaybackChoice, type PlaybackStallFallbackState, type PlayMethod, type SessionTranscodingInfo, type TimelineCue, type TrickplayLevel, type TrickplayPreview } from './player-model';
 import { BITRATE_CHOICES, loadPlaybackPreferences, PLAYER_SPEEDS, savePlaybackPreferences } from './device-profile';
 import { captionCss, loadCaptionStyle, primaryCueLine, SECONDARY_TRACK_LABEL } from './caption-style';
 import { disableHostFullscreen, enableHostFullscreen, hasNativeShell, hideHostMediaSession, hostMediaSessionInfo, hostSupports, updateHostMediaSession, updateHostVolume } from './native-host';
@@ -33,7 +34,10 @@ interface PlayerProps {
 }
 
 type PlayerMenu = 'episodes' | 'chapters' | 'captions' | 'settings' | null;
+interface PlayerMenuPosition { left: number; bottom: number; width: number; maxHeight: number }
 type AspectFit = 'contain' | 'cover' | 'fill';
+
+const BUFFERING_INDICATOR_DELAY_MS = 1200;
 type PlayerBufferState = 'ready' | 'buffering' | 'reconnecting';
 
 /** Hugeicons (MIT free pack) icon data plus a renderer so every player control uses one consistent stroke set. */
@@ -239,6 +243,47 @@ function EpisodeThumb({ api, item }: { api: JellyfinApi; item: MediaItem }) {
 }
 
 const REPEAT_LABELS: Record<RepeatMode, string> = { off: t('Repeat off'), all: t('Repeat queue'), one: t('Repeat this title') };
+const MOVIE_END_RECOMMENDATION_LIMIT = 4;
+
+function PlayerEndRecommendationCard({ api, item, onPlay }: { api: JellyfinApi; item: MediaItem; onPlay: (item: MediaItem) => void }) {
+    const imageKey = api.imageUrl(item, 'Primary', 480, 82);
+    const [ imageUrl, setImageUrl ] = useState(() => imageKey ? peekCachedImage(imageKey) : '');
+    const held = useRef('');
+    useEffect(() => {
+        let active = true;
+        const bag: { cancel?: () => void } = {};
+        const apply = (url: string) => {
+            if (!active || !url) return;
+            if (held.current && held.current !== imageKey) releaseCachedImage(held.current);
+            held.current = imageKey;
+            retainCachedImage(imageKey);
+            setImageUrl(url);
+        };
+        if (imageKey) {
+            const cached = peekCachedImage(imageKey);
+            if (cached) apply(cached);
+            else void api.loadImageUrl(imageKey, bag).then(apply);
+        }
+        return () => {
+            active = false;
+            bag.cancel?.();
+            if (held.current) releaseCachedImage(held.current);
+            held.current = '';
+        };
+    }, [ api, imageKey ]);
+
+    return <button data-focusable="true" class="player-end-card" type="button" aria-label={t('Play {0}', item.Name)} onClick={() => onPlay(item)}>
+        <span class="player-end-card-art">
+            {imageUrl ? <img src={imageUrl} alt="" loading="lazy" decoding="async" onError={() => {
+                if (held.current) releaseCachedImage(held.current);
+                held.current = '';
+                setImageUrl('');
+            }} /> : <span class="player-end-card-fallback" aria-hidden="true">{item.Name.slice(0, 1).toUpperCase()}</span>}
+        </span>
+        <strong>{item.Name}</strong>
+        <small>{[ item.ProductionYear, item.RunTimeTicks ? `${Math.round(item.RunTimeTicks / 600_000_000)} min` : '' ].filter(Boolean).join(' · ')}</small>
+    </button>;
+}
 
 export function Player({ url, item, playback, playbackSession, sessionOwner, api, tvClient, onBack, onError, onPlayItem, onPlaybackReported, onRenegotiate }: PlayerProps) {
     const rootRef = useRef<HTMLDivElement>(null);
@@ -248,6 +293,8 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     const bufferStateRef = useRef<PlayerBufferState>('buffering');
     const progressWatchRef = useRef<PlaybackProgressWatch>({ lastPositionSeconds: 0, lastProgressAtMs: Date.now(), liveReopenAttempted: false });
     const progressWatchItemRef = useRef(item?.Id || '');
+    const bufferingTimerRef = useRef<number | undefined>(undefined);
+    const playbackStallFallbackRef = useRef<PlaybackStallFallbackState>({ confirmedAtMs: [], attempts: 0 });
     const reopenInFlightRef = useRef(false);
     const renegotiateRef = useRef<(options: PlaybackRenegotiationOptions, onFailure: (message: string) => void) => Promise<boolean>>(async () => false);
     const reopenLiveStreamRef = useRef<() => Promise<boolean>>(async () => false);
@@ -267,6 +314,8 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     const pausedRef = useRef(false);
     const osdRef = useRef(true);
     const menuRef = useRef<PlayerMenu>(null);
+    const captionsButtonRef = useRef<HTMLButtonElement>(null);
+    const settingsButtonRef = useRef<HTMLButtonElement>(null);
     const onBackRef = useRef(onBack);
     const onErrorRef = useRef(onError);
     const onPlayItemRef = useRef(onPlayItem);
@@ -288,6 +337,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     const [ currentTime, setCurrentTime ] = useState(0);
     const [ duration, setDuration ] = useState(0);
     const [ liveRanges, setLiveRanges ] = useState<Array<[number, number]>>([]);
+    const [ bufferedRanges, setBufferedRanges ] = useState<Array<[number, number]>>([]);
     const [ paused, setPaused ] = useState(true);
     const [ muted, setMuted ] = useState(false);
     const [ volume, setVolume ] = useState(preferences.volume);
@@ -299,6 +349,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     const fullscreenSupported = useRef(hostSupports('fullscreenchange')).current;
     const [ playbackError, setPlaybackError ] = useState('');
     const [ menu, setMenu ] = useState<PlayerMenu>(null);
+    const [ menuPosition, setMenuPosition ] = useState<PlayerMenuPosition | null>(null);
     const [ seasonList, setSeasonList ] = useState<MediaItem[]>([]);
     const [ episodesBySeason, setEpisodesBySeason ] = useState<Record<string, MediaItem[]>>({});
     const [ episodeState, setEpisodeState ] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -306,8 +357,14 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     const [ neighbours, setNeighbours ] = useState<{ previous: MediaItem | null; next: MediaItem | null }>({ previous: null, next: null });
     const [ queue, setQueue ] = useState<PlayQueue>(() => playQueue.get());
     const [ upNextCard, setUpNextCard ] = useState<{ item: MediaItem; queue: PlayQueue; source: 'queue' | 'episode'; remaining: number } | null>(null);
+    const [ movieEndScreenItemId, setMovieEndScreenItemId ] = useState<string | null>(null);
+    const [ movieEndRecommendations, setMovieEndRecommendations ] = useState<MediaItem[]>([]);
+    const [ movieEndRecommendationState, setMovieEndRecommendationState ] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+    const movieEndScreenOpen = item?.Type === 'Movie' && movieEndScreenItemId === item.Id;
     const endedRef = useRef<() => void>(() => undefined);
     const upNextRef = useRef(false);
+    const movieEndScreenOpenRef = useRef(false);
+    const endScreenSessionRef = useRef(playbackSession?.key);
     const [ cues, setCues ] = useState<TimelineCue[]>([]);
     const [ chapters, setChapters ] = useState<Chapter[]>([]);
     const segmentActions = useRef(loadSegmentActions()).current;
@@ -355,10 +412,23 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     const styledSubtitle = selectedSubtitle && /^(ass|ssa)$/i.test(selectedSubtitle.Codec || '') && subtitlePlan?.action === 'track';
     const hoverFrame = seekHover && trickplay ? trickplayFrame(trickplay.level, seekHover.time) : null;
     const hoverTile = hoverFrame && api && item && playback ? api.trickplayTileUrl(item.Id, trickplay?.level.Width || hoverFrame.width, hoverFrame.tileIndex, trickplay?.sourceId || playback.mediaSourceId) : '';
+    const seekProgress = seekBarProgress(bounds, bufferedRanges, currentTime, mediaRef.current.offset);
+    const refreshBufferedRanges = useCallback((video: HTMLVideoElement) => {
+        const nextRanges = rangesOf(video.buffered);
+        setBufferedRanges(current => {
+            if (current.length !== nextRanges.length) return nextRanges;
+            const unchanged = current.every((range, index) => {
+                const next = nextRanges[index];
+                return next !== undefined && range[0] === next[0] && range[1] === next[1];
+            });
+            return unchanged ? current : nextRanges;
+        });
+    }, []);
     onBackRef.current = onBack;
     onErrorRef.current = onError;
     onPlayItemRef.current = onPlayItem;
     upNextRef.current = Boolean(upNextCard);
+    movieEndScreenOpenRef.current = movieEndScreenOpen;
     const queueCurrent = currentItem(queue)?.Id === item?.Id ? currentItem(queue) : null;
     const queueNext = queueCurrent ? advance(queue, true) : null;
     const queuePrevious = queueCurrent ? previousInQueue(queue) : null;
@@ -368,9 +438,38 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
         setUpNextCard(null);
         onPlayItemRef.current(step.item.Id === item?.Id ? { ...step.item, UserData: { ...step.item.UserData, PlaybackPositionTicks: 0 } } : step.item);
     };
+    const restartMovie = () => {
+        if (!item) return;
+        setMovieEndScreenItemId(null);
+        setMovieEndRecommendations([]);
+        setMovieEndRecommendationState('idle');
+        onPlayItemRef.current({ ...item, UserData: { ...item.UserData, PlaybackPositionTicks: 0 } });
+    };
+    const clearHideTimer = () => {
+        if (hideTimer.current) {
+            window.clearTimeout(hideTimer.current);
+            hideTimer.current = undefined;
+        }
+    };
     endedRef.current = () => {
         const next = upNext(playQueue.get(), { autoplay: api?.session.user.Configuration?.EnableNextEpisodeAutoPlay, nextEpisode: neighbours.next, current: item });
-        if (next) setUpNextCard({ ...next, remaining: AUTOPLAY_COUNTDOWN_SECONDS });
+        if (next) {
+            setUpNextCard({ ...next, remaining: AUTOPLAY_COUNTDOWN_SECONDS });
+            return;
+        }
+        if (item?.Type !== 'Movie') return;
+        clearHideTimer();
+        if (clickTimer.current) {
+            window.clearTimeout(clickTimer.current);
+            clickTimer.current = undefined;
+        }
+        setPaused(true);
+        pausedRef.current = true;
+        setOsdOpen(false);
+        osdRef.current = false;
+        setMovieEndScreenItemId(item.Id);
+        setMovieEndRecommendations([]);
+        setMovieEndRecommendationState('loading');
     };
     onReportedRef.current = onPlaybackReported;
     onRenegotiateRef.current = onRenegotiate;
@@ -379,6 +478,35 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     subtitleIndexRef.current = subtitleIndex;
     tvRef.current = tvClient;
     pausedRef.current = paused;
+    const clearBufferingTimer = () => {
+        if (bufferingTimerRef.current === undefined) return;
+        window.clearTimeout(bufferingTimerRef.current);
+        bufferingTimerRef.current = undefined;
+    };
+    const showConfirmedBuffering = () => {
+        clearBufferingTimer();
+        if (bufferStateRef.current !== 'ready') return;
+        setBufferState('buffering');
+        const fallback = playbackStallFallback(
+            playbackStallFallbackRef.current,
+            Date.now(),
+            playback?.maxBitrate,
+            playback?.bitrate,
+            BITRATE_CHOICES.map(choice => choice.value)
+        );
+        playbackStallFallbackRef.current = fallback.state;
+        if (fallback.maxBitrate !== undefined) {
+            void renegotiateRef.current({ forceTranscode: true, maxBitrate: fallback.maxBitrate }, message => setPlaybackError(message));
+        }
+    };
+    const scheduleBufferingIndicator = () => {
+        if (bufferStateRef.current !== 'ready' || bufferingTimerRef.current !== undefined) return;
+        bufferingTimerRef.current = window.setTimeout(() => {
+            bufferingTimerRef.current = undefined;
+            if (videoRef.current?.paused || bufferStateRef.current !== 'ready') return;
+            showConfirmedBuffering();
+        }, BUFFERING_INDICATOR_DELAY_MS);
+    };
     observeProgressRef.current = video => {
         if (reopenInFlightRef.current) return;
         const previous = progressWatchRef.current;
@@ -392,11 +520,14 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
         });
         progressWatchRef.current = decision.watch;
         if (video.paused || video.seeking) {
+            clearBufferingTimer();
             if (bufferStateRef.current !== 'reconnecting') setBufferState('ready');
             return;
         }
-        if (progressed) setBufferState('ready');
-        else if (decision.buffering && bufferStateRef.current === 'ready') setBufferState('buffering');
+        if (progressed) {
+            clearBufferingTimer();
+            setBufferState('ready');
+        } else if (decision.buffering) scheduleBufferingIndicator();
         if (decision.recoveryFailed && bufferStateRef.current !== 'ready') {
             setBufferState('ready');
             setPlaybackError(t('Live TV stopped advancing after reconnecting.'));
@@ -407,14 +538,11 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     osdRef.current = osdOpen;
     offsetRef.current = subtitleOffset;
 
-    const clearHideTimer = () => {
-        if (hideTimer.current) {
-            window.clearTimeout(hideTimer.current);
-            hideTimer.current = undefined;
-        }
-    };
-
     const reveal = () => {
+        if (movieEndScreenOpenRef.current) {
+            clearHideTimer();
+            return;
+        }
         if (!osdRef.current) {
             setOsdOpen(true);
             osdRef.current = true;
@@ -444,6 +572,30 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
         setMenu(value);
         reveal();
     };
+
+    useLayoutEffect(() => {
+        const anchor = menu === 'captions' ? captionsButtonRef.current : menu === 'settings' ? settingsButtonRef.current : null;
+        if (!anchor) {
+            setMenuPosition(null);
+            return;
+        }
+        const updatePosition = () => {
+            const bounds = anchor.getBoundingClientRect();
+            const margin = 16;
+            const viewportWidth = window.innerWidth;
+            const width = Math.min(320, viewportWidth * .78, Math.max(0, viewportWidth - margin * 2));
+            const left = Math.max(margin, Math.min(bounds.right - width, viewportWidth - width - margin));
+            const maxHeight = Math.max(0, Math.min(420, window.innerHeight * .52, bounds.top - margin));
+            setMenuPosition({ left, bottom: window.innerHeight - bounds.top + 6, width, maxHeight });
+        };
+        updatePosition();
+        window.addEventListener('resize', updatePosition);
+        window.visualViewport?.addEventListener('resize', updatePosition);
+        return () => {
+            window.removeEventListener('resize', updatePosition);
+            window.visualViewport?.removeEventListener('resize', updatePosition);
+        };
+    }, [ menu ]);
 
     const closeMenu = () => {
         menuRef.current = null;
@@ -503,11 +655,13 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     const renegotiate = async (options: PlaybackRenegotiationOptions, onFailure: (message: string) => void): Promise<boolean> => {
         const request = onRenegotiateRef.current;
         if (!request || !playback) {
+            clearBufferingTimer();
             setBufferState('ready');
             onFailure(t('This player cannot request a new stream here.'));
             return false;
         }
         const position = mediaRef.current.position;
+        clearBufferingTimer();
         setSwitching(true);
         setBufferState(options.reopenLiveStream ? 'reconnecting' : 'buffering');
         try {
@@ -534,6 +688,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     reopenLiveStreamRef.current = async () => {
         if (reopenInFlightRef.current) return false;
         if (!api || !(playback?.isLive || item?.Type === 'TvChannel') || !playbackSession) {
+            clearBufferingTimer();
             setBufferState('ready');
             setPlaybackError(t('The live stream could not be reopened.'));
             return false;
@@ -545,6 +700,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
             lastProgressAtMs: Date.now(),
             liveReopenAttempted: true
         };
+        clearBufferingTimer();
         setBufferState('reconnecting');
         hlsRef.current?.destroy();
         hlsRef.current = null;
@@ -711,6 +867,10 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                 window.removeEventListener('pointerup', releaseRef.current);
                 window.removeEventListener('pointercancel', releaseRef.current);
             }
+            if (bufferingTimerRef.current !== undefined) {
+                window.clearTimeout(bufferingTimerRef.current);
+                bufferingTimerRef.current = undefined;
+            }
             if (currentFullscreenElement() === rootRef.current) exitStageFullscreen();
             if (video) {
                 rememberPosition(video);
@@ -728,6 +888,10 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
         mediaRef.current = mediaProgress(playback, item);
         const itemChanged = progressWatchItemRef.current !== (item?.Id || '');
         progressWatchItemRef.current = item?.Id || '';
+        clearBufferingTimer();
+        if (itemChanged) {
+            playbackStallFallbackRef.current = { confirmedAtMs: [], attempts: 0 };
+        }
         progressWatchRef.current = {
             lastPositionSeconds: videoRef.current?.currentTime || 0,
             lastProgressAtMs: Date.now(),
@@ -737,6 +901,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
         setCurrentTime(mediaRef.current.position);
         setDuration(0);
         setLiveRanges([]);
+        setBufferedRanges([]);
         setDiagnostics(null);
         setPlaybackError('');
         setSeekHover(null);
@@ -750,6 +915,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
         video.removeAttribute('src');
         const fail = () => {
             if (cancelled || !aliveRef.current) return;
+            clearBufferingTimer();
             reporterRef.current?.stop(true);
             hlsRef.current?.destroy();
             hlsRef.current = null;
@@ -765,12 +931,24 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                 fail();
                 return;
             }
-            const instance = new Hls({ startPosition: mediaRef.current.pendingStart > 0 ? mediaRef.current.pendingStart : -1 });
+            const bufferPolicyInput: HlsBufferPolicyInput = {
+                deviceMemoryGiB: Reflect.get(navigator, 'deviceMemory'),
+                sourceBitrate: playback?.bitrate,
+                maxBitrate: playback?.maxBitrate,
+                isLive: Boolean(playback?.isLive || item?.Type === 'TvChannel')
+            };
+            const instance = new Hls(createHlsPlayerConfig(
+                bufferPolicyInput,
+                mediaRef.current.pendingStart > 0 ? mediaRef.current.pendingStart : -1
+            ));
             const recoveryAttempts: HlsRecoveryAttempts = { networkRetries: 0, mediaRetries: 0 };
             hlsRef.current = instance;
+            instance.on(Hls.Events.FRAG_BUFFERED, () => {
+                if (!cancelled) refreshBufferedRanges(video);
+            });
             instance.on(Hls.Events.ERROR, (_event, data) => {
                 if (cancelled || !aliveRef.current || reopenInFlightRef.current) return;
-                if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR && !video.paused) setBufferState('buffering');
+                if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR && !video.paused) scheduleBufferingIndicator();
                 const kind = data.type === Hls.ErrorTypes.NETWORK_ERROR
                     ? 'network'
                     : data.type === Hls.ErrorTypes.MEDIA_ERROR ? 'media' : 'other';
@@ -806,6 +984,11 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                 }
                 }
             });
+            registerHlsManifestBufferPolicy(instance.config, listener => {
+                instance.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
+                    if (!cancelled) listener(data.levels);
+                });
+            }, bufferPolicyInput);
             instance.on(Hls.Events.MANIFEST_PARSED, () => {
                 if (cancelled) return;
                 void video.play().catch(error => {
@@ -823,7 +1006,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
             hlsRef.current?.destroy();
             hlsRef.current = null;
         };
-    }, [ url, hlsPlayback, playbackSession?.key, playback?.isLive, item?.Type, setBufferState ]);
+    }, [ url, hlsPlayback, playbackSession?.key, playback?.isLive, playback?.bitrate, playback?.maxBitrate, item?.Type, refreshBufferedRanges, setBufferState ]);
 
     useEffect(() => {
         const video = videoRef.current;
@@ -1046,8 +1229,18 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     useEffect(() => playQueue.subscribe(setQueue), []);
     useEffect(() => {
         setUpNextCard(null);
+        setMovieEndScreenItemId(null);
+        setMovieEndRecommendations([]);
+        setMovieEndRecommendationState('idle');
         playQueue.set(syncQueue(playQueue.get(), item));
     }, [ item?.Id ]);
+    useEffect(() => {
+        if (endScreenSessionRef.current === playbackSession?.key) return;
+        endScreenSessionRef.current = playbackSession?.key;
+        setMovieEndScreenItemId(null);
+        setMovieEndRecommendations([]);
+        setMovieEndRecommendationState('idle');
+    }, [ playbackSession?.key ]);
     const upNextOpen = Boolean(upNextCard);
     useEffect(() => {
         if (!upNextOpen) return;
@@ -1058,6 +1251,36 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     useEffect(() => {
         if (upNextCard && upNextCard.remaining <= 0) playQueued(upNextCard);
     }, [ upNextCard?.remaining ]);
+    useEffect(() => {
+        if (!movieEndScreenOpen || !item) return;
+        let active = true;
+        const apply = (items: MediaItem[]) => {
+            if (!active) return;
+            const seen = new Set([ item.Id ]);
+            const suggestions = items.filter(candidate => {
+                if (!candidate.Id || seen.has(candidate.Id) || !queueable(candidate)) return false;
+                seen.add(candidate.Id);
+                return true;
+            }).slice(0, MOVIE_END_RECOMMENDATION_LIMIT);
+            setMovieEndRecommendations(suggestions);
+            setMovieEndRecommendationState('ready');
+        };
+        if (!api) {
+            setMovieEndRecommendationState('error');
+        } else {
+            void api.getSimilarItems(item.Id, 12).then(apply).catch(() => {
+                if (active) setMovieEndRecommendationState('error');
+            });
+        }
+        return () => { active = false; };
+    }, [ api, item?.Id, movieEndScreenOpen ]);
+    useEffect(() => {
+        if (!movieEndScreenOpen) return;
+        const frame = window.requestAnimationFrame(() => {
+            rootRef.current?.querySelector<HTMLElement>('.player-end-screen .player-end-card, .player-end-screen .player-end-replay')?.focus();
+        });
+        return () => window.cancelAnimationFrame(frame);
+    }, [ movieEndScreenOpen, movieEndRecommendationState ]);
 
     const promptOutsideOsd = skipPromptShown && !osdOpen;
     useEffect(() => {
@@ -1264,6 +1487,17 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.ctrlKey || event.altKey || event.metaKey) return;
             if (event.key === 'Tab' && rootRef.current) {
+                const endScreen = rootRef.current.querySelector<HTMLElement>('.player-end-screen');
+                if (endScreen && !osdRef.current) {
+                    const controls = Array.from(endScreen.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled)')).filter(el => el.getClientRects().length);
+                    if (controls.length) {
+                        const index = controls.indexOf(document.activeElement as HTMLElement);
+                        if (index < 0) { event.preventDefault(); controls[0].focus(); return; }
+                        if (event.shiftKey && index === 0) { event.preventDefault(); controls[controls.length - 1].focus(); return; }
+                        if (!event.shiftKey && index === controls.length - 1) { event.preventDefault(); controls[0].focus(); return; }
+                        return;
+                    }
+                }
                 // Keyboard focus must never land on controls the user cannot see.
                 if (!osdRef.current) {
                     event.preventDefault();
@@ -1301,6 +1535,8 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
             }
             const action = classifyPlayerKey(key, event.keyCode);
             const onSkipPrompt = event.target instanceof Element && Boolean(event.target.closest('.player-skip-prompt, .player-up-next'));
+            const inEndScreen = event.target instanceof Element && Boolean(event.target.closest('.player-end-screen'));
+            if (inEndScreen && (action === 'select' || key === ' ' || key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown')) return;
             if (action === 'select' && !osdRef.current && !onSkipPrompt) {
                 event.preventDefault();
                 reveal();
@@ -1396,7 +1632,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
 
     const onPointerDown = (event: PointerEvent) => {
         const target = event.target instanceof Element ? event.target : null;
-        if (target?.closest('.player-osd, .player-drawer, .player-menu-scrim, .player-error')) {
+        if (target?.closest('.player-osd, .player-drawer, .player-menu-scrim, .player-error, .player-end-screen')) {
             reveal();
             return;
         }
@@ -1424,7 +1660,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
 
     const onDoubleClick = (event: MouseEvent) => {
         const target = event.target instanceof Element ? event.target : null;
-        if (target?.closest('.player-osd, .player-drawer, .player-error')) return;
+        if (target?.closest('.player-osd, .player-drawer, .player-error, .player-end-screen')) return;
         if (clickTimer.current) {
             window.clearTimeout(clickTimer.current);
             clickTimer.current = undefined;
@@ -1459,6 +1695,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
         class="player-stage"
         tabIndex={-1}
         data-osd-open={osdOpen ? 'true' : 'false'}
+        data-end-screen-open={movieEndScreenOpen ? 'true' : 'false'}
         data-menu-open={menu ? 'true' : 'false'}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -1473,8 +1710,10 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
             autoPlay
             playsInline
             onEmptied={() => { if (mediaRef.current.loaded) mediaRef.current.frozen = true; }}
+            onProgress={event => refreshBufferedRanges(event.currentTarget as HTMLVideoElement)}
             onTimeUpdate={event => {
                 const video = event.target as HTMLVideoElement;
+                refreshBufferedRanges(video);
                 observeProgressRef.current(video);
                 rememberPosition(video);
                 if (!Number.isFinite(video.duration)) setLiveRanges(rangesOf(video.seekable));
@@ -1485,6 +1724,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                 const video = event.target as HTMLVideoElement;
                 const media = mediaRef.current;
                 media.loaded = true;
+                refreshBufferedRanges(video);
                 applyStartPosition(video);
                 rememberPosition(video);
                 setDuration(itemPosition(video.duration || 0, media.offset));
@@ -1499,16 +1739,25 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
             }}
             onCanPlay={event => {
                 const video = event.currentTarget as HTMLVideoElement;
-                if (video.paused && bufferStateRef.current !== 'reconnecting') setBufferState('ready');
+                refreshBufferedRanges(video);
+                if (video.paused && bufferStateRef.current !== 'reconnecting') {
+                    clearBufferingTimer();
+                    setBufferState('ready');
+                }
             }}
-            onDurationChange={event => setDuration(itemPosition((event.target as HTMLVideoElement).duration || 0, mediaRef.current.offset))}
+            onDurationChange={event => {
+                const video = event.target as HTMLVideoElement;
+                refreshBufferedRanges(video);
+                setDuration(itemPosition(video.duration || 0, mediaRef.current.offset));
+            }}
             onPlay={() => { setPaused(false); pausedRef.current = false; reveal(); }}
-            onPlaying={() => { setPaused(false); pausedRef.current = false; setBufferState('ready'); setPlaybackError(''); reveal(); }}
-            onWaiting={event => { if (!(event.currentTarget as HTMLVideoElement).paused && !playbackError) setBufferState('buffering'); }}
-            onStalled={event => { if (!(event.currentTarget as HTMLVideoElement).paused && !playbackError) setBufferState('buffering'); }}
+            onPlaying={() => { clearBufferingTimer(); setPaused(false); pausedRef.current = false; setBufferState('ready'); setPlaybackError(''); reveal(); }}
+            onWaiting={event => { if (!(event.currentTarget as HTMLVideoElement).paused && !playbackError) scheduleBufferingIndicator(); }}
+            onStalled={event => { if (!(event.currentTarget as HTMLVideoElement).paused && !playbackError) scheduleBufferingIndicator(); }}
             onPause={() => {
                 setPaused(true);
                 pausedRef.current = true;
+                clearBufferingTimer();
                 if (bufferStateRef.current !== 'reconnecting') setBufferState('ready');
                 reveal();
             }}
@@ -1520,6 +1769,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
             }}
             onError={() => {
                 if (!aliveRef.current || hlsPlayback || reopenInFlightRef.current) return;
+                clearBufferingTimer();
                 setPaused(true);
                 pausedRef.current = true;
                 if (playback?.isLive && !progressWatchRef.current.liveReopenAttempted) {
@@ -1548,6 +1798,27 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
         <style>{captionCss(captionStyle)}</style>
         {!osdOpen && skipPromptShown && skip && <div class="player-skip-prompt"><button data-focusable="true" class="player-skip" type="button" onClick={() => seekTo(skip.end)}>{t(skip.label)}</button></div>}
         {skipNote && <p class="player-skip-note" role="status">{skipNote}</p>}
+        {movieEndScreenOpen && item && <div class="player-end-screen" role="dialog" aria-modal="true" aria-label={t('Your next watch')} data-focusable="scope">
+            <div class="player-end-content">
+                <div class="player-end-heading">
+                    <div>
+                        <p class="player-end-eyebrow">{t('Your next watch')}</p>
+                        <h2>{playbackTitle(item)}</h2>
+                    </div>
+                    <p class="player-end-section-title">{t('More like this')}</p>
+                </div>
+                {movieEndRecommendationState === 'loading' && <p class="player-end-status" role="status" aria-live="polite">{t('Loading recommendations from your library…')}</p>}
+                {movieEndRecommendationState === 'error' && <p class="player-end-status" role="status">{t('Recommendations could not load.')}</p>}
+                {movieEndRecommendationState === 'ready' && movieEndRecommendations.length === 0 && <p class="player-end-status">{t('No similar titles are available right now.')}</p>}
+                {movieEndRecommendations.length > 0 && <div class="player-end-recommendations">
+                    {api && movieEndRecommendations.map(recommendation => <PlayerEndRecommendationCard key={recommendation.Id} api={api} item={recommendation} onPlay={next => onPlayItemRef.current(next)} />)}
+                </div>}
+                <div class="player-end-actions">
+                    <button data-focusable="true" class="button primary player-end-replay" type="button" onClick={restartMovie}>{t('Replay')}</button>
+                    <button data-focusable="true" class="button secondary" type="button" onClick={() => onBackRef.current()}>{t('Back')}</button>
+                </div>
+            </div>
+        </div>}
         {upNextCard && <div class="player-up-next" role="dialog" aria-label={t('Up next')} data-focusable="scope">
             {api && <img src={api.imageUrl(upNextCard.item, 'Primary', 320)} alt="" />}
             <div>
@@ -1600,6 +1871,10 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                     }}
                     onPointerLeave={() => { if (!draggingRef.current) setSeekHover(null); }}
                 >
+                    <div class="player-seek-buffer" aria-hidden="true">
+                        {seekProgress.buffered.map((range, index) => <span key={`buffered-${index}`} class="player-buffered-range" style={{ left: `${range.leftPercent}%`, width: `${range.widthPercent}%` }} />)}
+                        <span class="player-played-progress" style={{ width: `${seekProgress.playedPercent}%` }} />
+                    </div>
                     <div class="player-cues" aria-hidden="true">
                         {cues.map(cue => {
                             const box = bounds.live ? null : cueBox(cue, duration);
@@ -1661,8 +1936,8 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                 {queueCurrent && queue.order.length > 1 && <button data-focusable={focusable} class={queue.shuffle ? 'player-control active' : 'player-control'} type="button" aria-label={t('Shuffle queue')} aria-pressed={queue.shuffle} onClick={() => playQueue.update(current => toggleShuffle(current))}><PlayerIcon name="shuffle" /></button>}
                 {queueCurrent && <button data-focusable={focusable} class={queue.repeat !== 'off' ? 'player-control active' : 'player-control'} type="button" aria-label={REPEAT_LABELS[queue.repeat]} title={t('{0} more in queue', upcoming(queue).length)} onClick={() => playQueue.update(current => ({ ...current, repeat: cycleRepeat(current.repeat) }))}><PlayerIcon name={queue.repeat === 'one' ? 'repeat-one' : 'repeat'} /></button>}
                 <div class="player-pop">
-                    <button data-focusable={focusable} class={menu === 'captions' ? 'player-control active' : 'player-control'} type="button" aria-label={t('Audio and subtitles')} aria-expanded={menu === 'captions'} onClick={() => chooseMenu('captions')}><PlayerIcon name="captions" /></button>
-                    {menu === 'captions' && <div class="player-menu" role="dialog" aria-label={t('Audio and subtitles')}>
+                    <button ref={captionsButtonRef} data-focusable={focusable} class={menu === 'captions' ? 'player-control active' : 'player-control'} type="button" aria-label={t('Audio and subtitles')} aria-expanded={menu === 'captions'} onClick={() => chooseMenu('captions')}><PlayerIcon name="captions" /></button>
+                    {menu === 'captions' && <div class="player-menu" style={menuPosition ? { position: 'fixed', left: `${menuPosition.left}px`, right: 'auto', bottom: `${menuPosition.bottom}px`, width: `${menuPosition.width}px`, maxHeight: `${menuPosition.maxHeight}px` } : undefined} role="dialog" aria-label={t('Audio and subtitles')}>
                         <p class="player-menu-label">{t('Audio')}</p>
                         {audioStreams.length ? audioStreams.map(stream => <button data-focusable={focusable} key={stream.Index} class={audioIndex === stream.Index ? 'player-menu-item active' : 'player-menu-item'} aria-pressed={audioIndex === stream.Index} type="button" onClick={() => selectAudio(stream.Index)}>{streamLabel(stream)}</button>) : <p class="player-menu-note">{t('No alternate audio tracks were reported.')}</p>}
                         {audioNote && <p class="player-menu-note">{audioNote}</p>}
@@ -1703,8 +1978,8 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                     </div>}
                 </div>
                 <div class="player-pop">
-                    <button data-focusable={focusable} class={menu === 'settings' ? 'player-control active' : 'player-control'} type="button" aria-label={t('Playback settings')} aria-expanded={menu === 'settings'} onClick={() => chooseMenu('settings')}><PlayerIcon name="settings" /></button>
-                    {menu === 'settings' && <div class="player-menu" role="dialog" aria-label={t('Playback settings')}>
+                    <button ref={settingsButtonRef} data-focusable={focusable} class={menu === 'settings' ? 'player-control active' : 'player-control'} type="button" aria-label={t('Playback settings')} aria-expanded={menu === 'settings'} onClick={() => chooseMenu('settings')}><PlayerIcon name="settings" /></button>
+                    {menu === 'settings' && <div class="player-menu" style={menuPosition ? { position: 'fixed', left: `${menuPosition.left}px`, right: 'auto', bottom: `${menuPosition.bottom}px`, width: `${menuPosition.width}px`, maxHeight: `${menuPosition.maxHeight}px` } : undefined} role="dialog" aria-label={t('Playback settings')}>
                         <p class="player-menu-label">{t('Playback speed')}</p>
                         <div class="player-speed-row">
                             {PLAYER_SPEEDS.map(value => <button data-focusable={focusable} key={value} class={speed === value ? 'player-menu-item active' : 'player-menu-item'} aria-pressed={speed === value} type="button" onClick={() => { setSpeed(value); choosePreference({ speed: value }); withVideo(video => { video.playbackRate = value; }); reveal(); }}>{value}×</button>)}

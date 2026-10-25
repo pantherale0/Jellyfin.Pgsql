@@ -32,7 +32,7 @@ test('player OSD: popouts close with a full-stage click-away scrim', () => {
     assert.match(css, /\[data-menu-open="true"\] \.player-osd \{ z-index: 4; pointer-events: none; \}/);
     assert.match(css, /\[data-menu-open="true"\] \.player-osd :is\([^\]]+\) \{ pointer-events: auto; \}/);
     assert.match(css, /\[data-menu-open="true"\] \.player-drawer \{ z-index: 6; \}/);
-    assert.match(player, /closest\('\.player-osd, \.player-drawer, \.player-menu-scrim, \.player-error'\)/, 'a scrim close must not also start the play toggle');
+    assert.match(player, /closest\('\.player-osd, \.player-drawer, \.player-menu-scrim, \.player-error, \.player-end-screen'\)/, 'clicks in the movie end screen must not also start the play toggle');
 });
 
 test('player OSD: every transport control renders from the shared icon registry', () => {

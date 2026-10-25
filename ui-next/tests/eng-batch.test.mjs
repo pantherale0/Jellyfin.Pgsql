@@ -163,7 +163,8 @@ test('ENG-09 virtual row geometry reads the same values CSS uses to size rows', 
 
 test('ENG-10 scheduler comments describe only what the code guarantees', () => {
     const api = source('api.ts');
-    assert.match(api, /Plain <img> elements \(home feed cards, live thumbnails\) are fetched\n\/\/ by the browser and are not counted here/);
+    assert.match(api, /this scheduler \(API reads and authenticated image blobs\) stay under that cap so a click\n\/\/ can still take the last slot/);
+    assert.match(api, /Plain <img> requests do not use the scheduler/);
     assert.match(api, /the parse itself still occupies the main thread/);
 });
 

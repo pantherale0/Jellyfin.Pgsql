@@ -1,6 +1,65 @@
 import type { MediaItem } from './types';
 import { t } from './i18n';
 
+export interface HlsBufferPolicyInput {
+    deviceMemoryGiB: unknown;
+    sourceBitrate: number | undefined;
+    maxBitrate: number | undefined;
+    manifestBitrates?: readonly number[];
+    isLive: boolean;
+}
+
+export interface HlsBufferPolicy {
+    maxBufferSize: number;
+    maxBufferLength: number;
+    maxMaxBufferLength: number;
+    backBufferLength: number;
+}
+
+const HLS_BUFFER_MEMORY_TIERS: readonly { minimumGiB: number; bytes: number }[] = [
+    { minimumGiB: 8, bytes: 256 * 1024 * 1024 },
+    { minimumGiB: 4, bytes: 128 * 1024 * 1024 },
+    { minimumGiB: 0, bytes: 64 * 1024 * 1024 }
+];
+
+export function hlsBufferPolicy(input: HlsBufferPolicyInput): HlsBufferPolicy {
+    const deviceMemoryGiB = typeof input.deviceMemoryGiB === 'number'
+        && Number.isFinite(input.deviceMemoryGiB)
+        && input.deviceMemoryGiB > 0
+        ? input.deviceMemoryGiB
+        : 0;
+    const maxBufferSize = HLS_BUFFER_MEMORY_TIERS.find(tier => deviceMemoryGiB >= tier.minimumGiB)?.bytes
+        || HLS_BUFFER_MEMORY_TIERS[HLS_BUFFER_MEMORY_TIERS.length - 1].bytes;
+    const bitrates = [ input.sourceBitrate, input.maxBitrate, ...(input.manifestBitrates || []) ].filter((bitrate): bitrate is number =>
+        typeof bitrate === 'number' && Number.isFinite(bitrate) && bitrate > 0
+    );
+    const bitrate = bitrates.length ? Math.max(...bitrates) : undefined;
+    const defaultForwardBufferLength = 30;
+    const defaultBackBufferLength = 90;
+    if (bitrate === undefined) {
+        return {
+            maxBufferSize,
+            maxBufferLength: defaultForwardBufferLength,
+            maxMaxBufferLength: defaultForwardBufferLength,
+            backBufferLength: defaultBackBufferLength
+        };
+    }
+
+    const capacitySeconds = maxBufferSize * 8 / bitrate;
+    const forwardFloor = Math.min(defaultForwardBufferLength, capacitySeconds);
+    const backBufferLength = Math.min(defaultBackBufferLength, Math.max(0, capacitySeconds - forwardFloor));
+    const backBufferBytes = backBufferLength * bitrate / 8;
+    const forwardBufferSize = Math.max(0, Math.floor(maxBufferSize - backBufferBytes));
+    const forwardCapacitySeconds = forwardBufferSize * 8 / bitrate;
+    const maxMaxBufferLength = Math.min(input.isLive ? defaultForwardBufferLength : 600, forwardCapacitySeconds);
+    return {
+        maxBufferSize: forwardBufferSize,
+        maxBufferLength: Math.min(defaultForwardBufferLength, maxMaxBufferLength),
+        maxMaxBufferLength,
+        backBufferLength
+    };
+}
+
 export interface MediaStreamInfo {
     Index: number;
     Type?: string | number;
@@ -93,6 +152,10 @@ export interface PlaybackProgressDecision {
 
 export const PLAYBACK_BUFFERING_FALLBACK_MS = 2_000;
 export const LIVE_REOPEN_AFTER_STALL_MS = 20_000;
+const PLAYBACK_STALL_WINDOW_MS = 60_000;
+const PLAYBACK_STALLS_BEFORE_FALLBACK = 3;
+const MAX_PLAYBACK_QUALITY_FALLBACKS = 2;
+const DEFAULT_PLAYBACK_FALLBACK_BITRATE = 8_000_000;
 
 export function observePlaybackProgress(watch: PlaybackProgressWatch, sample: PlaybackProgressSample): PlaybackProgressDecision {
     const nextWatch = { ...watch };
@@ -111,6 +174,40 @@ export function observePlaybackProgress(watch: PlaybackProgressWatch, sample: Pl
         reopenLiveStream,
         recoveryFailed: sample.isLive && watch.liveReopenAttempted && stalledForMs >= LIVE_REOPEN_AFTER_STALL_MS
     };
+}
+
+export interface PlaybackStallFallbackState {
+    confirmedAtMs: number[];
+    attempts: number;
+}
+
+export interface PlaybackStallFallbackDecision {
+    state: PlaybackStallFallbackState;
+    maxBitrate?: number;
+}
+
+export function playbackStallFallback(
+    state: PlaybackStallFallbackState,
+    nowMs: number,
+    currentMaxBitrate: number | undefined,
+    sourceBitrate: number | undefined,
+    bitrateChoices: readonly number[]
+): PlaybackStallFallbackDecision {
+    const confirmedAtMs = state.confirmedAtMs.filter(time => nowMs - time <= PLAYBACK_STALL_WINDOW_MS);
+    confirmedAtMs.push(nowMs);
+    const nextState = { confirmedAtMs, attempts: state.attempts };
+    if (confirmedAtMs.length < PLAYBACK_STALLS_BEFORE_FALLBACK || state.attempts >= MAX_PLAYBACK_QUALITY_FALLBACKS) {
+        return { state: nextState };
+    }
+
+    const limits = [ currentMaxBitrate, sourceBitrate ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0);
+    const ceiling = limits.length ? Math.min(...limits) : DEFAULT_PLAYBACK_FALLBACK_BITRATE;
+    const maxBitrate = bitrateChoices.reduce<number | undefined>((lowestHigher, choice) => {
+        if (choice <= 0 || choice >= ceiling) return lowestHigher;
+        return lowestHigher === undefined || choice > lowestHigher ? choice : lowestHigher;
+    }, undefined);
+    if (maxBitrate === undefined) return { state: nextState };
+    return { state: { confirmedAtMs: [], attempts: state.attempts + 1 }, maxBitrate };
 }
 
 export type HlsRecoveryKind = 'network' | 'media' | 'other';
@@ -272,6 +369,33 @@ export function seekBounds(duration: number, ranges: Array<[number, number]>): S
 export function clampSeek(target: number, bounds: SeekBounds): number {
     if (!bounds.seekable) return bounds.end;
     return Math.min(Math.max(bounds.start, target), bounds.end);
+}
+
+export interface SeekBarRange {
+    leftPercent: number;
+    widthPercent: number;
+}
+
+export interface SeekBarProgress {
+    playedPercent: number;
+    buffered: SeekBarRange[];
+}
+
+export function seekBarProgress(bounds: SeekBounds, ranges: Array<[number, number]>, currentTime: number, offsetSeconds: number): SeekBarProgress {
+    const span = bounds.end - bounds.start;
+    if (!bounds.seekable || !Number.isFinite(bounds.start) || !Number.isFinite(bounds.end) || !Number.isFinite(span) || span <= 0) {
+        return { playedPercent: 0, buffered: [] };
+    }
+    const offset = Number.isFinite(offsetSeconds) ? offsetSeconds : 0;
+    const percentage = (time: number) => Math.min(100, Math.max(0, (time - bounds.start) / span * 100));
+    const buffered = ranges.flatMap(([mediaStart, mediaEnd]) => {
+        if (!Number.isFinite(mediaStart) || !Number.isFinite(mediaEnd) || mediaEnd <= mediaStart) return [];
+        const start = Math.max(bounds.start, Math.min(bounds.end, mediaStart + offset));
+        const end = Math.max(bounds.start, Math.min(bounds.end, mediaEnd + offset));
+        if (end <= start) return [];
+        return [ { leftPercent: percentage(start), widthPercent: percentage(end) - percentage(start) } ];
+    });
+    return { playedPercent: Number.isFinite(currentTime) ? percentage(currentTime) : 0, buffered };
 }
 
 export function rangesOf(ranges: TimeRanges | null | undefined): Array<[number, number]> {

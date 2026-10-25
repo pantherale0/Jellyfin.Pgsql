@@ -28,10 +28,20 @@ test('play real WebM media and report start, progress, and stop', async ({ page 
     await expect.poll(() => video.evaluate(element => element instanceof HTMLVideoElement && !element.paused && element.currentTime > 0)).toBe(true);
 
     await page.setViewportSize({ width: 375, height: 812 });
-    await video.evaluate(element => element.dispatchEvent(new Event('waiting')));
-    await expect(page.getByRole('status').filter({ hasText: 'Buffering…' })).toBeVisible();
-    await video.evaluate(element => element.dispatchEvent(new Event('playing')));
-    await expect(page.getByRole('status').filter({ hasText: 'Buffering…' })).toHaveCount(0);
+    const buffering = page.getByRole('status').filter({ hasText: 'Buffering…' });
+    await video.evaluate(element => {
+        if (!(element instanceof HTMLVideoElement)) throw new Error('The player video element is missing.');
+        const currentTime = element.currentTime;
+        Object.defineProperty(element, 'currentTime', { configurable: true, get: () => currentTime, set: () => undefined });
+        element.dispatchEvent(new Event('waiting', { bubbles: true }));
+    });
+    await expect(buffering).toBeVisible({ timeout: 5000 });
+    await video.evaluate(element => {
+        if (!(element instanceof HTMLVideoElement)) throw new Error('The player video element is missing.');
+        Reflect.deleteProperty(element, 'currentTime');
+        element.dispatchEvent(new Event('playing', { bubbles: true }));
+    });
+    await expect(buffering).toHaveCount(0);
 
     await expect.poll(() => video.evaluate(element => element instanceof HTMLVideoElement ? element.duration : 0)).toBeGreaterThan(29);
     expect(streamPaths).toContain('/Videos/e2e-movie-1/stream');

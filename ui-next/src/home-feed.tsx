@@ -1,7 +1,7 @@
 import { tasteTierLabel } from './discovery';
 import { h } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { JellyfinApi } from './api';
+import { peekCachedImage, releaseCachedImage, retainCachedImage, type JellyfinApi } from './api';
 import { HOME_EXPLORE_PAGE_SIZE, type HomeFeedBlock } from './home-feed-blocks';
 import { preferredScrollBehavior } from './live-model';
 import { describeCard, homeCardHeading, homeCardSubheading, homeRailShape, resumeMinutesLeft } from './media-labels';
@@ -219,15 +219,68 @@ function HomeFeedCard({ item, api, onSelect, shape = 'poster' }: { item: MediaIt
         : '';
     const progress = Math.max(0, Math.min(100, item.UserData?.PlayedPercentage || 0));
     const minutes = resumeMinutesLeft(item);
-    const [ imageFailed, setImageFailed ] = useState(false);
-    const hasImage = Boolean(src) && !imageFailed;
+    const [ image, setImage ] = useState(() => ({ key: src, url: src ? peekCachedImage(src) : '', failed: false }));
+    const card = useRef<HTMLButtonElement>(null);
+    const retainedKey = useRef('');
+    useEffect(() => {
+        let active = true;
+        let stopObserving: (() => void) | undefined;
+        const bag: { cancel?: () => void } = {};
+        const apply = (url: string) => {
+            if (!active) return;
+            if (url && retainedKey.current !== src) {
+                if (retainedKey.current) releaseCachedImage(retainedKey.current);
+                retainedKey.current = src;
+                retainCachedImage(src);
+            } else if (!url && retainedKey.current === src) {
+                releaseCachedImage(src);
+                retainedKey.current = '';
+            }
+            setImage({ key: src, url, failed: false });
+        };
+        const load = () => {
+            if (!active || !api || !src) return;
+            const cached = peekCachedImage(src);
+            if (cached) apply(cached);
+            else void api.loadImageUrl(src, bag).then(apply);
+        };
+        if (!api || !src) {
+            setImage({ key: src, url: '', failed: false });
+        } else if (typeof IntersectionObserver === 'undefined' || !card.current) {
+            load();
+        } else {
+            const observer = new IntersectionObserver(entries => {
+                if (!entries.some(entry => entry.isIntersecting)) return;
+                observer.disconnect();
+                load();
+            }, { rootMargin: '300px' });
+            observer.observe(card.current);
+            stopObserving = () => observer.disconnect();
+        }
+        return () => {
+            active = false;
+            bag.cancel?.();
+            stopObserving?.();
+            if (retainedKey.current) {
+                releaseCachedImage(retainedKey.current);
+                retainedKey.current = '';
+            }
+        };
+    }, [ api, item.Id, src ]);
+    const hasImage = Boolean(src) && image.key === src && Boolean(image.url) && !image.failed;
     const initials = item.Name.trim().split(/\s+/).slice(0, 2).map(word => word.charAt(0)).join('').toUpperCase();
     const description = describeCard(item);
     const subheading = [ homeCardSubheading(item), minutes !== null ? t('{0} min left', minutes) : '' ].filter(Boolean).join(' · ');
-    return <button data-focusable="true" class={`home-feed-card${landscape ? ' landscape' : ''}`} aria-label={description ? t('View {0}, {1}', item.Name, description) : t('View {0}', item.Name)} onClick={() => onSelect(item)}>
+    return <button ref={card} data-focusable="true" class={`home-feed-card${landscape ? ' landscape' : ''}`} aria-label={description ? t('View {0}, {1}', item.Name, description) : t('View {0}', item.Name)} onClick={() => onSelect(item)}>
         <span class={`home-feed-card-art${hasImage ? '' : ' no-artwork'}${liveProgram ? ' live-artwork' : ''}`}>
             {hasImage
-                ? <img src={src} alt="" loading="lazy" onError={() => setImageFailed(true)} />
+                ? <img src={image.url} alt="" loading="lazy" onError={() => {
+                    if (retainedKey.current === src) {
+                        releaseCachedImage(src);
+                        retainedKey.current = '';
+                    }
+                    setImage({ key: src, url: '', failed: true });
+                }} />
                 : <span class="home-feed-card-fallback" aria-hidden="true"><span class="home-feed-fallback-glow" /><span class="home-feed-fallback-icon">{liveProgram ? 'LIVE' : initials || 'J'}</span><span class="home-feed-fallback-label">{liveProgram ? item.ChannelName || t('ON NOW') : item.Type === 'Series' ? 'SERIES' : t('IN YOUR LIBRARY')}</span></span>}
             {tasteTierLabel(item.TasteTier) && <span class={`home-feed-tier tier-${item.TasteTier}`}>{tasteTierLabel(item.TasteTier)}</span>}
             <span class="home-feed-card-overlay"><strong>{homeCardHeading(item)}</strong><small>{subheading || t('In your library')}</small></span>
@@ -250,12 +303,39 @@ function Spotlight({ block, api, onSelect, onPlay, onUserData, nextBlockId }: {
     const [ savingFavorite, setSavingFavorite ] = useState(false);
     const [ favoriteError, setFavoriteError ] = useState('');
     const image = item && api ? api.imageUrl(item, 'Backdrop', 1920, 85) || api.imageUrl(item, 'Primary', 960, 85) : '';
-    const background = useRef<HTMLDivElement>(null);
-    useEffect(() => () => {
-        const imageNodes = background.current?.querySelectorAll('img') || [];
-        imageNodes.forEach(node => { node.src = ''; });
-        if (background.current) background.current.style.backgroundImage = 'none';
-    }, []);
+    const [ imageState, setImageState ] = useState(() => ({ key: image, url: image ? peekCachedImage(image) : '', failed: false }));
+    const retainedKey = useRef('');
+    useEffect(() => {
+        let active = true;
+        const bag: { cancel?: () => void } = {};
+        const apply = (url: string) => {
+            if (!active) return;
+            if (url && retainedKey.current !== image) {
+                if (retainedKey.current) releaseCachedImage(retainedKey.current);
+                retainedKey.current = image;
+                retainCachedImage(image);
+            } else if (!url && retainedKey.current === image) {
+                releaseCachedImage(image);
+                retainedKey.current = '';
+            }
+            setImageState({ key: image, url, failed: false });
+        };
+        if (!api || !image) {
+            setImageState({ key: image, url: '', failed: false });
+        } else {
+            const cached = peekCachedImage(image);
+            if (cached) apply(cached);
+            else void api.loadImageUrl(image, bag).then(apply);
+        }
+        return () => {
+            active = false;
+            bag.cancel?.();
+            if (retainedKey.current) {
+                releaseCachedImage(retainedKey.current);
+                retainedKey.current = '';
+            }
+        };
+    }, [ api, image ]);
     const label = block.spotlightType === 'collection' ? t('COLLECTION SPOTLIGHT')
         : block.spotlightType === 'director' ? t('DIRECTOR FOCUS')
             : block.spotlightType === 'milestone' ? t('NEXT TV MILESTONE') : block.subtitle || 'SPOTLIGHT';
@@ -267,7 +347,15 @@ function Spotlight({ block, api, onSelect, onPlay, onUserData, nextBlockId }: {
         window.scrollTo(0, window.scrollY + spotlight.getBoundingClientRect().top - (window.innerHeight - spotlight.offsetHeight) / 2);
     };
     return <section class={`home-spotlight home-spotlight-${block.spotlightType || 'discovery'}`} data-spotlight-id={block.id} onFocusIn={focusSpotlight}>
-        <div ref={background} class="home-spotlight-background" style={image ? { backgroundImage: `url("${image}")` } : undefined} />
+        <div class="home-spotlight-background">
+            {imageState.key === image && imageState.url && !imageState.failed && <img src={imageState.url} alt="" loading="lazy" decoding="async" onError={() => {
+                if (retainedKey.current === image) {
+                    releaseCachedImage(image);
+                    retainedKey.current = '';
+                }
+                setImageState({ key: image, url: '', failed: true });
+            }} />}
+        </div>
         <div class="home-spotlight-scrim" />
         <div class="home-spotlight-content">
             <p class="home-spotlight-eyebrow">{label}</p>
