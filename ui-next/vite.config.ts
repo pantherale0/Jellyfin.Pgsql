@@ -7,6 +7,10 @@ import { devProbeAllowed, devProbeOrigins } from './src/auth-state';
 export default defineConfig(({ command, mode }) => {
     const input: Record<string, string> = { app: resolve(__dirname, 'index.html') };
     if (command !== 'build') input.debug = resolve(__dirname, 'debug.html');
+    if (mode === 'e2e') {
+        input.pluginShellFixture = resolve(__dirname, 'e2e/fixtures/plugin-shell.html');
+        input.transcodingPipelineFixture = resolve(__dirname, 'e2e/fixtures/transcoding-pipeline.html');
+    }
 
     const env = loadEnv(mode, process.cwd(), '');
     const backend = env.JELLYFIN_BACKEND_URL || env.VITE_JELLYFIN_SERVER_URL || 'http://localhost:8096';

@@ -13,7 +13,7 @@ const appUrl = `http://127.0.0.1:${appPort}`;
 const authFile = resolve(projectRoot, 'test-results/.auth/user.json');
 const tvUserAgent = 'Mozilla/5.0 (Web0S; Linux/SmartTV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.106 Safari/537.36 WebAppManager';
 const appCommand = mode === 'preview'
-    ? `npm run build && npx vite preview --host 127.0.0.1 --port ${appPort} --strictPort`
+    ? `npm run build -- --mode e2e && npx vite preview --host 127.0.0.1 --port ${appPort} --strictPort`
     : `npx vite --host 127.0.0.1 --port ${appPort} --strictPort`;
 
 process.env.E2E_FAKE_SERVER_URL = fakeServerUrl;
