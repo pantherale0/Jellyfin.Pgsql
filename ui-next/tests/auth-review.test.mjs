@@ -95,6 +95,11 @@ test('AUTH-02 every sign-in path commits through the guarded owner', () => {
         'only the shared commit, sign-out, cross-tab adoption and picker return may set the session');
 });
 
+test('AUTH-02 clearing a signed-in session also clears cached media images', () => {
+    const clear = body('const clearSignedInState =', 'const logout =');
+    assert.match(clear, /clearImageCache\(\)/, 'account switches must not reuse an image object URL from the prior session');
+});
+
 test('AUTH-02 abandoned Quick Connect tokens are signed out instead of left live', () => {
     const quickConnect = body('if (cancelled || !authAttempt.isCurrent(attempt)) {', 'commitSignIn(result);');
     assert.match(quickConnect, /new JellyfinApi\(result\)\.logout\(\)/);

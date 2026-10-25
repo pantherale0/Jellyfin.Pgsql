@@ -104,9 +104,8 @@ interface CachedImage {
 const imageCache = new Map<string, CachedImage>();
 
 // Browsers only keep a handful of HTTP/1.1 connections per host. Requests made through
-// this scheduler (API reads and loadImage blobs) stay under that cap so a click can still
-// take the last slot. Plain <img> elements (home feed cards, live thumbnails) are fetched
-// by the browser and are not counted here; the cap is a budget for scheduled work only.
+// this scheduler (API reads and authenticated image blobs) stay under that cap so a click
+// can still take the last slot. Plain <img> requests do not use the scheduler.
 const MAX_IN_FLIGHT = 4;
 const MAX_BULK = 3;
 const MAX_BACKGROUND = 2;
@@ -1461,8 +1460,16 @@ export class JellyfinApi {
     }
 
     async loadImage(item: MediaItem, type = 'Primary', width = 420, quality = 90, bag?: ImageCancel): Promise<string> {
-        const url = this.imageUrl(item, type, width, quality);
+        return this.loadImageUrl(this.imageUrl(item, type, width, quality), bag);
+    }
+
+    async loadImageUrl(url: string, bag?: ImageCancel): Promise<string> {
         if (!url) return '';
+        try {
+            if (new URL(url, this.session.server).origin !== new URL(this.session.server).origin) return '';
+        } catch (_error) {
+            return '';
+        }
         const cached = imageCache.get(url);
         if (cached) {
             imageCache.delete(url);

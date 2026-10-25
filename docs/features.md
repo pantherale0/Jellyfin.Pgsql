@@ -101,7 +101,7 @@ Server query patches include [`jellyfin_home_api_performance`](patches.md#jellyf
 
 ## Playback and transcoding
 
-**What:** Server patches add transcoding diagnostics, hardware capability reporting, codec fallback, playback error codes, device-specific playback settings, and HLS lifecycle fixes. UI Next includes a player, an administrator Transcoding page, and a stage graph for active transcoding sessions.
+**What:** Server patches add transcoding diagnostics, hardware capability reporting, codec fallback, playback error codes, device-specific playback settings, and HLS lifecycle fixes. UI Next includes a player with device-memory-based HLS VOD buffer targets and up to ten minutes of lookahead. Its seek bar distinguishes buffered from played media. After three confirmed stalls in 60 seconds, the player attempts up to two lower-bitrate renegotiations. When a movie ends without a queued title, the player offers similar titles to play next. Live TV follows the available playlist rather than buffering ten minutes ahead. UI Next also includes an administrator Transcoding page and a stage graph for active transcoding sessions.
 
 **Where:** See the [Playback and encoding patch group](patches.md#3-playback--encoding), including [`jellyfin_transcoding_pipeline`](patches.md#jellyfin_transcoding_pipelinepatch), [`jellyfin_z_transcode_codec_fallback`](patches.md#jellyfin_z_transcode_codec_fallbackpatch), and [`jellyfin_zzzzzzz_hls_remux_segment_restart`](patches.md#jellyfin_zzzzzzz_hls_remux_segment_restartpatch).
 
