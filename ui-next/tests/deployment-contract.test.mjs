@@ -30,7 +30,8 @@ test('the repository patch targets contain only the Jellyfin server', () => {
     const repo = fileURLToPath(new URL('../../', import.meta.url));
     const gitmodules = readFileSync(new URL('../../.gitmodules', import.meta.url), 'utf8');
     const patchFiles = readdirSync(new URL('../../patches/', import.meta.url));
-    const patchList = execFileSync('bash', [ 'scripts/apply-patches.sh', '--list', 'all' ], {
+    // apply-patches.sh is POSIX sh; use sh so the suite also runs in the Alpine image build.
+    const patchList = execFileSync('sh', [ 'scripts/apply-patches.sh', '--list', 'all' ], {
         cwd: repo,
         encoding: 'utf8'
     });
@@ -46,7 +47,7 @@ test('server patch application rejects legacy web patch names', () => {
     const patchesDir = mkdtempSync(join(tmpdir(), 'jellyfin-web-patches-'));
     try {
         writeFileSync(join(patchesDir, 'jellyfin_web_old.patch'), '');
-        const result = spawnSync('bash', [ 'scripts/apply-patches.sh', '--list', 'all', patchesDir ], { cwd: repo, encoding: 'utf8' });
+        const result = spawnSync('sh', [ 'scripts/apply-patches.sh', '--list', 'all', patchesDir ], { cwd: repo, encoding: 'utf8' });
         assert.equal(result.status, 1);
         assert.match(result.stderr, /web patches are no longer supported/);
     } finally {
