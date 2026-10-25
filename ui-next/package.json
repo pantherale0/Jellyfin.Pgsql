@@ -1,0 +1,32 @@
+{
+  "name": "jellyfin-ui-next",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "vite --open",
+    "dev:lan": "UI_NEXT_DEV_LAN=true vite --host 0.0.0.0 --open",
+    "dev:debug": "vite --open /debug.html",
+    "build": "tsc --noEmit && vite build",
+    "test": "node --test tests/*.test.mjs e2e/fake-server/*.test.mjs",
+    "e2e": "playwright test --config e2e/playwright.config.ts",
+    "e2e:typecheck": "tsc --noEmit -p e2e/tsconfig.json",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@hugeicons/core-free-icons": "^4.3.5",
+    "hls.js": "^1.5.20",
+    "preact": "^10.26.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@preact/preset-vite": "^2.10.1",
+    "@types/node": "^26.6.4",
+    "@vitejs/plugin-legacy": "^6.1.1",
+    "typescript": "~5.8.3",
+    "vite": "^6.2.6"
+  }
+}

@@ -1,8 +1,8 @@
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index 509ab5756f..a7c7407ec3 100644
+index d7864cfa3d..a55812b02d 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
-@@ -43,6 +43,7 @@ using Microsoft.EntityFrameworkCore;
+@@ -42,6 +42,7 @@ using Microsoft.EntityFrameworkCore;
  using Microsoft.Extensions.Hosting;
  using Microsoft.Extensions.Logging;
  using Episode = MediaBrowser.Controller.Entities.TV.Episode;
@@ -10,7 +10,7 @@ index 509ab5756f..a7c7407ec3 100644
  
  namespace Emby.Server.Implementations.Session
  {
-@@ -936,7 +937,7 @@ namespace Emby.Server.Implementations.Session
+@@ -927,7 +928,7 @@ namespace Emby.Server.Implementations.Session
  
              var users = GetUsers(session);
  
@@ -19,7 +19,7 @@ index 509ab5756f..a7c7407ec3 100644
              {
                  var progressItem = GetProgressItem(libraryItem, info.MediaSourceId);
                  foreach (var user in users)
-@@ -1089,7 +1090,7 @@ namespace Emby.Server.Implementations.Session
+@@ -1080,7 +1081,7 @@ namespace Emby.Server.Implementations.Session
              var users = GetUsers(session);
  
              // only update saved user data on actual check-ins, not automated ones
@@ -28,7 +28,7 @@ index 509ab5756f..a7c7407ec3 100644
              {
                  var progressItem = GetProgressItem(libraryItem, info.MediaSourceId);
                  foreach (var user in users)
-@@ -1356,7 +1357,7 @@ namespace Emby.Server.Implementations.Session
+@@ -1351,7 +1352,7 @@ namespace Emby.Server.Implementations.Session
              var users = GetUsers(session);
              var playedToCompletion = false;
  

@@ -49,7 +49,7 @@ index 2bbfeb40b8..b3d504d5e8 100644
  
          return NoContent();
 diff --git a/Jellyfin.Api/Controllers/DynamicHlsController.cs b/Jellyfin.Api/Controllers/DynamicHlsController.cs
-index 3e11b89d0c..f6ae534f35 100644
+index dd1ba18b17..57da48f62e 100644
 --- a/Jellyfin.Api/Controllers/DynamicHlsController.cs
 +++ b/Jellyfin.Api/Controllers/DynamicHlsController.cs
 @@ -65,7 +65,6 @@ public class DynamicHlsController : BaseJellyfinApiController
@@ -78,7 +78,7 @@ index 3e11b89d0c..f6ae534f35 100644
                                  liveStreamResponse.MediaSource,
                                  state.RequestedUrl);
                              state.Request.LiveStreamId = liveStreamResponse.MediaSource.LiveStreamId;
-@@ -1591,7 +1588,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -1566,7 +1563,7 @@ public class DynamicHlsController : BaseJellyfinApiController
  
                      streamingRequest.StartTimeTicks = streamingRequest.CurrentRuntimeTicks;
  
@@ -87,7 +87,7 @@ index 3e11b89d0c..f6ae534f35 100644
                          && state.VideoRequest is not null
                          && !EncodingHelper.IsCopyCodec(state.OutputVideoCodec);
  
-@@ -1722,7 +1719,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -1697,7 +1694,7 @@ public class DynamicHlsController : BaseJellyfinApiController
              InitSegmentIndex = initSegmentIndex,
              SegmentIndex = segmentIndex,
              IsInitSegmentRequest = isInitSegmentRequest,
@@ -96,7 +96,7 @@ index 3e11b89d0c..f6ae534f35 100644
              BuildCommandLineArguments = (attemptState, playlistPath, startNumber) =>
                  GetCommandLineArguments(playlistPath, attemptState, false, startNumber)
          };
-@@ -1731,6 +1728,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -1706,6 +1703,7 @@ public class DynamicHlsController : BaseJellyfinApiController
      private async Task<StreamState> CreateStreamStateForCodecAsync(
          StreamingRequestDto streamingRequest,
          string codec,
@@ -104,7 +104,7 @@ index 3e11b89d0c..f6ae534f35 100644
          CancellationToken cancellationToken)
      {
          var clonedRequest = CloneStreamingRequest(streamingRequest);
-@@ -1750,7 +1748,9 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -1725,7 +1723,9 @@ public class DynamicHlsController : BaseJellyfinApiController
                  _encodingHelper,
                  _transcodeManager,
                  TranscodingJobType,
@@ -115,7 +115,7 @@ index 3e11b89d0c..f6ae534f35 100644
              .ConfigureAwait(false);
      }
  
-@@ -1908,8 +1908,8 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -1883,8 +1883,8 @@ public class DynamicHlsController : BaseJellyfinApiController
  
      private string GetCommandLineArguments(string outputPath, StreamState state, bool isEventPlaylist, int startNumber)
      {
@@ -126,7 +126,7 @@ index 3e11b89d0c..f6ae534f35 100644
  
          var mapArgs = state.IsOutputVideo ? _encodingHelper.GetMapArgs(state) : string.Empty;
  
-@@ -1921,7 +1921,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -1896,7 +1896,7 @@ public class DynamicHlsController : BaseJellyfinApiController
  
          var segmentFormat = string.Empty;
          var segmentContainer = outputExtension.TrimStart('.');
@@ -135,7 +135,7 @@ index 3e11b89d0c..f6ae534f35 100644
          var hlsArguments = $"-hls_playlist_type {(isEventPlaylist ? "event" : "vod")} -hls_list_size 0";
  
          if (string.Equals(segmentContainer, "ts", StringComparison.OrdinalIgnoreCase))
-@@ -1955,8 +1955,8 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -1930,8 +1930,8 @@ public class DynamicHlsController : BaseJellyfinApiController
              segmentFormat = "mpegts";
          }
  
@@ -146,7 +146,7 @@ index 3e11b89d0c..f6ae534f35 100644
              : "128";
  
          var baseUrlParam = string.Empty;
-@@ -1972,7 +1972,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -1947,7 +1947,7 @@ public class DynamicHlsController : BaseJellyfinApiController
              CultureInfo.InvariantCulture,
              "{0} {1} -map_metadata -1 -map_chapters -1 -threads {2} {3} {4} {5} -copyts -avoid_negative_ts disabled -max_muxing_queue_size {6} -f hls -max_delay 5000000 -hls_time {7} -hls_segment_type {8} -start_number {9}{10} -hls_segment_filename \"{11}\" {12} -y \"{13}\"",
              inputModifier,
@@ -155,7 +155,7 @@ index 3e11b89d0c..f6ae534f35 100644
              threads,
              mapArgs,
              GetVideoArguments(state, startNumber, isEventPlaylist, segmentContainer),
-@@ -2034,7 +2034,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -2009,7 +2009,7 @@ public class DynamicHlsController : BaseJellyfinApiController
              if (audioBitrate.HasValue && !EncodingHelper.LosslessAudioCodecs.Contains(state.ActualOutputAudioCodec, StringComparison.OrdinalIgnoreCase))
              {
                  var vbrParam = _encodingHelper.GetAudioVbrModeParam(audioCodec, audioBitrate.Value, audioChannels ?? 2);
@@ -164,7 +164,7 @@ index 3e11b89d0c..f6ae534f35 100644
                  {
                      audioTranscodeParams += vbrParam;
                  }
-@@ -2059,7 +2059,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -2034,7 +2034,7 @@ public class DynamicHlsController : BaseJellyfinApiController
  
          if (EncodingHelper.IsCopyCodec(audioCodec))
          {
@@ -173,7 +173,7 @@ index 3e11b89d0c..f6ae534f35 100644
              var copyArgs = "-codec:a:0 copy" + bitStreamArgs + strictArgs;
  
              return copyArgs;
-@@ -2069,7 +2069,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -2044,7 +2044,7 @@ public class DynamicHlsController : BaseJellyfinApiController
  
          var channels = state.OutputAudioChannels;
  
@@ -182,7 +182,7 @@ index 3e11b89d0c..f6ae534f35 100644
  
          if (channels.HasValue
              && (channels.Value != 2
-@@ -2082,7 +2082,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -2057,7 +2057,7 @@ public class DynamicHlsController : BaseJellyfinApiController
          if (bitrate.HasValue && !EncodingHelper.LosslessAudioCodecs.Contains(actualOutputAudioCodec, StringComparison.OrdinalIgnoreCase))
          {
              var vbrParam = _encodingHelper.GetAudioVbrModeParam(audioCodec, bitrate.Value, channels ?? 2);
@@ -191,7 +191,7 @@ index 3e11b89d0c..f6ae534f35 100644
              {
                  args += vbrParam;
              }
-@@ -2103,7 +2103,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -2078,7 +2078,7 @@ public class DynamicHlsController : BaseJellyfinApiController
              args += " -ar 48000";
          }
  
@@ -200,7 +200,7 @@ index 3e11b89d0c..f6ae534f35 100644
  
          return args;
      }
-@@ -2128,7 +2128,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -2113,7 +2113,7 @@ public class DynamicHlsController : BaseJellyfinApiController
              return string.Empty;
          }
  
@@ -209,7 +209,7 @@ index 3e11b89d0c..f6ae534f35 100644
  
          var args = "-codec:v:0 " + codec;
  
-@@ -2188,7 +2188,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -2172,7 +2172,7 @@ public class DynamicHlsController : BaseJellyfinApiController
          }
          else
          {
@@ -218,7 +218,7 @@ index 3e11b89d0c..f6ae534f35 100644
  
              // Set the key frame params for video encoding to match the hls segment time.
              args += _encodingHelper.GetHlsVideoKeyFrameArguments(state, codec, state.SegmentLength, isEventPlaylist, startNumber);
-@@ -2201,7 +2201,7 @@ public class DynamicHlsController : BaseJellyfinApiController
+@@ -2185,7 +2185,7 @@ public class DynamicHlsController : BaseJellyfinApiController
              }
  
              // video processing filters.
@@ -1061,11 +1061,11 @@ index ea38950d32..c559ffdd4a 100644
      /// Gets the options of a device.
      /// </summary>
 diff --git a/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs b/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
-index 9cf7b9aca6..314dfd5070 100644
+index 359465081b..6805984a25 100644
 --- a/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
-@@ -1,6 +1,8 @@
- using System;
+@@ -2,6 +2,8 @@ using System;
+ using System.Collections.Concurrent;
  using System.Diagnostics;
  using System.Threading;
 +using Jellyfin.Data.Dtos;
@@ -1073,7 +1073,7 @@ index 9cf7b9aca6..314dfd5070 100644
  using MediaBrowser.Model.Dto;
  using Microsoft.Extensions.Logging;
  
-@@ -81,6 +83,18 @@ public sealed class TranscodingJob : IDisposable
+@@ -78,6 +80,18 @@ public sealed class TranscodingJob : IDisposable
      /// </summary>
      public string? DeviceId { get; set; }
  
@@ -1135,7 +1135,7 @@ index e19a9a1eeb..f76a3a54fa 100644
  
          if (TranscodeCodecFallbackChain.IsRaceEligible(context.State, encodingOptions, context.IsInitSegmentRequest))
 diff --git a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
-index 4487a82a5c..d0ebfca7e4 100644
+index 182891924d..ba555bf204 100644
 --- a/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
 +++ b/MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs
 @@ -376,7 +376,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
@@ -1147,7 +1147,7 @@ index 4487a82a5c..d0ebfca7e4 100644
  
              long? bufferTicks = null;
              if (job?.TranscodingPositionTicks is not null && job.DownloadPositionTicks is not null)
-@@ -755,7 +755,11 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+@@ -730,7 +730,11 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
                  Id = transcodingJobId,
                  PlaySessionId = playSessionId,
                  LiveStreamId = liveStreamId,
@@ -1160,7 +1160,7 @@ index 4487a82a5c..d0ebfca7e4 100644
              };
  
              _activeTranscodingJobs.Add(job);
-@@ -826,7 +830,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
+@@ -801,7 +805,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
                      new LiveStreamRequest { OpenToken = state.MediaSource.OpenToken },
                      cancellationTokenSource.Token)
                  .ConfigureAwait(false);
@@ -3401,15 +3401,6 @@ index 0000000000..226e3b425c
 +        }
 +    }
 +}
-diff --git a/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs b/src/Jellyfin.Database/Jellyfin.Database.Providers.Sqlite/Migrations/JellyfinDbModelSnapshot.cs
-index 0c35ccc992a8ca3eed0c85c23add068e4d9df006..aed70d898b49b58f6e17580b611593c5cf586d87 100644
-GIT binary patch
-delta 42
-ycmbRGgSq7=^M?0JCl^Qy2?yjPRwgATXZshFWaj4;dll#BO;!xA+$^{3dnf>wLlTSt
-
-delta 18
-acmZqq$vpK3^M?0JCvV_3*xa}5TPOfuehLKu
-
 diff --git a/tests/Jellyfin.Api.Tests/Helpers/DevicePlaybackOptionsHelperTests.cs b/tests/Jellyfin.Api.Tests/Helpers/DevicePlaybackOptionsHelperTests.cs
 new file mode 100644
 index 0000000000..239488c442

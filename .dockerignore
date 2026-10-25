@@ -1,7 +1,8 @@
 dev-env/
 **/node_modules/
+ui-next/.env*
+ui-next/dist/
 **/bin/
 **/obj/
 .git/
 jellyfin/.git/
-jellyfin-web/.git/

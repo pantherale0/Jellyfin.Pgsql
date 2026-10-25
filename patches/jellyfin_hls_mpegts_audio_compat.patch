@@ -1,8 +1,8 @@
 diff --git a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-index 681db9d826..ab4d0eb2e0 100644
+index 524f4e7ea6..01784781cf 100644
 --- a/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs
-@@ -696,7 +696,9 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -697,7 +697,9 @@ namespace MediaBrowser.Controller.MediaEncoding
              {
                  "ogg" or "oga" or "ogv" or "webm" or "webma" => "opus",
                  "m4a" or "m4b" or "mp4" or "mov" or "mkv" or "mka" => "aac",
@@ -13,7 +13,7 @@ index 681db9d826..ab4d0eb2e0 100644
                  // Containers that share their name with the codec they carry.
                  "aac" or "ac3" or "alac" or "dts" or "eac3" or "flac" or "mp2" or "mp3" or "opus" or "truehd" or "vorbis" => inferredCodec,
                  // Anything else - manifests such as m3u8/mpd in particular - names a container that
-@@ -2717,8 +2719,12 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -2736,8 +2738,12 @@ namespace MediaBrowser.Controller.MediaEncoding
                  reasons |= TranscodeReason.AudioSampleRateNotSupported;
              }
  
@@ -28,7 +28,7 @@ index 681db9d826..ab4d0eb2e0 100644
                  && audioStream.BitRate.HasValue
                  && audioStream.BitRate.Value > request.AudioBitRate.Value)
              {
-@@ -7616,6 +7622,17 @@ namespace MediaBrowser.Controller.MediaEncoding
+@@ -7658,6 +7664,17 @@ namespace MediaBrowser.Controller.MediaEncoding
                  // Keep them in the supported codecs list, but shift them to the end of the list so that if transcoding happens, another codec is used
                  shiftAudioCodecs.Add("dts");
                  shiftAudioCodecs.Add("truehd");
@@ -47,7 +47,7 @@ index 681db9d826..ab4d0eb2e0 100644
              else
              {
 diff --git a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
-index f7c92d7095..43c5097db6 100644
+index c8fbd3f111..ca3e50c5df 100644
 --- a/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 +++ b/MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs
 @@ -405,6 +405,13 @@ namespace MediaBrowser.MediaEncoding.Encoder

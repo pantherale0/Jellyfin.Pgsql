@@ -34,6 +34,7 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<TastePersonaGenerator>();
         serviceCollection.AddSingleton<TasteMatchService>();
         serviceCollection.AddSingleton<UserMergeService>();
+        serviceCollection.AddSingleton<MergePreviewTokens>();
         serviceCollection.AddSingleton<EmbyImportSessionStore>();
         serviceCollection.AddSingleton<EmbySqliteReader>();
         serviceCollection.AddSingleton<EmbyUserDataMatcher>();
@@ -98,12 +99,21 @@ public sealed class PgsqlServiceRegistrator : IPluginServiceRegistrator
             sp.GetRequiredService<QueryRuntimeStats>(),
             sp.GetRequiredService<ILoggerFactory>().CreateLogger<PgNextUpQuery>()));
 
+        serviceCollection.AddSingleton(sp => new PgResumeQuery(
+            sp.GetRequiredService<IDbContextFactory<JellyfinDbContext>>(),
+            sp.GetRequiredService<IItemQueryHelpers>(),
+            sp.GetRequiredService<CachedItemLoader>(),
+            PgsqlQueryOptions.Current,
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger<PgResumeQuery>()));
+
         serviceCollection.AddSingleton<IItemRepository>(sp => new CachingItemRepository(
             (IItemRepository)sp.GetRequiredService(coreRepositoryType),
             sp.GetRequiredService<IQueryResultCache>(),
             sp.GetRequiredService<IQueryCacheVersionStore>(),
             sp.GetRequiredService<CachedItemLoader>(),
             sp.GetRequiredService<PgLatestQueryService>(),
+            sp.GetRequiredService<PgResumeQuery>(),
+            PgsqlQueryOptions.Current,
             sp.GetRequiredService<QueryRuntimeStats>(),
             sp.GetRequiredService<ILoggerFactory>().CreateLogger<CachingItemRepository>()));
 

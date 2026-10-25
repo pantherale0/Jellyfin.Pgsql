@@ -24,8 +24,9 @@ export ConnectionStrings__Default="Host=${POSTGRES_HOST};Port=${POSTGRES_PORT};D
 echo "[validate] Applying migrations (dotnet ef database update)..."
 if ! update_output="$(dotnet ef database update \
     --project "${PROJECT}" \
+    --configuration Release \
     -- --migration-provider Jellyfin-PgSql 2>&1)"; then
-    build_output="$(dotnet build "${PROJECT}" 2>&1 || true)"
+    build_output="$(dotnet build "${PROJECT}" -c Release 2>&1 || true)"
     echo "${update_output}"
     echo ""
     echo "--- dotnet build ---"
@@ -42,6 +43,7 @@ dotnet ef migrations bundle \
     --self-contained \
     --project "${PROJECT}" \
     --startup-project "${PROJECT}" \
+    --configuration Release \
     -- --migration-provider Jellyfin-PgSql
 chmod +x "${REPO_ROOT}/docker/jellyfin.PgsqlMigrator"
 

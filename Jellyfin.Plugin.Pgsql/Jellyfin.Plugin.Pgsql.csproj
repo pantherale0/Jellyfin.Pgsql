@@ -32,8 +32,11 @@
          remove them so PluginManager never LoadFromAssemblyPath's a private copy.
          MediaBrowser.Controller is a project reference so the plugin matches this
          fork's patched search API (SearchQueryResult), not the NuGet package surface. -->
-    <ProjectReference Include="..\jellyfin\src\Jellyfin.Database\Jellyfin.Database.Implementations\Jellyfin.Database.Implementations.csproj" />
+    <ProjectReference Include="..\jellyfin\src\Jellyfin.Database\Jellyfin.Database.Implementations\Jellyfin.Database.Implementations.csproj">
+      <SetConfiguration>Configuration=$(Configuration)</SetConfiguration>
+    </ProjectReference>
     <ProjectReference Include="..\jellyfin\MediaBrowser.Controller\MediaBrowser.Controller.csproj">
+      <SetConfiguration>Configuration=$(Configuration)</SetConfiguration>
       <PrivateAssets>all</PrivateAssets>
     </ProjectReference>
   </ItemGroup>

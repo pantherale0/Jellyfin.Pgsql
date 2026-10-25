@@ -39,19 +39,28 @@ internal static class PgQuerySqlBuilder
         IReadOnlyDictionary<string, object> extraParameters,
         Func<DbDataReader, TResult> mapRow)
     {
+        using var command = CreateWrappedCommand(context, innerQuery, outerSqlTemplate, extraParameters);
+        return Execute(context, command, mapRow);
+    }
+
+    /// <summary>Builds a parameter-preserving wrapped command owned by the caller.</summary>
+    /// <typeparam name="TInner">The inner query element type.</typeparam>
+    /// <param name="context">The database context.</param>
+    /// <param name="innerQuery">The EF query to embed.</param>
+    /// <param name="outerSqlTemplate">The compile-time SQL template.</param>
+    /// <param name="extraParameters">Additional bound parameters.</param>
+    /// <returns>The unexecuted command.</returns>
+    public static DbCommand CreateWrappedCommand<TInner>(
+        JellyfinDbContext context,
+        IQueryable<TInner> innerQuery,
+        string outerSqlTemplate,
+        IReadOnlyDictionary<string, object> extraParameters)
+    {
         using var innerCommand = innerQuery.CreateDbCommand();
         var sql = outerSqlTemplate.Replace(InnerQueryPlaceholder, innerCommand.CommandText, StringComparison.Ordinal);
-
-        var connection = context.Database.GetDbConnection();
-        var wasOpen = connection.State == ConnectionState.Open;
-        if (!wasOpen)
-        {
-            context.Database.OpenConnection();
-        }
-
+        var command = context.Database.GetDbConnection().CreateCommand();
         try
         {
-            using var command = connection.CreateCommand();
 #pragma warning disable CA2100 // SQL is composed from EF-generated text and compile-time templates; values are parameterized.
             command.CommandText = sql;
 #pragma warning restore CA2100
@@ -79,6 +88,31 @@ internal static class PgQuerySqlBuilder
                 command.Parameters.Add(extra);
             }
 
+            return command;
+        }
+        catch
+        {
+            command.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Executes a caller-owned command using the context's connection lifecycle.</summary>
+    /// <typeparam name="TResult">The mapped result type.</typeparam>
+    /// <param name="context">The database context.</param>
+    /// <param name="command">The bound command.</param>
+    /// <param name="mapRow">The row mapper.</param>
+    /// <returns>The mapped rows.</returns>
+    public static List<TResult> Execute<TResult>(JellyfinDbContext context, DbCommand command, Func<DbDataReader, TResult> mapRow)
+    {
+        var wasOpen = context.Database.GetDbConnection().State == ConnectionState.Open;
+        if (!wasOpen)
+        {
+            context.Database.OpenConnection();
+        }
+
+        try
+        {
             var results = new List<TResult>();
             using var reader = command.ExecuteReader();
             while (reader.Read())

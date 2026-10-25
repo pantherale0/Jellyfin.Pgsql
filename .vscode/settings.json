@@ -1,6 +1,5 @@
 {
     "jellyfinDir": "${workspaceFolder}/jellyfin/Jellyfin.Server",
-    "jellyfinWebDir": "${workspaceFolder}/jellyfin-web",
     "jellyfinLinuxDataDir": "${workspaceFolder}/dev-env/config",
     "jellyfinWindowsDataDir": "${workspaceFolder}/dev-env/config",
     "pluginName": "Jellyfin.Plugin.Pgsql",

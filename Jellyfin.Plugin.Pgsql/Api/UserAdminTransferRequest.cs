@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 
 namespace Jellyfin.Plugin.Pgsql.Api;
 
@@ -19,4 +20,11 @@ public sealed class UserAdminTransferRequest
     /// </summary>
     [Required]
     public Guid TargetUserId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the token returned by the matching preview.
+    /// Required by execute endpoints and ignored by preview endpoints.
+    /// </summary>
+    [JsonPropertyName("previewToken")]
+    public string? PreviewToken { get; set; }
 }

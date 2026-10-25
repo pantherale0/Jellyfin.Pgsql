@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using Jellyfin.Plugin.Pgsql.Configuration;
 
 namespace Jellyfin.Plugin.Pgsql.Query;
 
@@ -93,10 +94,13 @@ internal sealed class PgsqlQueryOptions
     /// </summary>
     public bool OptimizeNextUp { get; private init; }
 
-    private static PgsqlQueryOptions Resolve()
-    {
-        var config = Plugin.Instance?.Configuration;
+    /// <summary>Gets a value indicating whether candidate-first PostgreSQL Resume selection is enabled.</summary>
+    public bool OptimizeResume { get; private init; }
 
+    private static PgsqlQueryOptions Resolve() => Resolve(Plugin.Instance?.Configuration);
+
+    internal static PgsqlQueryOptions Resolve(PluginConfiguration? config)
+    {
         var backendText = Environment.GetEnvironmentVariable("Pgsql_CACHE_BACKEND") ?? config?.CacheBackend;
         if (!Enum.TryParse<QueryCacheBackend>(backendText, ignoreCase: true, out var backend))
         {
@@ -120,6 +124,7 @@ internal sealed class PgsqlQueryOptions
             OptimizeTvLatest = GetBool("Pgsql_PG_OPTIMIZE_TV_LATEST", optimizeLatest),
             OptimizeMusicLatest = GetBool("Pgsql_PG_OPTIMIZE_MUSIC_LATEST", optimizeLatest),
             OptimizeNextUp = GetBool("Pgsql_PG_OPTIMIZE_NEXTUP", config?.OptimizeNextUpQueries ?? true),
+            OptimizeResume = GetBool("Pgsql_PG_OPTIMIZE_RESUME", config?.OptimizeResumeQueries ?? true),
         };
     }
 

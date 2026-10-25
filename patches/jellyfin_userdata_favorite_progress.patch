@@ -1,5 +1,5 @@
 diff --git a/Emby.Server.Implementations/Library/UserDataManager.cs b/Emby.Server.Implementations/Library/UserDataManager.cs
-index 0680046c11..d725b24ccb 100644
+index 1e7068b24b..eefb0a1f3b 100644
 --- a/Emby.Server.Implementations/Library/UserDataManager.cs
 +++ b/Emby.Server.Implementations/Library/UserDataManager.cs
 @@ -1,6 +1,7 @@
@@ -18,7 +18,7 @@ index 0680046c11..d725b24ccb 100644
  
          /// <summary>
          /// Initializes a new instance of the <see cref="UserDataManager"/> class.
-@@ -56,31 +58,53 @@ namespace Emby.Server.Implementations.Library
+@@ -56,47 +58,69 @@ namespace Emby.Server.Implementations.Library
              cancellationToken.ThrowIfCancellationRequested();
  
              var keys = item.GetUserDataKeys();
@@ -75,10 +75,42 @@ index 0680046c11..d725b24ccb 100644
 -            }
  
 -            dbContext.SaveChanges();
--            transaction.Commit();
 +                dbContext.SaveChanges();
++
++                // Rows under keys the item no longer reports are kept, not deleted: the key set is briefly
++                // incomplete mid-refresh, and those rows are what a deleted and re-added item reattaches by.
++                dbContext.UserData
++                    .Where(e => e.ItemId == item.Id && e.UserId == user.Id && !keys.Contains(e.CustomDataKey))
++                    .ExecuteUpdate(e => e
++                        .SetProperty(f => f.AudioStreamIndex, userData.AudioStreamIndex)
++                        .SetProperty(f => f.IsFavorite, userData.IsFavorite)
++                        .SetProperty(f => f.LastPlayedDate, userData.LastPlayedDate)
++                        .SetProperty(f => f.Likes, userData.Likes)
++                        .SetProperty(f => f.PlaybackPositionTicks, userData.PlaybackPositionTicks)
++                        .SetProperty(f => f.PlayCount, userData.PlayCount)
++                        .SetProperty(f => f.Played, userData.Played)
++                        .SetProperty(f => f.Rating, userData.Rating)
++                        .SetProperty(f => f.SubtitleStreamIndex, userData.SubtitleStreamIndex));
++
 +                transaction.Commit();
  
+-            // Rows under keys the item no longer reports are kept, not deleted: the key set is briefly
+-            // incomplete mid-refresh, and those rows are what a deleted and re-added item reattaches by.
+-            dbContext.UserData
+-                .Where(e => e.ItemId == item.Id && e.UserId == user.Id && !keys.Contains(e.CustomDataKey))
+-                .ExecuteUpdate(e => e
+-                    .SetProperty(f => f.AudioStreamIndex, userData.AudioStreamIndex)
+-                    .SetProperty(f => f.IsFavorite, userData.IsFavorite)
+-                    .SetProperty(f => f.LastPlayedDate, userData.LastPlayedDate)
+-                    .SetProperty(f => f.Likes, userData.Likes)
+-                    .SetProperty(f => f.PlaybackPositionTicks, userData.PlaybackPositionTicks)
+-                    .SetProperty(f => f.PlayCount, userData.PlayCount)
+-                    .SetProperty(f => f.Played, userData.Played)
+-                    .SetProperty(f => f.Rating, userData.Rating)
+-                    .SetProperty(f => f.SubtitleStreamIndex, userData.SubtitleStreamIndex));
+-
+-            transaction.Commit();
+-
 -            var userId = user.InternalId;
 -            var cacheKey = GetCacheKey(userId, item.Id);
 -            _cache.AddOrUpdate(cacheKey, userData);
@@ -89,7 +121,7 @@ index 0680046c11..d725b24ccb 100644
  
              UserDataSaved?.Invoke(this, new UserDataSaveEventArgs
              {
-@@ -92,6 +116,31 @@ namespace Emby.Server.Implementations.Library
+@@ -108,6 +132,31 @@ namespace Emby.Server.Implementations.Library
              });
          }
  
@@ -121,7 +153,7 @@ index 0680046c11..d725b24ccb 100644
          /// <inheritdoc />
          public void SaveUserData(User user, BaseItem item, UpdateUserItemDataDto userDataDto, UserDataSaveReason reason)
          {
-@@ -353,11 +402,18 @@ namespace Emby.Server.Implementations.Library
+@@ -369,11 +418,18 @@ namespace Emby.Server.Implementations.Library
          public UserItemData? GetUserData(User user, BaseItem item)
          {
              ArgumentNullException.ThrowIfNull(user);
@@ -146,18 +178,10 @@ index 0680046c11..d725b24ccb 100644
  
          /// <summary>
 diff --git a/tests/Jellyfin.Server.Implementations.Tests/Library/UserDataManagerTests.cs b/tests/Jellyfin.Server.Implementations.Tests/Library/UserDataManagerTests.cs
-index ba3127bc08..50a5c6794d 100644
+index 2ed16de15b..8f6c39ce0f 100644
 --- a/tests/Jellyfin.Server.Implementations.Tests/Library/UserDataManagerTests.cs
 +++ b/tests/Jellyfin.Server.Implementations.Tests/Library/UserDataManagerTests.cs
-@@ -8,6 +8,7 @@ using Jellyfin.Database.Providers.Sqlite;
- using MediaBrowser.Controller.Configuration;
- using MediaBrowser.Controller.Entities;
- using MediaBrowser.Model.Configuration;
-+using MediaBrowser.Model.Entities;
- using Microsoft.Data.Sqlite;
- using Microsoft.EntityFrameworkCore;
- using Microsoft.Extensions.Logging.Abstractions;
-@@ -207,6 +208,39 @@ public sealed class UserDataManagerTests : IDisposable
+@@ -210,6 +210,39 @@ public sealed class UserDataManagerTests : IDisposable
          Assert.Equal(333, result[retiredItem.Id].PlaybackPositionTicks);
      }
  
@@ -195,5 +219,5 @@ index ba3127bc08..50a5c6794d 100644
 +    }
 +
      [Fact]
-     public void GetUserData_NullUser_ThrowsArgumentNullException()
+     public void SaveUserData_RowUnderRetiredKey_IsKeptInAgreement()
      {

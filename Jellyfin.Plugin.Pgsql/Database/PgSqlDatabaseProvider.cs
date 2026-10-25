@@ -160,6 +160,24 @@ public sealed class PgSqlDatabaseProvider : IJellyfinDatabaseProvider, IDisposab
     }
 
     /// <inheritdoc/>
+    public async Task RefreshStatistics(CancellationToken cancellationToken)
+    {
+        if (DbContextFactory is null)
+        {
+            return;
+        }
+
+        await using var context = await DbContextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        if (!context.Database.IsNpgsql())
+        {
+            return;
+        }
+
+        await context.Database.ExecuteSqlRawAsync("ANALYZE", cancellationToken).ConfigureAwait(false);
+        _logger.LogInformation("PostgreSQL query planner statistics refreshed successfully");
+    }
+
+    /// <inheritdoc/>
     public void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Use C collation for consistent case-sensitive behavior matching SQLite BINARY
