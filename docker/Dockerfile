@@ -28,7 +28,9 @@ COPY jellyfin/MediaBrowser.Providers/Plugins/Tmdb/Configuration/PluginConfigurat
 COPY Jellyfin.Plugin.Pgsql/Configuration/PluginConfiguration.cs /src/Jellyfin.Plugin.Pgsql/Configuration/PluginConfiguration.cs
 COPY Jellyfin.Plugin.Seerr/Configuration/PluginConfiguration.cs /src/Jellyfin.Plugin.Seerr/Configuration/PluginConfiguration.cs
 COPY patches/jellyfin_sso.patch patches/jellyfin_zz_last_admin_invariant.patch /src/patches/
-COPY .github/workflows/test.yaml /src/.github/workflows/test.yaml
+COPY .github/workflows/test.yaml .github/workflows/docker.yaml /src/.github/workflows/
+COPY .gitmodules /src/.gitmodules
+COPY scripts/apply-patches.sh /src/scripts/apply-patches.sh
 COPY docker/Dockerfile /src/docker/Dockerfile
 
 RUN npm test && npm run build
