@@ -15,11 +15,11 @@ public sealed class SeerrDiscoverPathTests
     }
 
     [Fact]
-    public void BuildDiscoverPath_Tv_WithGenresAndVoteFloor()
+    public void BuildDiscoverPath_Tv_WithAnyGenreAndVoteFloor()
     {
         var path = SeerrClient.BuildDiscoverPath("tv", [18, 35, 18], 6.5f, 2);
 
-        Assert.Equal("discover/tv?page=2&sortBy=popularity.desc&genre=18%2C35&voteAverageGte=6.5", path);
+        Assert.Equal("discover/tv?page=2&sortBy=popularity.desc&genre=18%7C35&voteAverageGte=6.5", path);
     }
 
     [Fact]

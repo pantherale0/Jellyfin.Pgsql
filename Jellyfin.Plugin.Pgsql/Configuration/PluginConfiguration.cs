@@ -74,6 +74,12 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool OptimizeNextUpQueries { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets a value indicating whether candidate-first PostgreSQL Resume selection is enabled.
+    /// Overridden by <c>Pgsql_PG_OPTIMIZE_RESUME</c>.
+    /// </summary>
+    public bool OptimizeResumeQueries { get; set; } = true;
+
+    /// <summary>
     /// Gets or sets a value indicating whether user taste profiles are built and applied to movie suggestions.
     /// Overridden by <c>Pgsql_TASTE_ENABLED</c>.
     /// </summary>

@@ -1,8 +1,8 @@
 diff --git a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
-index 3bd5ca327d..4c75a29f39 100644
+index bdbe4b4378..88787031a1 100644
 --- a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
 +++ b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
-@@ -479,8 +479,7 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
+@@ -486,8 +486,7 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
  
          if (!string.IsNullOrWhiteSpace(filter.NameContains))
          {
@@ -40,10 +40,10 @@ index 7cc6daa905..f6682770da 100644
      public bool IsTypeSupported(BaseItem baseItem)
      {
 diff --git a/MediaBrowser.Controller/Entities/BaseItem.cs b/MediaBrowser.Controller/Entities/BaseItem.cs
-index b7390914ee..d9a654fb8d 100644
+index 2356ff792d..2bf16a0ab7 100644
 --- a/MediaBrowser.Controller/Entities/BaseItem.cs
 +++ b/MediaBrowser.Controller/Entities/BaseItem.cs
-@@ -1168,7 +1168,9 @@ namespace MediaBrowser.Controller.Entities
+@@ -1192,7 +1192,9 @@ namespace MediaBrowser.Controller.Entities
  
              var list = GetAllItemsForMediaSources().ToList();
              var commonPrefix = GetCommonNamePrefix(list);
@@ -54,7 +54,7 @@ index b7390914ee..d9a654fb8d 100644
  
              if (IsActiveRecording())
              {
-@@ -1194,7 +1196,7 @@ namespace MediaBrowser.Controller.Entities
+@@ -1218,7 +1220,7 @@ namespace MediaBrowser.Controller.Entities
              return Enumerable.Empty<(BaseItem, MediaSourceType)>();
          }
  
@@ -63,7 +63,7 @@ index b7390914ee..d9a654fb8d 100644
          {
              ArgumentNullException.ThrowIfNull(item);
  
-@@ -1215,7 +1217,7 @@ namespace MediaBrowser.Controller.Entities
+@@ -1239,7 +1241,7 @@ namespace MediaBrowser.Controller.Entities
                  Type = type,
                  HasSegments = MediaSegmentManager.IsTypeSupported(item)
                      && (protocol is null or MediaProtocol.File)

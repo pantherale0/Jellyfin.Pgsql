@@ -21,6 +21,7 @@ internal sealed class PostgresInstanceLeadership : IInstanceLeadership, IAsyncDi
     private NpgsqlConnection? _connection;
     private bool _isLeader;
     private long _epoch;
+    private long _leaderSinceTicks;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PostgresInstanceLeadership"/> class.
@@ -46,6 +47,18 @@ internal sealed class PostgresInstanceLeadership : IInstanceLeadership, IAsyncDi
     public long Epoch => Interlocked.Read(ref _epoch);
 
     /// <summary>
+    /// Gets when this instance last acquired leadership, or <c>null</c> while it is standby.
+    /// </summary>
+    public DateTimeOffset? LeaderSinceUtc
+    {
+        get
+        {
+            var ticks = Interlocked.Read(ref _leaderSinceTicks);
+            return ticks == 0 ? null : new DateTimeOffset(ticks, TimeSpan.Zero);
+        }
+    }
+
+    /// <summary>
     /// Attempts to acquire the advisory lock or confirm it is still held.
     /// </summary>
     /// <param name="cancellationToken">The cancellation token.</param>
@@ -68,6 +81,7 @@ internal sealed class PostgresInstanceLeadership : IInstanceLeadership, IAsyncDi
             if (await TryAcquireLockedAsync(cancellationToken).ConfigureAwait(false))
             {
                 var epoch = Interlocked.Increment(ref _epoch);
+                Interlocked.Exchange(ref _leaderSinceTicks, DateTimeOffset.UtcNow.UtcTicks);
                 Volatile.Write(ref _isLeader, true);
                 if (_logger.IsEnabled(LogLevel.Information))
                 {
@@ -151,6 +165,7 @@ internal sealed class PostgresInstanceLeadership : IInstanceLeadership, IAsyncDi
     {
         var wasLeader = _isLeader;
         Volatile.Write(ref _isLeader, false);
+        Interlocked.Exchange(ref _leaderSinceTicks, 0);
         await DisposeConnectionAsync().ConfigureAwait(false);
         if (wasLeader)
         {

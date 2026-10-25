@@ -11,7 +11,7 @@ index e6e3d645fe..242866ab5c 100644
              serviceCollection.AddSingleton<ITranscodeManager, TranscodeManager>();
              serviceCollection.AddScoped<MediaInfoHelper>();
 diff --git a/Emby.Server.Implementations/Session/SessionManager.cs b/Emby.Server.Implementations/Session/SessionManager.cs
-index c0a4aade3d..3fcda061eb 100644
+index a55812b02d..cda4be664c 100644
 --- a/Emby.Server.Implementations/Session/SessionManager.cs
 +++ b/Emby.Server.Implementations/Session/SessionManager.cs
 @@ -30,6 +30,7 @@ using MediaBrowser.Controller.Events.Authentication;
@@ -22,7 +22,7 @@ index c0a4aade3d..3fcda061eb 100644
  using MediaBrowser.Controller.Net;
  using MediaBrowser.Controller.Session;
  using MediaBrowser.Model.Dto;
-@@ -57,6 +58,7 @@ namespace Emby.Server.Implementations.Session
+@@ -58,6 +59,7 @@ namespace Emby.Server.Implementations.Session
          private static readonly TimeSpan LiveTvProgramLookupMinInterval = TimeSpan.FromSeconds(30);
  
          private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
@@ -30,7 +30,7 @@ index c0a4aade3d..3fcda061eb 100644
          private readonly IUserDataManager _userDataManager;
          private readonly IServerConfigurationManager _config;
          private readonly ILogger<SessionManager> _logger;
-@@ -111,6 +113,7 @@ namespace Emby.Server.Implementations.Session
+@@ -112,6 +114,7 @@ namespace Emby.Server.Implementations.Session
          /// <param name="mediaSourceManager">Instance of <see cref="IMediaSourceManager"/> interface.</param>
          /// <param name="hostApplicationLifetime">Instance of <see cref="IHostApplicationLifetime"/> interface.</param>
          /// <param name="dbProvider">Instance of <see cref="IDbContextFactory{JellyfinDbContext}"/> interface.</param>
@@ -38,7 +38,7 @@ index c0a4aade3d..3fcda061eb 100644
          public SessionManager(
              ILogger<SessionManager> logger,
              IEventManager eventManager,
-@@ -125,7 +128,8 @@ namespace Emby.Server.Implementations.Session
+@@ -126,7 +129,8 @@ namespace Emby.Server.Implementations.Session
              IDeviceManager deviceManager,
              IMediaSourceManager mediaSourceManager,
              IHostApplicationLifetime hostApplicationLifetime,
@@ -48,7 +48,7 @@ index c0a4aade3d..3fcda061eb 100644
          {
              _logger = logger;
              _eventManager = eventManager;
-@@ -143,6 +147,7 @@ namespace Emby.Server.Implementations.Session
+@@ -144,6 +148,7 @@ namespace Emby.Server.Implementations.Session
  
              _deviceManager.DeviceOptionsUpdated += OnDeviceManagerDeviceOptionsUpdated;
              _dbProvider = dbProvider;
@@ -56,7 +56,7 @@ index c0a4aade3d..3fcda061eb 100644
          }
  
          /// <summary>
-@@ -2691,12 +2696,31 @@ namespace Emby.Server.Implementations.Session
+@@ -2708,12 +2713,31 @@ namespace Emby.Server.Implementations.Session
  
              if (!userIsAdmin)
              {
@@ -250,10 +250,10 @@ index 2702e3bc09..4e1e6ea388 100644
          }
      }
 diff --git a/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs b/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
-index 5045030b9b..7319bde9e3 100644
+index 12600af384..359465081b 100644
 --- a/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
 +++ b/MediaBrowser.Controller/MediaEncoding/TranscodingJob.cs
-@@ -126,6 +126,16 @@ public sealed class TranscodingJob : IDisposable
+@@ -128,6 +128,16 @@ public sealed class TranscodingJob : IDisposable
      /// </summary>
      public int? BitRate { get; set; }
  

@@ -1,176 +1,136 @@
 # Features
 
-Operator-facing map of capabilities in this fork: what you get, how to configure it, and which plugins/patches implement it. Env-var tables for Postgres, cache, and SSO remain authoritative in the [README](../README.md).
+This page maps the operator-facing features in the fork to the plugin, UI Next, and server patches that implement them. The root [README](../README.md) owns configuration and setup instructions.
+
+## UI Next web client
+
+**What:** UI Next is the only web client in the standard image. The Jellyfin-version and `latest` tags serve it at `/web`.
+
+**Where:** Client source, tests, and translations live in [`ui-next/`](../ui-next/). The [`Dockerfile`](../docker/Dockerfile) builds UI Next and sets `JELLYFIN_WEB_DIR=/jellyfin/ui-next`.
+
+**What it includes:** UI Next supports password, OIDC, and Quick Connect sign-in. It includes home and library browsing, search, details, video and music playback, Live TV, DVR, playlists, favorites, and metadata editing. Seerr requests and taste features are also available. The administrator workspace covers users, libraries, playback, Live TV, metadata, infrastructure, activity, and system settings. Its System page edits per-device playback overrides, and Playback shows active transcoding pipelines when the server reports them. The [UI Next guide](../ui-next/README.md) lists current capabilities, development steps, security notes, and compatibility limits.
+
+The administrator workspace includes its own Metadata manager. The image does not include Jellyfin Web, and the custom Jellyfin Web patch stack has been removed. See the [confirmed UI Next gaps](#features-not-yet-in-ui-next) below.
+
+**How to configure it:** See [UI Next image](../README.md#ui-next-image), [SSO](../README.md#single-sign-on-sso-with-rbac-via-oauth2oidc), and the [UI Next guide](../ui-next/README.md).
+
+### Features not yet in UI Next
+
+This non-exhaustive list covers confirmed gaps against the removed fork-specific Jellyfin Web patches. It does not compare UI Next with every feature in stock Jellyfin Web.
+
+- **Live TV Multiview player:** UI Next can display and edit the server's Multiview permission, but it cannot play several Live TV channels at once. The server permission and APIs remain available to clients that implement Multiview.
+- **Remote YouTube trailer playback:** The trailer plugin can resolve and relay public YouTube trailers, but UI Next lists local trailers only. It has no action to start remote trailer playback. See [Remote YouTube trailers](#remote-youtube-trailers).
 
 ## PostgreSQL database provider
 
 **What:** Jellyfin stores its system database in PostgreSQL instead of SQLite.
 
-**Where:** [`Jellyfin.Plugin.Pgsql`](../Jellyfin.Plugin.Pgsql/), Docker entrypoint `POSTGRES_*` wiring, [`docker/database.xml`](../docker/database.xml).
+**Where:** [`Jellyfin.Plugin.Pgsql`](../Jellyfin.Plugin.Pgsql/), Docker entrypoint `POSTGRES_*` wiring, and [`docker/database.xml`](../docker/database.xml).
 
-**How:** The plugin registers as a custom database provider. Images set connection parameters from environment variables (`POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, optional SSL). `Pgsql_COMMAND_TIMEOUT` (default `90`) raises Npgsql’s command timeout for heavy library queries.
+**How:** The plugin registers as a custom database provider. Images set connection parameters from environment variables. `Pgsql_COMMAND_TIMEOUT` raises Npgsql's command timeout for heavy library queries.
 
-**Related:** SQLite→PG migration in [README](../README.md#migrating-from-sqlite-to-postgresql); inherited scale caveats in [known issues](known-issues.md).
+**Related:** The README covers [SQLite-to-PostgreSQL migration](../README.md#migrating-from-sqlite-to-postgresql). See [known issues](known-issues.md) for scale caveats.
 
-## Query cache and optimised Latest
+## Query cache and PostgreSQL query optimization
 
-**What:** Cache home Latest/Resume ID lists and stable library browse `/Items` pages; optionally replace Latest queries with PostgreSQL `DISTINCT ON` variants.
+**What:** The plugin can cache home Latest and Resume ID lists and stable library `/Items` pages. It can also replace supported Latest and Resume queries with PostgreSQL-specific selectors.
 
-**Where:** [`Jellyfin.Plugin.Pgsql/Query/`](../Jellyfin.Plugin.Pgsql/Query/); toggles `Pgsql_CACHE_*`, `Pgsql_PG_OPTIMIZE_*`, `REDIS_CONNECTION_STRING` ([README](../README.md#query-cache-and-optimisation-optional-experimental)).
+**Where:** [`Jellyfin.Plugin.Pgsql/Query/`](../Jellyfin.Plugin.Pgsql/Query/). Configure the `Pgsql_CACHE_*`, `Pgsql_PG_OPTIMIZE_*`, and `REDIS_CONNECTION_STRING` settings in the [README](../README.md#query-cache-and-optimisation-optional-experimental).
 
-**How:** Cache keys are per user and per view (never shared across users). Failures fall back to stock Jellyfin queries. Redis uses a shared persistent multiplexer with background PING health: request paths only touch Redis when status is `Ready`; `Unknown`/`Unavailable` skip immediately to the in-process memory fallback (no repeated SyncTimeout wait). Cache operations default to a bounded 250 ms deadline (`Pgsql_REDIS_OPERATION_TIMEOUT_MS`) so brief local stalls do not cause the 100 ms false-unhealthy flapping seen under load. Default Latest TTL is 120s; browse pages default to 60s (`Pgsql_CACHE_BROWSE_TTL`). Browse cache stores `(TotalRecordCount, ids[])` for recursive SortName-style library pages.
+**How:** Cache keys include the user and query boundaries. Redis failures fall back to the in-process memory cache. Supported Resume requests select candidates from positive playback-progress rows before loading item details; unsupported filters use Jellyfin's core query.
 
-**Patches that help home/query load:** [`jellyfin_home_api_performance`](patches.md#jellyfin_home_api_performancepatch), [`jellyfin_unoptimized_query_fixes`](patches.md#jellyfin_unoptimized_query_fixespatch), [`jellyfin_query_split_userdata`](patches.md#jellyfin_query_split_userdatapatch), [`jellyfin_z_items_browse_perf`](patches.md#jellyfin_z_items_browse_perfpatch), [`jellyfin_latest_tv_always_series`](patches.md#jellyfin_latest_tv_always_seriespatch), [`jellyfin_zzz_byname_access_semijoin`](patches.md#jellyfin_zzz_byname_access_semijoinpatch), [`jellyfin_zzzz_people_query_perf`](patches.md#jellyfin_zzzz_people_query_perfpatch). Descendant-query memory fixes are stock Jellyfin as of v12.0-rc6 ([jellyfin#17602](https://github.com/jellyfin/jellyfin/issues/17602)).
+Server query patches include [`jellyfin_home_api_performance`](patches.md#jellyfin_home_api_performancepatch), [`jellyfin_unoptimized_query_fixes`](patches.md#jellyfin_unoptimized_query_fixespatch), [`jellyfin_query_split_userdata`](patches.md#jellyfin_query_split_userdatapatch), and the [library browse performance patch](patches.md#jellyfin_z_items_browse_perfpatch). See the [README query section](../README.md#query-cache-and-optimisation-optional-experimental) for limits and trade-offs.
 
-## Fuzzy search (PostgreSQL)
+## PostgreSQL fuzzy search
 
-**What:** Server-side fuzzy / franchise-oriented search via the plugin provider; core SQL search provider is disabled when the plugin is present so results do not double-count.
+**What:** The plugin adds PostgreSQL-backed fuzzy and franchise-oriented search. Jellyfin's SQL search provider is disabled when the plugin provider is active, avoiding duplicate results.
 
-**Where:** [`Jellyfin.Plugin.Pgsql/Search/`](../Jellyfin.Plugin.Pgsql/Search/); patches [`jellyfin_search_performance`](patches.md#jellyfin_search_performancepatch), [`jellyfin_disable_sql_search_provider`](patches.md#jellyfin_disable_sql_search_providerpatch); web infinite scroll on search ([`jellyfin_web_user_search_infinite_scroll`](patches.md#jellyfin_web_user_search_infinite_scrollpatch)).
+**Where:** [`Jellyfin.Plugin.Pgsql/Search/`](../Jellyfin.Plugin.Pgsql/Search/), [`jellyfin_search_performance`](patches.md#jellyfin_search_performancepatch), and [`jellyfin_disable_sql_search_provider`](patches.md#jellyfin_disable_sql_search_providerpatch). UI Next provides the search interface.
 
-**How:** Plugin registers an `ISearchProvider`. ApplicationHost prefers PostgreSQL similarity for “Similar” and excludes `SqlSearchProvider` from search parts. Fuzzy title matching uses only the indexable pg_trgm `<%` operator (`jellyfin_word_similar`) with a per-transaction similarity threshold so `IX_BaseItems_CleanName_trgm` can be used — Levenshtein and function-form `similarity()` are not OR’d into the same filter (those force a sequential scan). Total-count is computed from the page when it is not full; `CountAsync` of the union runs only when the page is full and the client asked for a total. Genre/tag `ILIKE` goes through `jellyfin_ilike`, which inlines to `haystack ILIKE pattern` so GIN trigram indexes on OriginalTitle / Genres / Tags can be used. More Like This scores franchise titles the same way (one batched `<%` / `ILIKE` pass instead of a `word_similarity()` scan per source) and hides already-played candidates with a `UserData` lookup on the short candidate list rather than the rc5 folder-descendant `IsPlayed` SQL.
+**How:** The plugin registers an `ISearchProvider` and uses `pg_trgm` indexes for supported title and metadata matches.
 
-**People listings:** `/Persons` collapse (one row per provider key or lowercased name) lives in [`jellyfin_zz_person_provider_identity`](patches.md#jellyfin_zz_person_provider_identitypatch). Name-contains search and batched `HasSegments` on media-source builds are in [`jellyfin_zzzz_people_query_perf`](patches.md#jellyfin_zzzz_people_query_perfpatch).
+## Single Sign-On and RBAC
 
-## Single Sign-On (OIDC) and RBAC
+**What:** OIDC login can create users, assign administrator access from IdP roles, set parental ratings from birthdate claims, and apply per-group library, permission, tag, and Live TV policies.
 
-**What:** Forced OIDC login for browsers, auto-create users, admin role from IdP groups, parental rating from birthdate claim, and per-group dashboard mappings for libraries, permissions, block-unrated types, Allowed/Blocked tags, and Live TV channel/category allowlists (exceptions when unrated Live TV is blocked).
+**Where:** [`jellyfin_sso`](patches.md#jellyfin_ssopatch), [`jellyfin_z_livetv_rbac_allowlist`](patches.md#jellyfin_z_livetv_rbac_allowlistpatch), and [`jellyfin_startup_secret_redaction`](patches.md#jellyfin_startup_secret_redactionpatch). UI Next provides the sign-in flow and SSO mapping editor.
 
-**Where:**
-
-- Server: [`jellyfin_sso.patch`](patches.md#jellyfin_ssopatch) (`SSOController`), [`jellyfin_z_livetv_rbac_allowlist.patch`](patches.md#jellyfin_z_livetv_rbac_allowlistpatch) (ChannelGroup persist + parental enforcement), [`jellyfin_startup_secret_redaction.patch`](patches.md#jellyfin_startup_secret_redactionpatch) (credential-safe startup logging)
-- Web: [`jellyfin_web_rbac.patch`](patches.md#jellyfin_web_rbacpatch) (SSO Mappings UI)
-- TV: [`jellyfin_web_tv_quickconnect_login`](patches.md#jellyfin_web_tv_quickconnect_loginpatch), [`jellyfin_web_quickconnect_modal`](patches.md#jellyfin_web_quickconnect_modalpatch)
-- Config: `JELLYFIN_SSO_OIDC_*` ([README](../README.md#single-sign-on-sso-with-rbac-via-oauth2oidc))
-
-**How:** When SSO env vars are set, the web client redirects to the IdP. Callback is the configured absolute `JELLYFIN_SSO_OIDC_REDIRECT_URI` (not derived from `Host`). Matching IdP groups merge `sso_rbac.json` additively onto the user. Emergency bypass: `?local=true` on the login URL. TV clients skip forced redirect and open Quick Connect. Startup logging redacts credential-like environment variables; credentials exposed by an older image must still be rotated.
-
-**Live TV allowlist:** With “Live TV” under block-unrated, channels without ratings are hidden unless allowlisted by M3U `group-title` category, EPG category (`Kids` / `Sports` / `News`), or individual channel. Whitelisted Live TV also bypasses AllowedTags (BlockedTags still apply). Refresh the Live TV guide after changing M3U groups so categories appear in the UI.
-
-**Related:** Fork issue [pantherale0#5](https://github.com/pantherale0/Jellyfin.Pgsql/issues/5) (SSO mapping config / auth).
-
-## Live TV Multiview
-
-**What:** Experimental desktop/mobile web overlay for watching up to 4 Live TV channels at once (Sky TV 1+3, Quad 2×2, Dual side-by-side). Supports audio-focus switching, in-place slot swap, and a channel picker. Each tile opens a normal Live TV session via `getPlaybackInfo` and plays with raw `hls.js` (not the full html video player stack—no per-tile subtitle/bitrate OSD). Access requires the `EnableLiveTvMultiview` user permission (Dashboard user profile or SSO group mappings in `sso_rbac.json`), the experimental display setting (`chkEnableExperimentalMultiview`), and a non-TV client (`!isTvClient() && !layoutManager.tv` — including LG webOS). Entry points: Live TV → Channels header, item context menu, and the video OSD button (Live TV items only). Tuner exhaustion when adding a channel shows a toast.
-
-**Where:**
-- Server: [`jellyfin_livetv_multiview_rbac.patch`](patches.md#jellyfin_livetv_multiview_rbacpatch) (`PermissionKind.EnableLiveTvMultiview`, `UserPolicy`, `UserManager`)
-- Web: [`jellyfin_web_zzz_livetv_multiview.patch`](patches.md#jellyfin_web_zzz_livetv_multiviewpatch) (`multiviewManager.js`, `channelPickerModal.js`, `multiview.scss`, `userSettings.js`, `displaySettings`, OSD Multiview button, User Profile checkbox)
-- SSO: [`jellyfin_sso.patch`](patches.md#jellyfin_ssopatch), [`jellyfin_web_rbac.patch`](patches.md#jellyfin_web_rbacpatch) (SSO Mappings UI)
-
-**Note:** Permission is enforced in the web UI only; see [known issues](known-issues.md).
+**How:** The server uses the configured absolute `JELLYFIN_SSO_OIDC_REDIRECT_URI`. UI Next uses the one-time code flow for allowlisted separate origins and same-origin callback credentials otherwise. It also offers Quick Connect and password sign-in. The root [README SSO section](../README.md#single-sign-on-sso-with-rbac-via-oauth2oidc) documents setup.
 
 ## Playback statistics
 
-**What:** Persist playback activity (including daily rollups / delivery method analytics) and expose user + admin dashboards with charts and CSV export.
+**What:** The server records playback activity and daily rollups, then exposes user and administrator statistics APIs. UI Next provides playback statistics views.
 
-**Where:** Server [`jellyfin_playback_statistics`](patches.md#jellyfin_playback_statisticspatch); web [`jellyfin_web_user_playback_stats`](patches.md#jellyfin_web_user_playback_statspatch) (Dashboard → Reports → Playback). Progress write load reduced by [`jellyfin_playback_progress_coalesce`](patches.md#jellyfin_playback_progress_coalescepatch).
+**Where:** [`jellyfin_playback_statistics`](patches.md#jellyfin_playback_statisticspatch) and [`jellyfin_playback_progress_coalesce`](patches.md#jellyfin_playback_progress_coalescepatch).
 
 ## Remote YouTube trailers
 
-**What:** Remote YouTube trailers play in Jellyfin's HTML5 player instead of the YouTube iframe. The plugin resolves a progressive MP4 with yt-dlp and relays it with seek/Range support. Local and remote trailers are transient: they do not update resume/played state, playback statistics, or taste/neural recommendation inputs.
+**What:** The plugin resolves public YouTube trailers with a pinned `yt-dlp` binary and relays them through Jellyfin. Trailer playback does not affect resume state, played status, playback statistics, or taste recommendations.
 
-**Where:** Plugin `Trailers/` and `TrailerController`; server [`jellyfin_trailer_history`](patches.md#jellyfin_trailer_historypatch); web [`jellyfin_web_ytdlp_trailers`](patches.md#jellyfin_web_ytdlp_trailerspatch). See [README configuration](../README.md#remote-youtube-trailers).
+**Where:** Plugin `Trailers/` and `TrailerController`; [`jellyfin_trailer_history`](patches.md#jellyfin_trailer_historypatch). UI Next currently lists local trailers only.
 
-**How:** The image bundles a pinned yt-dlp release. Standalone installs provide `yt-dlp` on `PATH` or set `Pgsql_YTDLP_PATH`. Progressive MP4 sources are relayed directly with Range support; adaptive-only H.264/AAC sources are remuxed through Jellyfin's configured ffmpeg into fragmented MP4 without temporary downloads. Jellyfin relays all trailer bytes, so server bandwidth is used. Public YouTube videos are supported; private/account/geo bypass remains out of scope.
+**Limits:** Adaptive-only streams use Jellyfin's configured ffmpeg and do not support byte-range seeking. Remote trailer playback uses server bandwidth. See [README configuration](../README.md#remote-youtube-trailers).
 
-## Taste profiles, For You, and taste models
+## Taste profiles and recommendations
 
-**What:** Per-user taste profiles and precomputed recommendations; home “For You” section; user taste identity UI; admin shadow-eval reports for taste models. Engagement weighting uses completion-aware playback (short abandons are negatives; deep watches/favorites are positives) and For You impression logs so recommended→engage is boosted and recommended→abandon is penalized more strongly. Profiles also store year / runtime / parental bands, movie-vs-series share, writers, box-set membership, original language, and production country; live linear scoring (For You, similar, match badges) applies soft penalties outside those bands, boosts writer / collection / language / country overlap, and demotes confirmed For You skips (impressed, no later engagement, after a 14-day confirm window). Shadow neural training uses the same axes, mixes genre-matched hard catalog negatives with random ones, treats confirmed impression skips as weak negatives, and applies recency decay on labeled sample weights. Evaluation uses a time-based holdout (newest 20% of the event span), global Precision@10, per-user Mean Precision@10, and a matured For You impression→engage rate (14-day window). ROC AUC is omitted when the holdout contains only one class (catalog negatives are kept in the train window so they do not leak into eval). When `Pgsql_TASTE_NEURAL_SERVE` is on and a shadow zip loads, the **recommendations refresh task** blends 50% neural with 50% linear into stored For You rows and Because you watched/liked similar lists (up to 12 recently played + 8 liked baselines, franchise-diversified, 16 items each). `GET /Movies/Recommendations` and More Like This read those rows; a title watched after the last rebuild falls back to similarity + linear only. Match badges stay linear on the request path. Neural serving stays **off** by default.
+**What:** The plugin builds per-user taste profiles and recommendations for UI Next's For You and similar-title views. Administrators can inspect taste-model evaluation results.
 
-**Where:**
+**Where:** [`Jellyfin.Plugin.Pgsql/Taste/`](../Jellyfin.Plugin.Pgsql/Taste/), UI Next's profile and home views, and the server schema patches [`jellyfin_user_taste_profiles`](patches.md#jellyfin_user_taste_profilespatch), [`jellyfin_user_taste_recommendations`](patches.md#jellyfin_user_taste_recommendationspatch), and [`jellyfin_zz_user_taste_because_you`](patches.md#jellyfin_zz_user_taste_because_youpatch).
 
-- DB entities: [`jellyfin_user_taste_profiles`](patches.md#jellyfin_user_taste_profilespatch), [`jellyfin_user_taste_recommendations`](patches.md#jellyfin_user_taste_recommendationspatch), [`jellyfin_z_user_taste_recommendation_impressions`](patches.md#jellyfin_z_user_taste_recommendation_impressionspatch), [`jellyfin_zz_user_taste_because_you`](patches.md#jellyfin_zz_user_taste_because_youpatch)
-- Home section enum + API: [`jellyfin_foryou_home_section`](patches.md#jellyfin_foryou_home_sectionpatch)
-- Plugin logic: [`Jellyfin.Plugin.Pgsql/Taste/`](../Jellyfin.Plugin.Pgsql/Taste/), `TasteProfileController` / `TasteAdminController`
-- Web: [`jellyfin_web_foryou_home`](patches.md#jellyfin_web_foryou_homepatch), [`jellyfin_web_taste_identity`](patches.md#jellyfin_web_taste_identitypatch), [`jellyfin_web_z_taste_models`](patches.md#jellyfin_web_z_taste_modelspatch)
+**How:** The plugin stores user profiles and scheduled recommendation results. Neural serving is off by default. See the taste settings in the plugin and UI Next administrator workspace.
 
-## Seerr / Beyond Your Library
+## Seerr and Beyond Your Library
 
-**What:** Search results can show Seerr request status and request actions; home “Beyond Your Library” row surfaces discover candidates outside the library (with parental filtering).
+**What:** UI Next can show Seerr request status and request actions in search, and can add personalized Beyond Your Library rows to the home feed.
 
-**Where:** [`Jellyfin.Plugin.Seerr`](../Jellyfin.Plugin.Seerr/) (plugin config: Seerr URL + API key); [`jellyfin_web_seerr_search`](patches.md#jellyfin_web_seerr_searchpatch); [`jellyfin_z_beyond_your_library_home`](patches.md#jellyfin_z_beyond_your_library_homepatch) + [`jellyfin_web_seerr_z_beyond_your_library_home`](patches.md#jellyfin_web_seerr_z_beyond_your_library_homepatch).
+**Where:** [`Jellyfin.Plugin.Seerr`](../Jellyfin.Plugin.Seerr/) and UI Next's `seerr.ts` and `seerr-views.tsx`. The server's [`jellyfin_z_beyond_your_library_home`](patches.md#jellyfin_z_beyond_your_library_homepatch) adds the home-section type.
 
-**Note:** Upstream Devices.`AppVersion` length issues with Jellyseerr were discussed on JPVenson ([#25](https://github.com/JPVenson/Jellyfin.Pgsql/issues/25)); use a current image/schema if you hit `varchar(32)` errors.
+**How:** Configure the Seerr URL and API key in the plugin. The key stays on the server. UI Next hides Seerr controls when the gateway is disabled or unavailable.
 
 ## Emby userdata import and user merge
 
-**What:** Admins can upload Emby SQLite userdata and map/import progress/favorites; merge/transfer userdata between Jellyfin users.
+**What:** Administrators can upload Emby SQLite userdata, preview mappings, and import or transfer progress and favorites. UI Next requires a server-signed preview token before a transfer can run.
 
-**Where:** Plugin `Api/EmbyImport*` + `Admin/EmbyImport/`; web [`jellyfin_web_zz_emby_userdata_import`](patches.md#jellyfin_web_zz_emby_userdata_importpatch), [`jellyfin_web_z_user_admin`](patches.md#jellyfin_web_z_user_adminpatch) (Dashboard → Users).
+**Where:** Plugin `Api/EmbyImport*` and `Admin/EmbyImport/`; UI Next administrator workspace under Users & access.
 
 ## Live TV hardening
 
-**What:** Guide/listings performance, published URL rewrites for Docker, clearing unreachable tuner-origin Paths from PlaybackInfo (so clients use `TranscodingUrl` / LiveStreamFiles), ignoring unmatched Live TV `MediaSourceId` and AutoOpen fallback to the first tuner source (Wholphin channel-placeholder id → avoid `NoCompatibleStream` / missing `LiveStreamId`), SharedHttpStream for extensionless HTTP M3U origins (e.g. Dispatcharr), `live.m3u8` open-before-ffmpeg-CLI + `Request.LiveStreamId` sync (avoid null-`OpenToken` after premature close), rolling stream buffers / keep-alive seconds, configurable probe delay and SharedHttpStream open timeout, non-blocking live-stream open/close (avoids freezing all Live TV on one stalled M3U open), per-channel keyed share-or-create with safe `ConsumerCount`, reverse-close when clients omit `LiveStreamId`, orphaned open-stream sweep, `livetv` item alias, active recordings widget.
+**What:** Server patches improve guide queries, published URLs, tuner lifecycle, HLS stream opening, and recovery from stalled sources. UI Next includes On Now, Guide, Channels, and DVR views.
 
-**Where:** See [Live TV patch group](patches.md#4-live-tv). Notable upstream refs: [jellyfin#15411](https://github.com/jellyfin/jellyfin/issues/15411) / [PR #17298](https://github.com/jellyfin/jellyfin/pull/17298), [jellyfin#17128](https://github.com/jellyfin/jellyfin/pull/17128), [jellyfin#9813](https://github.com/jellyfin/jellyfin/issues/9813), [jellyfin#17319](https://github.com/jellyfin/jellyfin/issues/17319), [jellyfin#16880](https://github.com/jellyfin/jellyfin/issues/16880), [jellyfin#17177](https://github.com/jellyfin/jellyfin/issues/17177), [jellyfin-web#8072](https://github.com/jellyfin/jellyfin-web/pull/8072). Encoding UI: [`jellyfin_web_live_stream`](patches.md#jellyfin_web_live_streampatch).
+**Where:** See the [Live TV patch group](patches.md#4-live-tv). The UI Next guide documents the client behavior and its browser playback path.
 
-## Playback / encoding tooling
+## Playback and transcoding
 
-**What:** Lazy transcoding pipeline probe exposed to admins; hardware encoder capability API + dashboard; generation-aware HLS remux restart behaviour; HDR10+ SEI strip on MPEG-TS; Chrome/Opera MKV DirectPlay false-positive fix; **transcode codec fallback** (parallel AV1/H.264 init race, sequential encoder chain, Activity Log alerts, dashboard toggles).
+**What:** Server patches add transcoding diagnostics, hardware capability reporting, codec fallback, playback error codes, device-specific playback settings, and HLS lifecycle fixes. UI Next includes a player, an administrator Transcoding page, and a stage graph for active transcoding sessions.
 
-**Where:** [Playback / encoding group](patches.md#3-playback--encoding). Codec fallback: [`jellyfin_z_transcode_codec_fallback`](patches.md#jellyfin_z_transcode_codec_fallbackpatch) + [`jellyfin_web_z_transcode_codec_fallback`](patches.md#jellyfin_web_z_transcode_codec_fallbackpatch). Upstream: [jellyfin#13668](https://github.com/jellyfin/jellyfin/issues/13668), [jellyfin#16823](https://github.com/jellyfin/jellyfin/issues/16823), [jellyfin-web#7651](https://github.com/jellyfin/jellyfin-web/issues/7651).
+**Where:** See the [Playback and encoding patch group](patches.md#3-playback--encoding), including [`jellyfin_transcoding_pipeline`](patches.md#jellyfin_transcoding_pipelinepatch), [`jellyfin_z_transcode_codec_fallback`](patches.md#jellyfin_z_transcode_codec_fallbackpatch), and [`jellyfin_zzzzzzz_hls_remux_segment_restart`](patches.md#jellyfin_zzzzzzz_hls_remux_segment_restartpatch).
 
-**How (codec fallback):** Enabled by default (`EnableTranscodeCodecFallback`, `EnableParallelCodecRace` in Dashboard → Playback → Transcoding). When AV1 encode fails at HLS init, the server races or falls back to H.264 (etc.), 302-redirects the client to the winning playlist, and writes deduplicated Activity Log entries. Devices → playback info shows an `AV1 → H.264 fallback` badge when active.
+**Limits:** The graph follows the server's ordered stage list and edge labels; it does not infer branch connections. Pipeline details are unavailable when the server cannot report them. See [known issues](known-issues.md) for client compatibility and transcoding caveats.
 
-### Per-device playback and transcoding options
+## Media resource security
 
-**What:** Dashboard → Devices → Edit lets administrators override playback permissions, a maximum streaming bitrate, preferred output codec, tone mapping, audio/quality/deinterlacing, hardware decoding/encoding and codec fallback for **one registered device**. Each field inherits the server or client policy until explicitly overridden. A preferred codec only reorders codecs the client already advertised; e.g. prefer H.264 over HEVC for an SDR Android TV while keeping HEVC on other devices. Tone mapping can use BT.2390, TV color range and automatic source peak (`0`); peak `100` means 1000-nit input, not a 100-nit SDR output target.
+**What:** Subtitle streams and video attachments require authentication and respect library visibility. Attachments download instead of opening as active documents under Jellyfin's origin.
 
-**Where:** Server [`jellyfin_zzzzz_device_playback_options`](patches.md#jellyfin_zzzzz_device_playback_optionspatch) with SQLite schema migration, plugin `Jellyfin.Plugin.Pgsql/Migrations/20260926204250_AddDevicePlaybackOptions.cs` for PostgreSQL, web [`jellyfin_web_zzzzz_device_playback_options`](patches.md#jellyfin_web_zzzzz_device_playback_optionspatch).
+**Where:** [`jellyfin_zzzzzz_media_resource_security`](patches.md#jellyfin_zzzzzz_media_resource_securitypatch). UI Next supplies tokens for subtitle requests.
 
-**How:** Admin-only `GET /Devices/Options` and `PUT /Devices/Options/Playback` read/replace sparse settings; `{}` clears them. Existing `POST /Devices/Options` still edits the name without clearing overrides. Playback uses the authenticated access token's registered device, not a client-supplied device id; API keys do not get device overrides. Hardware/HEVC/AV1/race permissions and codec decode lists cannot exceed global settings. Effective encoding settings are cloned and pinned to an active playback job. Deleting a device in the dashboard removes its saved overrides. No extra environment variables are needed.
+## Active-standby high availability
 
-## Playback error messaging
+**What:** PostgreSQL advisory locking selects one Jellyfin writer. Standby instances fail readiness checks, while leader epochs and role headers let clients detect failover.
 
-**What:** Structured playback failure codes from the server and a friendlier web dialog (summary, tip, Try Again / Try with Transcoding). Mid-stream HLS failures expose intent via the `X-Playback-Error-Code` response header; pre-play failures use `PlaybackInfoResponse.errorCode` (+ optional `message`). Subtitle/audio stream changes proceed even when cleanup of the previous transcode transiently fails.
+**Where:** Plugin [`Jellyfin.Plugin.Pgsql/Ha/`](../Jellyfin.Plugin.Pgsql/Ha/) and [`jellyfin_z_ha_leadership`](patches.md#jellyfin_z_ha_leadershippatch). UI Next shows role and readiness information in the administrator workspace.
 
-**Where:** [`jellyfin_zzz_playback_errors`](patches.md#jellyfin_zzz_playback_errorspatch) + [`jellyfin_web_zzzz_playback_errors`](patches.md#jellyfin_web_zzzz_playback_errorspatch).
+**How to configure it:** Set `Pgsql_HA_ENABLED=true`. See [README HA settings](../README.md#active-standby-ha-optional) and [known issues](known-issues.md).
 
-**Web behaviour:** Title “Couldn't play this”; localized `PlaybackErrorFriendly.*` strings; one automatic reconnect attempt on `LiveStreamFenced` before showing the dialog.
+## UI Next TV and accessibility behavior
 
-**Client contract (mobile / third-party):**
+**What:** UI Next supports keyboard and remote navigation, responsive TV layouts, Quick Connect, a D-pad guide, focus management for dialogs, and TV-specific playback controls.
 
-| Phase | Source | Action |
-|---|---|---|
-| Pre-play | `PlaybackInfoResponse.errorCode` (PascalCase default; camelCase with `Accept: application/json; profile="CamelCase"`) | Map code to platform strings; optional `message` is English fallback only |
-| Mid-play | `X-Playback-Error-Code` on failed manifest/segment HTTP responses; optional JSON `{ errorCode }` on API errors | Prefer header; fall back to generic network/server error if missing |
-| `LiveStreamFenced` | 503 + code | Restart playback (web auto-retries once) |
-| `TranscodeFailed` / `TranscodeNotAllowed` | 500 / 403 | Suggest retry or ask admin about transcoding permissions |
-| `NotAllowed` | 403 at PlaybackInfo | Policy denial — contact admin |
+**Where:** [`ui-next/`](../ui-next/) and its [end-to-end tests](../ui-next/README.md#end-to-end-tests). The tests emulate a webOS user agent; they do not verify a physical TV or wrapper.
 
-Extend `@jellyfin/sdk` `PlaybackErrorCode` when bumping Jellyfin tags (new enum values: `TranscodeFailed`, `TranscodeNotAllowed`, `StreamUnavailable`, `LiveStreamFenced`).
+## Background media work and plugin reliability
 
-## Parental library images
+**What:** Server patches limit background scan, segment, and chapter-image work during playback. Other patches fix library refresh, metadata identity, image-info duplicates, plugin dependency loading, and automated subtitle downloads on read-only media mounts.
 
-**What:** Library/collection/splash images respect parental filters so restricted users do not see collage tiles from blocked titles.
+**Where:** [`jellyfin_background_media_qos`](patches.md#jellyfin_background_media_qospatch), [`jellyfin_media_updated_path_refresh`](patches.md#jellyfin_media_updated_path_refreshpatch), [`jellyfin_zz_person_provider_identity`](patches.md#jellyfin_zz_person_provider_identitypatch), [`jellyfin_dedupe_baseitem_image_infos`](patches.md#jellyfin_dedupe_baseitem_image_infospatch), [`jellyfin_plugin_load_context_deps`](patches.md#jellyfin_plugin_load_context_depspatch), and [`jellyfin_subtitle_ro_skip`](patches.md#jellyfin_subtitle_ro_skippatch).
 
-**Where:** [`jellyfin_library_image_parental`](patches.md#jellyfin_library_image_parentalpatch).
-
-## Active-standby HA (opt-in)
-
-**What:** One writer at a time: PostgreSQL advisory lock, leader-only library watchers/scheduled tasks/recording timers, `/health/ready`, `X-Jellyfin-Leader-Epoch` / `X-Jellyfin-Ha-Role` headers, Live TV `LiveStreamFenced` 503, flush coalesced progress on shutdown, optional Redis progress overlay.
-
-**Where:** Plugin [`Jellyfin.Plugin.Pgsql/Ha/`](../Jellyfin.Plugin.Pgsql/Ha/); patch [`jellyfin_z_ha_leadership`](patches.md#jellyfin_z_ha_leadershippatch). Env: [README](../README.md#active-standby-ha-optional).
-
-**How:** `Pgsql_HA_ENABLED=true`. Fail-closed until the lock is held. EF migrations take a separate blocking advisory lock so two boots cannot interleave DDL. HLS VOD already restarts ffmpeg from the requested segment; Live TV is not retuned.
-
-## TV / webOS UX
-
-**What:** Infinite scroll on library views, TV focus/nav helpers, capped home-row / lazy-load pressure, webOS 5 / older Chromium workarounds, Quick Connect-first login on TV, lighter play-start (simple spinner + deferred webOS fullscreen), and Live TV Multiview fully disabled on webOS / TV clients.
-
-**Where:** [TV UX group](patches.md#8-tv--web-ux); play-start: [`jellyfin_web_zzzz_tv_playback_perf`](patches.md#jellyfin_web_zzzz_tv_playback_perfpatch); Multiview off on TV: [`jellyfin_web_zzz_livetv_multiview`](patches.md#jellyfin_web_zzz_livetv_multiviewpatch).
-
-## Background media QoS (scan / segments / chapters)
-
-**What:** Library scan, media-segment extraction, and chapter-image work yield while playback is active and use more conservative unset concurrency defaults so the server stays usable under load.
-
-**Where:** [`jellyfin_background_media_qos`](patches.md#jellyfin_background_media_qospatch); PG index `IX_MediaSegments_ItemId` (`AddMediaSegmentsItemIdIndex`, restored after the rc5 sync drop by `RestoreMediaSegmentsItemIdIndex`); batched `HasSegments` in [`jellyfin_zzzz_people_query_perf`](patches.md#jellyfin_zzzz_people_query_perfpatch).
-
-**How:** Raise throughput explicitly via `LibraryScanFanoutConcurrency` and/or `ParallelImageEncodingLimit` in server config if overnight jobs should use more cores. Segment extraction skips items that already have provider rows (`forceOverwrite: false`). Extreme scan memory/OOM is unchanged — see [known issues](known-issues.md).
-
-## Library / plugin reliability
-
-**What:** Path-aware media refresh; BaseItem image-info dedupe; person provider-key identity; fix plugin ALC so transitive deps (for example Redis) resolve from `.deps.json`. Disabled-plugin cleanup is stock Jellyfin as of v12.0-rc5 ([jellyfin#15897](https://github.com/jellyfin/jellyfin/issues/15897)). Descendant-query memory fixes are stock as of v12.0-rc6 ([jellyfin#17602](https://github.com/jellyfin/jellyfin/issues/17602)). Automated subtitle download is skipped when “Save subtitles into media folders” targets a read-only media mount ([`jellyfin_subtitle_ro_skip`](patches.md#jellyfin_subtitle_ro_skippatch)) — uncheck that option (save under Jellyfin metadata) or remount RW if you want downloads.
-
-**Where:** [Library / metadata group](patches.md#5-library--metadata--plugin-loading); favorites-during-progress fix [jellyfin#14981](https://github.com/jellyfin/jellyfin/issues/14981).
+See [known issues](known-issues.md) for remaining limits.

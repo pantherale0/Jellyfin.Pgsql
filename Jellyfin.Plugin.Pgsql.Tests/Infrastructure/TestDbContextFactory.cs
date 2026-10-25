@@ -15,14 +15,15 @@ internal sealed class TestDbContextFactory : IDbContextFactory<JellyfinDbContext
     private readonly DbContextOptions<JellyfinDbContext> _options;
     private readonly PgSqlDatabaseProvider _provider;
 
-    public TestDbContextFactory(string connectionString)
+    public TestDbContextFactory(string connectionString, params IInterceptor[] interceptors)
     {
         var optionsBuilder = new DbContextOptionsBuilder<JellyfinDbContext>();
         optionsBuilder.UseNpgsql(connectionString, npgsqlOptions =>
         {
             npgsqlOptions.MigrationsAssembly(typeof(PgSqlDatabaseProvider).Assembly.GetName().Name);
         })
-        .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
+        .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning))
+        .AddInterceptors(interceptors);
 
         _provider = new PgSqlDatabaseProvider(null!, NullLogger<PgSqlDatabaseProvider>.Instance);
         // EnsureSearchSqlHelpers runs during PgSqlDatabaseProvider.Initialise in production;

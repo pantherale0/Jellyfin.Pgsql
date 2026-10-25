@@ -183,17 +183,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker image
+      - name: Build and push UI Next image
         uses: docker/build-push-action@v6.15.0
         with:
           context: .
           file: docker/Dockerfile
+          target: ui-next
           push: true
           build-args: |
             JELLYFIN_VERSION=${{ steps.image-tag.outputs.tag }}
+            UI_NEXT_BUILD=${{ github.sha }}
           tags: |
             ${{ env.REGISTRY }}/${{ steps.image-tag.outputs.owner }}/${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.tag }}
             ${{ env.REGISTRY }}/${{ steps.image-tag.outputs.owner }}/${{ env.IMAGE_NAME }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=jellyfin-ui-next
+          cache-to: type=gha,scope=jellyfin-ui-next,mode=max
           platforms: linux/amd64

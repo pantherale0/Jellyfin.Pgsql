@@ -16,6 +16,8 @@ Deep documentation (benefits/drawbacks, architecture, features, full patch catal
 | [Patches](docs/patches.md) | What / why / where / how for every file in `patches/` |
 | [Known issues](docs/known-issues.md) | Fork tracker items and inherited Postgres caveats |
 
+The standard image serves UI Next at `/web`. See the [UI Next guide](ui-next/README.md) for its features, development steps, and security notes. UI Next remains experimental, and support on physical TV and wrapper devices needs testing.
+
 ## Contributing, issues, and pull requests
 
 Issues and pull requests on this repository are **locked to collaborators only** (primarily for automated CI/CD, such as migration sync). This is intentional: the project is not set up for open contribution via PRs or issue trackers.
@@ -26,14 +28,14 @@ If you want to discuss a bug, idea, or change, please use [GitHub Discussions](h
 
 Use your existing Jellyfin Compose file and point the image at this repository’s container registry:
 
-`ghcr.io/pantherale0/jellyfin.pgsql:12.1`
+`ghcr.io/pantherale0/jellyfin.pgsql:12.3`
 
 Add the connection parameters as environment variables in your compose file:
 
 ```yaml
 services:
   jellyfin:
-    image: ghcr.io/pantherale0/jellyfin.pgsql:12.1
+    image: ghcr.io/pantherale0/jellyfin.pgsql:12.3
     volumes:
       - /path/to/config:/config
       - /path/to/cache:/cache
@@ -51,11 +53,25 @@ services:
 
 Images are built and published automatically on every push to `master`, when a release is cut, or on the daily schedule when a new Jellyfin version tag is needed. See [Release flow](#release-flow) below.
 
+### UI Next image
+
+The normal Jellyfin-version tag and `latest` both serve UI Next at `/web`. For example, use `ghcr.io/pantherale0/jellyfin.pgsql:12.3`. UI Next remains experimental, so test it on target devices before deployment.
+
+In the official Jellyfin Android app, enable ExoPlayer to hand supported video playback to the native player. UI Next verifies that the app uses the same server and user before handing playback over. The Android app then owns the playback controls. On webOS, UI Next uses HTML video and the TV media pipeline when available. Other TV and wrapper behavior remains unverified.
+
+Android native handoff requires a Jellyfin Android build that includes the companion `NativePlayer.syncSession` bridge; unmodified releases fall back to UI Next's browser player.
+
+To confirm a deployment serves the expected frontend, compare the image digest with the profile menu build revision. The menu shows the short commit the image was built from:
+
+```bash
+  docker inspect ghcr.io/pantherale0/jellyfin.pgsql:12.3 --format '{{.RepoDigests}}'
+```
+
 ## Query cache and optimisation (optional, experimental)
 
 The plugin can cache the home-screen queries (Latest and Resume rows), stable library
-browse `/Items` pages, and replace Jellyfin's Latest queries with PostgreSQL-optimised
-versions (`DISTINCT ON` instead of nested `GROUP BY` subqueries). Both features are enabled
+browse `/Items` pages, and replace Jellyfin's Latest and supported Resume queries with PostgreSQL-optimised
+versions. Latest uses `DISTINCT ON`; Resume starts from the user's in-progress items instead of scanning the video library. These features are enabled
 by default, fail open (any error falls back to the standard Jellyfin queries), and are
 provided strictly as-is.
 
@@ -76,6 +92,7 @@ appear in the Latest row.
 | `Pgsql_PG_OPTIMIZE_MOVIES_LATEST` | inherit | Per-type override for movies |
 | `Pgsql_PG_OPTIMIZE_TV_LATEST` | inherit | Per-type override for TV shows |
 | `Pgsql_PG_OPTIMIZE_MUSIC_LATEST` | inherit | Per-type override for music |
+| `Pgsql_PG_OPTIMIZE_RESUME` | `true` | Enable candidate-first Resume selection independently of cache settings; overrides plugin `OptimizeResumeQueries`. Restart after changing this setting |
 | `Pgsql_COMMAND_TIMEOUT` | `90` | Database command timeout in seconds (Jellyfin's default of 30 is too tight for heavy library queries on large remote databases) |
 
 Use the in-process `Memory` backend for a single Jellyfin instance; use `Redis` when running
@@ -87,6 +104,7 @@ keeping the first request after a real failure bounded.
 
 Known trade-offs:
 
+- Resume optimisation supports DatePlayed descending requests, including counted pages. It preserves library, parental, tag, and item restrictions through Jellyfin's query helpers, then loads details only for the selected IDs. Search, other sorting, unsupported criteria, and any in-progress folder candidate use the standard repository. An offset beyond the last item still returns the full eligible total when requested.
 - The TV Latest optimisation ports Jellyfin's Season/Series container-selection logic into the
   plugin, so its behaviour must be re-checked when syncing against new Jellyfin releases.
 - Cached Latest rows can lag behind library scans by up to the configured TTL.
@@ -106,17 +124,20 @@ Keep `/config` on one writer (or set `JELLYFIN_SERVER_ID` so both pods share the
 
 When HA is enabled, point k8s **readiness** at `/health/ready` (not `/health`). In-flight TCP streams still drop; HLS VOD/remux can resume from the next segment request; Live TV returns `LiveStreamFenced` (503) and the client should restart playback.
 
+Every response carries `X-Jellyfin-Ha-Role` (`single`, `leader` or `standby`) and `X-Jellyfin-Leader-Epoch`; both are listed in `Access-Control-Expose-Headers` for cross-origin requests. If a reverse proxy rewrites CORS headers, keep them exposed so a separately hosted UI Next can read them. Administrators can see the role, epoch, instance host name, leader-since time and heartbeat in `GET /Pgsql/Stats`, and in the UI Next admin top bar and Overview "High availability" card. Without readable headers the card falls back to stats and says so.
+
 To build the image locally instead:
 
 ```bash
-docker build -f docker/Dockerfile --build-arg JELLYFIN_VERSION=12.1 -t jellyfin.pgsql .
+docker build -f docker/Dockerfile --build-arg JELLYFIN_VERSION=12.3 -t jellyfin.pgsql .
 ```
 
 ## Remote YouTube trailers
 
-The bundled web client plays remote YouTube trailers through Jellyfin's normal HTML5
-player. The server resolves a progressive MP4 with the pinned yt-dlp binary and relays
-the bytes, including seek/Range requests. This consumes Jellyfin server bandwidth.
+The plugin resolves remote YouTube trailers with the pinned yt-dlp binary and relays the
+bytes through a Jellyfin endpoint that supports seek and HTTP Range requests. This consumes
+Jellyfin server bandwidth. UI Next currently lists local trailers only; it does not expose
+the remote YouTube trailer action.
 
 Trailer playback—both local trailer files and remote YouTube trailers—is deliberately
 excluded from resume state, played status, playback statistics, and taste/neural
@@ -157,14 +178,17 @@ Configure the OIDC integration using the following environment variables in your
 | `JELLYFIN_SSO_OIDC_ADMIN_ROLE` | `jellyfin_admin` | The role/group name that grants Administrator privileges in Jellyfin |
 | `JELLYFIN_SSO_OIDC_BIRTHDATE_CLAIM` | `birthdate` | The claim containing the user's date of birth (`YYYY-MM-DD`). Used to set max parental rating from age on each login. Missing/invalid values leave the existing rating unchanged. |
 | `JELLYFIN_SSO_OIDC_CREATE_USERS` | `true` | Set to `false` to disable auto-creation of new users |
+| `JELLYFIN_SSO_UI_RETURN_URLS` | empty | Comma-separated UI addresses allowed to receive a one-time SSO code (e.g. `https://ui.example.com/,https://jellyfin.example.com/jellyfin/web/`). Needed for UI Next on a separate origin or under a custom base path. `https` only (`http` for localhost); a return address matches when scheme, host and port are equal and its path is under the listed path. |
+
+Sign-in must start on the same host as `JELLYFIN_SSO_OIDC_REDIRECT_URI`: the login sets a short-lived `jellyfin_sso_state` cookie that the callback must receive, so starting from a LAN address while the redirect URI uses a public domain fails with "This sign-in was not started in this browser". Sign-ins must also complete within 10 minutes.
+
+UI Next on a separate origin (or a custom base path) uses a one-time code. List its address in `JELLYFIN_SSO_UI_RETURN_URLS`: `/sso/config?returnUrl=` then reports `codeExchange: true`, the callback redirects to that address with `#sso_code=...` (single use, valid 60 seconds), and UI Next redeems it with `POST /sso/exchange` together with a PKCE-style verifier only that tab holds. The token never appears in a URL. A separate UI origin must also be listed in Jellyfin's CORS hosts. Without an allowlisted address, the same-origin callback returns to `<BaseUrl>/web/index.html`; the server serves UI Next there.
 
 Startup environment logging redacts values whose names indicate credentials (including secrets, passwords, tokens, API keys, private keys, and connection strings). This only protects future logs: rotate any credential that appeared in logs produced by an older image.
 
-### How it is Built
-To maintain a clean upstream repository, changes to the `jellyfin` server and `jellyfin-web` client are packaged as patches under [`patches/`](patches/):
-1. `jellyfin_*.patch` files (e.g. [`patches/jellyfin_sso.patch`](patches/jellyfin_sso.patch)) are applied to the `jellyfin` submodule.
-2. `jellyfin_web_*.patch` files (e.g. [`patches/jellyfin_web_rbac.patch`](patches/jellyfin_web_rbac.patch)) are applied to the `jellyfin-web` submodule.
-3. During `docker build`, [`scripts/apply-patches.sh`](scripts/apply-patches.sh) scans `patches/` and applies every matching patch before compiling the server and web client from source.
+### How the image is built
+
+Server changes are stored as `jellyfin_*.patch` files in [`patches/`](patches/) and applied to the `jellyfin` submodule by [`scripts/apply-patches.sh`](scripts/apply-patches.sh). Docker builds the patched server and plugins, builds UI Next from `ui-next/`, and sets `JELLYFIN_WEB_DIR=/jellyfin/ui-next`.
 
 ## Local Development & Debugging (Fast Loop)
 
@@ -180,16 +204,16 @@ Instead of running full Docker image builds (`start-dev.sh`), use the fast local
    ```bash
    ./scripts/dev-backend.sh
    ```
-4. **CLI Web UI Watch (Instant HMR on frontend save):**
+4. **UI Next dev server (instant HMR on frontend save):**
    ```bash
-   ./scripts/dev-web.sh
+   npm --prefix ui-next run dev
    ```
 
 ## Build (from source)
 
-1. Check out the Jellyfin submodule: `git submodule update --init jellyfin`
-2. Build the plugin: `dotnet build`
-3. Place the plugin in Jellyfin’s plugin folder.
+1. Check out the Jellyfin submodule: `git submodule update --init jellyfin`.
+2. Build UI Next with `npm --prefix ui-next ci && npm --prefix ui-next run build`.
+3. Build the plugin with `dotnet build` and place it in Jellyfin's plugin folder.
 4. Update `database.xml` to use the plugin as the database provider:
 
 ```xml
@@ -210,7 +234,7 @@ Instead of running full Docker image builds (`start-dev.sh`), use the fast local
 ## Add migration (manual)
 
 ```bash
-dotnet ef migrations add {MIGRATION_NAME} --project Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj -- --migration-provider Jellyfin-PgSql
+dotnet ef migrations add {MIGRATION_NAME} --project Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj --configuration Release -- --migration-provider Jellyfin-PgSql
 ```
 
 ## Release flow
@@ -220,8 +244,8 @@ dotnet ef migrations add {MIGRATION_NAME} --project Jellyfin.Plugin.Pgsql/Jellyf
 A scheduled GitHub Actions workflow ([`.github/workflows/sync-migrations.yaml`](.github/workflows/sync-migrations.yaml)) runs daily and:
 
 1. Detects new Jellyfin releases and SQLite schema migrations via the GitHub API
-2. Bumps NuGet refs, the Docker base image version, and both `jellyfin` / `jellyfin-web` submodule gitlinks to the same tag
-3. Rebases `patches/` from the previous tag onto the new one (`scripts/rebase-patches.sh`), verifies they apply, builds the solution against patched jellyfin (catches new API surface even when no schema migration is needed), then leaves submodules clean
+2. Bumps NuGet refs, the Docker base image version, and the `jellyfin` server submodule gitlink
+3. Rebases server patches from the previous tag onto the new one (`scripts/rebase-patches.sh`), verifies they apply, builds the four plugin and test projects individually in Release against patched Jellyfin, then leaves the server submodule clean
 4. **Only if** Jellyfin’s latest SQLite migration advanced: generates a PostgreSQL `Update_*` via model diff (SQLite migrations are **not** copied), post-processes PG-specific fixes, and validates against Postgres
 5. Opens a collaborator-only PR for review and merge
 
@@ -243,7 +267,7 @@ git submodule update --init jellyfin
 
 CI already provides Postgres (`POSTGRES_PASSWORD=jellyfin`). Local compose uses `jellyfin_secure_pass`. Override `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_PASSWORD` if your database is not that default.
 
-Options: `--force` to re-run when state appears current, `--dry-run` to check drift and NuGet/TFM compatibility without modifying the repo, `--skip-rebase` to leave `patches/` unchanged (apply-only, old behaviour).
+Options: `--force` to re-run when state appears current, `--dry-run` to check drift and NuGet/TFM compatibility without modifying the repo, and `--skip-rebase` to leave `patches/` unchanged (apply-only, old behaviour).
 
 Standalone patch rebase (same machinery sync uses):
 
@@ -290,7 +314,7 @@ services:
       - /path/to/redis-data:/data
 
   jellyfin:
-    image: ghcr.io/pantherale0/jellyfin.pgsql:12.1
+    image: ghcr.io/pantherale0/jellyfin.pgsql:12.3
     depends_on:
       - postgres
       - redis
@@ -322,7 +346,7 @@ docker run --rm \
   -e POSTGRES_HOST=postgres -e POSTGRES_DB=jellyfin \
   -e POSTGRES_USER=jellyfin -e POSTGRES_PASSWORD=secret \
   -v /path/to/config:/config \
-  ghcr.io/pantherale0/jellyfin.pgsql:12.1 \
+  ghcr.io/pantherale0/jellyfin.pgsql:12.3 \
   /jellyfin-pgsql/migrate-sqlite-to-postgres.sh --dry-run --sqlite-db /config/data/jellyfin.db
 ```
 

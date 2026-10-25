@@ -8,7 +8,7 @@
         "start-dev-deps",
         "apply-server-patches",
         "sync-dev-plugins",
-        "ensure-web-dist",
+        "build-ui-next",
         "build-server"
       ]
     },
@@ -35,13 +35,6 @@
       "problemMatcher": []
     },
     {
-      "label": "apply-all-patches",
-      "type": "shell",
-      "command": "./scripts/apply-patches.sh",
-      "args": ["all"],
-      "problemMatcher": []
-    },
-    {
       "label": "clean-submodules",
       "type": "shell",
       "command": "./scripts/clean-submodules.sh",
@@ -54,9 +47,11 @@
       "problemMatcher": "$msCompile"
     },
     {
-      "label": "ensure-web-dist",
+      "label": "build-ui-next",
       "type": "shell",
-      "command": "./scripts/ensure-web-dist.sh",
+      "command": "npm",
+      "args": ["run", "build"],
+      "options": { "cwd": "${workspaceFolder}/ui-next" },
       "problemMatcher": []
     },
     {
@@ -76,22 +71,17 @@
       "problemMatcher": "$msCompile"
     },
     {
-      "label": "build-web",
-      "type": "shell",
-      "command": "./scripts/build-web.sh",
-      "group": "build",
-      "problemMatcher": []
-    },
-    {
       "label": "start-server",
       "type": "shell",
       "command": "./scripts/dev-backend.sh",
       "problemMatcher": []
     },
     {
-      "label": "start-web-dev",
+      "label": "start-ui-next-dev",
       "type": "shell",
-      "command": "./scripts/dev-web.sh",
+      "command": "npm",
+      "args": ["run", "dev"],
+      "options": { "cwd": "${workspaceFolder}/ui-next" },
       "problemMatcher": []
     },
     {
@@ -103,11 +93,11 @@
       "problemMatcher": "$msCompile"
     },
     {
-      "label": "test-web",
+      "label": "test-ui-next",
       "type": "shell",
       "command": "npm",
       "args": ["test"],
-      "options": { "cwd": "${workspaceFolder}/jellyfin-web" },
+      "options": { "cwd": "${workspaceFolder}/ui-next" },
       "group": "test",
       "problemMatcher": []
     }

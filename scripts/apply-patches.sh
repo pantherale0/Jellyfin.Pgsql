@@ -1,13 +1,11 @@
 #!/bin/sh
-# Apply all patches from patches/ for a given submodule target.
+# Apply server patches from patches/.
 #
-# Naming convention (flat patches/ directory):
-#   jellyfin_web*.patch  -> jellyfin-web/
-#   jellyfin_*.patch     -> jellyfin/  (excluding jellyfin_web*)
+# Naming convention (flat patches/ directory): jellyfin_*.patch -> jellyfin/
 #
 # Usage:
-#   apply-patches.sh [jellyfin|jellyfin-web|all] [patches-dir]
-#   apply-patches.sh --list [jellyfin|jellyfin-web|all] [patches-dir]
+#   apply-patches.sh [jellyfin|all] [patches-dir]
+#   apply-patches.sh --list [jellyfin|all] [patches-dir]
 #
 # --list prints matching patch paths in apply order (no submodule reset).
 
@@ -19,24 +17,17 @@ if [ "${1:-}" = "--list" ]; then
     shift
 fi
 
-TARGET="${1:-all}"
+TARGET="${1:-jellyfin}"
 PATCHES_DIR="${2:-patches}"
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 cd "$REPO_ROOT"
 
-if [ "$TARGET" = "all" ]; then
-    "$0" $([ "$LIST_ONLY" = 1 ] && echo --list) jellyfin "$PATCHES_DIR"
-    "$0" $([ "$LIST_ONLY" = 1 ] && echo --list) jellyfin-web "$PATCHES_DIR"
-    exit 0
-fi
-
 case "$TARGET" in
-    jellyfin|jellyfin-web)
-        ;;
+    all|jellyfin) TARGET="jellyfin" ;;
     *)
-        echo "Unknown target: $TARGET (expected jellyfin, jellyfin-web, or all)" >&2
+        echo "Unknown target: $TARGET (expected jellyfin or all)" >&2
         exit 1
         ;;
 esac
@@ -51,25 +42,18 @@ fi
 
 patch_matches() {
     base="$1"
-    case "$TARGET" in
-        jellyfin-web)
-            case "$base" in
-                jellyfin_web*.patch) return 0 ;;
-            esac
+    case "$base" in
+        jellyfin_web*.patch)
+            echo "ERROR: web patches are no longer supported: $base" >&2
+            exit 1
             ;;
-        jellyfin)
-            case "$base" in
-                jellyfin_web*.patch) return 1 ;;
-                jellyfin_*.patch|jellyfin.patch) return 0 ;;
-            esac
-            ;;
+        jellyfin_*.patch|jellyfin.patch) return 0 ;;
+        *) return 1 ;;
     esac
-    return 1
 }
 
 if [ "$LIST_ONLY" = 1 ]; then
-    # LC_ALL=C: locale collation can put jellyfin_web_z_tv_ux_perf before
-    # jellyfin_web_z_tv_ux.patch (underscore before dot), breaking prerequisites.
+    # Byte-order sorting keeps server patch prerequisites stable across locales.
     # shellcheck disable=SC2012
     for patch_file in $(ls "$PATCHES_DIR"/*.patch 2>/dev/null | LC_ALL=C sort); do
         base=$(basename "$patch_file")

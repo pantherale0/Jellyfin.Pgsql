@@ -58,7 +58,7 @@
                     <div class="detailSectionContent">
                         <p>
                             The plugin can cache home-screen queries (Latest, Resume) and run
-                            PostgreSQL-optimised Latest queries. These features are provided as-is;
+                            PostgreSQL-optimised Latest and Resume queries. These features are provided as-is;
                             all failures fall back to the standard Jellyfin queries.
                         </p>
                         <ul>
@@ -72,9 +72,11 @@
                             <li><strong>Pgsql_PG_OPTIMIZE_LATEST</strong> - Enable PostgreSQL-optimised Latest queries (default: true)</li>
                             <li><strong>Pgsql_PG_OPTIMIZE_MOVIES_LATEST / Pgsql_PG_OPTIMIZE_TV_LATEST / Pgsql_PG_OPTIMIZE_MUSIC_LATEST</strong> - Per-type overrides (default: inherit master flag)</li>
                             <li><strong>Pgsql_PG_OPTIMIZE_NEXTUP</strong> - Enable PostgreSQL-optimised NextUp batch queries (default: true)</li>
+                            <li><strong>Pgsql_PG_OPTIMIZE_RESUME</strong> - Select Resume pages from the user's in-progress items (default: true; independent of caching; restart required)</li>
                             <li><strong>Pgsql_COMMAND_TIMEOUT</strong> - Database command timeout in seconds (default: 90)</li>
                         </ul>
                         <p>Note: cached Latest lists can lag behind library changes by up to the configured TTL.</p>
+                        <p>Resume optimisation supports DatePlayed descending pages with optional totals. Folder candidates, search, other ordering, and unsupported filters use the standard query.</p>
                     </div>
                 </div>
 

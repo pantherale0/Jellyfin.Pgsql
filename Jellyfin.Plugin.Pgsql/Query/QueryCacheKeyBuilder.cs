@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Jellyfin.Data.Enums;
 using MediaBrowser.Controller.Entities;
 
@@ -57,9 +58,22 @@ internal static class QueryCacheKeyBuilder
             return null;
         }
 
+        var resumeCriteria = JsonSerializer.Serialize(new
+        {
+            filter.ParentType,
+            filter.DescendantOfId,
+            LinkedChildAncestorIds = filter.LinkedChildAncestorIds.Order(),
+            filter.IncludeOwnedItems,
+            filter.IncludeAlternateVersions,
+            filter.MaxParentalRating,
+            BlockUnratedItems = filter.BlockUnratedItems.Order(),
+            IncludeInheritedTags = filter.IncludeInheritedTags.Order(StringComparer.Ordinal),
+            ExcludeInheritedTags = filter.ExcludeInheritedTags.Order(StringComparer.Ordinal),
+            filter.UserHasContentRestrictions,
+        });
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"lv{libraryVersion}:uv{userVersion}:resume:{Hash(canonical)}");
+            $"lv{libraryVersion}:uv{userVersion}:resume:v2:{Hash(canonical + resumeCriteria)}");
     }
 
     /// <summary>
@@ -204,6 +218,12 @@ internal static class QueryCacheKeyBuilder
             .Append('|').Append(filter.EnableGroupByMetadataKey ? '1' : '0')
             .Append('|').Append(Flag(filter.CollapseBoxSetItems));
 
+        // Alphabet boundaries affect both the IDs and TotalRecordCount. Length-prefix
+        // strings so user-supplied separators cannot alias another combination.
+        AppendString(builder, filter.NameStartsWith);
+        AppendString(builder, filter.NameStartsWithOrGreater);
+        AppendString(builder, filter.NameLessThan);
+
         AppendGuids(builder, filter.TopParentIds);
         AppendGuids(builder, filter.AncestorIds);
         AppendGuids(builder, filter.ItemIds);
@@ -234,6 +254,11 @@ internal static class QueryCacheKeyBuilder
         }
 
         return builder.ToString();
+    }
+
+    private static void AppendString(StringBuilder builder, string? value)
+    {
+        builder.Append('|').Append(value?.Length ?? 0).Append(':').Append(value);
     }
 
     private static char Flag(bool? value)

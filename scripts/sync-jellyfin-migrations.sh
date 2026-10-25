@@ -50,7 +50,7 @@ Notes:
   Update_* migrations are generated only when Jellyfin's SQLite migration set advances.
   Tag-only bumps (same latest core migration) update refs/submodules and verify patches,
   but do not run EF — patch schema belongs in dedicated plugin migrations, not Update_*.
-  Every sync still applies server patches and builds the solution so new Jellyfin API
+  Every sync still applies server patches and builds plugin projects so new Jellyfin API
   surface (interface members, etc.) is caught even when no Update_* is generated.
 
   Generating Update_* requires PostgreSQL. Locally the script starts
@@ -325,13 +325,12 @@ begin_sync_backup() {
     cp "${REPO_ROOT}/docker/Dockerfile" "${SYNC_BACKUP_DIR}/"
     cp "${REPO_ROOT}/build.yaml" "${SYNC_BACKUP_DIR}/"
     cp "${STATE_FILE}" "${SYNC_BACKUP_DIR}/"
+    cp "${REPO_ROOT}/Jellyfin.Plugin.Pgsql/meta.json" "${SYNC_BACKUP_DIR}/pgsql-meta.json"
+    cp "${REPO_ROOT}/Jellyfin.Plugin.Seerr/meta.json" "${SYNC_BACKUP_DIR}/seerr-meta.json"
     cp "${REPO_ROOT}/.config/dotnet-tools.json" "${SYNC_BACKUP_DIR}/"
     cp -a "${MIGRATIONS_DIR}" "${SYNC_BACKUP_DIR}/Migrations"
     cp -a "${REPO_ROOT}/patches" "${SYNC_BACKUP_DIR}/patches"
     git -C "${REPO_ROOT}/jellyfin" rev-parse HEAD > "${SYNC_BACKUP_DIR}/jellyfin_commit"
-    if [[ -d "${REPO_ROOT}/jellyfin-web/.git" ]] || [[ -f "${REPO_ROOT}/jellyfin-web/.git" ]]; then
-        git -C "${REPO_ROOT}/jellyfin-web" rev-parse HEAD > "${SYNC_BACKUP_DIR}/jellyfin_web_commit"
-    fi
     SYNC_STARTED=true
 }
 
@@ -368,6 +367,8 @@ rollback_sync() {
     cp "${SYNC_BACKUP_DIR}/Dockerfile" "${REPO_ROOT}/docker/"
     cp "${SYNC_BACKUP_DIR}/build.yaml" "${REPO_ROOT}/"
     cp "${SYNC_BACKUP_DIR}/jellyfin-sync-state.json" "${STATE_FILE}"
+    cp "${SYNC_BACKUP_DIR}/pgsql-meta.json" "${REPO_ROOT}/Jellyfin.Plugin.Pgsql/meta.json"
+    cp "${SYNC_BACKUP_DIR}/seerr-meta.json" "${REPO_ROOT}/Jellyfin.Plugin.Seerr/meta.json"
     cp "${SYNC_BACKUP_DIR}/dotnet-tools.json" "${REPO_ROOT}/.config/"
     rm -rf "${MIGRATIONS_DIR}"
     cp -a "${SYNC_BACKUP_DIR}/Migrations" "${MIGRATIONS_DIR}"
@@ -377,7 +378,6 @@ rollback_sync() {
     fi
 
     restore_submodule_commit jellyfin "${SYNC_BACKUP_DIR}/jellyfin_commit"
-    restore_submodule_commit jellyfin-web "${SYNC_BACKUP_DIR}/jellyfin_web_commit"
 
     rm -rf "${SYNC_BACKUP_DIR}"
     SYNC_STARTED=false
@@ -387,6 +387,7 @@ write_failure_report() {
     local stage="$1"
     local summary="$2"
     local details="${3:-}"
+    local rebase_command="./scripts/rebase-patches.sh --from v${STATE_VERSION:-PREV} --to v${TARGET_VERSION}"
 
     {
         echo "# Migration sync failed for Jellyfin ${TARGET_VERSION}"
@@ -417,7 +418,7 @@ write_failure_report() {
         echo "## Next steps"
         echo ""
         echo "- Review the workflow log and reproduce locally: \`./scripts/sync-jellyfin-migrations.sh --version ${TARGET_VERSION}\`"
-        echo "- If patches failed to apply, rebase with \`./scripts/rebase-patches.sh --from v${STATE_VERSION:-PREV} --to v${TARGET_VERSION}\` or export-patch.sh after resolving conflicts."
+        echo "- If patches failed to apply, rebase with \`${rebase_command}\` or export-patch.sh after resolving conflicts."
         echo "- Fix the underlying issue, then re-run the sync workflow or close this issue when resolved."
     } > "${FAILURE_REPORT}"
 }
@@ -467,6 +468,12 @@ bump_version_refs() {
 
     sed_inplace "s/^framework: \".*\"/framework: \"${RESOLVED_PLUGIN_TFM}\"/" \
         "${REPO_ROOT}/build.yaml"
+
+    local target_abi="${RESOLVED_NUGET_VERSION}.0"
+    sed_inplace "s/\"targetAbi\": \"[^\"]*\"/\"targetAbi\": \"${target_abi}\"/" \
+        "${REPO_ROOT}/Jellyfin.Plugin.Pgsql/meta.json"
+    sed_inplace "s/\"targetAbi\": \"[^\"]*\"/\"targetAbi\": \"${target_abi}\"/" \
+        "${REPO_ROOT}/Jellyfin.Plugin.Seerr/meta.json"
 }
 
 update_submodule() {
@@ -484,34 +491,22 @@ update_submodule() {
 update_submodules() {
     local version="$1"
     update_submodule jellyfin "${version}"
-    if [[ -d "${REPO_ROOT}/jellyfin-web/.git" ]] || [[ -f "${REPO_ROOT}/jellyfin-web/.git" ]]; then
-        update_submodule jellyfin-web "${version}"
-    else
-        echo "[sync] WARNING: jellyfin-web submodule missing; skipped (server and web should share the same tag)." >&2
-    fi
 }
 
 get_submodule_commit() {
     git -C "${REPO_ROOT}/jellyfin" rev-parse HEAD
 }
 
-verify_patches() {
-    local target="$1"
-    local keep_applied="${2:-false}"
-    echo "[sync] Verifying ${target} patches apply on v${TARGET_VERSION}..."
-    if ! bash "${SCRIPT_DIR}/apply-patches.sh" "${target}"; then
-        local hint="Rebase matching files under \`patches/\` onto v${TARGET_VERSION}, then re-run sync."
-        if [[ "${target}" == "jellyfin-web" ]]; then
-            hint="Rebase with \`./scripts/rebase-patches.sh --from v${STATE_VERSION} --to v${TARGET_VERSION} --target jellyfin-web\`, then re-run sync."
-        else
-            hint="Rebase with \`./scripts/rebase-patches.sh --from v${STATE_VERSION} --to v${TARGET_VERSION} --target jellyfin\`, then re-run sync."
-        fi
+verify_server_patches() {
+    local keep_applied="${1:-false}"
+    echo "[sync] Verifying server patches apply on v${TARGET_VERSION}..."
+    if ! bash "${SCRIPT_DIR}/apply-patches.sh" jellyfin; then
         fail_sync "apply-patches" \
-            "Patches for \`${target}\` failed to apply on v${TARGET_VERSION}." \
-            "${hint}"
+            "Server patches failed to apply on v${TARGET_VERSION}." \
+            "Rebase patches with ./scripts/rebase-patches.sh --from v${STATE_VERSION} --to v${TARGET_VERSION}, then re-run sync."
     fi
     if [[ "${keep_applied}" != "true" ]]; then
-        reset_submodule_clean "${target}"
+        reset_submodule_clean jellyfin
     fi
 }
 
@@ -532,12 +527,9 @@ rebase_patch_series() {
     # If the current patches already apply on the destination tag, do not replay
     # them onto the old tag (that fails after a successful rebase rewrite).
     echo "[sync] Checking whether patches already apply on v${to_tag}..."
-    if bash "${SCRIPT_DIR}/apply-patches.sh" jellyfin \
-        && { [[ ! -d "${REPO_ROOT}/jellyfin-web/.git" && ! -f "${REPO_ROOT}/jellyfin-web/.git" ]] \
-            || bash "${SCRIPT_DIR}/apply-patches.sh" jellyfin-web; }; then
+    if bash "${SCRIPT_DIR}/apply-patches.sh" jellyfin; then
         echo "[sync] Patches already apply on v${to_tag}; skipping rebase."
         reset_submodule_clean jellyfin
-        reset_submodule_clean jellyfin-web
         echo "" >> "${SYNC_REPORT}"
         echo "## Patches" >> "${SYNC_REPORT}"
         echo "- Already applied on v${to_tag}; rebase skipped." >> "${SYNC_REPORT}"
@@ -569,15 +561,25 @@ rebase_patch_series() {
     git -C "${REPO_ROOT}" add patches 2>/dev/null || true
 }
 
-verify_solution_build() {
-    echo "[sync] Building solution against patched jellyfin (API surface check)..."
+verify_plugin_projects_build() {
+    local -a projects=(
+        "${REPO_ROOT}/Jellyfin.Plugin.Pgsql/Jellyfin.Plugin.Pgsql.csproj"
+        "${REPO_ROOT}/Jellyfin.Plugin.Pgsql.Tests/Jellyfin.Plugin.Pgsql.Tests.csproj"
+        "${REPO_ROOT}/Jellyfin.Plugin.Seerr/Jellyfin.Plugin.Seerr.csproj"
+        "${REPO_ROOT}/Jellyfin.Plugin.Seerr.Tests/Jellyfin.Plugin.Seerr.Tests.csproj"
+    )
+
+    local project
     local build_output
-    if ! build_output="$(dotnet build "${REPO_ROOT}/Jellyfin.Plugin.Pgsql.sln" -c Release --no-restore 2>&1)"; then
-        fail_sync "build" \
-            "Solution failed to build against Jellyfin v${TARGET_VERSION}. Fix plugin/test compile breaks (new interface members, etc.), then re-run sync." \
-            "${build_output}"
-    fi
-    echo "[sync] Solution build passed."
+    for project in "${projects[@]}"; do
+        echo "[sync] Building ${project##*/} against patched jellyfin..."
+        if ! build_output="$(dotnet build "${project}" -c Release --no-restore 2>&1)"; then
+            fail_sync "build" \
+                "Project ${project##*/} failed to build against Jellyfin v${TARGET_VERSION}. Fix plugin/test compile breaks (new interface members, etc.), then re-run sync." \
+                "${build_output}"
+        fi
+    done
+    echo "[sync] All plugin projects built successfully."
 }
 
 get_latest_pg_migration() {
@@ -604,6 +606,7 @@ remove_empty_migration() {
 
     echo "[sync] Removing empty migration via dotnet ef migrations remove..."
     dotnet ef migrations remove --force \
+        --configuration Release \
         --project "${PROJECT}" \
         -- --migration-provider Jellyfin-PgSql
 
@@ -697,12 +700,12 @@ if [[ "${DRY_RUN}" == "true" ]]; then
     else
         echo "[sync] Dry run: would skip EF migration generation (no new core migrations)."
     fi
-    echo "[sync] Dry run: would apply patches and build the solution (API surface check)."
+    echo "[sync] Dry run: would apply server patches and build plugin projects (API surface check)."
     if version_gt "${TARGET_VERSION}" "${STATE_VERSION}" || [[ "${TARGET_VERSION}" != "${STATE_VERSION}" ]]; then
         if [[ "${SKIP_REBASE}" == "true" ]]; then
             echo "[sync] Dry run: would skip patch rebase (--skip-rebase)."
         else
-            echo "[sync] Dry run: would rebase patches/ from v${STATE_VERSION} onto v${TARGET_VERSION}."
+            echo "[sync] Dry run: would rebase server patches/ from v${STATE_VERSION} onto v${TARGET_VERSION}."
         fi
     fi
     if ! preflight_check "${TARGET_VERSION}"; then
@@ -764,13 +767,10 @@ SUBMODULE_COMMIT="$(get_submodule_commit)"
 SYNC_STAGE="rebase-patches"
 rebase_patch_series "${STATE_VERSION}" "${TARGET_VERSION}"
 
-# Apply server patches and keep them for the solution build / optional EF generation.
+# Apply server patches and keep them for plugin builds / optional EF generation.
 # Patch schema must live in dedicated plugin migrations — never rely on Update_* to capture it.
 SYNC_STAGE="apply-patches"
-verify_patches jellyfin true
-if [[ -d "${REPO_ROOT}/jellyfin-web/.git" ]] || [[ -f "${REPO_ROOT}/jellyfin-web/.git" ]]; then
-    verify_patches jellyfin-web
-fi
+verify_server_patches true
 
 SYNC_STAGE="restore-packages"
 echo "[sync] Restoring packages..."
@@ -778,10 +778,10 @@ dotnet tool restore
 dotnet restore "${REPO_ROOT}/Jellyfin.Plugin.Pgsql.sln"
 
 SYNC_STAGE="build"
-verify_solution_build
+verify_plugin_projects_build
 echo "" >> "${SYNC_REPORT}"
 echo "## Build" >> "${SYNC_REPORT}"
-echo "- Solution build against patched jellyfin v${TARGET_VERSION}: passed" >> "${SYNC_REPORT}"
+echo "- Plugin projects built against patched jellyfin v${TARGET_VERSION}: passed" >> "${SYNC_REPORT}"
 
 PG_MIGRATION="$(get_latest_pg_migration)"
 
@@ -793,8 +793,9 @@ if [[ "${HAS_NEW_CORE_MIGRATIONS}" == "true" ]]; then
     ef_output=""
     if ! ef_output="$(dotnet ef migrations add "${MIGRATION_NAME}" \
         --project "${PROJECT}" \
+        --configuration Release \
         -- --migration-provider Jellyfin-PgSql 2>&1)"; then
-        build_output="$(dotnet build "${PROJECT}" 2>&1 || true)"
+        build_output="$(dotnet build "${PROJECT}" -c Release 2>&1 || true)"
         fail_sync "generate-migration" \
             "EF Core failed to generate migration \`${MIGRATION_NAME}\`." \
             "${ef_output}
@@ -812,6 +813,7 @@ ${build_output}"
     pending_output=""
     if pending_output="$(dotnet ef migrations has-pending-model-changes \
         --project "${PROJECT}" \
+        --configuration Release \
         -- --migration-provider Jellyfin-PgSql 2>&1)"; then
         :
     else

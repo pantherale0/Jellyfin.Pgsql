@@ -93,7 +93,7 @@ index e539508644..c8ca3bd49f 100644
  
              dto.People = list.ToArray();
 diff --git a/Emby.Server.Implementations/Library/LibraryManager.cs b/Emby.Server.Implementations/Library/LibraryManager.cs
-index e36fd2ca2b..d5d3300bb8 100644
+index 3e02975089..7d8fe45a69 100644
 --- a/Emby.Server.Implementations/Library/LibraryManager.cs
 +++ b/Emby.Server.Implementations/Library/LibraryManager.cs
 @@ -1263,6 +1263,52 @@ namespace Emby.Server.Implementations.Library
@@ -149,7 +149,7 @@ index e36fd2ca2b..d5d3300bb8 100644
          /// <summary>
          /// Gets the studio.
          /// </summary>
-@@ -3688,7 +3734,7 @@ namespace Emby.Server.Implementations.Library
+@@ -3746,7 +3792,7 @@ namespace Emby.Server.Implementations.Library
                  {
                      try
                      {
@@ -158,7 +158,7 @@ index e36fd2ca2b..d5d3300bb8 100644
                      }
                      catch (Exception ex)
                      {
-@@ -3699,6 +3745,7 @@ namespace Emby.Server.Implementations.Library
+@@ -3757,6 +3803,7 @@ namespace Emby.Server.Implementations.Library
                  .Where(i => i is not null)
                  .Where(i => query.User is null || i!.IsVisible(query.User))
                  .OfType<BaseItem>()
@@ -166,7 +166,7 @@ index e36fd2ca2b..d5d3300bb8 100644
                  .ToList()
                  .AsReadOnly();
  
-@@ -3888,7 +3935,6 @@ namespace Emby.Server.Implementations.Library
+@@ -3946,7 +3993,6 @@ namespace Emby.Server.Implementations.Library
          private async Task SavePeopleMetadataAsync(IEnumerable<PersonInfo> people, CancellationToken cancellationToken)
          {
              var peopleList = people.ToList();
@@ -174,7 +174,7 @@ index e36fd2ca2b..d5d3300bb8 100644
  
              foreach (var person in peopleList)
              {
-@@ -3896,16 +3942,25 @@ namespace Emby.Server.Implementations.Library
+@@ -3954,16 +4000,25 @@ namespace Emby.Server.Implementations.Library
  
                  var itemUpdateType = ItemUpdateType.MetadataDownload;
                  var saveEntity = false;
@@ -205,7 +205,7 @@ index e36fd2ca2b..d5d3300bb8 100644
                          saveEntity = true;
                      }
                      catch (Exception ex)
-@@ -3917,11 +3972,22 @@ namespace Emby.Server.Implementations.Library
+@@ -3975,11 +4030,22 @@ namespace Emby.Server.Implementations.Library
  
                  foreach (var id in person.ProviderIds)
                  {
@@ -416,7 +416,7 @@ index 092a621bfc..a9a2e1b474 100644
                  .Where(p => !context.PeopleBaseItemMap.Any(m => m.PeopleId.Equals(p.Id)))
                  .ExecuteDeleteAsync(cancellationToken)
 diff --git a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
-index c592295fa4..8d856e766b 100644
+index a9dc0bb62d..7b754fa201 100644
 --- a/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 +++ b/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs
 @@ -453,15 +453,33 @@ public sealed partial class BaseItemRepository
@@ -459,7 +459,7 @@ index c592295fa4..8d856e766b 100644
                  .Where(e => context.PeopleBaseItemMap
                      .Any(m => m.ItemId == e.Id && peopleEntityIds.Contains(m.PeopleId) && (personTypes.Length == 0 || personTypes.Contains(m.People.PersonType))));
 diff --git a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
-index fcddc09ad9..3bd5ca327d 100644
+index 802138ed5e..bdbe4b4378 100644
 --- a/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
 +++ b/Jellyfin.Server.Implementations/Item/PeopleRepository.cs
 @@ -7,6 +7,7 @@ using Jellyfin.Database.Implementations.Entities;
@@ -838,7 +838,7 @@ index fcddc09ad9..3bd5ca327d 100644
 +                .AsNoTracking();
          }
  
-         if (!filter.ItemId.IsEmpty())
+         if (filter.MustHaveItem)
 diff --git a/MediaBrowser.Controller/Entities/PeopleHelper.cs b/MediaBrowser.Controller/Entities/PeopleHelper.cs
 index 29f238d8ea..383b3ffd6e 100644
 --- a/MediaBrowser.Controller/Entities/PeopleHelper.cs
@@ -1361,7 +1361,7 @@ index b53210b0b1..3d6cee96b5 100644
  
      /// <summary>
 diff --git a/MediaBrowser.Controller/Library/ILibraryManager.cs b/MediaBrowser.Controller/Library/ILibraryManager.cs
-index 408a38239e..b73924e78b 100644
+index 3e6ee51c23..67eafc7908 100644
 --- a/MediaBrowser.Controller/Library/ILibraryManager.cs
 +++ b/MediaBrowser.Controller/Library/ILibraryManager.cs
 @@ -113,6 +113,13 @@ namespace MediaBrowser.Controller.Library

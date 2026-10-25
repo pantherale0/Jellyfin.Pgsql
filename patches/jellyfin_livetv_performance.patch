@@ -1,8 +1,8 @@
 diff --git a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs
-index ee36be035b..6075dc05dd 100644
+index 9e846056ac..106e6da436 100644
 --- a/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs
 +++ b/src/Jellyfin.Database/Jellyfin.Database.Implementations/ModelConfiguration/BaseItemConfiguration.cs
-@@ -48,6 +48,8 @@ public class BaseItemConfiguration : IEntityTypeConfiguration<BaseItemEntity>
+@@ -50,6 +50,8 @@ public class BaseItemConfiguration : IEntityTypeConfiguration<BaseItemEntity>
          builder.HasIndex(e => new { e.Type, e.SeriesPresentationUniqueKey, e.IsFolder, e.IsVirtualItem });
          // live tv programs
          builder.HasIndex(e => new { e.Type, e.TopParentId, e.StartDate });
@@ -2026,7 +2026,7 @@ index 7274a3030c..6eb8631275 100644
  
          result = new EpgChannelData(channels);
 diff --git a/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs b/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs
-index f78d464659..d7fdbc0193 100644
+index f78d464659..cef1594152 100644
 --- a/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs
 +++ b/src/Jellyfin.LiveTv/Listings/XmlTvListingsProvider.cs
 @@ -10,6 +10,7 @@ using System.Linq;
@@ -2037,7 +2037,7 @@ index f78d464659..d7fdbc0193 100644
  using Jellyfin.Extensions;
  using Jellyfin.XmlTv;
  using Jellyfin.XmlTv.Entities;
-@@ -33,6 +34,8 @@ namespace Jellyfin.LiveTv.Listings
+@@ -33,8 +34,10 @@ namespace Jellyfin.LiveTv.Listings
          private readonly IServerConfigurationManager _config;
          private readonly IHttpClientFactory _httpClientFactory;
          private readonly ILogger<XmlTvListingsProvider> _logger;
@@ -2046,6 +2046,8 @@ index f78d464659..d7fdbc0193 100644
          private readonly ConcurrentDictionary<string, DateTime> _lastDownloadFailures = new(StringComparer.Ordinal);
 +        private ProgrammeCacheEntry? _programmeCache;
  
+         public XmlTvListingsProvider(
+             IServerConfigurationManager config,
 @@ -220,11 +223,101 @@ namespace Jellyfin.LiveTv.Listings
              _logger.LogDebug("Getting xmltv programs for channel {Id}", channelId);
  
