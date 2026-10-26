@@ -10,6 +10,8 @@ This page maps the operator-facing features in the fork to the plugin, UI Next, 
 
 **What it includes:** UI Next supports password, OIDC, and Quick Connect sign-in. It includes home and library browsing, search, details, video and music playback, Live TV, DVR, playlists, favorites, and metadata editing. Seerr requests and taste features are also available. The administrator workspace covers users, libraries, playback, Live TV, metadata, infrastructure, activity, and system settings. Its System page edits per-device playback overrides, and Playback shows active transcoding pipelines when the server reports them. The [UI Next guide](../ui-next/README.md) lists current capabilities, development steps, security notes, and compatibility limits.
 
+UI Next prefetches full item details for the active home recommendation. Poster cards start a prefetch after 200 ms of pointer hover or when keyboard or TV focus enters. Opening a title uses ready data or joins the request while the detail view loads.
+
 The administrator workspace includes its own Metadata manager. The image does not include Jellyfin Web, and the custom Jellyfin Web patch stack has been removed. See the [confirmed UI Next gaps](#features-not-yet-in-ui-next) below.
 
 **How to configure it:** See [UI Next image](../README.md#ui-next-image), [SSO](../README.md#single-sign-on-sso-with-rbac-via-oauth2oidc), and the [UI Next guide](../ui-next/README.md).

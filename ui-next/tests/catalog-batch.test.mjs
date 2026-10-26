@@ -177,10 +177,13 @@ test('CAT-08 episode loading pages beyond the old 1,000/800 caps and the player 
     assert.match(player, /api\.getAdjacentEpisodes\(item\.SeriesId, item\.Id\)/, 'previous/next work across season boundaries');
 });
 
-test('CAT-10 detail hydration exposes a loading state alongside retry', () => {
+test('CAT-10 detail hydration tracks summary items without relabeling fully loaded items', () => {
     const main = source('main.tsx');
-    assert.match(main, /setDetailLoading\(true\);\s*setView\('details'\)/);
-    assert.match(main, /finally \{\s*if \(request === detailRequest\.current && accountGeneration\.isCurrent\(account\)\) setDetailLoading\(false\);/);
+    assert.match(main, /setSelected\(lease\?\.item \|\| item\)/, 'ready prefetched data opens without refetching');
+    assert.match(main, /setDetailLoading\(!lease\?\.item && details\.kind === 'summary'\);\s*setView\('details'\)/, 'summary navigation opens while a prefetch is pending');
+    assert.match(main, /if \(result\.kind === 'ready'\) setSelected\(result\.item\);/);
+    assert.match(main, /if \(result\.kind === 'failed'\) setDetailError\(messageOf\(result\.error\)\);/);
+    assert.match(main, /if \(result\.kind !== 'cancelled'\) setDetailLoading\(false\);/);
     assert.match(main, /Loading full details…/);
 });
 

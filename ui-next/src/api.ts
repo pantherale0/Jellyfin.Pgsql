@@ -13,6 +13,7 @@ import { asSeerrEnabled, asSeerrItems, type SeerrItem, type SeerrMediaType } fro
 import { normalizeBranding, NO_BRANDING, type Branding } from './branding';
 import { publicUsers, type ForgotPasswordResult, type PublicUser } from './account';
 import { createSsoChallenge, createSsoSession, normalizeUserId, SSO_HANDOFF_KEY, ssoHandoffFromExchange, ssoReturnUrl, UI_NEXT_SIGNED_OUT_KEY, type SsoHandoff, type SsoHandoffAttempt } from './sso-session';
+import { ItemDetailsPrefetcher, type ItemDetailsLease, type ItemDetailsPriority } from './item-prefetch';
 import { haTracker } from './ha-status';
 import { hostDeviceProfile, hostIdentity } from './native-host';
 import { t } from './i18n';
@@ -445,12 +446,17 @@ const MAX_EPISODES = 20000;
 export class JellyfinApi {
     readonly session: Session;
     private readonly onSessionExpired?: () => void;
+    private readonly itemDetailsPrefetcher: ItemDetailsPrefetcher;
     private sessionExpired = false;
     private reportTail: Promise<unknown> = Promise.resolve();
 
     constructor(session: Session, onSessionExpired?: () => void) {
         this.session = session;
         this.onSessionExpired = onSessionExpired;
+        this.itemDetailsPrefetcher = new ItemDetailsPrefetcher((itemId, signal, priority) => this.getItem(itemId, {
+            signal,
+            priority: priority === 'background' ? 0 : 2
+        }));
     }
 
     static async login(serverInput: string, username: string, password: string): Promise<Session> {
@@ -677,6 +683,7 @@ export class JellyfinApi {
         if (error instanceof JellyfinRequestError && error.status === 401) {
             if (!this.sessionExpired) {
                 this.sessionExpired = true;
+                this.itemDetailsPrefetcher.clear();
                 this.onSessionExpired?.();
             }
             throw new JellyfinRequestError(401, t('Your session expired. Sign in again.'));
@@ -1131,8 +1138,21 @@ export class JellyfinApi {
         return `${this.session.server}/Videos/${encodeURIComponent(itemId)}/Trickplay/${width}/${index}.jpg?${queryString({ MediaSourceId: mediaSourceId, ApiKey: this.session.token })}`;
     }
 
-    async getItem(id: string): Promise<MediaItem> {
-        return this.request<unknown>(`/Users/${encodeURIComponent(this.session.user.Id)}/Items/${encodeURIComponent(id)}?Fields=Overview,CommunityRating,ProductionYear,RunTimeTicks,UserData,BackdropImageTags,ImageTags,ChildCount,PremiereDate,EndDate,SeriesName,SeriesId,IndexNumber,ParentIndexNumber,People,ExternalUrls,Genres,Studios,Tags,Taglines,MediaSources,MediaStreams,CanDelete,CanDownload,OfficialRating,CriticRating,LocalTrailerCount,SpecialFeatureCount,PartCount,AlbumArtists,ArtistItems`).then(asMediaItem);
+    async getItem(id: string, options: { signal?: AbortSignal; priority?: number } = {}): Promise<MediaItem> {
+        return this.request<unknown>(
+            `/Users/${encodeURIComponent(this.session.user.Id)}/Items/${encodeURIComponent(id)}?Fields=Overview,CommunityRating,ProductionYear,RunTimeTicks,UserData,BackdropImageTags,ImageTags,ChildCount,PremiereDate,EndDate,SeriesName,SeriesId,IndexNumber,ParentIndexNumber,People,ExternalUrls,Genres,Studios,Tags,Taglines,MediaSources,MediaStreams,CanDelete,CanDownload,OfficialRating,CriticRating,LocalTrailerCount,SpecialFeatureCount,PartCount,AlbumArtists,ArtistItems`,
+            { signal: options.signal },
+            false,
+            options.priority ?? 2
+        ).then(asMediaItem);
+    }
+
+    acquireItemDetails(itemId: string, priority: ItemDetailsPriority = 'interactive'): ItemDetailsLease {
+        return this.itemDetailsPrefetcher.acquire(itemId, priority);
+    }
+
+    clearItemDetailsPrefetch(): void {
+        this.itemDetailsPrefetcher.clear();
     }
 
     async getChapters(id: string): Promise<Array<{ StartPositionTicks?: number; Name?: string; ImageTag?: string }>> {
@@ -1544,6 +1564,7 @@ export class JellyfinApi {
 
     async logout(): Promise<void> {
         clearImageCache();
+        this.itemDetailsPrefetcher.clear();
         await new Promise<void>(resolve => {
             const xhr = new XMLHttpRequest();
             xhr.open('POST', `${this.session.server}/Sessions/Logout`, true);

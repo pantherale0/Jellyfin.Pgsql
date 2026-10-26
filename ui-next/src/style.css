@@ -115,6 +115,12 @@ button:disabled { opacity: .6; cursor: wait; }
 .recommendation-copy h1 { display: -webkit-box; margin: 0; overflow: hidden; color: var(--text); font-size: clamp(2.8rem, 6.6vw, 6rem); font-weight: 800; letter-spacing: -.075em; line-height: .98; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .recommendation-title-logo { display: block; width: auto; max-width: min(100%, 620px); max-height: clamp(100px, 20vw, 250px); object-fit: contain; object-position: left center; filter: drop-shadow(0 2px 12px rgba(0,0,0,.42)); }
 .recommendation-title-slot.logo-loading span { display: block; width: min(65%, 430px); height: clamp(64px, 10vw, 130px); border-radius: 8px; background: rgba(var(--ink), .055); }
+.recommendation-detail-button { min-width: 13.5rem; justify-content: center; }
+.recommendation-detail-error { margin: .65rem 0 0; color: #ffd1d1; font-size: .83rem; line-height: 1.4; }
+.content-title-slot { display: flex; min-height: clamp(88px, 11vw, 136px); align-items: center; }
+.content-title-slot h1 { display: flex; width: 100%; align-items: center; }
+.content-title-logo { display: block; width: auto; max-width: min(100%, 680px); max-height: clamp(80px, 12vw, 148px); object-fit: contain; object-position: left center; filter: drop-shadow(0 2px 12px rgba(0,0,0,.42)); }
+.content-title-loading { display: block; width: min(65%, 430px); height: clamp(64px, 10vw, 120px); border-radius: 8px; background: rgba(var(--ink), .055); }
 .recommendation-metadata { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1.2rem; color: var(--text); font-size: .92rem; font-weight: 650; }
 .recommendation-metadata span + span { padding-inline-start: 1rem; border-inline-start: 1px solid rgba(var(--ink), .3); }
 .recommendation-overview { display: -webkit-box; max-width: 590px; margin: 1rem 0 1.5rem; overflow: hidden; color: var(--text-2); font-size: clamp(.95rem, 1.2vw, 1.08rem); line-height: 1.65; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
@@ -458,8 +464,9 @@ button:disabled { opacity: .6; cursor: wait; }
 .player-live-edge:disabled { opacity: .55; cursor: default; }
 .player-time:last-child { text-align: right; }
 .player-seek-wrap { position: relative; flex: 1; display: flex; align-items: center; height: 32px; }
-.player-seek-buffer { position: absolute; z-index: 0; top: 50%; right: 0; left: 0; height: 4px; overflow: hidden; border-radius: 99px; background: rgba(var(--ink), .2); transform: translateY(-50%); pointer-events: none; }
-.player-buffered-range { position: absolute; top: 0; bottom: 0; background: rgba(var(--ink), .48); }
+.player-seek-buffer { position: absolute; z-index: 0; top: 50%; right: 0; left: 0; height: 6px; overflow: hidden; border-radius: 99px; background: rgba(var(--ink), .2); transform: translateY(-50%); pointer-events: none; }
+.player-buffered-range { position: absolute; top: 0; bottom: 0; background: rgba(var(--ink), .62); }
+.player-buffered-range::after { content: ""; position: absolute; z-index: 1; top: -1px; right: 0; bottom: -1px; width: 2px; border-radius: 99px; background: var(--text); }
 .player-played-progress { position: absolute; top: 0; bottom: 0; left: 0; background: var(--accent); }
 .player-cues { position: absolute; z-index: 2; right: 0; left: 0; height: 4px; pointer-events: none; }
 .player-cue { position: absolute; top: 0; height: 100%; border-radius: 99px; background: var(--accent); }
@@ -551,6 +558,8 @@ button:disabled { opacity: .6; cursor: wait; }
     .recommendation-title-slot { min-height: clamp(110px, 28vw, 190px); }
     .recommendation-copy h1 { font-size: clamp(2.8rem, 12vw, 4.4rem); }
     .recommendation-title-logo { max-width: min(94%, 520px); max-height: clamp(90px, 28vw, 180px); }
+    .content-title-slot { min-height: clamp(76px, 20vw, 120px); }
+    .content-title-logo { max-width: min(94%, 600px); max-height: clamp(72px, 24vw, 132px); }
     .recommendation-overview { -webkit-line-clamp: 3; }
     .recommendation-controls { inset-inline-end: var(--page-gutter); bottom: 1.6rem; inset-inline-start: var(--page-gutter); justify-content: space-between; }
     .recommendation-pagination { margin-inline-start: auto; }
@@ -1812,12 +1821,12 @@ html[data-theme=light] {
     }
 }
 /* Tinted status text tuned for dark surfaces needs darker shades on light ones. */
-html[data-theme=light] .media-kind-live, html[data-theme=light] .profile-menu > .sign-out-menu-item, html[data-theme=light] .notice.error, html[data-theme=light] .md-btn.danger, html[data-theme=light] .md-error { color: #b42318; }
+html[data-theme=light] .media-kind-live, html[data-theme=light] .profile-menu > .sign-out-menu-item, html[data-theme=light] .notice.error, html[data-theme=light] .recommendation-detail-error, html[data-theme=light] .md-btn.danger, html[data-theme=light] .md-error { color: #b42318; }
 html[data-theme=light] .home-section-error h3 { color: #7a4a12; }
 html[data-theme=light] .notice.storage-warning, html[data-theme=light] .notice.success { color: #2f5410; }
 html[data-theme=light] .ad-chip.on { color: #1d4ed8; }
 @media (prefers-color-scheme: light) {
-    html[data-theme=system] .media-kind-live, html[data-theme=system] .profile-menu > .sign-out-menu-item, html[data-theme=system] .notice.error, html[data-theme=system] .md-btn.danger, html[data-theme=system] .md-error { color: #b42318; }
+    html[data-theme=system] .media-kind-live, html[data-theme=system] .profile-menu > .sign-out-menu-item, html[data-theme=system] .notice.error, html[data-theme=system] .recommendation-detail-error, html[data-theme=system] .md-btn.danger, html[data-theme=system] .md-error { color: #b42318; }
     html[data-theme=system] .home-section-error h3 { color: #7a4a12; }
     html[data-theme=system] .notice.storage-warning, html[data-theme=system] .notice.success { color: #2f5410; }
     html[data-theme=system] .ad-chip.on { color: #1d4ed8; }
@@ -1834,6 +1843,6 @@ html[data-motion=reduce] *, html[data-motion=reduce] *::before, html[data-motion
 
 [dir=rtl] .dir-arrow { display: inline-block; transform: scaleX(-1); }
 [dir=rtl] .hero-shade, [dir=rtl] .recommendation-shade { transform: scaleX(-1); }
-[dir=rtl] .recommendation-title-logo { object-position: right center; }
+[dir=rtl] .recommendation-title-logo, [dir=rtl] .content-title-logo { object-position: right center; }
 /* Time runs left to right in the guide and on the seek bar in every language. */
 [dir=rtl] .player-timeline, [dir=rtl] .player-osd-bottom, [dir=rtl] .live-guide-scroll { direction: ltr; }
