@@ -17,6 +17,7 @@ import { canAddToPlaylist, canManageCollections, withoutItem } from './detail-mo
 import { t } from './i18n';
 import { isMusicTarget } from './music-model';
 import { musicEngine } from './music-player';
+import { useItemPrefetch } from './item-prefetch';
 
 const PAGE_SIZE = 80;
 const WINDOW_SIZE = PAGE_SIZE * 3;
@@ -925,6 +926,7 @@ function LibraryCard({ api, item, view, onSelect, onPlay, onToggle, onRemove, ca
     const [ director, setDirector ] = useState('');
     const pressTimer = useRef<number>();
     const longPressed = useRef(false);
+    const prefetch = useItemPrefetch(api, item.Id, !selecting);
     const video = item.MediaStreams?.find(stream => stream.Type === 'Video' || stream.Type === 1);
     const audio = defaultAudioStream(item);
     const quality = mediaBadge(item);
@@ -985,7 +987,7 @@ function LibraryCard({ api, item, view, onSelect, onPlay, onToggle, onRemove, ca
     const description = describeCard(item);
     const can = itemCapabilities(item);
     const label = description ? `${item.Name}, ${description}` : item.Name;
-    return <article ref={cardRef} class={`library-card library-card-${view}${selecting ? ' selecting' : ''}${selected ? ' selected' : ''}`} data-library-item-id={item.Id}>
+    return <article ref={cardRef} class={`library-card library-card-${view}${selecting ? ' selecting' : ''}${selected ? ' selected' : ''}`} data-library-item-id={item.Id} onPointerEnter={prefetch.onPointerEnter} onPointerLeave={prefetch.onPointerLeave} onFocusIn={prefetch.onFocusIn} onFocusOut={prefetch.onFocusOut}>
         <button class="library-card-open" data-focusable="true" aria-label={selecting ? t('Select {0}', label) : t('View {0}', label)} aria-pressed={selecting ? selected : undefined} onClick={() => { if (longPressed.current) { longPressed.current = false; return; } if (selecting) onToggleSelect?.(item); else onSelect(item); }} onTouchStart={onPointerDown} onTouchEnd={clearPress} onTouchMove={clearPress}>
             <span class="library-card-art"><img src={image || undefined} alt="" loading="lazy" />{!image && <span class="art-placeholder">{item.Name.slice(0, 1)}</span>}
                 {selecting && <span class="library-select-check" aria-hidden="true">{selected ? '✓' : ''}</span>}

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { peekCachedImage, releaseCachedImage, retainCachedImage, type JellyfinApi } from './api';
 import { HOME_EXPLORE_PAGE_SIZE, type HomeFeedBlock } from './home-feed-blocks';
 import { preferredScrollBehavior } from './live-model';
+import { useItemPrefetch } from './item-prefetch';
 import { describeCard, homeCardHeading, homeCardSubheading, homeRailShape, resumeMinutesLeft } from './media-labels';
 import type { SeerrItem } from './seerr';
 import { SeerrCard } from './seerr-views';
@@ -222,6 +223,7 @@ function HomeFeedCard({ item, api, onSelect, shape = 'poster' }: { item: MediaIt
     const [ image, setImage ] = useState(() => ({ key: src, url: src ? peekCachedImage(src) : '', failed: false }));
     const card = useRef<HTMLButtonElement>(null);
     const retainedKey = useRef('');
+    const prefetch = useItemPrefetch(api, item.Id);
     useEffect(() => {
         let active = true;
         let stopObserving: (() => void) | undefined;
@@ -271,7 +273,7 @@ function HomeFeedCard({ item, api, onSelect, shape = 'poster' }: { item: MediaIt
     const initials = item.Name.trim().split(/\s+/).slice(0, 2).map(word => word.charAt(0)).join('').toUpperCase();
     const description = describeCard(item);
     const subheading = [ homeCardSubheading(item), minutes !== null ? t('{0} min left', minutes) : '' ].filter(Boolean).join(' · ');
-    return <button ref={card} data-focusable="true" class={`home-feed-card${landscape ? ' landscape' : ''}`} aria-label={description ? t('View {0}, {1}', item.Name, description) : t('View {0}', item.Name)} onClick={() => onSelect(item)}>
+    return <button ref={card} data-focusable="true" class={`home-feed-card${landscape ? ' landscape' : ''}`} aria-label={description ? t('View {0}, {1}', item.Name, description) : t('View {0}', item.Name)} onClick={() => onSelect(item)} onPointerEnter={prefetch.onPointerEnter} onPointerLeave={prefetch.onPointerLeave} onFocusIn={prefetch.onFocusIn} onFocusOut={prefetch.onFocusOut}>
         <span class={`home-feed-card-art${hasImage ? '' : ' no-artwork'}${liveProgram ? ' live-artwork' : ''}`}>
             {hasImage
                 ? <img src={image.url} alt="" loading="lazy" onError={() => {
@@ -302,6 +304,7 @@ function Spotlight({ block, api, onSelect, onPlay, onUserData, nextBlockId }: {
     useEffect(() => { setFavorited(item?.UserData?.IsFavorite === true); }, [ item?.Id, item?.UserData?.IsFavorite ]);
     const [ savingFavorite, setSavingFavorite ] = useState(false);
     const [ favoriteError, setFavoriteError ] = useState('');
+    const prefetch = useItemPrefetch(api, item?.Id || '', Boolean(item));
     const image = item && api ? api.imageUrl(item, 'Backdrop', 1920, 85) || api.imageUrl(item, 'Primary', 960, 85) : '';
     const [ imageState, setImageState ] = useState(() => ({ key: image, url: image ? peekCachedImage(image) : '', failed: false }));
     const retainedKey = useRef('');
@@ -346,7 +349,7 @@ function Spotlight({ block, api, onSelect, onPlay, onUserData, nextBlockId }: {
         if (!spotlight || !target.matches('.home-spotlight-actions [data-focusable="true"]')) return;
         window.scrollTo(0, window.scrollY + spotlight.getBoundingClientRect().top - (window.innerHeight - spotlight.offsetHeight) / 2);
     };
-    return <section class={`home-spotlight home-spotlight-${block.spotlightType || 'discovery'}`} data-spotlight-id={block.id} onFocusIn={focusSpotlight}>
+    return <section class={`home-spotlight home-spotlight-${block.spotlightType || 'discovery'}`} data-spotlight-id={block.id} onPointerEnter={prefetch.onPointerEnter} onPointerLeave={prefetch.onPointerLeave} onFocusIn={event => { prefetch.onFocusIn(); focusSpotlight(event); }} onFocusOut={prefetch.onFocusOut}>
         <div class="home-spotlight-background">
             {imageState.key === image && imageState.url && !imageState.failed && <img src={imageState.url} alt="" loading="lazy" decoding="async" onError={() => {
                 if (retainedKey.current === image) {

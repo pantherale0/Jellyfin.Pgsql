@@ -45,6 +45,7 @@ import { currentLanguage, inlineSign, readStoredLanguage, resolveLanguage, t } f
 import { localeLoaders } from './i18n/loaders';
 import { isMusicTarget } from './music-model';
 import { MiniPlayer, MusicActions, musicEngine, NowPlaying, useMusicPlayer } from './music-player';
+import { useItemPrefetch, type ItemDetailsLease } from './item-prefetch';
 import './style.css';
 
 const AdminDashboard = lazy(() => import('./admin/admin-dashboard').then(module => ({ default: module.AdminDashboard })));
@@ -73,6 +74,8 @@ function isTvClient(): boolean {
 type ContentOrigin =
     | { kind: 'show'; bookmark: ShowBookmark }
     | { kind: 'home' | 'library' | 'search' | 'live' | 'favorites'; scrollY: number };
+
+type ItemDetailsMode = { kind: 'summary' } | { kind: 'full' };
 
 type PlaybackOrigin = ContentOrigin | { kind: 'details'; item: MediaItem; parent: ContentOrigin; scrollY: number };
 
@@ -280,6 +283,18 @@ function App() {
     const nativeHandoffItemId = useRef<string | null>(null);
     const nativeReturnRefresh = useRef<(itemId: string) => void>(() => undefined);
     const detailRequest = useRef(0);
+    const detailPrefetchLease = useRef<ItemDetailsLease | null>(null);
+    const showPrefetchLease = useRef<ItemDetailsLease | null>(null);
+    const releaseDetailPrefetch = () => {
+        const lease = detailPrefetchLease.current;
+        detailPrefetchLease.current = null;
+        lease?.release();
+    };
+    const releaseShowPrefetch = () => {
+        const lease = showPrefetchLease.current;
+        showPrefetchLease.current = null;
+        lease?.release();
+    };
     const renderedView = useRef(view);
     renderedView.current = view;
     const [ search, setSearch ] = useState('');
@@ -343,7 +358,7 @@ function App() {
     const programmaticScrollTimer = useRef<number>();
     const urlUpdateTimer = useRef<number>();
     const showInUrl = useRef(false);
-    const openItemRef = useRef<(item: MediaItem) => void>(() => undefined);
+    const openItemRef = useRef<(item: MediaItem, origin?: ContentOrigin, details?: ItemDetailsMode) => Promise<void>>(async () => undefined);
     const playRef = useRef<(item: MediaItem) => void>(() => undefined);
     const restoredLive = useRef(false);
     const selectItem = useCallback((item: MediaItem) => { void openItemRef.current(item); }, []);
@@ -376,6 +391,11 @@ function App() {
         clearSignedInState();
         setError(t('Your session expired. Sign in again.'));
     }) : null, [ session ]);
+    useEffect(() => () => api?.clearItemDetailsPrefetch(), [ api ]);
+    useEffect(() => {
+        if (view !== 'details') releaseDetailPrefetch();
+        if (view !== 'show') releaseShowPrefetch();
+    }, [ view ]);
     const music = useMusicPlayer(api);
     const tvClient = isTvClient();
     const switchReturnSession = useRef<Session | null>(null);
@@ -1085,9 +1105,16 @@ function App() {
         }
     }, [ activeRecommendation ]);
 
+    const activeRecommendationId = recommendations[activeRecommendation]?.Id || '';
+    useEffect(() => {
+        if (!api || view !== 'home' || !activeRecommendationId) return;
+        const lease = api.acquireItemDetails(activeRecommendationId, 'background');
+        return () => lease.release();
+    }, [ api, view, activeRecommendationId ]);
+
     const openRecommendation = useCallback(() => {
         const item = recommendations[activeRecommendation];
-        if (item) void openItem(item);
+        if (item) void openItemRef.current(item);
     }, [ recommendations, activeRecommendation ]);
 
     const retryHomeSection = useCallback((section: 'views' | 'resume' | 'latest') => {
@@ -1506,6 +1533,7 @@ function App() {
     };
 
     const invalidateShow = () => {
+        releaseShowPrefetch();
         showGeneration.current++;
         episodeRequests.current = {};
         setShowRestore(null);
@@ -1960,7 +1988,7 @@ function App() {
         void api.getItem(itemId).then(item => {
             if (cancelled || !navigation.isCurrent(intent)) return;
             clearItemQuery();
-            void openItem(item);
+            void openItem(item, undefined, { kind: 'full' });
         }).catch(e => {
             if (cancelled || !navigation.isCurrent(intent)) return;
             clearItemQuery();
@@ -1979,6 +2007,7 @@ function App() {
 
     const returnToContent = (origin: ContentOrigin) => {
         detailRequest.current++;
+        releaseDetailPrefetch();
         setSelected(null);
         if (origin.kind === 'show') {
             setShowRestore({ ...origin.bookmark });
@@ -2015,14 +2044,36 @@ function App() {
         return () => window.cancelAnimationFrame(frame);
     }, [ contentRestore, view ]);
 
-    const openItem = async (item: MediaItem, origin?: ContentOrigin) => {
+    const openItem = async (item: MediaItem, origin?: ContentOrigin, details: ItemDetailsMode = { kind: 'summary' }) => {
         if (!api) return;
+        detailRequest.current++;
+        releaseDetailPrefetch();
+        if (view === 'show') releaseShowPrefetch();
         const account = accountGeneration.current();
         if ((item.Type === 'Series' || item.Type === 'Season') && view !== 'show') {
             seriesOrigin.current = origin || (view === 'details' ? detailOrigin.current : null) || contentOrigin();
         }
         if (item.Type === 'Series') {
-            await openSeries(item);
+            const lease = details.kind === 'full' ? null : api.acquireItemDetails(item.Id, 'interactive');
+            const series = lease?.item || item;
+            const opening = openSeries(series);
+            const generation = showGeneration.current;
+            if (lease?.item) lease.release();
+            else if (lease) {
+                showPrefetchLease.current = lease;
+                void lease.promise.then(result => {
+                    if (result.kind === 'ready'
+                        && showGeneration.current === generation
+                        && accountGeneration.isCurrent(account)
+                        && renderedView.current === 'show') {
+                        setTvSeries(current => current?.Id === item.Id ? result.item : current);
+                    }
+                }).finally(() => {
+                    lease.release();
+                    if (showPrefetchLease.current === lease) showPrefetchLease.current = null;
+                });
+            }
+            await opening;
             return;
         }
         if (item.Type === 'Season') {
@@ -2050,19 +2101,22 @@ function App() {
         }
         const request = ++detailRequest.current;
         detailOrigin.current = parent;
-        setSelected(item);
+        const lease = details.kind === 'full' ? null : api.acquireItemDetails(item.Id, 'interactive');
+        setSelected(lease?.item || item);
         setDetailError('');
-        setDetailLoading(true);
+        setDetailLoading(!lease?.item && details.kind === 'summary');
         setView('details');
-        try {
-            const full = await api.getItem(item.Id);
-            if (request === detailRequest.current && accountGeneration.isCurrent(account) && renderedView.current === 'details') setSelected(full);
-        } catch (e) {
-            // The sparse list item stays visible, but the failure is explicit with retry.
-            if (request === detailRequest.current && accountGeneration.isCurrent(account)) setDetailError(messageOf(e));
-        } finally {
-            if (request === detailRequest.current && accountGeneration.isCurrent(account)) setDetailLoading(false);
-        }
+        if (!lease) return;
+        detailPrefetchLease.current = lease;
+        void lease.promise.then(result => {
+            if (request !== detailRequest.current || !accountGeneration.isCurrent(account) || renderedView.current !== 'details') return;
+            if (result.kind === 'ready') setSelected(result.item);
+            else if (result.kind === 'failed') setDetailError(messageOf(result.error));
+            if (result.kind !== 'cancelled') setDetailLoading(false);
+        }).finally(() => {
+            lease.release();
+            if (detailPrefetchLease.current === lease) detailPrefetchLease.current = null;
+        });
     };
 
     const openEpisodeSeries = async (episode: MediaItem) => {
@@ -2798,7 +2852,7 @@ function App() {
         case 'details':
         case 'player':
             if (selected?.Id === route.itemId) { setView('details'); return; }
-            open(() => api.getItem(route.itemId), item => void openItem(item));
+            open(() => api.getItem(route.itemId), item => void openItem(item, undefined, { kind: 'full' }));
             return;
         }
     };
@@ -2948,7 +3002,7 @@ function App() {
                                 {recommendations[activeRecommendation].RunTimeTicks && <span>{t('{0} min', Math.round(recommendations[activeRecommendation].RunTimeTicks / 600000000))}</span>}
                             </div>
                             <p class="recommendation-overview">{recommendations[activeRecommendation].Overview || t('A recommendation picked for you from your library.')}</p>
-                            <button data-focusable="true" class="button primary" onClick={openRecommendation}>{t('View details')}{' '}<span class="dir-arrow" aria-hidden="true">→</span></button>
+                            <button data-focusable="true" class="button primary" type="button" onClick={openRecommendation}>{t('View details')}{' '}<span class="dir-arrow" aria-hidden="true">→</span></button>
                         </div>
                         {recommendations.length > 1 && <div class="recommendation-controls" aria-label={t('Recommendation carousel controls')}>
                             <button data-focusable="true" class="recommendation-arrow" aria-label={t('Previous recommendation')} onClick={() => stepRecommendation(-1)}>‹</button>
@@ -3326,51 +3380,82 @@ const Artwork = memo(function Artwork({ api, item, backdrop = false, className =
     return <div ref={holder} class={`artwork ${className} ${src ? 'has-image' : ''} ${usedPosterFallback ? 'poster-fallback' : ''}`} aria-hidden="true">{src && <img class="artwork-image" src={src} alt="" decoding="async" onError={onImageError} />}<span class="art-placeholder">{item.Name.slice(0, 1)}</span></div>;
 });
 
-function RecommendationTitle({ api, item }: { api: JellyfinApi | null; item: MediaItem }) {
-    const logoUrl = api && item.ImageTags?.Logo ? api.imageUrl(item, 'Logo', 1000) : '';
-    const cachedLogo = peekCachedImage(logoUrl);
-    const [ logoState, setLogoState ] = useState<{ status: 'loading' | 'logo' | 'text'; url: string }>(() => ({
-        status: cachedLogo ? 'logo' : logoUrl ? 'loading' : 'text',
-        url: cachedLogo
-    }));
+type MediaLogoState =
+    | { kind: 'loading'; imageKey: string }
+    | { kind: 'logo'; imageKey: string; url: string }
+    | { kind: 'text'; imageKey: string };
+
+function initialMediaLogoState(imageKey: string): MediaLogoState {
+    if (!imageKey) return { kind: 'text', imageKey };
+    const cached = peekCachedImage(imageKey);
+    return cached ? { kind: 'logo', imageKey, url: cached } : { kind: 'loading', imageKey };
+}
+
+function useMediaLogo(api: JellyfinApi | null, item: MediaItem) {
+    const imageKey = api && item.ImageTags?.Logo ? api.imageUrl(item, 'Logo', 1000) : '';
+    const [ storedState, setStoredState ] = useState<MediaLogoState>(() => initialMediaLogoState(imageKey));
+    const state = storedState.imageKey === imageKey ? storedState : initialMediaLogoState(imageKey);
     useEffect(() => {
         let active = true;
-        if (!api || !logoUrl) {
-            setLogoState({ status: 'text', url: '' });
+        if (!api || !imageKey) {
+            setStoredState({ kind: 'text', imageKey });
             return;
         }
         const apply = (url: string) => {
             if (!active) return;
-            if (url) retainCachedImage(logoUrl);
-            setLogoState({ status: url ? 'logo' : 'text', url });
+            if (url) retainCachedImage(imageKey);
+            setStoredState(url ? { kind: 'logo', imageKey, url } : { kind: 'text', imageKey });
         };
-        const cached = peekCachedImage(logoUrl);
+        const cached = peekCachedImage(imageKey);
         if (cached) apply(cached);
         else {
-            setLogoState({ status: 'loading', url: '' });
+            setStoredState({ kind: 'loading', imageKey });
             const bag: { cancel?: () => void } = {};
             void api.loadImage(item, 'Logo', 1000, 90, bag).then(apply).catch(() => {
-                if (active) setLogoState({ status: 'text', url: '' });
+                if (active) setStoredState({ kind: 'text', imageKey });
             });
             return () => {
                 active = false;
                 bag.cancel?.();
-                releaseCachedImage(logoUrl);
+                releaseCachedImage(imageKey);
             };
         }
         return () => {
             active = false;
-            releaseCachedImage(logoUrl);
+            releaseCachedImage(imageKey);
         };
-    }, [ api, item.Id, logoUrl ]);
+    }, [ api, item.Id, imageKey ]);
 
-    if (logoState.status === 'loading') {
+    const onImageError = () => {
+        releaseCachedImage(imageKey);
+        setStoredState({ kind: 'text', imageKey });
+    };
+    return { state, onImageError };
+}
+
+function RecommendationTitle({ api, item }: { api: JellyfinApi | null; item: MediaItem }) {
+    const { state, onImageError } = useMediaLogo(api, item);
+
+    if (state.kind === 'loading') {
         return <div class="recommendation-title-slot logo-loading" role="status" aria-label={t('Loading {0} logo', item.Name)}><span /></div>;
     }
-    if (logoState.status === 'logo' && logoState.url) {
-        return <div class="recommendation-title-slot"><img class="recommendation-title-logo" src={logoState.url} alt={item.Name} decoding="async" onError={() => { releaseCachedImage(logoUrl); setLogoState({ status: 'text', url: '' }); }} /></div>;
+    if (state.kind === 'logo') {
+        return <div class="recommendation-title-slot"><img class="recommendation-title-logo" src={state.url} alt={item.Name} decoding="async" onError={onImageError} /></div>;
     }
     return <div class="recommendation-title-slot"><h1>{item.Name}</h1></div>;
+}
+
+function MediaTitle({ api, item }: { api: JellyfinApi | null; item: MediaItem }) {
+    const { state, onImageError } = useMediaLogo(api, item);
+    return <div class="content-title-slot">
+        <h1 aria-busy={state.kind === 'loading' ? 'true' : undefined}>
+            {state.kind === 'logo'
+                ? <img class="content-title-logo" src={state.url} alt={item.Name} decoding="async" onError={onImageError} />
+                : state.kind === 'loading'
+                    ? <><span class="visually-hidden">{item.Name}</span><span class="content-title-loading" aria-hidden="true" /></>
+                    : item.Name}
+        </h1>
+    </div>;
 }
 
 function MediaRow({ title, subtitle, items, api, onSelect }: { title: string; subtitle: string; items: MediaItem[]; api: JellyfinApi | null; onSelect: (item: MediaItem) => void }) {
@@ -3383,7 +3468,8 @@ const MediaCard = memo(function MediaCard({ api, item, onSelect, eager = false, 
     const kind = showKind ? mediaKind(item) : null;
     const fallback = item.ProductionYear ? String(item.ProductionYear) : (item.SeriesName || t('In your library'));
     const description = describeCard(item);
-    return <button data-focusable="true" class="media-card" onClick={() => onSelect(item)} aria-label={description ? t('View {0}, {1}', item.Name, description) : t('View {0}', item.Name)}><span class="media-card-art"><Artwork eager={eager} api={api} item={item} /><span class="media-card-overlay"><span class="media-name">{item.Name}</span>{kind
+    const prefetch = useItemPrefetch(api, item.Id);
+    return <button data-focusable="true" class="media-card" onClick={() => onSelect(item)} onPointerEnter={prefetch.onPointerEnter} onPointerLeave={prefetch.onPointerLeave} onFocusIn={prefetch.onFocusIn} onFocusOut={prefetch.onFocusOut} aria-label={description ? t('View {0}, {1}', item.Name, description) : t('View {0}', item.Name)}><span class="media-card-art"><Artwork eager={eager} api={api} item={item} /><span class="media-card-overlay"><span class="media-name">{item.Name}</span>{kind
         ? <span class="media-year">{kind.label && <span class={kind.live ? 'media-kind-live' : 'media-kind'}>{t(kind.label)}</span>}{kind.label && kind.detail ? ' · ' : ''}{kind.detail || (!kind.label ? fallback : '')}</span>
         : <>{item.ProductionYear && <span class="media-year">{item.ProductionYear}</span>}</>}</span>{item.UserData?.PlayedPercentage !== undefined && item.UserData.PlayedPercentage > 0 && <span class="progress-track"><span style={{ width: `${Math.min(100, item.UserData.PlayedPercentage)}%` }} /></span>}</span></button>;
 });
@@ -3607,7 +3693,7 @@ function DetailPage({ api, item, backLabel, loading, loadError, onRetry, onBack,
     return <><section class="detail-page"><Artwork eager api={api} item={item} backdrop className="detail-backdrop" /><div class="detail-gradient" /><div class="detail-content">
         <button data-focusable="true" class="back-link" onClick={onBack}><span class="dir-arrow" aria-hidden="true">←</span> <span>{backLabel}</span></button>
         <p class="eyebrow">{item.Type || 'FEATURED'}</p>
-        <h1>{item.Name}</h1>
+        <MediaTitle api={api} item={item} />
         {item.Type === 'Episode' && item.SeriesName && <p class="detail-series-name muted">{item.SeriesName}</p>}
         {loading && !loadError && <p class="muted detail-loading" role="status"><span class="mini-spinner" aria-hidden="true" />{' '}{t('Loading full details…')}</p>}
         {loadError && <p class="notice error" role="alert"><span>{t('Full details could not load: {0}', loadError)}</span> <button data-focusable="true" class="button secondary" type="button" onClick={onRetry}>{t('Retry')}</button></p>}
@@ -4028,7 +4114,7 @@ function ShowDetailView(props: ShowDetailViewProps) {
             <div class="show-header-copy">
                 <button class="back-link" data-show-control="back" data-focusable="true" onClick={() => { cancelIntent(); onBack(); }}><span class="dir-arrow" aria-hidden="true">←</span> <span>{backLabel}</span></button>
                 <p class="eyebrow">{t('TV SERIES')}</p>
-                <h1>{series.Name}</h1>
+                <MediaTitle api={api} item={series} />
                 <div class="show-metadata">
                     {series.ProductionYear && <span>{series.ProductionYear}{endYear && endYear !== series.ProductionYear && `–${endYear}`}</span>}
                     {series.CommunityRating && <span>★ {series.CommunityRating.toFixed(1)}</span>}
@@ -4111,7 +4197,8 @@ const EpisodeCard = memo(function EpisodeCard({ api, episode, seasonId, captureB
     onPlay: (episode: MediaItem, bookmark: ShowBookmark) => void;
 }) {
     const progress = episode.UserData?.PlayedPercentage || 0;
-    return <article data-episode-id={episode.Id} data-season-id={seasonId} class={episode.UserData?.Played ? 'episode-card played' : 'episode-card'}>
+    const prefetch = useItemPrefetch(api, episode.Id);
+    return <article data-episode-id={episode.Id} data-season-id={seasonId} class={episode.UserData?.Played ? 'episode-card played' : 'episode-card'} onPointerEnter={prefetch.onPointerEnter} onPointerLeave={prefetch.onPointerLeave} onFocusIn={prefetch.onFocusIn} onFocusOut={prefetch.onFocusOut}>
         <button class="episode-art-button" data-show-control="art" data-episode-id={episode.Id} data-season-id={seasonId} data-focusable="true" aria-label={t('Play {0}', episode.Name)} onClick={() => onPlay(episode, captureBookmark(seasonId, episode.Id, 'art'))}>
             <Artwork api={api} item={episode} className="episode-art" />
             {episode.RunTimeTicks && <span class="episode-runtime">{t('{0} min', Math.round(episode.RunTimeTicks / 600000000))}</span>}
