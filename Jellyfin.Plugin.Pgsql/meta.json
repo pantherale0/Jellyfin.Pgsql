@@ -6,7 +6,7 @@
   "name": "PostgreSQL Database",
   "overview": "PostgreSQL database provider for Jellyfin",
   "owner": "jellyfin",
-  "targetAbi": "12.3.0.0",
+  "targetAbi": "12.4.0.0",
   "timestamp": "2026-07-13T00:00:00.0000000Z",
   "version": "1.0.0.0",
   "status": "Active",
