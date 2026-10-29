@@ -80,12 +80,12 @@ export interface AndroidNativePlayerPreferences {
 
 export interface AndroidNativePlayerBridge {
     isEnabled: () => unknown;
-    syncSession: (requestId: string, serverUrl: string, userId: string, accessToken: string) => unknown;
+    syncSession?: (requestId: string, serverUrl: string, userId: string, accessToken: string) => unknown;
     loadPlayer: (playOptions: string, preferences: string) => unknown;
 }
 
 export type AndroidNativePlaybackDispatch = 'unavailable' | 'disabled' | 'dispatched' | 'failed';
-export type AndroidNativeSessionSync = 'unavailable' | 'disabled' | 'ready' | 'rejected' | 'timeout' | 'failed';
+export type AndroidNativeSessionSync = 'unavailable' | 'disabled' | 'ready' | 'legacy' | 'rejected' | 'timeout' | 'failed';
 
 export interface AndroidNativeSession {
     serverUrl: string;
@@ -141,14 +141,16 @@ function androidNativePlayerBridge(): AndroidNativePlayerBridge | null {
     if (typeof window === 'undefined') return null;
     try {
         const candidate = window.NativePlayer;
-        if (typeof candidate !== 'object' || candidate === null || !('isEnabled' in candidate) || !('syncSession' in candidate) || !('loadPlayer' in candidate)) return null;
+        if (typeof candidate !== 'object' || candidate === null || !('isEnabled' in candidate) || !('loadPlayer' in candidate)) return null;
         const isEnabled = candidate.isEnabled;
-        const syncSession = candidate.syncSession;
+        const syncSession = 'syncSession' in candidate ? candidate.syncSession : undefined;
         const loadPlayer = candidate.loadPlayer;
-        if (typeof isEnabled !== 'function' || typeof syncSession !== 'function' || typeof loadPlayer !== 'function') return null;
+        if (typeof isEnabled !== 'function' || typeof loadPlayer !== 'function' || (syncSession !== undefined && typeof syncSession !== 'function')) return null;
         return {
             isEnabled: () => Reflect.apply(isEnabled, candidate, []),
-            syncSession: (requestId, serverUrl, userId, accessToken) => Reflect.apply(syncSession, candidate, [ requestId, serverUrl, userId, accessToken ]),
+            ...(typeof syncSession === 'function' ? {
+                syncSession: (requestId: string, serverUrl: string, userId: string, accessToken: string) => Reflect.apply(syncSession, candidate, [ requestId, serverUrl, userId, accessToken ])
+            } : {}),
             loadPlayer: (playOptions, preferences) => Reflect.apply(loadPlayer, candidate, [ playOptions, preferences ])
         };
     } catch (_error) {
@@ -156,22 +158,110 @@ function androidNativePlayerBridge(): AndroidNativePlayerBridge | null {
     }
 }
 
+function currentHostAppName(): string | null {
+    const appHost = nativeShell()?.AppHost;
+    if (appHost && typeof appHost.appName === 'function') {
+        try {
+            return identityString(appHost.appName.call(appHost));
+        } catch (_error) {
+            return null;
+        }
+    }
+    return hostIdentity()?.appName || null;
+}
+
+export function isLegacyAndroidNativePlayer(): boolean {
+    const bridge = androidNativePlayerBridge();
+    return bridge !== null && !bridge.syncSession && currentHostAppName() === 'Jellyfin for Android';
+}
+
+const LEGACY_ANDROID_CREDENTIALS_KEY = 'jellyfin_credentials';
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readLegacyAndroidCredentials(): { fields: Record<string, unknown>; servers: unknown[] } {
+    try {
+        const raw = localStorage.getItem(LEGACY_ANDROID_CREDENTIALS_KEY);
+        if (!raw) return { fields: {}, servers: [] };
+        const parsed: unknown = JSON.parse(raw);
+        if (!isObjectRecord(parsed)) return { fields: {}, servers: [] };
+        return { fields: parsed, servers: Array.isArray(parsed.Servers) ? parsed.Servers : [] };
+    } catch (_error) {
+        return { fields: {}, servers: [] };
+    }
+}
+
+function matchesLegacyAndroidSession(value: unknown, session: Pick<AndroidNativeSession, 'userId' | 'accessToken'>): boolean {
+    return isObjectRecord(value) && value.UserId === session.userId && value.AccessToken === session.accessToken;
+}
+
+export function writeLegacyAndroidCredentials(session: AndroidNativeSession): boolean {
+    if (!isLegacyAndroidNativePlayer() || typeof window === 'undefined' || !session.userId || !session.accessToken) return false;
+    try {
+        const server = new URL(session.serverUrl);
+        if ((server.protocol !== 'https:' && server.protocol !== 'http:')
+            || server.origin !== window.location.origin
+            || server.username || server.password || server.search || server.hash) return false;
+        const stored = readLegacyAndroidCredentials();
+        const servers = stored.servers.filter(value => !matchesLegacyAndroidSession(value, session));
+        localStorage.setItem(LEGACY_ANDROID_CREDENTIALS_KEY, JSON.stringify({
+            ...stored.fields,
+            Servers: [ { UserId: session.userId, AccessToken: session.accessToken }, ...servers ]
+        }));
+        return true;
+    } catch (_error) {
+        return false;
+    }
+}
+
+export function clearLegacyAndroidCredentials(session?: Pick<AndroidNativeSession, 'userId' | 'accessToken'>): void {
+    if (!isLegacyAndroidNativePlayer() || !session?.userId || !session.accessToken) return;
+    try {
+        const stored = readLegacyAndroidCredentials();
+        const servers = stored.servers.filter(value => !matchesLegacyAndroidSession(value, session));
+        if (servers.length === stored.servers.length) return;
+        if (servers.length === 0 && Object.keys(stored.fields).every(key => key === 'Servers')) {
+            localStorage.removeItem(LEGACY_ANDROID_CREDENTIALS_KEY);
+        } else {
+            localStorage.setItem(LEGACY_ANDROID_CREDENTIALS_KEY, JSON.stringify({ ...stored.fields, Servers: servers }));
+        }
+    } catch (_error) { /* Storage can be disabled. */ }
+}
+
 let nativeSessionSyncSequence = 0;
 
+export interface AndroidNativeSessionSyncOptions {
+    timeoutMs?: number;
+    legacySync?: () => Promise<boolean>;
+}
+
 /** Synchronizes and verifies the UI session in Jellyfin Android before native playback. */
-export function synchronizeAndroidNativePlayerSession(session: AndroidNativeSession, timeoutMs = 15_000): Promise<AndroidNativeSessionSync> {
+export async function synchronizeAndroidNativePlayerSession(session: AndroidNativeSession, options: AndroidNativeSessionSyncOptions = {}): Promise<AndroidNativeSessionSync> {
     const bridge = androidNativePlayerBridge();
     if (!bridge || typeof window === 'undefined') return Promise.resolve('unavailable');
     try {
         if (bridge.isEnabled() !== true) return Promise.resolve('disabled');
         const server = new URL(session.serverUrl);
-        if ((server.protocol !== 'https:' && server.protocol !== 'http:') || server.origin !== window.location.origin || server.username || server.password) {
+        if ((server.protocol !== 'https:' && server.protocol !== 'http:')
+            || server.origin !== window.location.origin
+            || server.username || server.password || server.search || server.hash) {
             return Promise.resolve('unavailable');
         }
     } catch (_error) {
         return Promise.resolve('unavailable');
     }
     if (!session.userId || !session.accessToken) return Promise.resolve('unavailable');
+
+    if (!bridge.syncSession) {
+        if (!isLegacyAndroidNativePlayer() || !options.legacySync) return 'unavailable';
+        try {
+            return await options.legacySync() ? 'legacy' : 'failed';
+        } catch (_error) {
+            return 'failed';
+        }
+    }
 
     nativeSessionSyncSequence += 1;
     const requestId = `ui-next-${Date.now().toString(36)}-${nativeSessionSyncSequence}`;
@@ -193,9 +283,9 @@ export function synchronizeAndroidNativePlayerSession(session: AndroidNativeSess
             finish(detail.ready ? 'ready' : 'rejected');
         };
         window.addEventListener('jellyfin-native-session-sync', onSyncResult);
-        timer = window.setTimeout(() => finish('timeout'), Math.max(1, timeoutMs));
+        timer = window.setTimeout(() => finish('timeout'), Math.max(1, options.timeoutMs ?? 15_000));
         try {
-            if (bridge.syncSession(requestId, session.serverUrl, session.userId, session.accessToken) !== true) finish('failed');
+            if (bridge.syncSession?.(requestId, session.serverUrl, session.userId, session.accessToken) !== true) finish('failed');
         } catch (_error) {
             finish('failed');
         }
@@ -399,7 +489,8 @@ export function notifySignedIn(user: unknown, accessToken: string): void {
     call(shell => shell.onLocalUserSignedIn?.(user, accessToken));
 }
 
-export function notifySignedOut(info: unknown = {}): void {
+export function notifySignedOut(info: unknown = {}, legacySession?: Pick<AndroidNativeSession, 'userId' | 'accessToken'>): void {
+    clearLegacyAndroidCredentials(legacySession);
     call(shell => shell.onLocalUserSignedOut?.(info));
 }
 

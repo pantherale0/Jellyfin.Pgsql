@@ -15,7 +15,7 @@ import { publicUsers, type ForgotPasswordResult, type PublicUser } from './accou
 import { createSsoChallenge, createSsoSession, normalizeUserId, SSO_HANDOFF_KEY, ssoHandoffFromExchange, ssoReturnUrl, UI_NEXT_SIGNED_OUT_KEY, type SsoHandoff, type SsoHandoffAttempt } from './sso-session';
 import { ItemDetailsPrefetcher, type ItemDetailsLease, type ItemDetailsPriority } from './item-prefetch';
 import { haTracker } from './ha-status';
-import { hostDeviceProfile, hostIdentity } from './native-host';
+import { hostDeviceProfile, hostIdentity, writeLegacyAndroidCredentials } from './native-host';
 import { t } from './i18n';
 
 const CLIENT_NAME = 'Jellyfin UI Next';
@@ -457,6 +457,16 @@ export class JellyfinApi {
             signal,
             priority: priority === 'background' ? 0 : 2
         }));
+    }
+
+    async syncLegacyAndroidSession(): Promise<boolean> {
+        if (!writeLegacyAndroidCredentials({
+            serverUrl: this.session.server,
+            userId: this.session.user.Id,
+            accessToken: this.session.token
+        })) return false;
+        await this.request<unknown>('/Sessions/Capabilities/Full', {}, false, 1);
+        return true;
     }
 
     static async login(serverInput: string, username: string, password: string): Promise<Session> {

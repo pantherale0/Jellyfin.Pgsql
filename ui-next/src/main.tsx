@@ -370,13 +370,17 @@ function App() {
     useEffect(() => playQueue.clear(), [ session?.server, session?.user.Id ]);
     useEffect(() => musicEngine.stop(), [ session?.server, session?.user.Id ]);
     useEffect(() => haTracker.reset(), [ session?.server, session?.user.Id ]);
-    const hostSignedIn = useRef<string | null>(null);
+    const hostSignedIn = useRef<{ serverId: string; userId: string; accessToken: string } | null>(null);
     useEffect(() => {
         if (session?.token) {
-            hostSignedIn.current = session.serverId;
+            hostSignedIn.current = { serverId: session.serverId, userId: session.user.Id, accessToken: session.token };
             notifySignedIn({ ...session.user, ServerId: session.serverId }, session.token);
-        } else if (hostSignedIn.current !== null) {
-            notifySignedOut({ serverId: hostSignedIn.current });
+        } else if (hostSignedIn.current) {
+            const previousSession = hostSignedIn.current;
+            notifySignedOut(
+                { serverId: previousSession.serverId },
+                { userId: previousSession.userId, accessToken: previousSession.accessToken }
+            );
             hostSignedIn.current = null;
         }
     }, [ session?.server, session?.user.Id, session?.token ]);
@@ -2361,9 +2365,9 @@ function App() {
                 serverUrl: session.server,
                 userId: session.user.Id,
                 accessToken: session.token
-            });
+            }, { legacySync: () => api.syncLegacyAndroidSession() });
             if (!navigation.isCurrent(nativeIntent)) return;
-            if (nativeSessionSync === 'ready') {
+            if (nativeSessionSync === 'ready' || nativeSessionSync === 'legacy') {
                 nativeHandoffItemId.current = playbackItem.Id;
                 const nativeDispatch = dispatchAndroidNativePlayback(nativeOptions, nativePreferences);
                 if (nativeDispatch === 'dispatched') {

@@ -62,6 +62,7 @@ const appHost = (overrides = {}) => ({
 afterEach(() => {
     delete globalThis.NativeShell;
     delete globalThis.window.NativePlayer;
+    storage.delete('jellyfin_credentials');
     host.resetHostIdentity();
     requests.length = 0;
     opened.length = 0;
@@ -276,7 +277,7 @@ test('UI wiring: identity before render, menu entries, sign-in/out, gated featur
     const main = source('main.tsx');
     assert.match(main, /void initHostIdentity\(\)\.finally\(\(\) => render\(<App \/>/);
     assert.match(main, /notifySignedIn\(\{ \.\.\.session\.user, ServerId: session\.serverId \}, session\.token\)/);
-    assert.match(main, /notifySignedOut\(\{ serverId: hostSignedIn\.current \}\)/);
+    assert.match(main, /notifySignedOut\([\s\S]*serverId: previousSession\.serverId[\s\S]*userId: previousSession\.userId[\s\S]*accessToken: previousSession\.accessToken[\s\S]*\)/);
     assert.match(main, /hostSupports\('clientsettings'\) && <button[^\n]*openHostClientSettings\(\)/);
     assert.match(main, /hostSupports\('downloadmanagement'\) && <button[^\n]*openHostDownloadManager\(\)/);
     assert.match(main, /hostSupports\('exitmenu'\) && <button[^\n]*exitHostApp\(\)/);
@@ -423,7 +424,7 @@ test('Android playback waits for a matching native session-ready acknowledgement
         serverUrl: 'https://jellyfin.example.test/web/',
         userId: '018f6bd5-33c5-7abc-8c3f-55f62bc95b13',
         accessToken: 'opaque-access-token'
-    }, 50), 'ready');
+    }, { timeoutMs: 50, legacySync: async () => assert.fail('modern syncSession must be preferred') }), 'ready');
     assert.equal(calls.length, 1);
     assert.equal(calls[0][1], 'https://jellyfin.example.test/web/');
     assert.equal(calls[0][2], '018f6bd5-33c5-7abc-8c3f-55f62bc95b13');
@@ -438,11 +439,11 @@ test('Android session sync refuses cross-origin, disabled, rejected and timed-ou
         syncSession: (...args) => { calls.push(args); return true; },
         loadPlayer: () => undefined
     };
-    assert.equal(await host.synchronizeAndroidNativePlayerSession({ ...session, serverUrl: 'https://other.example.test' }, 20), 'unavailable');
+    assert.equal(await host.synchronizeAndroidNativePlayerSession({ ...session, serverUrl: 'https://other.example.test' }, { timeoutMs: 20 }), 'unavailable');
     assert.equal(calls.length, 0);
 
     globalThis.window.NativePlayer.isEnabled = () => false;
-    assert.equal(await host.synchronizeAndroidNativePlayerSession(session, 20), 'disabled');
+    assert.equal(await host.synchronizeAndroidNativePlayerSession(session, { timeoutMs: 20 }), 'disabled');
     assert.equal(calls.length, 0);
 
     globalThis.window.NativePlayer.isEnabled = () => true;
@@ -450,10 +451,143 @@ test('Android session sync refuses cross-origin, disabled, rejected and timed-ou
         queueMicrotask(() => globalThis.window.dispatchEvent(new CustomEvent('jellyfin-native-session-sync', { detail: { requestId, ready: false } })));
         return true;
     };
-    assert.equal(await host.synchronizeAndroidNativePlayerSession(session, 50), 'rejected');
+    assert.equal(await host.synchronizeAndroidNativePlayerSession(session, { timeoutMs: 50 }), 'rejected');
 
     globalThis.window.NativePlayer.syncSession = () => true;
-    assert.equal(await host.synchronizeAndroidNativePlayerSession(session, 5), 'timeout');
+    assert.equal(await host.synchronizeAndroidNativePlayerSession(session, { timeoutMs: 5 }), 'timeout');
+});
+
+test('stock Jellyfin Android uses the legacy capabilities hook when syncSession is absent', async () => {
+    const session = { serverUrl: 'https://jellyfin.example.test', userId: 'user-id', accessToken: 'access-token' };
+    const legacySyncCalls = [];
+    globalThis.NativeShell = { AppHost: appHost({ appName: () => 'Jellyfin for Android' }) };
+    await host.initHostIdentity();
+    globalThis.window.NativePlayer = { isEnabled: () => true, loadPlayer: () => undefined };
+
+    const result = await host.synchronizeAndroidNativePlayerSession(session, {
+        legacySync: async () => { legacySyncCalls.push(session); return true; }
+    });
+
+    assert.equal(result, 'legacy');
+    assert.deepEqual(legacySyncCalls, [ session ]);
+});
+
+test('legacy Android handoff detects the bridge if NativeShell arrives after UI Next startup', async () => {
+    const session = { serverUrl: 'https://jellyfin.example.test', userId: 'user-id', accessToken: 'access-token' };
+    const legacySyncCalls = [];
+    host.resetHostIdentity();
+    delete globalThis.NativeShell;
+    globalThis.window.NativePlayer = { isEnabled: () => true, loadPlayer: () => undefined };
+    assert.equal(await host.initHostIdentity(), null);
+
+    globalThis.NativeShell = { AppHost: appHost({ appName: () => 'Jellyfin for Android' }) };
+    assert.equal(await host.synchronizeAndroidNativePlayerSession(session, {
+        legacySync: async () => { legacySyncCalls.push(session); return true; }
+    }), 'legacy');
+    assert.deepEqual(legacySyncCalls, [ session ]);
+});
+
+test('legacy Android handoff is not attempted for another wrapper or an ExoPlayer-disabled app', async () => {
+    const session = { serverUrl: 'https://jellyfin.example.test', userId: 'user-id', accessToken: 'access-token' };
+    let legacySyncCalls = 0;
+    globalThis.NativeShell = { AppHost: appHost({ appName: () => 'Jellyfin Media Player' }) };
+    await host.initHostIdentity();
+    globalThis.window.NativePlayer = { isEnabled: () => true, loadPlayer: () => undefined };
+
+    assert.equal(await host.synchronizeAndroidNativePlayerSession(session, {
+        legacySync: async () => { legacySyncCalls++; return true; }
+    }), 'unavailable');
+    assert.equal(legacySyncCalls, 0);
+
+    globalThis.NativeShell = { AppHost: appHost({ appName: () => 'Jellyfin for Android' }) };
+    await host.initHostIdentity();
+    globalThis.window.NativePlayer.isEnabled = () => false;
+    assert.equal(await host.synchronizeAndroidNativePlayerSession(session, {
+        legacySync: async () => { legacySyncCalls++; return true; }
+    }), 'disabled');
+    assert.equal(legacySyncCalls, 0);
+});
+
+test('legacy Android session sync writes the credential fields and requests the intercepted capabilities route', async () => {
+    storage.delete('jellyfin_credentials');
+    globalThis.NativeShell = { AppHost: appHost({ appName: () => 'Jellyfin for Android' }) };
+    await host.initHostIdentity();
+    globalThis.window.NativePlayer = { isEnabled: () => true, loadPlayer: () => undefined };
+    const { JellyfinApi } = await import('../src/api.ts');
+    const api = new JellyfinApi({
+        server: 'https://jellyfin.example.test',
+        token: 'access-token',
+        user: { Id: '018f6bd5-33c5-7abc-8c3f-55f62bc95b13' },
+        serverId: 'server-id'
+    });
+
+    assert.equal(typeof api.syncLegacyAndroidSession, 'function');
+    assert.equal(await api.syncLegacyAndroidSession(), true);
+    assert.deepEqual(JSON.parse(storage.get('jellyfin_credentials')), {
+        Servers: [ { UserId: '018f6bd5-33c5-7abc-8c3f-55f62bc95b13', AccessToken: 'access-token' } ]
+    });
+    assert.equal(requests[0].method, 'GET');
+    assert.equal(requests[0].url, 'https://jellyfin.example.test/Sessions/Capabilities/Full');
+    assert.match(requests[0].headers.Authorization, /Token="access-token"/);
+});
+
+test('legacy Android session sync preserves other stored servers and top-level credential fields', async () => {
+    globalThis.NativeShell = { AppHost: appHost({ appName: () => 'Jellyfin for Android' }) };
+    await host.initHostIdentity();
+    globalThis.window.NativePlayer = { isEnabled: () => true, loadPlayer: () => undefined };
+    const storedCredentials = {
+        LastUsedApiClient: 'existing-client',
+        Servers: [ { Id: 'existing-server', UserId: 'other-user', AccessToken: 'other-token' } ]
+    };
+    storage.set('jellyfin_credentials', JSON.stringify(storedCredentials));
+    const { JellyfinApi } = await import('../src/api.ts');
+    const api = new JellyfinApi({
+        server: 'https://jellyfin.example.test',
+        token: 'access-token',
+        user: { Id: '018f6bd5-33c5-7abc-8c3f-55f62bc95b13' },
+        serverId: 'server-id'
+    });
+
+    assert.equal(await api.syncLegacyAndroidSession(), true);
+    assert.deepEqual(JSON.parse(storage.get('jellyfin_credentials')), {
+        LastUsedApiClient: 'existing-client',
+        Servers: [
+            { UserId: '018f6bd5-33c5-7abc-8c3f-55f62bc95b13', AccessToken: 'access-token' },
+            { Id: 'existing-server', UserId: 'other-user', AccessToken: 'other-token' }
+        ]
+    });
+});
+
+test('signing out removes only the legacy Android credential written for that session', async () => {
+    globalThis.NativeShell = { AppHost: appHost({ appName: () => 'Jellyfin for Android' }) };
+    await host.initHostIdentity();
+    globalThis.window.NativePlayer = { isEnabled: () => true, loadPlayer: () => undefined };
+    const otherServer = { Id: 'other-server', UserId: 'other-user', AccessToken: 'other-token' };
+    storage.set('jellyfin_credentials', JSON.stringify({
+        LastUsedApiClient: 'existing-client',
+        Servers: [ { UserId: '018f6bd5-33c5-7abc-8c3f-55f62bc95b13', AccessToken: 'access-token' }, otherServer ]
+    }));
+
+    host.notifySignedOut({ serverId: 'server-id' }, { userId: '018f6bd5-33c5-7abc-8c3f-55f62bc95b13', accessToken: 'access-token' });
+
+    assert.deepEqual(JSON.parse(storage.get('jellyfin_credentials')), {
+        LastUsedApiClient: 'existing-client',
+        Servers: [ otherServer ]
+    });
+});
+
+test('signing out without a legacy handoff preserves Android credentials', async () => {
+    globalThis.NativeShell = { AppHost: appHost({ appName: () => 'Jellyfin for Android' }) };
+    await host.initHostIdentity();
+    globalThis.window.NativePlayer = { isEnabled: () => true, loadPlayer: () => undefined };
+    const storedCredentials = {
+        Servers: [ { Id: 'native-server', UserId: 'native-user', AccessToken: 'native-token' } ]
+    };
+    storage.set('jellyfin_credentials', JSON.stringify(storedCredentials));
+
+    host.notifySignedOut({ serverId: 'server-id' });
+
+    assert.deepEqual(JSON.parse(storage.get('jellyfin_credentials')), storedCredentials);
 });
 
 test('native player return refresh waits for a hidden or blurred page to become active', () => {
@@ -516,7 +650,8 @@ test('UI video playback hands off before creating a web session or negotiating a
     assert.ok(nativeHandoff > playStart, 'native bridge is checked in the playback handler');
     assert.ok(sessionSync > playStart && sessionSync < nativeHandoff, 'native app identity is acknowledged before player launch');
     assert.match(main.slice(sessionSync, nativeHandoff), /serverUrl: session\.server,[\s\S]*userId: session\.user\.Id,[\s\S]*accessToken: session\.token/);
-    assert.match(main.slice(sessionSync, nativeHandoff), /nativeSessionSync === 'ready'/, 'the app must accept the session before ExoPlayer starts');
+    assert.match(main.slice(sessionSync, nativeHandoff), /nativeSessionSync === 'ready' \|\| nativeSessionSync === 'legacy'/, 'modern acknowledgments and the stock Android capability hook must both gate ExoPlayer startup');
+    assert.match(main.slice(sessionSync, nativeHandoff), /legacySync: \(\) => api\.syncLegacyAndroidSession\(\)/, 'the stock Android fallback must establish its native API client through the legacy capability hook');
     assert.ok(nativeHandoff < sessionStart, 'native handoff precedes UI Next session ownership');
     assert.ok(sessionStart < browserNegotiation, 'browser negotiation follows the native handoff branch');
     assert.match(main.slice(playStart, nativeHandoff), /!playbackSessions\.active\(\)/, 'an active UI Next player keeps ownership');
