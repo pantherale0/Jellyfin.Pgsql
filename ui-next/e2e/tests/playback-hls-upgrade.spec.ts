@@ -9,6 +9,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 test('HLS.js resumes MPEG-TS playback and supports a backward seek', async ({ page }) => {
     await resetFakeServer();
+    await page.addInitScript(() => {
+        const canPlayType = HTMLMediaElement.prototype.canPlayType;
+        HTMLMediaElement.prototype.canPlayType = function(type: string) {
+            return /mpegurl/i.test(type) ? '' : canPlayType.call(this, type);
+        };
+    });
     const segment = await readFile(new URL('../fake-server/media/hls-sample.ts', import.meta.url));
     const corsHeaders = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*' };
 
@@ -66,6 +72,7 @@ test('HLS.js resumes MPEG-TS playback and supports a backward seek', async ({ pa
 
     const video = page.locator('video');
     await expect.poll(() => video.evaluate(element => element instanceof HTMLVideoElement && !element.paused && element.currentTime > 0)).toBe(true);
+    await expect.poll(() => video.evaluate(element => element instanceof HTMLVideoElement ? element.currentSrc : '')).toMatch(/^blob:/);
     await expect.poll(() => video.evaluate(element => element instanceof HTMLVideoElement && element.buffered.length > 0)).toBe(true);
     await expect.poll(() => video.evaluate(element => element instanceof HTMLVideoElement && element.currentTime > 3)).toBe(true);
     const playbackRequest = (await fakeServerRequests()).find(request => request.path === '/Items/e2e-movie-1/PlaybackInfo');

@@ -76,6 +76,7 @@ const PlayerIcon = ({ name, size = 24, class: className }: { name: PlayerIconNam
 );
 
 const PLAYBACK_ERROR = t('Playback stopped because this browser could not play the stream.');
+const NATIVE_HLS_FIRST_FRAME_TIMEOUT_MS = 2500;
 
 /** Reporting state for one media load; a new URL gets a fresh object so the old stop report keeps its own position. */
 interface MediaProgress { position: number; duration: number; pendingStart: number; offset: number; loaded: boolean; frozen: boolean }
@@ -303,7 +304,25 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
         bufferStateRef.current = next;
         setBufferStateValue(next);
     }, []);
-    const hlsPlayback = isHlsUrl(url) && !canPlayNativeHls();
+    const [ nativeHlsFallbackSession, setNativeHlsFallbackSession ] = useState<number | null>(null);
+    const expectsVideoFrames = !playback?.streams.length || playback.streams.some(stream => streamKind(stream.Type) === 'video');
+    const firstVideoFrameRef = useRef(false);
+    const hlsPlayback = isHlsUrl(url) && (!canPlayNativeHls() || nativeHlsFallbackSession === playbackSession?.key);
+    const engineRef = useRef<'pending' | 'native' | 'hlsjs' | 'failed'>(hlsPlayback ? 'pending' : 'native');
+    const fallbackNativeHls = useCallback(() => {
+        const sessionKey = playbackSession?.key;
+        if (!isHlsUrl(url) || !sessionKey || engineRef.current !== 'native') return false;
+        engineRef.current = 'pending';
+        const video = videoRef.current;
+        if (video) {
+            video.pause();
+            video.removeAttribute('src');
+            video.load();
+        }
+        setNativeHlsFallbackSession(sessionKey);
+        setBufferState('buffering');
+        return true;
+    }, [ url, playbackSession?.key, setBufferState ]);
     const seekWrapRef = useRef<HTMLDivElement>(null);
     const hideTimer = useRef<number>();
     const clickTimer = useRef<number>();
@@ -885,6 +904,8 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     }, []);
 
     useLayoutEffect(() => {
+        engineRef.current = hlsPlayback ? 'pending' : 'native';
+        firstVideoFrameRef.current = false;
         mediaRef.current = mediaProgress(playback, item);
         const itemChanged = progressWatchItemRef.current !== (item?.Id || '');
         progressWatchItemRef.current = item?.Id || '';
@@ -912,13 +933,17 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
         const video = videoRef.current;
         if (!video || !hlsPlayback) return;
         let cancelled = false;
+        let hls: Hls | null = null;
+        engineRef.current = 'pending';
         video.removeAttribute('src');
         const fail = () => {
             if (cancelled || !aliveRef.current) return;
+            engineRef.current = 'failed';
             clearBufferingTimer();
             reporterRef.current?.stop(true);
-            hlsRef.current?.destroy();
-            hlsRef.current = null;
+            hls?.destroy();
+            if (hlsRef.current === hls) hlsRef.current = null;
+            hls = null;
             video.pause();
             setBufferState('ready');
             setPlaybackError(PLAYBACK_ERROR);
@@ -942,7 +967,9 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                 mediaRef.current.pendingStart > 0 ? mediaRef.current.pendingStart : -1
             ));
             const recoveryAttempts: HlsRecoveryAttempts = { networkRetries: 0, mediaRetries: 0 };
+            hls = instance;
             hlsRef.current = instance;
+            engineRef.current = 'hlsjs';
             instance.on(Hls.Events.FRAG_BUFFERED, () => {
                 if (!cancelled) refreshBufferedRanges(video);
             });
@@ -1003,10 +1030,49 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
         }).catch(() => fail());
         return () => {
             cancelled = true;
-            hlsRef.current?.destroy();
-            hlsRef.current = null;
+            hls?.destroy();
+            if (hlsRef.current === hls) hlsRef.current = null;
         };
     }, [ url, hlsPlayback, playbackSession?.key, playback?.isLive, playback?.bitrate, playback?.maxBitrate, item?.Type, refreshBufferedRanges, setBufferState ]);
+
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video || !isHlsUrl(url)) return;
+        if (!expectsVideoFrames) {
+            firstVideoFrameRef.current = true;
+            return;
+        }
+
+        let firstFrameSeen = false;
+        let frameCallbackId: number | undefined;
+        let fallbackTimer: number | undefined;
+        const onFirstFrame = () => {
+            if (firstFrameSeen) return;
+            firstFrameSeen = true;
+            firstVideoFrameRef.current = true;
+            if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer);
+            if (aliveRef.current && bufferStateRef.current !== 'reconnecting') setBufferState('ready');
+        };
+
+        if (typeof video.requestVideoFrameCallback === 'function') {
+            frameCallbackId = video.requestVideoFrameCallback(onFirstFrame);
+        } else {
+            video.addEventListener('loadeddata', onFirstFrame);
+        }
+
+        if (!hlsPlayback && canPlayNativeHls()) {
+            fallbackTimer = window.setTimeout(() => {
+                fallbackTimer = undefined;
+                if (!firstFrameSeen) fallbackNativeHls();
+            }, NATIVE_HLS_FIRST_FRAME_TIMEOUT_MS);
+        }
+
+        return () => {
+            if (frameCallbackId !== undefined) video.cancelVideoFrameCallback(frameCallbackId);
+            video.removeEventListener('loadeddata', onFirstFrame);
+            if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer);
+        };
+    }, [ url, hlsPlayback, playbackSession?.key, expectsVideoFrames, fallbackNativeHls, setBufferState ]);
 
     useEffect(() => {
         const video = videoRef.current;
@@ -1082,7 +1148,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
             if (owner.isCurrent(session)) endedRef.current();
         };
         const onMediaError = () => {
-            if (hlsPlayback) return;
+            if (engineRef.current !== 'native') return;
             if (playback?.isLive && (!progressWatchRef.current.liveReopenAttempted || reopenInFlightRef.current)) return;
             reporter.stop(true);
         };
@@ -1129,7 +1195,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
             });
             if (reporterRef.current === reporter) reporterRef.current = null;
         };
-    }, [ api, item?.Id, url, hlsPlayback, playback?.direct, playback?.isLive, playback?.streams, playbackSession?.key, playbackSession?.mediaSourceId, playbackSession?.playSessionId, playbackSession?.liveStreamId ]);
+    }, [ api, item?.Id, url, playback?.direct, playback?.isLive, playback?.streams, playbackSession?.key, playbackSession?.mediaSourceId, playbackSession?.playSessionId, playbackSession?.liveStreamId ]);
 
     useEffect(() => { reporterRef.current?.pulse(); }, [ audioIndex, subtitleIndex ]);
 
@@ -1751,7 +1817,15 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                 setDuration(itemPosition(video.duration || 0, mediaRef.current.offset));
             }}
             onPlay={() => { setPaused(false); pausedRef.current = false; reveal(); }}
-            onPlaying={() => { clearBufferingTimer(); setPaused(false); pausedRef.current = false; setBufferState('ready'); setPlaybackError(''); reveal(); }}
+            onPlaying={() => {
+                const ready = !expectsVideoFrames || firstVideoFrameRef.current;
+                if (ready) clearBufferingTimer();
+                setPaused(false);
+                pausedRef.current = false;
+                setBufferState(ready ? 'ready' : 'buffering');
+                setPlaybackError('');
+                reveal();
+            }}
             onWaiting={event => { if (!(event.currentTarget as HTMLVideoElement).paused && !playbackError) scheduleBufferingIndicator(); }}
             onStalled={event => { if (!(event.currentTarget as HTMLVideoElement).paused && !playbackError) scheduleBufferingIndicator(); }}
             onPause={() => {
@@ -1768,7 +1842,9 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                 choosePreference({ volume: video.volume });
             }}
             onError={() => {
-                if (!aliveRef.current || hlsPlayback || reopenInFlightRef.current) return;
+                if (!aliveRef.current || reopenInFlightRef.current) return;
+                if (fallbackNativeHls()) return;
+                if (engineRef.current !== 'native') return;
                 clearBufferingTimer();
                 setPaused(true);
                 pausedRef.current = true;
