@@ -1,8 +1,34 @@
 import { resolve } from 'node:path';
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig, loadEnv, type Plugin } from 'vite';
 import legacy from '@vitejs/plugin-legacy';
 import preact from '@preact/preset-vite';
 import { devProbeAllowed, devProbeOrigins } from './src/auth-state';
+
+function androidWebViewCompatibility(): Plugin {
+    let compatFileName = '';
+    return {
+        name: 'ui-next-android-webview-compat',
+        apply: 'build',
+        buildStart() {
+            compatFileName = `main.ui-next-${Date.now().toString(36)}.bundle.js`;
+            this.emitFile({ type: 'asset', fileName: compatFileName, source: ';' });
+        },
+        transformIndexHtml: {
+            order: 'post',
+            handler(_html, context) {
+                if (context.filename !== resolve(__dirname, 'index.html')) return;
+                if (!compatFileName) throw new Error('UI Next Android compatibility marker was not emitted.');
+
+                const markerPath = `./${compatFileName}`;
+                return [ {
+                    tag: 'script',
+                    children: `(function () { var marker = document.createElement('script'); marker.async = false; marker.src = new URL(${JSON.stringify(markerPath)}, document.baseURI).href + '?ts=' + Date.now(); document.head.appendChild(marker); })();`,
+                    injectTo: 'head-prepend'
+                } ];
+            }
+        }
+    };
+}
 
 export default defineConfig(({ command, mode }) => {
     const input: Record<string, string> = { app: resolve(__dirname, 'index.html') };
@@ -87,7 +113,8 @@ export default defineConfig(({ command, mode }) => {
             // Safari 12) lack Promise.prototype.finally / Array.prototype.flatMap and friends.
             modernPolyfills: true,
             polyfills: true
-        })
+        }),
+        androidWebViewCompatibility()
     ],
     base: './',
     publicDir: 'public',

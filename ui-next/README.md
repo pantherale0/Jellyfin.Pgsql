@@ -89,7 +89,7 @@ npm run build
 npm run preview
 ```
 
-The build is static and is emitted to `dist/`. The Dockerfile's `ui-next` target is also its default target. The workflow serves this build at `/web` under the standard Jellyfin-version and `latest` tags. UI Next includes its own Metadata manager in the administrator workspace. Wrapper launch behavior, media playback integration, older TV engines, and performance on physical devices still need testing.
+The build is static and is emitted to `dist/`. The Dockerfile's `ui-next` target is also its default target. The workflow serves this build at `/web` under the standard Jellyfin-version and `latest` tags. UI Next includes its own Metadata manager in the administrator workspace. Production output includes a classic Android WebView marker before the Vite module entry. The updated image still needs an on-device startup check; wrapper playback, older TV engines, and performance on physical devices also need testing.
 
 ### End-to-end tests
 
@@ -156,6 +156,8 @@ Known gaps against the removed fork-specific Jellyfin Web patches are listed in 
 Vite emits a modern bundle plus a syntax-transpiled legacy bundle (currently targeting Chrome 38+, Safari 10+, and Firefox 45+), with the legacy bundle selected by `@vitejs/plugin-legacy`. That is a best-effort web-engine target, not a guarantee for every TV browser. The TV layout supports directional arrows, common Back key codes, and basic media keys. Older webOS/Tizen models must be tested in their actual browser/wrapper.
 
 Native wrappers that load the server's web client and inject `window.NativeShell` (Jellyfin Android, Jellyfin Media Player, and similar) get the app-host contract implemented in `src/native-host.ts`:
+
+The production build emits a classic `main.ui-next-*.bundle.js` marker for Jellyfin Android's WebView startup detector. Android intercepts that request to signal that the web app loaded and inject its native scripts. The marker is a no-op in ordinary browsers; Vite's module entry still starts UI Next. The updated build has not yet been verified on the connected Android device.
 
 - **Identity:** before the first request UI Next awaits `AppHost.init()` (up to three seconds) and uses the host's `deviceId`, `deviceName`, `appName` and `appVersion` in the `Authorization` header, so the server sees the same device the wrapper registers. Missing, invalid or slow values fall back to the browser identity (`Jellyfin UI Next` and a per-browser device ID).
 - **Capabilities:** `AppHost.supports()` decides whether Download, provider links, file uploads (images, subtitles, lyrics, profile picture), and the player's fullscreen button are offered. Without a host, desktop and mobile browsers keep them and the TV layout hides them.
