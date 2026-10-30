@@ -47,9 +47,22 @@ export default defineConfig({
         {
             name: 'chromium',
             testMatch: 'tests/**/*.spec.ts',
-            testIgnore: 'tests/tv-*.spec.ts',
+            testIgnore: [ 'tests/tv-*.spec.ts', 'tests/mobile-*.spec.ts' ],
             dependencies: [ 'setup' ],
             use: { ...devices['Desktop Chrome'], storageState: authFile }
+        },
+        {
+            name: 'mobile',
+            testMatch: 'tests/mobile-*.spec.ts',
+            dependencies: [ 'setup' ],
+            use: {
+                ...devices['Desktop Chrome'],
+                isMobile: true,
+                hasTouch: true,
+                deviceScaleFactor: 3,
+                viewport: { width: 411, height: 869 },
+                storageState: authFile
+            }
         },
         {
             name: 'tv',

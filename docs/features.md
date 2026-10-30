@@ -12,6 +12,8 @@ This page maps the operator-facing features in the fork to the plugin, UI Next, 
 
 UI Next prefetches full item details for the active home recommendation. Poster cards start a prefetch after 200 ms of pointer hover or when keyboard or TV focus enters. Opening a title uses ready data or joins the request while the detail view loads.
 
+UI Next adapts its shared library, Search, Filters, Live TV Guide, and Home hero to phone-sized screens. Poster actions move below the artwork, List actions move below row content, and the first Home feed card appears in the initial viewport.
+
 The administrator workspace includes its own Metadata manager. The image does not include Jellyfin Web, and the custom Jellyfin Web patch stack has been removed. See the [confirmed UI Next gaps](#features-not-yet-in-ui-next) below.
 
 **How to configure it:** See [UI Next image](../README.md#ui-next-image), [SSO](../README.md#single-sign-on-sso-with-rbac-via-oauth2oidc), and the [UI Next guide](../ui-next/README.md).

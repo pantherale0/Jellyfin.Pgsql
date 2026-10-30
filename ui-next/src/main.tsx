@@ -319,6 +319,7 @@ function App() {
     /** Item ids already shown in an explore rail, so themed pages never repeat titles. */
     const homeExploreSeen = useRef<Set<string>>(new Set());
     const [ searchExpanded, setSearchExpanded ] = useState(false);
+    const [ mobileSearch, setMobileSearch ] = useState(() => window.matchMedia('(max-width: 760px)').matches);
     const searchInputRef = useRef<HTMLInputElement>(null);
     const lastFocusRect = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
     const lastModality = useRef<'keyboard' | 'pointer'>('pointer');
@@ -636,6 +637,22 @@ function App() {
     useEffect(() => {
         document.documentElement.classList.toggle('tv-client', isTvClient());
     }, []);
+
+    useEffect(() => {
+        const media = window.matchMedia('(max-width: 760px)');
+        const apply = () => setMobileSearch(media.matches);
+        apply();
+        if (media.addEventListener) media.addEventListener('change', apply);
+        else media.addListener(apply);
+        return () => {
+            if (media.removeEventListener) media.removeEventListener('change', apply);
+            else media.removeListener(apply);
+        };
+    }, []);
+
+    useEffect(() => {
+        setSearchExpanded(false);
+    }, [ view, activeLibrary?.Id ]);
 
     useEffect(() => {
         const shell = document.querySelector('.app-shell');
@@ -2909,7 +2926,7 @@ function App() {
                     }}
                 ><span aria-hidden="true">⌕</span></button>
                 {!tvClient && searchExpanded && <form class="search-expand-form" onSubmit={e => { e.preventDefault(); void runSearch(); }}>
-                    <input ref={searchInputRef} data-focusable="true" value={search} onInput={e => setSearch((e.target as HTMLInputElement).value)} onKeyDown={e => { if (e.key === 'Escape') setSearchExpanded(false); }} placeholder={t('Search your library')} aria-label={t('Search your library')} />
+                    <input ref={searchInputRef} data-focusable="true" value={search} onInput={e => setSearch((e.target as HTMLInputElement).value)} onKeyDown={e => { if (e.key === 'Escape') setSearchExpanded(false); }} placeholder={t(mobileSearch ? 'Search…' : 'Search your library')} aria-label={t('Search your library')} />
                     <button data-focusable="true" class="search-submit" type="submit" aria-label={t('Submit search')}><span class="dir-arrow" aria-hidden="true">→</span></button>
                 </form>}
             </div>
@@ -3053,7 +3070,7 @@ function App() {
                  restore={showRestore}
                  onRestoreComplete={() => setShowRestore(null)}
              />}
-            {view === 'library' && activeLibrary && <LibraryPage key={activeLibrary.Id} api={api} library={activeLibrary} user={session.user} restore={libraryRestore} parentLabel={libraryTrail.current[libraryTrail.current.length - 1]?.Name} onUp={libraryTrail.current.length ? () => void navigateLibraryUp() : undefined} onSelect={selectItem} onPlay={playItem} />}
+            {view === 'library' && activeLibrary && <LibraryPage key={activeLibrary.Id} api={api} library={activeLibrary} user={session.user} restore={libraryRestore} parentLabel={libraryTrail.current[libraryTrail.current.length - 1]?.Name} onUp={libraryTrail.current.length ? () => void navigateLibraryUp() : undefined} onSelect={selectItem} onPlay={playItem} searchExpanded={searchExpanded} onCloseSearch={() => setSearchExpanded(false)} />}
             {view === 'search' && (tvClient && api
                 ? <TvSearchPage draft={searchDraft} onDraft={setSearchDraft} items={items} loading={loading} api={api} views={views} activeGenre={searchGenre} onSelectGenre={setSearchGenre} onOpenLibrary={library => void openLibrary(library)} onBack={goHome} onSelect={selectItem} total={searchTotal} loadingMore={searchLoadingMore} moreError={searchMoreError} onLoadMore={() => void loadMoreSearch()} seerrPending={seerrSearch.loading || seerrSearch.items.length > 0} seerrResults={<SeerrSearchResults items={withRequested(seerrSearch.items, seerrRequested)} loading={seerrSearch.loading} error={seerrSearch.error} onOpen={setSeerrSheet} />} />
                 : <section class="catalog-page"><div class="catalog-heading"><button class="back-link" data-focusable="true" onClick={goHome}><span class="dir-arrow" aria-hidden="true">←</span> <span>{t('Home')}</span></button><p class="eyebrow">{t('SEARCH RESULTS')}</p><h1>{t('Results for “{0}”', search)}</h1><p class="muted" aria-live="polite">{loading ? t('Searching…') : searchSummary(items.length, searchTotal)}</p></div><EntitySearchRows api={api} term={search} onSelect={selectItem} />{items.length ? <><VirtualizedMediaGrid items={items} api={api} onSelect={selectItem} hasMore={hasMoreResults(items.length, searchTotal) && !searchMoreError} onNearEnd={() => void loadMoreSearch()} /><SearchMore loaded={items.length} total={searchTotal} loading={searchLoadingMore} error={searchMoreError} onMore={() => void loadMoreSearch()} /></> : !loading && !seerrSearch.loading && !seerrSearch.items.length && <EmptyState title={t('No matches found')} text={t('Try another search or choose a different library.')} />}<SeerrSearchResults items={withRequested(seerrSearch.items, seerrRequested)} loading={seerrSearch.loading} error={seerrSearch.error} onOpen={setSeerrSheet} /></section>)}

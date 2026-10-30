@@ -25,7 +25,7 @@ const LETTERS = [ '#', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ' ];
 const T9: Record<string, string> = { '2': 'ABC', '3': 'DEF', '4': 'GHI', '5': 'JKL', '6': 'MNO', '7': 'PQRS', '8': 'TUV', '9': 'WXYZ' };
 
 
-export function LibraryPage({ api, library, user, restore = false, parentLabel, onUp, onSelect, onPlay }: {
+export function LibraryPage({ api, library, user, restore = false, parentLabel, onUp, onSelect, onPlay, searchExpanded, onCloseSearch }: {
     api: JellyfinApi | null;
     user?: JellyfinUser;
     library: MediaItem;
@@ -34,6 +34,8 @@ export function LibraryPage({ api, library, user, restore = false, parentLabel, 
     onUp?: () => void;
     onSelect: (item: MediaItem) => void;
     onPlay: (item: MediaItem) => void;
+    searchExpanded: boolean;
+    onCloseSearch: () => void;
 }) {
     const bookmark = useRef(restore ? peekLibraryBookmark(library.Id) : null);
     const pendingScroll = useRef<number | null>(bookmark.current ? bookmark.current.scrollY : null);
@@ -52,6 +54,7 @@ export function LibraryPage({ api, library, user, restore = false, parentLabel, 
     const [ loading, setLoading ] = useState(false);
     const [ error, setError ] = useState('');
     const [ filterOpen, setFilterOpen ] = useState(false);
+    const [ mobileFilters, setMobileFilters ] = useState(() => window.matchMedia('(max-width: 767px)').matches);
     const [ busyId, setBusyId ] = useState('');
     const [ scrubLetter, setScrubLetter ] = useState('');
     const [ scrubBubbleY, setScrubBubbleY ] = useState(0);
@@ -71,6 +74,7 @@ export function LibraryPage({ api, library, user, restore = false, parentLabel, 
     const requestOwner = useRef(0);
     const catalogRequest = useRef<AbortController | null>(null);
     const grid = useRef<HTMLDivElement>(null);
+    const filterDialogRef = useRef<HTMLDivElement>(null);
     const itemsRef = useRef<MediaItem[]>(items);
     const startIndexRef = useRef(startIndex);
     const totalRef = useRef(total);
@@ -86,6 +90,21 @@ export function LibraryPage({ api, library, user, restore = false, parentLabel, 
     const source = mode.source;
     const selectedYears = useMemo(() => decadeYears(query.Decade), [ query.Decade ]);
     const activeFilterCount = countFilters(query);
+
+    useEffect(() => {
+        const media = window.matchMedia('(max-width: 767px)');
+        const apply = () => setMobileFilters(media.matches);
+        apply();
+        if (media.addEventListener) media.addEventListener('change', apply);
+        else media.addListener(apply);
+        return () => {
+            if (media.removeEventListener) media.removeEventListener('change', apply);
+            else media.removeListener(apply);
+        };
+    }, []);
+
+    const mobileFilterSheet = mobileFilters && !document.documentElement.classList.contains('tv-client');
+    useDialogFocus(filterDialogRef, filterOpen && mobileFilterSheet, () => setFilterOpen(false), { initial: '.library-sheet-close' });
 
     const load = useCallback(async (absoluteStart: number, replace: boolean, nextQuery = query, nextView = view, scroll = false) => {
         if (!api || suggestionsMode || requestActive.current || jumpPending.current || scrubMoved.current) return;
@@ -741,10 +760,38 @@ export function LibraryPage({ api, library, user, restore = false, parentLabel, 
         })}</div>
     </fieldset>;
     const toggleFeature = (feature: LibraryFeature) => setFilter('Features', (query.Features || []).includes(feature) ? query.Features.filter(entry => entry !== feature) : [ ...(query.Features || []), feature ]);
+    const filterContent = <>
+        <Select label={t('Watch status')} value={query.WatchStatus === 'favorite' ? '' : query.WatchStatus} onChange={value => reset({ ...query, WatchStatus: value as LibraryQuery['WatchStatus'], Favorite: query.Favorite || query.WatchStatus === 'favorite' })} options={[[ '', 'Watch status' ], [ 'unplayed', 'Unplayed' ], [ 'played', 'Played' ], [ 'resumable', 'In progress' ]]} />
+        <Select label={t('Resolution')} value={query.Resolution} onChange={value => setFilter('Resolution', value)} options={[[ '', 'Resolution' ], [ '4k', '4K' ], [ '1080p', '1080p' ]]} />
+        {mode.id === 'shows' && <Select label={t('Series status')} value={query.SeriesStatus || ''} onChange={value => setFilter('SeriesStatus', value)} options={[[ '', 'Series status' ], [ 'Continuing', 'Continuing' ], [ 'Ended', 'Ended' ]]} />}
+        {mode.id === 'episodes' && <Select label={t('Availability')} value={query.Availability || ''} onChange={value => setFilter('Availability', value)} options={[[ '', 'Availability' ], [ 'missing', 'Missing episodes' ], [ 'unaired', 'Unaired episodes' ]]} />}
+        <div class="library-filter-toggles" role="group" aria-label={t('Flags')}>
+            <button type="button" data-focusable="true" class={query.Favorite || query.WatchStatus === 'favorite' ? 'active' : ''} aria-pressed={query.Favorite || query.WatchStatus === 'favorite'} onClick={() => reset({ ...query, Favorite: !(query.Favorite || query.WatchStatus === 'favorite'), WatchStatus: query.WatchStatus === 'favorite' ? '' : query.WatchStatus })}>{t('Favorites')}</button>
+            {([ [ 'subtitles', 'Has subtitles' ], [ 'trailer', 'Has trailer' ], [ 'special', 'Has extras' ] ] as Array<[LibraryFeature, string]>).map(([ feature, label ]) => {
+                const on = (query.Features || []).includes(feature);
+                return <button key={feature} type="button" data-focusable="true" class={on ? 'active' : ''} aria-pressed={on} onClick={() => toggleFeature(feature)}>{t(label)}</button>;
+            })}
+        </div>
+        {chips('Genres', 'Genre', genres.map(g => [ g.Name || '', g.Name || '' ] as [string, string]))}
+        {chips('Decades', 'Decade', yearOptions.map(year => [ String(year), `${year}s` ] as [string, string]))}
+        {chips(t('Parental ratings'), 'Ratings', facets.ratings.map(rating => [ rating, rating ] as [string, string]))}
+        {chips('Tags', 'Tags', facets.tags.slice(0, 60).map(tag => [ tag, tag ] as [string, string]))}
+        {activeFilterCount > 0 && <button type="button" class="button secondary" data-focusable="true" onClick={() => reset({ ...defaultLibraryQuery(), Mode: query.Mode, SortBy: query.SortBy, SortOrder: query.SortOrder, Title: query.Title })}>{t('Clear filters')}</button>}
+        {genreError && <p class="library-filter-error" role="alert">{genreError} <button class="button secondary" data-focusable="true" type="button" onClick={() => setGenreAttempt(value => value + 1)}>{t('Retry genres')}</button></p>}
+        {yearError && <p class="library-filter-error" role="alert">{yearError} <button class="button secondary" data-focusable="true" type="button" onClick={() => setYearAttempt(value => value + 1)}>{t('Retry decades')}</button></p>}
+    </>;
     const modeTabs = modes.length > 1 && <div class="library-mode-tabs" role="group" aria-label={t('Library view')}>
         {modes.map(entry => <button key={entry.id} type="button" data-focusable="true" class={entry.id === mode.id ? 'active' : ''} aria-pressed={entry.id === mode.id} onClick={() => selectMode(entry.id)}>{t(entry.label)}</button>)}
     </div>;
-    const filterButton = <button class="library-filter-open" data-focusable="true" aria-expanded={filterOpen} onClick={() => setFilterOpen(open => !open)}>{t('Filters')}{activeFilterCount > 0 && <span class="filter-count-pill">{activeFilterCount}</span>} <span aria-hidden="true">⌄</span></button>;
+    const toggleFilters = () => {
+        if (filterOpen) {
+            setFilterOpen(false);
+            return;
+        }
+        if (mobileFilterSheet && searchExpanded) onCloseSearch();
+        setFilterOpen(true);
+    };
+    const filterButton = <button class="library-filter-open" data-focusable="true" aria-controls="library-filters" aria-expanded={filterOpen} onClick={toggleFilters}>{t('Filters')}{activeFilterCount > 0 && <span class="filter-count-pill">{activeFilterCount}</span>} <span aria-hidden="true">⌄</span></button>;
     const rail = <div class="library-controls library-toolbar" data-focusable="scope">
         {!suggestionsMode && <span class="library-count">{total.toLocaleString()} {countLabel}</span>}
         <div class="library-operation-controls">
@@ -767,26 +814,18 @@ export function LibraryPage({ api, library, user, restore = false, parentLabel, 
         </nav>}
         {!titleSort && <div class={`library-scroll-progress${scrolling ? ' visible' : ''}`} aria-hidden="true"><i style={{ height: `${Math.max(4, scrollProgress * 100)}%` }} /></div>}
         {scrubLetter && <span class="alpha-bubble" style={{ top: `${scrubBubbleY}px` }} aria-hidden="true">{scrubLetter}</span>}
-        {filterOpen && listControls && <div class="library-filter-popover" role="group" aria-label={t('Library filters')}>
-            <Select label={t('Watch status')} value={query.WatchStatus === 'favorite' ? '' : query.WatchStatus} onChange={value => reset({ ...query, WatchStatus: value as LibraryQuery['WatchStatus'], Favorite: query.Favorite || query.WatchStatus === 'favorite' })} options={[[ '', 'Watch status' ], [ 'unplayed', 'Unplayed' ], [ 'played', 'Played' ], [ 'resumable', 'In progress' ]]} />
-            <Select label={t('Resolution')} value={query.Resolution} onChange={value => setFilter('Resolution', value)} options={[[ '', 'Resolution' ], [ '4k', '4K' ], [ '1080p', '1080p' ]]} />
-            {mode.id === 'shows' && <Select label={t('Series status')} value={query.SeriesStatus || ''} onChange={value => setFilter('SeriesStatus', value)} options={[[ '', 'Series status' ], [ 'Continuing', 'Continuing' ], [ 'Ended', 'Ended' ]]} />}
-            {mode.id === 'episodes' && <Select label={t('Availability')} value={query.Availability || ''} onChange={value => setFilter('Availability', value)} options={[[ '', 'Availability' ], [ 'missing', 'Missing episodes' ], [ 'unaired', 'Unaired episodes' ]]} />}
-            <div class="library-filter-toggles" role="group" aria-label={t('Flags')}>
-                <button type="button" data-focusable="true" class={query.Favorite || query.WatchStatus === 'favorite' ? 'active' : ''} aria-pressed={query.Favorite || query.WatchStatus === 'favorite'} onClick={() => reset({ ...query, Favorite: !(query.Favorite || query.WatchStatus === 'favorite'), WatchStatus: query.WatchStatus === 'favorite' ? '' : query.WatchStatus })}>{t('Favorites')}</button>
-                {([ [ 'subtitles', 'Has subtitles' ], [ 'trailer', 'Has trailer' ], [ 'special', 'Has extras' ] ] as Array<[LibraryFeature, string]>).map(([ feature, label ]) => {
-                    const on = (query.Features || []).includes(feature);
-                    return <button key={feature} type="button" data-focusable="true" class={on ? 'active' : ''} aria-pressed={on} onClick={() => toggleFeature(feature)}>{t(label)}</button>;
-                })}
+        {filterOpen && listControls && (mobileFilterSheet
+            ? <div class="library-sheet-layer">
+                <button class="library-sheet-backdrop" type="button" tabIndex={-1} data-dialog-backdrop aria-hidden="true" onClick={() => setFilterOpen(false)} />
+                <div id="library-filters" ref={filterDialogRef} class="library-sheet" role="dialog" aria-modal="true" aria-labelledby="library-filters-heading">
+                    <div class="library-sheet-heading">
+                        <h2 id="library-filters-heading">{t('Filters')}</h2>
+                        <button class="library-sheet-close" type="button" data-focusable="true" aria-label={t('Close')} onClick={() => setFilterOpen(false)}>×</button>
+                    </div>
+                    {filterContent}
+                </div>
             </div>
-            {chips('Genres', 'Genre', genres.map(g => [ g.Name || '', g.Name || '' ] as [string, string]))}
-            {chips('Decades', 'Decade', yearOptions.map(year => [ String(year), `${year}s` ] as [string, string]))}
-            {chips(t('Parental ratings'), 'Ratings', facets.ratings.map(rating => [ rating, rating ] as [string, string]))}
-            {chips('Tags', 'Tags', facets.tags.slice(0, 60).map(tag => [ tag, tag ] as [string, string]))}
-            {activeFilterCount > 0 && <button type="button" class="button secondary" data-focusable="true" onClick={() => reset({ ...defaultLibraryQuery(), Mode: query.Mode, SortBy: query.SortBy, SortOrder: query.SortOrder, Title: query.Title })}>{t('Clear filters')}</button>}
-            {genreError && <p class="library-filter-error" role="alert">{genreError} <button class="button secondary" data-focusable="true" type="button" onClick={() => setGenreAttempt(value => value + 1)}>{t('Retry genres')}</button></p>}
-            {yearError && <p class="library-filter-error" role="alert">{yearError} <button class="button secondary" data-focusable="true" type="button" onClick={() => setYearAttempt(value => value + 1)}>{t('Retry decades')}</button></p>}
-        </div>}
+            : <div id="library-filters" class="library-filter-popover" role="group" aria-label={t('Library filters')}>{filterContent}</div>)}
         {suggestionsMode && <LibrarySuggestions api={api} library={library} onSelect={onSelect} onPlay={onPlay} />}
         {error && <div class="home-section-error" role="alert"><p>{error}</p><button class="button secondary" data-focusable="true" onClick={() => void load(startIndex, true)}>{t('Retry')}</button></div>}
         {!suggestionsMode && items.length > 0 && <VirtualizedLibraryGrid gridRef={grid} square={Boolean(mode.square) && view === 'poster'} items={items} startIndex={startIndex} total={total} api={api} view={view} onSelect={onSelect} onPlay={onPlay} onToggle={toggleUserData} onRemove={removeItem} canUncollect={canUncollect} busyId={busyId} selecting={selecting} selection={selection} onToggleSelect={item => setSelection(current => toggleSelection(current, item))} onQueue={enqueue} />}
