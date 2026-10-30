@@ -34,6 +34,40 @@ test('library controls fit at 411, 360, and 320 pixels', async ({ page }) => {
     }
 });
 
+test('watched cards show a check while unwatched cards do not', async ({ page }) => {
+    await resetFakeServer();
+    await page.route(url => url.pathname === '/Items' && url.searchParams.get('ParentId') === 'e2e-movies-library', async route => {
+        const response = await route.fetch();
+        const result = await response.json();
+        await route.fulfill({
+            response,
+            body: JSON.stringify({
+                ...result,
+                Items: result.Items.map((item: { Id: string; UserData?: { Played?: boolean } }) => item.Id === 'e2e-movie-1'
+                    ? { ...item, UserData: { ...item.UserData, Played: true } }
+                    : item)
+            })
+        });
+    });
+
+    const app = new MobileUiNextPage(page);
+    await app.openHome();
+    await app.openLibrary('Movies');
+
+    const watchedCard = page.locator('[data-library-item-id="e2e-movie-1"]');
+    const watchedCardButton = watchedCard.getByRole('button', { name: /^View E2E Movie One/ });
+    const unwatchedCard = page.locator('[data-library-item-id="e2e-movie-2"]');
+    const unwatchedCardButton = unwatchedCard.getByRole('button', { name: /^View E2E Movie Two/ });
+
+    await expect(watchedCardButton).toBeVisible();
+    await expect(watchedCardButton).toHaveAccessibleName(/Played$/);
+    await expect(watchedCard.locator('.library-watched svg')).toBeVisible();
+    await expect(unwatchedCardButton).toBeVisible();
+    await expect(unwatchedCardButton).not.toHaveAccessibleName(/Played$/);
+    await expect(unwatchedCard.locator('.library-watched')).toHaveCount(0);
+    await expect(unwatchedCard.locator('.library-unplayed-dot')).toHaveCount(0);
+});
+
 test('poster actions stay inside cards with 48-pixel targets', async ({ page }) => {
     await resetFakeServer();
     const app = new MobileUiNextPage(page);

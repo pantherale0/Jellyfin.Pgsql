@@ -683,7 +683,9 @@ button:disabled { opacity: .6; cursor: wait; }
 .library-card-art > .art-placeholder { position: absolute; inset: 0; min-height: 0; }
 .library-unplayed, .library-quality { position: absolute; z-index: 1; top: .45rem; display: grid; min-width: 26px; min-height: 25px; place-items: center; padding: .2rem .4rem; border: 1px solid rgba(var(--ink), .12); border-radius: 7px; color: var(--text); background: rgba(var(--base), .78); font-size: .69rem; font-weight: 800; backdrop-filter: blur(7px); }
 .library-unplayed { inset-inline-start: .45rem; color: #15190f; background: var(--accent); border-color: transparent; }
-.library-unplayed-dot { position: absolute; z-index: 1; top: .55rem; inset-inline-start: .55rem; width: 10px; height: 10px; border: 2px solid rgba(var(--base), .7); border-radius: 50%; background: var(--accent); }
+.library-watched { position: absolute; z-index: 1; top: .45rem; inset-inline-start: .45rem; display: grid; width: 27px; height: 27px; place-items: center; border: 1px solid rgba(var(--base), .85); border-radius: 7px; color: #15190f; background: var(--accent); box-shadow: 0 2px 8px rgba(0,0,0,.45); }
+.library-watched svg { width: 17px; height: 17px; }
+.library-watched path { fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 .library-quality { inset-inline-end: .45rem; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .library-progress { position: absolute; inset-inline-end: 0; bottom: 0; inset-inline-start: 0; height: 3px; background: rgba(var(--ink), .22); }
 .library-progress i { display: block; height: 100%; background: var(--accent); }

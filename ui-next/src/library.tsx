@@ -1021,7 +1021,7 @@ function LibraryCard({ api, item, view, onSelect, onPlay, onToggle, onRemove, ca
     const metadata = [ item.ProductionYear, formatRuntime(item.RunTimeTicks) ].filter(Boolean).join(' • ');
     const progress = item.UserData?.PlayedPercentage || 0;
     const unplayedCount = item.UserData?.UnplayedItemCount || 0;
-    const showUnplayedDot = !unplayedCount && !item.UserData?.Played && !progress && item.Type !== 'Series';
+    const showWatchedCheck = !unplayedCount && Boolean(item.UserData?.Played) && item.Type !== 'Series';
     const posterOverlay = <span class="library-card-overlay"><strong>{item.Name}</strong><small>{metadata}</small></span>;
     const description = describeCard(item);
     const can = itemCapabilities(item);
@@ -1030,7 +1030,7 @@ function LibraryCard({ api, item, view, onSelect, onPlay, onToggle, onRemove, ca
         <button class="library-card-open" data-focusable="true" aria-label={selecting ? t('Select {0}', label) : t('View {0}', label)} aria-pressed={selecting ? selected : undefined} onClick={() => { if (longPressed.current) { longPressed.current = false; return; } if (selecting) onToggleSelect?.(item); else onSelect(item); }} onTouchStart={onPointerDown} onTouchEnd={clearPress} onTouchMove={clearPress}>
             <span class="library-card-art"><img src={image || undefined} alt="" loading="lazy" />{!image && <span class="art-placeholder">{item.Name.slice(0, 1)}</span>}
                 {selecting && <span class="library-select-check" aria-hidden="true">{selected ? '✓' : ''}</span>}
-                {view !== 'list' && <>{unplayedCount > 0 && <span class="library-unplayed" aria-label={t('{0} unplayed', unplayedCount)}>{unplayedCount}</span>}{showUnplayedDot && <span class="library-unplayed-dot" aria-label={t('Unplayed')} />}{quality && <span class="library-quality" title={quality}>{quality}</span>}{progress > 0 && progress < 100 && <span class="library-progress"><i style={{ width: `${progress}%` }} /></span>}{posterOverlay}</>}
+                {view !== 'list' && <>{unplayedCount > 0 && <span class="library-unplayed" aria-label={t('{0} unplayed', unplayedCount)}>{unplayedCount}</span>}{showWatchedCheck && <span class="library-watched" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="m5 12 4 4L19 6" /></svg></span>}{quality && <span class="library-quality" title={quality}>{quality}</span>}{progress > 0 && progress < 100 && <span class="library-progress"><i style={{ width: `${progress}%` }} /></span>}{posterOverlay}</>}
             </span>
             {view === 'list' && <span class="library-card-copy"><strong>{item.Name}</strong><small>{item.ProductionYear || '—'} <span>·</span> {metadataRuntime(item.RunTimeTicks)} <span>·</span> {item.CommunityRating ? `★ ${item.CommunityRating.toFixed(1)}` : t('Unrated')} <span>·</span> {director || t('Director unknown')} <span>·</span> {[ video?.Codec, audio?.Codec ].filter(Boolean).join(' / ') || t('Codec unknown')}</small></span>}
         </button>
