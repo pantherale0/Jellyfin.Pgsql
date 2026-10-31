@@ -135,8 +135,8 @@ docker build -f docker/Dockerfile --build-arg JELLYFIN_VERSION=12.3 -t jellyfin.
 ## Remote YouTube trailers
 
 The plugin resolves remote YouTube trailers with the pinned yt-dlp binary and relays the
-bytes through a Jellyfin endpoint that supports seek and HTTP Range requests for progressive
-sources. This consumes Jellyfin server bandwidth. On the UI Next detail page, **Watch trailer**
+bytes through a Jellyfin endpoint that supports seeking and HTTP Range requests.
+This consumes Jellyfin server bandwidth. On the UI Next detail page, **Watch trailer**
 uses a clapperboard icon and starts the first supported YouTube trailer in metadata order.
 Playback stays in UI Next, including on TV clients, and Back or trailer completion returns
 to the title. Favorite is a compact heart toggle beside the playback actions.
@@ -145,9 +145,16 @@ Trailer playback—both local trailer files and remote YouTube trailers—is del
 excluded from resume state, played status, playback statistics, and taste/neural
 recommendation inputs.
 
-When YouTube exposes only separate adaptive tracks, the plugin streams them through
-Jellyfin's configured ffmpeg as fragmented MP4 without temporary downloads. These remuxed
-responses are not byte-seekable; progressive sources retain normal HTTP Range support.
+When YouTube exposes separate adaptive tracks, the plugin uses Jellyfin's configured ffmpeg
+to prepare a completed MP4 before playback. This gives the player a fixed duration and
+supports byte-range seeking. The first play waits for preparation; later requests reuse
+the temporary file. Progressive sources continue to stream directly through the relay.
+
+Adaptive preparation requires a writable Jellyfin cache directory. The temporary cache
+under `pgsql-trailers/` holds at most eight files per server process with a 64 MiB output
+budget per trailer. Preparation runs one at a time and has a two-minute timeout. Entries
+expire after ten minutes and are removed on subsequent requests or normal shutdown.
+Later trailer requests also remove stale cache directories left by interrupted processes.
 
 The published image includes yt-dlp. Standalone plugin installations must install it on
 the Jellyfin host; set `Pgsql_YTDLP_PATH` to an alternate executable path when it is not

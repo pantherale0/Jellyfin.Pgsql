@@ -1,32 +1,51 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.MediaEncoding;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
+using Microsoft.Net.Http.Headers;
 
 namespace Jellyfin.Plugin.Pgsql.Trailers;
 
 /// <summary>
-/// Streams separate YouTube video and audio tracks through ffmpeg without temporary files.
+/// Prepares separate YouTube tracks as a seekable MP4 and serves the completed file.
 /// </summary>
-public sealed class FfmpegTrailerRemuxer : ITrailerRemuxer
+public sealed class FfmpegTrailerRemuxer : ITrailerRemuxer, IAsyncDisposable
 {
     private const int MaxErrorCharacters = 32 * 1024;
-    private static readonly SemaphoreSlim RemuxSlots = new(4, 4);
+    private const int MaxCachedFiles = 8;
+    private const long MaxFileBytes = 64L * 1024 * 1024;
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan PreparationTimeout = TimeSpan.FromMinutes(2);
+    private readonly SemaphoreSlim _cacheGate = new(1, 1);
+    private readonly Dictionary<string, CachedTrailer> _files = new(StringComparer.Ordinal);
     private readonly IMediaEncoder _mediaEncoder;
+    private readonly ILogger<FfmpegTrailerRemuxer> _logger;
+    private readonly string _cacheRoot;
+    private readonly string _directory;
+    private bool _disposed;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FfmpegTrailerRemuxer"/> class.
     /// </summary>
     /// <param name="mediaEncoder">Jellyfin media encoder providing the validated ffmpeg path.</param>
-    public FfmpegTrailerRemuxer(IMediaEncoder mediaEncoder)
+    /// <param name="appPaths">Application cache location.</param>
+    /// <param name="logger">Logger.</param>
+    public FfmpegTrailerRemuxer(IMediaEncoder mediaEncoder, IApplicationPaths appPaths, ILogger<FfmpegTrailerRemuxer> logger)
     {
         _mediaEncoder = mediaEncoder;
+        _logger = logger;
+        _cacheRoot = Path.Join(appPaths.CachePath, "pgsql-trailers");
+        _directory = Path.Join(_cacheRoot, Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
     }
 
     /// <inheritdoc />
@@ -37,25 +56,121 @@ public sealed class FfmpegTrailerRemuxer : ITrailerRemuxer
             throw new ArgumentException("Adaptive trailer tracks are required.", nameof(resolution));
         }
 
-        await RemuxSlots.WaitAsync(cancellationToken).ConfigureAwait(false);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(resolution.Url + "\n" + resolution.AudioUrl)));
+        if (!await _cacheGate.WaitAsync(PreparationTimeout, cancellationToken).ConfigureAwait(false))
+        {
+            throw new YtDlpException("Trailer preparation is busy. Try again later.");
+        }
+
+        FileStream file;
+        CachedTrailer trailer;
         try
         {
-            var startInfo = new ProcessStartInfo
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            CleanupOrphanedDirectories();
+            foreach (var expired in _files.Where(pair => pair.Value.ExpiresAt <= DateTimeOffset.UtcNow).Select(pair => pair.Key).ToArray())
             {
-                FileName = _mediaEncoder.EncoderPath,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            AddInput(startInfo, resolution.Url, resolution.Headers);
-            AddInput(startInfo, resolution.AudioUrl, resolution.AudioHeaders ?? new Dictionary<string, string>());
-            foreach (var argument in new[] { "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1" })
-            {
-                startInfo.ArgumentList.Add(argument);
+                RemoveFile(expired);
             }
 
-            using var process = new Process { StartInfo = startInfo };
+            if (!_files.TryGetValue(key, out var cached) || !File.Exists(cached.Path))
+            {
+                _files.Remove(key);
+                if (_files.Count >= MaxCachedFiles)
+                {
+                    RemoveFile(_files.MinBy(pair => pair.Value.ExpiresAt).Key);
+                }
+
+                cached = await PrepareAsync(resolution, resolution.AudioUrl, cancellationToken).ConfigureAwait(false);
+                _files.Add(key, cached);
+            }
+
+            trailer = cached;
+            file = new FileStream(trailer.Path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 64 * 1024, FileOptions.Asynchronous | FileOptions.RandomAccess);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new YtDlpException("Trailer cache is unavailable.", ex);
+        }
+        finally
+        {
+            _cacheGate.Release();
+        }
+
+        await using (file.ConfigureAwait(false))
+        {
+            context.Response.Headers.CacheControl = "private, no-cache";
+            await Results.File(file, "video/mp4", entityTag: trailer.EntityTag, enableRangeProcessing: true).ExecuteAsync(context).ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc />
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        await _cacheGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            foreach (var key in _files.Keys.ToArray())
+            {
+                RemoveFile(key);
+            }
+
+            if (Directory.Exists(_directory))
+            {
+                try
+                {
+                    Directory.Delete(_directory);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _logger.LogWarning(ex, "Unable to remove a temporary trailer directory");
+                }
+            }
+        }
+        finally
+        {
+            _cacheGate.Release();
+        }
+
+        _cacheGate.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
+    private async Task<CachedTrailer> PrepareAsync(YtDlpResolution resolution, string audioUrl, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(_directory);
+        var path = Path.Join(_directory, Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".mp4");
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = _mediaEncoder.EncoderPath,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        AddInput(startInfo, resolution.Url, resolution.Headers);
+        AddInput(startInfo, audioUrl, resolution.AudioHeaders ?? new Dictionary<string, string>());
+        foreach (var argument in new[] { "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", "-fs", MaxFileBytes.ToString(CultureInfo.InvariantCulture), "-movflags", "+faststart", "-f", "mp4", "-y", path })
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(PreparationTimeout);
+        using var process = new Process { StartInfo = startInfo };
+        try
+        {
             try
             {
                 if (!process.Start())
@@ -68,28 +183,92 @@ public sealed class FfmpegTrailerRemuxer : ITrailerRemuxer
                 throw new YtDlpException("Trailer remuxer is unavailable.", ex);
             }
 
+            var errorTask = ReadBoundedAsync(process.StandardError, timeout.Token);
+            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+            _ = await errorTask.ConfigureAwait(false);
+            if (process.ExitCode != 0)
+            {
+                throw new YtDlpException("Trailer remuxing failed.");
+            }
+
+            await using var output = File.OpenRead(path);
+            // ffmpeg may stop at -fs with exit code zero. Reject near-limit output rather than serving a clipped trailer.
+            if (output.Length == 0 || output.Length >= MaxFileBytes - (1024 * 1024))
+            {
+                throw new YtDlpException("Trailer exceeds the allowed cache size or is empty.");
+            }
+
+            var digest = await SHA256.HashDataAsync(output, timeout.Token).ConfigureAwait(false);
+            return new CachedTrailer(path, DateTimeOffset.UtcNow.Add(CacheTtl), new EntityTagHeaderValue('"' + Convert.ToHexString(digest) + '"'));
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            await StopProcessAsync(process).ConfigureAwait(false);
+            DeleteFile(path);
+            throw new YtDlpException("Trailer preparation timed out.");
+        }
+        catch
+        {
+            await StopProcessAsync(process).ConfigureAwait(false);
+            DeleteFile(path);
+            throw;
+        }
+    }
+
+    private void RemoveFile(string key)
+    {
+        if (_files.Remove(key, out var file))
+        {
+            DeleteFile(file.Path);
+        }
+    }
+
+    private void CleanupOrphanedDirectories()
+    {
+        if (!Directory.Exists(_cacheRoot))
+        {
+            return;
+        }
+
+        var cutoff = DateTime.UtcNow - CacheTtl - PreparationTimeout;
+        foreach (var directory in Directory.EnumerateDirectories(_cacheRoot))
+        {
+            if (directory == _directory
+                || !Guid.TryParseExact(Path.GetFileName(directory), "N", out _))
+            {
+                continue;
+            }
+
             try
             {
-                var errorTask = ReadBoundedAsync(process.StandardError, cancellationToken);
-                context.Response.StatusCode = StatusCodes.Status200OK;
-                context.Response.ContentType = "video/mp4";
-                await process.StandardOutput.BaseStream.CopyToAsync(context.Response.Body, cancellationToken).ConfigureAwait(false);
-                await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-                _ = await errorTask.ConfigureAwait(false);
-                if (process.ExitCode != 0)
+                if (Directory.GetLastWriteTimeUtc(directory) > cutoff
+                    || (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
                 {
-                    throw new YtDlpException("Trailer remuxing failed.");
+                    continue;
                 }
+
+                Directory.Delete(directory, recursive: true);
             }
-            catch
+            catch (DirectoryNotFoundException)
             {
-                TryKill(process);
-                throw;
+                // Another server process already removed the expired directory.
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(ex, "Unable to remove an expired trailer cache directory");
             }
         }
-        finally
+    }
+
+    private void DeleteFile(string path)
+    {
+        try
         {
-            RemuxSlots.Release();
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Unable to remove a temporary trailer file");
         }
     }
 
@@ -139,13 +318,14 @@ public sealed class FfmpegTrailerRemuxer : ITrailerRemuxer
         }
     }
 
-    private static void TryKill(Process process)
+    private static async Task StopProcessAsync(Process process)
     {
         try
         {
             if (!process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync().ConfigureAwait(false);
             }
         }
         catch (InvalidOperationException)
@@ -153,4 +333,6 @@ public sealed class FfmpegTrailerRemuxer : ITrailerRemuxer
             // The process exited between the check and kill.
         }
     }
+
+    private sealed record CachedTrailer(string Path, DateTimeOffset ExpiresAt, EntityTagHeaderValue EntityTag);
 }

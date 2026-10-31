@@ -39,6 +39,7 @@ public sealed class TrailerController : ControllerBase
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A task representing the streaming operation.</returns>
     [HttpGet("{videoId}/stream")]
+    [HttpHead("{videoId}/stream")]
     public async Task Stream(string videoId, CancellationToken cancellationToken)
     {
         if (!YouTubeVideoId.IsValid(videoId))

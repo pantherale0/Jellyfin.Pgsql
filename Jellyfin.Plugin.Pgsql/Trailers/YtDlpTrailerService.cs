@@ -12,7 +12,7 @@ using Microsoft.Net.Http.Headers;
 namespace Jellyfin.Plugin.Pgsql.Trailers;
 
 /// <summary>
-/// Resolves and relays YouTube trailer media without buffering complete files.
+/// Resolves YouTube trailers and relays progressive media or prepares adaptive tracks for VOD playback.
 /// </summary>
 public sealed class YtDlpTrailerService
 {

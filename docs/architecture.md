@@ -66,7 +66,7 @@ At runtime, UI Next routes supported Android video playback to the official Jell
 
 The `syncSession` readiness method is supplied by the companion Jellyfin Android change. Stock app releases without it use the intercepted capabilities route; custom wrappers still need their own session-sync contract.
 
-Remote YouTube trailers use a separate UI Next player source and the authenticated plugin route `/Pgsql/Trailers/{videoId}/stream`. This path stays in the HTML player on every client, bypasses library `PlaybackInfo` negotiation and native handoff, and does not send library playback reports. The plugin resolves YouTube media with yt-dlp and relays progressive sources or remuxes separate tracks with ffmpeg.
+Remote YouTube trailers use a separate UI Next player source and the authenticated plugin route `/Pgsql/Trailers/{videoId}/stream`. This path stays in the HTML player on every client, bypasses library `PlaybackInfo` negotiation and native handoff, and does not send library playback reports. The plugin resolves YouTube media with yt-dlp and relays progressive sources. For separate adaptive tracks, ffmpeg completes a fast-start MP4 in the bounded temporary cache before ASP.NET serves it with Content-Length, ETag, and byte-range support. This prevents the growing-duration behavior of the previous fragmented MP4 pipe.
 
 ## UI Next end-to-end tests
 

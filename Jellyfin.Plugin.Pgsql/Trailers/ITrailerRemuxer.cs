@@ -10,7 +10,7 @@ namespace Jellyfin.Plugin.Pgsql.Trailers;
 public interface ITrailerRemuxer
 {
     /// <summary>
-    /// Relays separate video and audio tracks as fragmented MP4.
+    /// Prepares separate tracks as a finalized MP4 and serves it with byte-range support.
     /// </summary>
     /// <param name="resolution">Resolved adaptive media tracks.</param>
     /// <param name="context">Current HTTP context.</param>

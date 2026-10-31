@@ -74,7 +74,7 @@ Server query patches include [`jellyfin_home_api_performance`](patches.md#jellyf
 
 **Where:** UI Next `remote-trailer.ts`, `detail-playback-actions.tsx`, and `player.tsx`; plugin `Trailers/` and `TrailerController`; [`jellyfin_trailer_history`](patches.md#jellyfin_trailer_historypatch). Remote trailers skip library playback reporting and leave the queue unchanged. Trailer playback does not affect resume state, played status, playback statistics, or taste recommendations.
 
-**Limits:** Adaptive-only streams use Jellyfin's configured ffmpeg and do not support byte-range seeking. Remote trailer playback uses server bandwidth. See [README configuration](../README.md#remote-youtube-trailers).
+**Limits:** Adaptive-only trailers use Jellyfin's configured ffmpeg to prepare a finalized, seekable MP4 with a fixed duration. First play waits for preparation, and later requests reuse the bounded temporary cache. Remote trailer playback uses server bandwidth and adaptive preparation requires writable cache storage. See [README configuration](../README.md#remote-youtube-trailers).
 
 ## Taste profiles and recommendations
 
