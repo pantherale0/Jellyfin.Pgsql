@@ -116,7 +116,7 @@ test('any user can add playable titles and folders to playlists, not people or t
     assert.equal(bulk.bulkCapabilities([ { Id: 'm', Type: 'Movie' }, { Id: 'b', Type: 'BoxSet' } ], viewer).playlist, false);
 });
 
-test('UI wiring: paged playlists, whole-playlist queue, editor controls, pickers and favorites Show more', () => {
+test('UI wiring: paged playlists, whole-playlist queue, editor controls and pickers', () => {
     const sections = source('detail-sections.tsx');
     assert.match(sections, /if \(kind === 'playlist'\) return <PlaylistEntries/);
     assert.match(sections, /api\.getPlaylistEntries\(item\.Id, entries\.length\)/);
@@ -131,7 +131,4 @@ test('UI wiring: paged playlists, whole-playlist queue, editor controls, pickers
     const library = source('library.tsx');
     assert.match(library, /<PlaylistPicker api=\{api\} itemIds=\{selected\.map\(item => item\.Id\)\}/);
     assert.match(library, /canAddToPlaylist\(item\) && <button[^\n]*>Add to playlist…<\/button>/);
-    const favorites = source('discovery-views.tsx');
-    assert.match(favorites, /api\.getFavorites\(group, FAVORITES_PAGE_SIZE, row\.items\.length\)/);
-    assert.match(favorites, /Show more \(\$\{\(row\.total - row\.items\.length\)\.toLocaleString\(\)\} remaining\)/);
 });

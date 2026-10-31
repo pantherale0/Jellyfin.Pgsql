@@ -77,17 +77,24 @@ function useLoaded<T>(load: (() => Promise<T>) | null, key: unknown[], initial: 
     return { value, loading, error, reload: () => setAttempt(current => current + 1), set: setValue };
 }
 
-export function MediaRow({ api, title, items, onOpen, onPlay }: { api: JellyfinApi | null; title: string; items: MediaItem[]; onOpen: (item: MediaItem) => void; onPlay?: (item: MediaItem) => void }) {
+export function MediaRow({ api, title, items, onOpen, onPlay, onRemoveFavorite, favoriteBusy = false }: { api: JellyfinApi | null; title: string; items: MediaItem[]; onOpen: (item: MediaItem) => void; onPlay?: (item: MediaItem) => void; onRemoveFavorite?: (item: MediaItem) => void; favoriteBusy?: boolean }) {
     if (!items.length) return null;
     return <section class="detail-row" aria-label={title}>
         <h2>{title}</h2>
-        <div class="detail-row-items">{items.map(entry => <div class="detail-card" key={entry.PlaylistItemId || entry.Id}>
-            <button data-focusable="true" type="button" class="detail-card-open" onClick={() => (onPlay && itemCapabilities(entry).playable ? onPlay(entry) : onOpen(entry))} aria-label={onPlay && itemCapabilities(entry).playable ? t('Play {0}', entry.Name) : t('Open {0}', entry.Name)}>
-                <span class="detail-card-art">{api && api.imageUrl(entry, 'Primary', 300) ? <img src={api.imageUrl(entry, 'Primary', 300)} alt="" loading="lazy" /> : <span aria-hidden="true">{entry.Name.slice(0, 1)}</span>}</span>
-                <strong>{entry.Name}</strong>
-                <small>{[ entry.ProductionYear, minutes(entry.RunTimeTicks) ].filter(Boolean).join(' · ')}</small>
-            </button>
-        </div>)}</div>
+        <div class="detail-row-items">{items.map(entry => {
+            const canPlay = Boolean(onPlay && itemCapabilities(entry).playable);
+            const activate = () => canPlay ? onPlay?.(entry) : onOpen(entry);
+            const removeFavorite = () => onRemoveFavorite?.(entry);
+            const favoriteLabel = t('Remove {0} from favorites', entry.Name);
+            return <div class="detail-card" key={entry.PlaylistItemId || entry.Id}>
+                <button data-focusable="true" type="button" class="detail-card-open" onClick={activate} aria-label={canPlay ? t('Play {0}', entry.Name) : t('Open {0}', entry.Name)}>
+                    <span class="detail-card-art">{api && api.imageUrl(entry, 'Primary', 300) ? <img src={api.imageUrl(entry, 'Primary', 300)} alt="" loading="lazy" /> : <span aria-hidden="true">{entry.Name.slice(0, 1)}</span>}</span>
+                    <strong>{entry.Name}</strong>
+                    <small>{[ entry.ProductionYear, minutes(entry.RunTimeTicks) ].filter(Boolean).join(' · ')}</small>
+                </button>
+                {onRemoveFavorite && itemCapabilities(entry).canFavorite && <button data-focusable="true" type="button" class="detail-card-favorite" aria-pressed="true" aria-label={favoriteLabel} title={favoriteLabel} disabled={favoriteBusy} onClick={removeFavorite}>★</button>}
+            </div>;
+        })}</div>
     </section>;
 }
 

@@ -12,7 +12,7 @@ This page maps the operator-facing features in the fork to the plugin, UI Next, 
 
 UI Next prefetches full item details for the active home recommendation. Poster cards start a prefetch after 200 ms of pointer hover or when keyboard or TV focus enters. Opening a title uses ready data or joins the request while the detail view loads.
 
-UI Next adapts its shared library, Search, Filters, Live TV Guide, and Home hero to phone-sized screens. Poster actions move below the artwork, List actions move below row content, and the first Home feed card appears in the initial viewport.
+UI Next adapts its shared library, Search, Filters, Favorites, Live TV Guide, and Home hero to phone-sized screens. Favorites includes a Live TV channel group with direct per-profile removal and Undo; Guide rows include channel favorite controls, including in compact Guide rows. The Guide grid shows channel logos when available and falls back to channel names otherwise. Guide stars remain visible on pointer desktops and touch layouts, and TV remote users can focus and activate them. Poster actions move below the artwork, List actions move below row content, and the first Home feed card appears in the initial viewport.
 
 Library poster cards show a corner check for watched items. Unwatched items have no watched badge. Series cards keep their unplayed episode count, and in-progress items keep the progress bar.
 

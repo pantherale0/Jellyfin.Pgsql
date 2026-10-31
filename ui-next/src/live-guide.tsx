@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { JellyfinApi, peekCachedImage, releaseCachedImage, retainCachedImage } from './api';
-import { GUIDE_CHANNEL_WIDTH, GUIDE_HEADER_HEIGHT, GUIDE_ROW_HEIGHT, PIXELS_PER_MINUTE, artType, directionalFocusIndex, elapsedStop, episodeCode, formatClock, formatRange, guideSegments, isAiring, mediaTags, moveGuideFocus, moveGuideToolbar, programBadges, rulerTicks, segmentBox, timelineWidth, timeRenderPadding, visibleIndexRange, visibleTimeRange, type GuideDay, type GuideDirection, type GuideFocusProgram, type GuideFocusTarget, type GuideNavigationContext, type GuideSegment, type GuideToolbarControl } from './live-model';
+import { GUIDE_CHANNEL_WIDTH, GUIDE_HEADER_HEIGHT, GUIDE_ROW_HEIGHT, PIXELS_PER_MINUTE, artType, directionalFocusIndex, elapsedStop, episodeCode, formatClock, formatRange, guideChannelLogoType, guideSegments, isAiring, mediaTags, moveGuideFocus, moveGuideToolbar, programBadges, rulerTicks, segmentBox, timelineWidth, timeRenderPadding, visibleIndexRange, visibleTimeRange, type GuideChannelLogoType, type GuideDay, type GuideDirection, type GuideFocusProgram, type GuideFocusTarget, type GuideNavigationContext, type GuideSegment, type GuideToolbarControl } from './live-model';
 import type { LiveChannelFilter, MediaItem } from './types';
 import { t } from './i18n';
 
@@ -30,25 +30,46 @@ function guideFocusTarget(element: HTMLElement): GuideFocusTarget | null {
         : null;
 }
 
-export function LiveThumb({ api, item, width = 96, className = '' }: { api: JellyfinApi; item: MediaItem; width?: number; className?: string }) {
-    const [ src, setSrc ] = useState('');
+type LiveThumbState =
+    | { kind: 'loading' }
+    | { kind: 'ready'; src: string; key: string }
+    | { kind: 'unavailable' };
+
+export function LiveThumb({ api, item, width = 96, className = '', imageType, fallbackText }: {
+    api: JellyfinApi;
+    item: MediaItem;
+    width?: number;
+    className?: string;
+    imageType?: GuideChannelLogoType | null;
+    fallbackText?: string;
+}) {
+    const [ state, setState ] = useState<LiveThumbState>(() => imageType === null ? { kind: 'unavailable' } : { kind: 'loading' });
     const held = useRef('');
-    const type = artType(item);
+    const type = imageType === undefined ? artType(item) : imageType;
     useEffect(() => {
+        if (!type) {
+            setState({ kind: 'unavailable' });
+            return;
+        }
         const key = api.imageUrl(item, type, width);
         if (!key) {
-            setSrc('');
+            setState({ kind: 'unavailable' });
             return;
         }
         let active = true;
         const bag: { cancel?: () => void } = {};
         const apply = (url: string) => {
-            if (!active || !url) return;
+            if (!active) return;
+            if (!url) {
+                setState({ kind: 'unavailable' });
+                return;
+            }
             if (held.current && held.current !== key) releaseCachedImage(held.current);
             retainCachedImage(key);
             held.current = key;
-            setSrc(url);
+            setState({ kind: 'ready', src: url, key });
         };
+        setState({ kind: 'loading' });
         const cached = peekCachedImage(key);
         if (cached) apply(cached);
         else void api.loadImage(item, type, width, 90, bag).then(apply);
@@ -58,8 +79,16 @@ export function LiveThumb({ api, item, width = 96, className = '' }: { api: Jell
             if (held.current) releaseCachedImage(held.current);
             held.current = '';
         };
-    }, [ api, item.Id, item.ImageTags?.Primary, item.ImageTags?.Thumb, item.ImageTags?.Logo, type, width ]);
-    return src ? <img class={className} src={src} alt="" /> : <span class={`live-logo-fallback ${className}`} aria-hidden="true" />;
+    }, [ api, item.Id, item.ImageTags?.Primary, item.ImageTags?.Thumb, item.ImageTags?.Logo, item.BackdropImageTags?.[0], type, width ]);
+    if (state.kind === 'ready') return <img class={className} src={state.src} alt="" onError={() => {
+        setState({ kind: 'unavailable' });
+        if (held.current === state.key) {
+            releaseCachedImage(state.key);
+            held.current = '';
+        }
+    }} />;
+    if (state.kind === 'unavailable' && fallbackText) return <span class={`live-channel-name-fallback ${className}`}>{fallbackText}</span>;
+    return <span class={`live-logo-fallback ${className}`} aria-hidden="true" />;
 }
 
 function BadgeRow({ program, now }: { program: MediaItem; now: number }) {
@@ -96,6 +125,7 @@ interface LiveGuideProps {
     onExtend: (direction: 'back' | 'forward') => void;
     onVisible: (start: number, end: number) => void;
     onToggleFavorite: (channel: MediaItem) => void;
+    favoriteBusyId: string;
     onOpenProgram: (program: MediaItem, channel: MediaItem, origin: HTMLElement) => void;
     onTune: (channel: MediaItem) => void;
 }
@@ -429,7 +459,7 @@ export function LiveGuide(props: LiveGuideProps) {
                     const index = rows.start + offset;
                     const segments = guideSegments(props.programsByChannel[channel.Id] || [], props.windowStart, props.windowEnd)
                         .filter(segment => segment.end > renderStart && segment.start < renderEnd);
-                    return <GuideRow key={channel.Id} api={props.api} channel={channel} index={index} segments={segments} windowStart={props.windowStart} now={props.now} onToggleFavorite={props.onToggleFavorite} onOpenProgram={props.onOpenProgram} onTune={props.onTune} onHover={showHover} onHide={hideHover} />;
+                    return <GuideRow key={channel.Id} api={props.api} channel={channel} index={index} segments={segments} windowStart={props.windowStart} now={props.now} onToggleFavorite={props.onToggleFavorite} favoriteBusyId={props.favoriteBusyId} onOpenProgram={props.onOpenProgram} onTune={props.onTune} onHover={showHover} onHide={hideHover} />;
                 })}
                 {!props.loading && !props.channels.length && <p class="live-empty">{t('No channels are available for this filter.')}</p>}
                 {props.loading && !props.channels.length && <p class="live-empty">{t('Loading the guide…')}</p>}
@@ -445,7 +475,7 @@ export function LiveGuide(props: LiveGuideProps) {
     </div>;
 }
 
-function GuideRow({ api, channel, index, segments, windowStart, now, onToggleFavorite, onOpenProgram, onTune, onHover, onHide }: {
+function GuideRow({ api, channel, index, segments, windowStart, now, onToggleFavorite, favoriteBusyId, onOpenProgram, onTune, onHover, onHide }: {
     api: JellyfinApi;
     channel: MediaItem;
     index: number;
@@ -453,6 +483,7 @@ function GuideRow({ api, channel, index, segments, windowStart, now, onToggleFav
     windowStart: number;
     now: number;
     onToggleFavorite: (channel: MediaItem) => void;
+    favoriteBusyId: string;
     onOpenProgram: (program: MediaItem, channel: MediaItem, origin: HTMLElement) => void;
     onTune: (channel: MediaItem) => void;
     onHover: (program: MediaItem, channel: MediaItem, target: HTMLElement) => void;
@@ -461,12 +492,11 @@ function GuideRow({ api, channel, index, segments, windowStart, now, onToggleFav
     const favorite = Boolean(channel.UserData?.IsFavorite);
     return <div class="live-row" role="row" aria-rowindex={index + 2} style={{ top: `${GUIDE_HEADER_HEIGHT + index * GUIDE_ROW_HEIGHT}px` }}>
         <div class="live-channel" role="rowheader" aria-colindex={1}>
-            <button type="button" class="live-channel-tune" data-focusable="true" data-rail="true" data-channel-id={channel.Id} id={`live-channel-${channel.Id}`} onClick={() => onTune(channel)}>
+            <button type="button" class="live-channel-tune" data-focusable="true" data-rail="true" data-channel-id={channel.Id} id={`live-channel-${channel.Id}`} aria-label={t('Channel {0}: {1}', channel.ChannelNumber || '—', channel.Name)} onClick={() => onTune(channel)}>
                 <span class="live-number">{channel.ChannelNumber || '—'}</span>
-                <span class="live-logo"><LiveThumb api={api} item={channel} width={96} /></span>
-                <span class="live-channel-name">{channel.Name}</span>
+                <span class="live-logo"><LiveThumb api={api} item={channel} width={96} imageType={guideChannelLogoType(channel)} fallbackText={channel.Name} /></span>
             </button>
-            <button type="button" class={favorite ? 'live-star on' : 'live-star'} data-focusable="true" data-channel-id={channel.Id} aria-pressed={favorite ? 'true' : 'false'} aria-label={favorite ? t('Remove {0} from favorites', channel.Name) : t('Add {0} to favorites', channel.Name)} onClick={event => { event.stopPropagation(); onToggleFavorite(channel); }}>{favorite ? '★' : '☆'}</button>
+            <button type="button" class={favorite ? 'live-star on' : 'live-star'} data-focusable="true" data-channel-id={channel.Id} aria-pressed={favorite ? 'true' : 'false'} aria-label={favorite ? t('Remove {0} from favorites', channel.Name) : t('Add {0} to favorites', channel.Name)} disabled={Boolean(favoriteBusyId)} onClick={event => { event.stopPropagation(); onToggleFavorite(channel); }}>{favorite ? '★' : '☆'}</button>
         </div>
         <div class="live-track" role="gridcell" aria-colindex={2}>
             {segments.map(segment => {

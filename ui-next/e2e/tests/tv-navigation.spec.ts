@@ -8,6 +8,34 @@ test('the webOS user agent activates the TV layout', async ({ page }) => {
     await tv.open();
 });
 
+test('TV Guide favorite stays visible and remains in the remote focus order', async ({ page }) => {
+    await resetFakeServer();
+    await page.route('**/LiveTv/Channels*', route => route.fulfill({
+        json: {
+            Items: [ {
+                Id: 'e2e-family-channel',
+                Name: 'Family News',
+                Type: 'TvChannel',
+                ChannelNumber: '7',
+                UserData: { IsFavorite: false }
+            } ],
+            TotalRecordCount: 1
+        }
+    }));
+
+    const tv = new TvPage(page);
+    await tv.open();
+    await page.goto('/?live=guide');
+    await expect(page.locator('html.tv-client')).toHaveCount(1);
+
+    const tune = page.locator('.live-channel-tune');
+    const favorite = page.getByRole('button', { name: 'Add Family News to favorites', exact: true });
+    await expect(favorite).toHaveCSS('opacity', '1');
+    await tune.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(favorite).toBeFocused();
+});
+
 test('an arrow key focuses the first control from a cold start', async ({ page }) => {
     await resetFakeServer();
     const tv = new TvPage(page);

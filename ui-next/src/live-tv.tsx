@@ -78,6 +78,9 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
     const [ dvrTick, setDvrTick ] = useState(0);
     const [ sheet, setSheet ] = useState<{ program: MediaItem; channel: MediaItem } | null>(null);
     const [ actionError, setActionError ] = useState('');
+    const [ favoriteStatus, setFavoriteStatus ] = useState('');
+    const [ favoriteUndo, setFavoriteUndo ] = useState<{ channel: MediaItem; favorite: boolean } | null>(null);
+    const [ favoriteBusyId, setFavoriteBusyId ] = useState('');
     const [ recordingBusy, setRecordingBusy ] = useState(false);
     const [ expandedId, setExpandedId ] = useState('');
     const [ dayPrograms, setDayPrograms ] = useState<MediaItem[]>([]);
@@ -423,18 +426,50 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
         };
     }, [ tab, sheet, compact, orderedGuide, orderedDirectory ]);
 
-    const toggleFavorite = async (channel: MediaItem) => {
-        const next = !channel.UserData?.IsFavorite;
-        const apply = (items: MediaItem[]) => items.map(item => item.Id === channel.Id ? withFavorite(item, next) : item);
+    const applyFavorite = (channelId: string, favorite: boolean) => {
+        const apply = (items: MediaItem[]) => items.map(item => item.Id === channelId ? withFavorite(item, favorite) : item);
         setGuideChannels(current => apply(current));
         setDirectory(current => apply(current));
+    };
+
+    const saveFavorite = async (channel: MediaItem, favorite: boolean, previousFavorite: boolean): Promise<boolean> => {
+        if (favoriteBusyId) return false;
+        setFavoriteBusyId(channel.Id);
+        setActionError('');
+        applyFavorite(channel.Id, favorite);
         try {
-            await api.setFavorite(channel.Id, next);
+            const userData = await api.setFavorite(channel.Id, favorite);
+            if (typeof userData?.IsFavorite === 'boolean' && userData.IsFavorite !== favorite) applyFavorite(channel.Id, userData.IsFavorite);
+            return true;
         } catch (error) {
-            const revert = (items: MediaItem[]) => items.map(item => item.Id === channel.Id ? withFavorite(item, !next) : item);
-            setGuideChannels(current => revert(current));
-            setDirectory(current => revert(current));
+            applyFavorite(channel.Id, previousFavorite);
             setActionError(liveError(error, t('Favorites could not be updated.')));
+            return false;
+        } finally {
+            setFavoriteBusyId('');
+        }
+    };
+
+    const toggleFavorite = async (channel: MediaItem) => {
+        const previousFavorite = channel.UserData?.IsFavorite === true;
+        const next = !previousFavorite;
+        setFavoriteUndo(null);
+        setFavoriteStatus(next ? t('Adding {0} to favorites…', channel.Name) : t('Removing {0} from favorites…', channel.Name));
+        const saved = await saveFavorite(channel, next, previousFavorite);
+        setFavoriteStatus(saved ? t(next ? 'Added {0} to favorites.' : 'Removed {0} from favorites.', channel.Name) : '');
+        if (saved) setFavoriteUndo({ channel, favorite: previousFavorite });
+    };
+
+    const undoFavorite = async () => {
+        const undo = favoriteUndo;
+        if (!undo || favoriteBusyId) return;
+        setFavoriteStatus(undo.favorite ? t('Adding {0} to favorites…', undo.channel.Name) : t('Removing {0} from favorites…', undo.channel.Name));
+        const saved = await saveFavorite(undo.channel, undo.favorite, !undo.favorite);
+        if (saved) {
+            setFavoriteUndo(null);
+            setFavoriteStatus(t(undo.favorite ? 'Added {0} to favorites.' : 'Removed {0} from favorites.', undo.channel.Name));
+        } else {
+            setFavoriteStatus('');
         }
     };
 
@@ -564,6 +599,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
             {TABS.map(item => <button type="button" role="tab" aria-selected={tab === item.id ? 'true' : 'false'} data-focusable="true" class={tab === item.id ? 'live-tab active' : 'live-tab'} key={item.id} onClick={() => onTab(item.id)}>{t(item.label)}</button>)}
         </div>
         {actionError && !sheet && <p class="notice error" role="alert">{actionError}</p>}
+        {favoriteStatus && !sheet && <div class="live-favorite-notice" role="status"><span>{favoriteStatus}</span>{favoriteUndo && <button class="button secondary" data-focusable="true" type="button" disabled={Boolean(favoriteBusyId)} onClick={undoFavorite}>{t('Undo')}</button>}</div>}
         {digits && tab !== 'guide' && <p class="live-digits" aria-live="polite">{t('Channel {0}', digits)}</p>}
 
         {tab === 'now' && <div class="live-now">
@@ -628,6 +664,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                 void ensurePrograms(orderedGuide.slice(start, end).map(channel => channel.Id), range.start, range.end);
             }}
             onToggleFavorite={channel => void toggleFavorite(channel)}
+            favoriteBusyId={favoriteBusyId}
             onOpenProgram={openSheet}
             onTune={channel => tune(channel)}
         />}
@@ -651,6 +688,7 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                                 <span class="live-bar next"><span class="live-bar-label">{t('Next')}</span><span>{following?.Name || t('Up next is not listed')}</span>{following?.StartDate && <span class="muted">{formatClock(Date.parse(following.StartDate))}</span>}</span>
                             </span>
                         </button>
+                        <button type="button" class={channel.UserData?.IsFavorite ? 'live-star on live-mobile-star' : 'live-star live-mobile-star'} data-focusable="true" data-channel-id={channel.Id} aria-pressed={channel.UserData?.IsFavorite ? 'true' : 'false'} aria-label={channel.UserData?.IsFavorite ? t('Remove {0} from favorites', channel.Name) : t('Add {0} to favorites', channel.Name)} title={channel.UserData?.IsFavorite ? t('Remove {0} from favorites', channel.Name) : t('Add {0} to favorites', channel.Name)} disabled={Boolean(favoriteBusyId)} onClick={() => void toggleFavorite(channel)}>{channel.UserData?.IsFavorite ? '★' : '☆'}</button>
                         {open && <div class="live-day-schedule">
                             {dayPrograms.map(item => <button type="button" class="live-day-item" data-focusable="true" key={item.Id} onClick={event => openSheet(item, channel, event.currentTarget)}>
                                 <span>{formatRange(item.StartDate, item.EndDate)}</span>
@@ -679,7 +717,6 @@ export function LiveTvPage({ api, userId, tab, onTab, onPlay }: {
                             {channel.CurrentProgram?.Name && <span class="muted">{channel.CurrentProgram.Name}</span>}
                         </span>
                     </button>
-                    <button type="button" class={channel.UserData?.IsFavorite ? 'live-star on' : 'live-star'} data-focusable="true" aria-pressed={channel.UserData?.IsFavorite ? 'true' : 'false'} aria-label={channel.UserData?.IsFavorite ? t('Remove {0} from favorites', channel.Name) : t('Add {0} to favorites', channel.Name)} onClick={() => void toggleFavorite(channel)}>{channel.UserData?.IsFavorite ? '★' : '☆'}</button>
                     <button type="button" class="live-move" data-focusable="true" aria-label={t('Move {0} earlier', channel.Name)} disabled={index === 0} onClick={() => shift(channel.Id, -1)}>↑</button>
                     <button type="button" class="live-move" data-focusable="true" aria-label={t('Move {0} later', channel.Name)} disabled={index === orderedDirectory.length - 1} onClick={() => shift(channel.Id, 1)}>↓</button>
                 </li>)}

@@ -50,3 +50,45 @@ test('Guide first row clears the header after switching from a scrolled tab', as
     if (!header || !firstChannel) return;
     expect(firstChannel.y).toBeGreaterThanOrEqual(header.y + header.height);
 });
+
+test('touch Guide favorite controls remain visible on phones and tablets', async ({ page }) => {
+    await resetFakeServer();
+    const favoriteActions: string[] = [];
+    await page.route('**/LiveTv/Channels*', route => route.fulfill({
+        json: {
+            Items: [ {
+                Id: 'e2e-family-channel',
+                Name: 'Family News',
+                Type: 'TvChannel',
+                ChannelNumber: '7',
+                UserData: { IsFavorite: false }
+            } ],
+            TotalRecordCount: 1
+        }
+    }));
+    await page.route(url => url.pathname.startsWith('/Users/e2e-user-id/FavoriteItems/'), route => {
+        favoriteActions.push(route.request().method());
+        return route.fulfill({ status: 204 });
+    });
+
+    const app = new MobileUiNextPage(page);
+    await app.openLiveTab('guide');
+    const favoriteButton = page.getByRole('button', { name: 'Add Family News to favorites', exact: true });
+    await expect(favoriteButton).toBeVisible();
+    await expect(favoriteButton).toHaveCSS('opacity', '1');
+    const favoriteBounds = await favoriteButton.boundingBox();
+    expect(favoriteBounds).not.toBeNull();
+    if (favoriteBounds) {
+        expect(favoriteBounds.width).toBeGreaterThanOrEqual(48);
+        expect(favoriteBounds.height).toBeGreaterThanOrEqual(48);
+    }
+    await favoriteButton.click();
+
+    await expect(page.getByRole('button', { name: 'Remove Family News from favorites', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Add Family News to favorites', exact: true })).toHaveAttribute('aria-pressed', 'false');
+    expect(favoriteActions).toEqual([ 'POST', 'DELETE' ]);
+
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await expect(page.getByRole('button', { name: 'Add Family News to favorites', exact: true })).toHaveCSS('opacity', '1');
+});

@@ -626,6 +626,15 @@ export function artType(item: MediaItem): string {
     return 'Primary';
 }
 
+export type GuideChannelLogoType = 'Primary' | 'Thumb' | 'Logo';
+
+export function guideChannelLogoType(item: Pick<MediaItem, 'ImageTags'>): GuideChannelLogoType | null {
+    if (item.ImageTags?.Primary) return 'Primary';
+    if (item.ImageTags?.Thumb) return 'Thumb';
+    if (item.ImageTags?.Logo) return 'Logo';
+    return null;
+}
+
 export function isHlsUrl(url: string): boolean {
     return /\.m3u8(?:[?#]|$)/i.test(url);
 }
