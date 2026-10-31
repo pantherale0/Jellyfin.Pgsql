@@ -21,6 +21,10 @@ export async function openTrailerDetails(page: Page, trailers: unknown = [
 }
 
 export function remoteTrailerCases() {
+    test.afterEach(async ({ page }) => {
+        await page.unrouteAll({ behavior: 'wait' });
+    });
+
     test('clapperboard action plays the first supported trailer and returns without library playback activity', async ({ page }) => {
         const requests: string[] = [];
         page.on('request', request => requests.push(request.url()));

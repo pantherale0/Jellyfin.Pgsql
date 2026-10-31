@@ -6,13 +6,16 @@ test('Favorites starts close below the navigation bar', async ({ page }) => {
     await page.goto('/');
     await page.getByRole('button', { name: 'Favorites', exact: true }).click();
 
+    await expect(page.locator('.favorites-page .catalog-heading .eyebrow')).toBeVisible();
     const topbar = await page.locator('.topbar').boundingBox();
-    const developmentWarning = await page.locator('.notice.storage-warning').boundingBox();
+    const warning = page.locator('.notice.storage-warning');
+    const developmentWarning = await warning.isVisible() ? await warning.boundingBox() : null;
     const eyebrow = await page.locator('.favorites-page .catalog-heading .eyebrow').boundingBox();
     expect(topbar).not.toBeNull();
     expect(eyebrow).not.toBeNull();
     if (topbar && eyebrow) {
         const precedingContentBottom = developmentWarning ? developmentWarning.y + developmentWarning.height : topbar.y + topbar.height;
+        expect(eyebrow.y - precedingContentBottom).toBeGreaterThanOrEqual(0);
         expect(eyebrow.y - precedingContentBottom).toBeLessThanOrEqual(56);
     }
 });
