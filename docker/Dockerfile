@@ -1,6 +1,8 @@
 ARG JELLYFIN_VERSION=12.4
 ARG YTDLP_VERSION=2026.08.19
 ARG YTDLP_SHA256=58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a
+ARG DENO_VERSION=2.7.0
+ARG DENO_SHA256=f1ca687ba8545105ba5809688ef659d96fe4272acc11e8b4800657cdb0045b7d
 
 # UI Next build stage
 FROM node:24-alpine AS ui-next-build
@@ -13,6 +15,7 @@ COPY ui-next/package.json ui-next/package-lock.json ./
 RUN npm ci
 
 COPY ui-next/index.html ./index.html
+COPY ui-next/public/ ./public/
 COPY ui-next/README.md ./README.md
 COPY ui-next/tsconfig.json ./tsconfig.json
 COPY ui-next/vite.config.ts ./vite.config.ts
@@ -92,10 +95,12 @@ RUN dotnet ef migrations bundle \
 FROM jellyfin/jellyfin:${JELLYFIN_VERSION} AS runtime
 ARG YTDLP_VERSION
 ARG YTDLP_SHA256
+ARG DENO_VERSION
+ARG DENO_SHA256
 
 # Install PostgreSQL 18 client tools for backup/restore functionality
 RUN apt-get update && \
-    apt-get install -y wget ca-certificates gnupg lsb-release && \
+    apt-get install -y wget ca-certificates gnupg lsb-release unzip && \
     wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] http://apt.postgresql.org/pub/repos/apt/ $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list && \
     apt-get update && \
@@ -103,6 +108,11 @@ RUN apt-get update && \
     wget --quiet -O /usr/local/bin/yt-dlp "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp_linux" && \
     echo "${YTDLP_SHA256}  /usr/local/bin/yt-dlp" | sha256sum --check --strict && \
     chmod 0755 /usr/local/bin/yt-dlp && \
+    wget --quiet -O /tmp/deno.zip "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-x86_64-unknown-linux-gnu.zip" && \
+    echo "${DENO_SHA256}  /tmp/deno.zip" | sha256sum --check --strict && \
+    unzip -q /tmp/deno.zip deno -d /usr/local/bin && \
+    chmod 0755 /usr/local/bin/deno && \
+    rm -f /tmp/deno.zip && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

@@ -66,7 +66,7 @@ At runtime, UI Next routes supported Android video playback to the official Jell
 
 The `syncSession` readiness method is supplied by the companion Jellyfin Android change. Stock app releases without it use the intercepted capabilities route; custom wrappers still need their own session-sync contract.
 
-Remote YouTube trailers use a separate UI Next player source and the authenticated plugin route `/Pgsql/Trailers/{videoId}/stream`. This path stays in the HTML player on every client, bypasses library `PlaybackInfo` negotiation and native handoff, and does not send library playback reports. The plugin resolves YouTube media with yt-dlp and relays progressive sources. For separate adaptive tracks, ffmpeg completes a fast-start MP4 in the bounded temporary cache before ASP.NET serves it with Content-Length, ETag, and byte-range support. This prevents the growing-duration behavior of the previous fragmented MP4 pipe.
+Remote YouTube trailers use a separate UI Next player source and the authenticated plugin route `/Pgsql/Trailers/{videoId}/stream`. This path stays in the HTML player on every client, bypasses library `PlaybackInfo` negotiation and native handoff, and does not send library playback reports. The plugin resolves YouTube media with yt-dlp and Deno. It relays progressive sources directly. For separate adaptive tracks, ffmpeg writes fragmented MP4 to stdout. The relay reads and patches the bounded initialization section with a finite duration, sends it to the client, and then streams the media fragments. It does not stage the complete trailer file.
 
 ## UI Next end-to-end tests
 
@@ -94,6 +94,8 @@ During `docker build` ([`docker/Dockerfile`](../docker/Dockerfile)):
 2. Docker builds UI Next, including its tests, then builds the patched server and packages the plugins.
 3. The runtime stage copies the UI Next bundle to `/jellyfin/ui-next` and sets `JELLYFIN_WEB_DIR` to that path.
 4. The entrypoint wires `POSTGRES_*`, optional Redis, and optional SSO environment variables. It can also run SQLite-to-PostgreSQL migration.
+
+The runtime image also includes checksum-pinned yt-dlp and Deno binaries. Deno provides the JavaScript runtime yt-dlp needs for current YouTube challenge solving.
 
 Push, release, scheduled, and manual Docker workflow events build `ui-next` and publish the Jellyfin-version and `latest` tags. The plugin build and test workflows also apply server patches.
 

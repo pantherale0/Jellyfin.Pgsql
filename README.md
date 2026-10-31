@@ -145,20 +145,22 @@ Trailer playback—both local trailer files and remote YouTube trailers—is del
 excluded from resume state, played status, playback statistics, and taste/neural
 recommendation inputs.
 
-When YouTube exposes separate adaptive tracks, the plugin uses Jellyfin's configured ffmpeg
-to prepare a completed MP4 before playback. This gives the player a fixed duration and
-supports byte-range seeking. The first play waits for preparation; later requests reuse
-the temporary file. Progressive sources continue to stream directly through the relay.
+When YouTube exposes separate adaptive tracks, Jellyfin's configured ffmpeg streams
+fragmented MP4 as it receives media. The relay buffers only the MP4 initialization section
+to set movie and track durations from yt-dlp metadata, then sends that header before the
+fragments. Playback can start while ffmpeg is still receiving the trailer; the server does
+not wait for a complete file. Adaptive trailers do not support HTTP byte-range seeking, but
+the browser can seek within media it has buffered. Progressive sources retain normal HTTP
+Range support.
 
-Adaptive preparation requires a writable Jellyfin cache directory. The temporary cache
-under `pgsql-trailers/` holds at most eight files per server process with a 64 MiB output
-budget per trailer. Preparation runs one at a time and has a two-minute timeout. Entries
-expire after ten minutes and are removed on subsequent requests or normal shutdown.
-Later trailer requests also remove stale cache directories left by interrupted processes.
+Adaptive relay limits are four concurrent remuxes, a 1 MiB initialization section, and a
+64 MiB output stream per trailer. Adaptive playback requires yt-dlp to report a finite
+duration. The server does not write adaptive trailer files to disk.
 
-The published image includes yt-dlp. Standalone plugin installations must install it on
-the Jellyfin host; set `Pgsql_YTDLP_PATH` to an alternate executable path when it is not
-available as `yt-dlp` on `PATH`. Changes require a restart. Private, age-restricted,
+The published image includes pinned yt-dlp and Deno releases. Deno supplies the JavaScript
+runtime yt-dlp needs to solve YouTube player challenges. Standalone plugin installations
+must put yt-dlp and Deno 2.3 or later on the Jellyfin process `PATH`; set `Pgsql_YTDLP_PATH`
+to an alternate yt-dlp executable when needed. Changes require a restart. Private, age-restricted,
 authenticated, and geo-bypassed YouTube playback is not supported.
 
 ## Single Sign-On (SSO) with RBAC via OAuth2/OIDC

@@ -9,6 +9,15 @@ import { test } from 'node:test';
 const dockerfile = readFileSync(new URL('../../docker/Dockerfile', import.meta.url), 'utf8');
 const workflow = readFileSync(new URL('../../.github/workflows/docker.yaml', import.meta.url), 'utf8');
 
+test('UI Next packages the webOS wrapper manifest', () => {
+    const manifestPath = new URL('../public/manifest.json', import.meta.url);
+    assert.equal(existsSync(manifestPath), true, 'UI Next public assets include manifest.json');
+
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    assert.equal(manifest.start_url, 'index.html');
+    assert.match(dockerfile, /^COPY ui-next\/public\/ \.\/public\/$/m);
+});
+
 test('the default Docker target serves UI Next and has no classic web build', () => {
     const stages = [ ...dockerfile.matchAll(/^FROM .+ AS ([\w-]+)$/gm) ].map(match => match[1]);
 

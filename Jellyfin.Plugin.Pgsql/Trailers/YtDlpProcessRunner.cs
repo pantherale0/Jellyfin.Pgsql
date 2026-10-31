@@ -38,6 +38,8 @@ public sealed class YtDlpProcessRunner : IYtDlpProcessRunner
         startInfo.ArgumentList.Add("--simulate");
         startInfo.ArgumentList.Add("--socket-timeout");
         startInfo.ArgumentList.Add("15");
+        startInfo.ArgumentList.Add("--js-runtimes");
+        startInfo.ArgumentList.Add("deno");
         startInfo.ArgumentList.Add("--format");
         startInfo.ArgumentList.Add("best[protocol^=http][ext=mp4][vcodec^=avc1][acodec^=mp4a][height<=1080]/bestvideo[protocol^=http][ext=mp4][vcodec^=avc1][height<=1080]+bestaudio[protocol^=http][ext=m4a][acodec^=mp4a]");
         startInfo.ArgumentList.Add("--print");
@@ -52,6 +54,8 @@ public sealed class YtDlpProcessRunner : IYtDlpProcessRunner
         startInfo.ArgumentList.Add("%(requested_formats.1.url)j");
         startInfo.ArgumentList.Add("--print");
         startInfo.ArgumentList.Add("%(requested_formats.1.http_headers)j");
+        startInfo.ArgumentList.Add("--print");
+        startInfo.ArgumentList.Add("%(duration)j");
         startInfo.ArgumentList.Add("https://www.youtube.com/watch?v=" + videoId);
 
         using var process = new Process { StartInfo = startInfo };
@@ -79,28 +83,29 @@ public sealed class YtDlpProcessRunner : IYtDlpProcessRunner
 
             if (process.ExitCode != 0)
             {
-                throw new YtDlpException(string.IsNullOrWhiteSpace(stderr) ? "yt-dlp failed." : "yt-dlp could not resolve the trailer.");
+                throw new YtDlpException(FailureMessage(stderr));
             }
 
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (lines.Length == 2)
+            if (lines.Length is 2 or 3)
             {
-                return ParseProgressive(lines[0], lines[1]);
+                return ParseProgressive(lines[0], lines[1], lines.Length == 3 ? ParseDuration(lines[2]) : null);
             }
 
-            if (lines.Length != 6)
+            if (lines.Length is not 6 and not 7)
             {
                 throw new YtDlpException("yt-dlp returned an invalid response.");
             }
 
+            var duration = lines.Length == 7 ? ParseDuration(lines[6]) : null;
             if (!string.Equals(lines[0], "NA", StringComparison.Ordinal))
             {
-                return ParseProgressive(lines[0], lines[1]);
+                return ParseProgressive(lines[0], lines[1], duration);
             }
 
             var video = ParseResource(lines[2], lines[3]);
             var audio = ParseResource(lines[4], lines[5]);
-            return new YtDlpResolution(video.Url, video.Headers, audio.Url, audio.Headers);
+            return new YtDlpResolution(video.Url, video.Headers, audio.Url, audio.Headers, duration);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -114,10 +119,45 @@ public sealed class YtDlpProcessRunner : IYtDlpProcessRunner
         }
     }
 
-    private static YtDlpResolution ParseProgressive(string urlJson, string headersJson)
+    private static YtDlpResolution ParseProgressive(string urlJson, string headersJson, double? durationSeconds)
     {
         var resource = ParseResource(urlJson, headersJson);
-        return new YtDlpResolution(resource.Url, resource.Headers);
+        return new YtDlpResolution(resource.Url, resource.Headers, DurationSeconds: durationSeconds);
+    }
+
+    private static double? ParseDuration(string value)
+    {
+        try
+        {
+            var duration = JsonSerializer.Deserialize<double?>(value);
+            return duration is > 0 && double.IsFinite(duration.Value) ? duration : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string FailureMessage(string stderr)
+    {
+        if (stderr.Contains("javascript runtime", StringComparison.OrdinalIgnoreCase)
+            || stderr.Contains("js runtime", StringComparison.OrdinalIgnoreCase))
+        {
+            return "yt-dlp could not use a JavaScript runtime to solve YouTube's challenge.";
+        }
+
+        if (stderr.Contains("requested format is not available", StringComparison.OrdinalIgnoreCase)
+            || stderr.Contains("no video formats found", StringComparison.OrdinalIgnoreCase))
+        {
+            return "yt-dlp found no compatible HTTP MP4 formats for the trailer.";
+        }
+
+        if (string.IsNullOrWhiteSpace(stderr))
+        {
+            return "yt-dlp failed without diagnostic output.";
+        }
+
+        return "yt-dlp could not resolve the trailer.";
     }
 
     private static ResolvedResource ParseResource(string urlJson, string headersJson)

@@ -4,7 +4,7 @@ This page maps the operator-facing features in the fork to the plugin, UI Next, 
 
 ## UI Next web client
 
-**What:** UI Next is the only web client in the standard image. The Jellyfin-version and `latest` tags serve it at `/web`.
+**What:** UI Next is the only web client in the standard image. The Jellyfin-version and `latest` tags serve it at `/web`. The image includes `/web/manifest.json` for Jellyfin webOS wrappers, which use `start_url` to open UI Next.
 
 **Where:** Client source, tests, and translations live in [`ui-next/`](../ui-next/). The [`Dockerfile`](../docker/Dockerfile) builds UI Next and sets `JELLYFIN_WEB_DIR=/jellyfin/ui-next`.
 
@@ -70,11 +70,11 @@ Server query patches include [`jellyfin_home_api_performance`](patches.md#jellyf
 
 ## Remote YouTube trailers
 
-**What:** UI Next offers **Watch trailer** with a clapperboard icon beside Play. It starts the first supported YouTube trailer from item metadata in the existing full-screen player. The plugin resolves the trailer with a pinned `yt-dlp` binary and relays it through Jellyfin, so TV clients stay inside UI Next. Back and trailer completion return to the detail page and restore focus to the trailer action. Favorite uses a compact heart toggle. Local trailer files remain available in the extras row.
+**What:** UI Next offers **Watch trailer** with a clapperboard icon beside Play. It starts the first supported YouTube trailer from item metadata in the existing full-screen player. The plugin resolves the trailer with pinned yt-dlp and Deno binaries and relays it through Jellyfin, so TV clients stay inside UI Next. Back and trailer completion return to the detail page and restore focus to the trailer action. Favorite uses a compact heart toggle. Local trailer files remain available in the extras row.
 
 **Where:** UI Next `remote-trailer.ts`, `detail-playback-actions.tsx`, and `player.tsx`; plugin `Trailers/` and `TrailerController`; [`jellyfin_trailer_history`](patches.md#jellyfin_trailer_historypatch). Remote trailers skip library playback reporting and leave the queue unchanged. Trailer playback does not affect resume state, played status, playback statistics, or taste recommendations.
 
-**Limits:** Adaptive-only trailers use Jellyfin's configured ffmpeg to prepare a finalized, seekable MP4 with a fixed duration. First play waits for preparation, and later requests reuse the bounded temporary cache. Remote trailer playback uses server bandwidth and adaptive preparation requires writable cache storage. See [README configuration](../README.md#remote-youtube-trailers).
+**Limits:** Adaptive-only trailers use Jellyfin's configured ffmpeg to stream fragmented MP4 with a finite duration. The relay sends its initialization header before the media fragments, so playback can start before the full trailer arrives. Adaptive sources do not support HTTP byte-range seeking; progressive sources do. The relay limits concurrent remuxes, initialization size, and output size. Remote trailer playback uses server bandwidth. See [README setup and limits](../README.md#remote-youtube-trailers).
 
 ## Taste profiles and recommendations
 
