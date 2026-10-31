@@ -94,6 +94,7 @@ export interface MediaItem {
     CanDelete?: boolean;
     CanDownload?: boolean;
     LocalTrailerCount?: number;
+    RemoteTrailers?: Array<{ Url?: string; Name?: string }>;
     SpecialFeatureCount?: number;
     PartCount?: number;
     ExtraType?: string;

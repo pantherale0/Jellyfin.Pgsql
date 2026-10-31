@@ -66,6 +66,8 @@ At runtime, UI Next routes supported Android video playback to the official Jell
 
 The `syncSession` readiness method is supplied by the companion Jellyfin Android change. Stock app releases without it use the intercepted capabilities route; custom wrappers still need their own session-sync contract.
 
+Remote YouTube trailers use a separate UI Next player source and the authenticated plugin route `/Pgsql/Trailers/{videoId}/stream`. This path stays in the HTML player on every client, bypasses library `PlaybackInfo` negotiation and native handoff, and does not send library playback reports. The plugin resolves YouTube media with yt-dlp and relays progressive sources or remuxes separate tracks with ffmpeg.
+
 ## UI Next end-to-end tests
 
 `ui-next/e2e/` runs Playwright Chromium against UI Next and a local fake Jellyfin HTTP server. The browser sends API requests to the app origin, and Vite forwards the configured Jellyfin paths to the fake server. The server generates deterministic PascalCase fixtures, serves the checked-in WebM and placeholder image, and records sanitized API requests. It writes only the method, path, and error type to stderr on internal failures. Vite 6 uses `server.proxy` as the default `preview.proxy`, so local dev and CI preview use the same proxy map. CI builds the static bundle, serves it with `vite preview`, and runs sign-in, browse, details, detail-actions, playback-report, profile-menu, and plugin-settings tests. A second Playwright project emulates a webOS user agent at 1920×1080 to exercise the TV layout and D-pad focus paths. The suite does not start Docker or PostgreSQL.

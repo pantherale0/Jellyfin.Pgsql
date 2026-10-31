@@ -10,6 +10,8 @@ import { isTvLayout } from './layout-mode';
 import { historyAction, initialRoute, routeFor, routeFromState, routeIdentity, withRoute, type AppRoute } from './app-routes';
 import { LibraryPage } from './library';
 import { Player } from './player';
+import { firstYouTubeTrailer, type PlayerSource } from './remote-trailer';
+import { FavoriteHeart, TrailerAction } from './detail-playback-actions';
 import { ProfileScreen, type ProfileScreenName } from './profile';
 import { buildHomeFeedBlocks, HOME_EXPLORE_PAGE_SIZE, type HomeFeedExtras } from './home-feed-blocks';
 import { composeExploreTopics, composeRecommendationTopics, explorePicksFromProfile, flattenRecommendationTopics, type ExploreTopicSpec } from './recommendations';
@@ -277,7 +279,7 @@ function App() {
     const [ detailError, setDetailError ] = useState('');
     const [ showRestore, setShowRestore ] = useState<ShowBookmark | null>(null);
     const [ contentRestore, setContentRestore ] = useState<{ kind: 'home' | 'library' | 'search' | 'live' | 'favorites'; scrollY: number } | null>(null);
-    const [ detailRestore, setDetailRestore ] = useState<{ itemId: string; scrollY: number } | null>(null);
+    const [ detailRestore, setDetailRestore ] = useState<{ itemId: string; scrollY: number; trailer?: boolean } | null>(null);
     const detailOrigin = useRef<ContentOrigin | null>(null);
     const playbackOrigin = useRef<PlaybackOrigin | null>(null);
     const nativeHandoffItemId = useRef<string | null>(null);
@@ -323,9 +325,8 @@ function App() {
     const searchInputRef = useRef<HTMLInputElement>(null);
     const lastFocusRect = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
     const lastModality = useRef<'keyboard' | 'pointer'>('pointer');
-    const [ playerUrl, setPlayerUrl ] = useState('');
-    const [ playerItem, setPlayerItem ] = useState<MediaItem | null>(null);
-    const [ playback, setPlayback ] = useState<PlaybackChoice | null>(null);
+    const [ playerSource, setPlayerSource ] = useState<PlayerSource | null>(null);
+    const playerItem = playerSource?.kind === 'library' ? playerSource.item : null;
     const [ loading, setLoading ] = useState(false);
     const [ playbackLoading, setPlaybackLoading ] = useState(false);
     const [ isMobileNavOpen, setIsMobileNavOpen ] = useState(false);
@@ -654,7 +655,7 @@ function App() {
         setSearchExpanded(false);
     }, [ view, activeLibrary?.Id ]);
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         const shell = document.querySelector('.app-shell');
         if (!shell) return;
         if (view === 'player') shell.setAttribute('inert', '');
@@ -1403,7 +1404,7 @@ function App() {
         setHomeLoading({ views: false, resume: false, latest: false });
         setSelected(null);
         setDetailError('');
-        setPlayerUrl('');
+        setPlayerSource(null);
         setActiveLibrary(null);
         setTvSeries(null);
         setShowSeasons([]);
@@ -2046,12 +2047,18 @@ function App() {
         detailOrigin.current = null;
     };
 
+    const detailFocusItem = useRef('');
     useLayoutEffect(() => {
-        if (!detailRestore || view !== 'details' || selected?.Id !== detailRestore.itemId) return;
+        if (view !== 'details') { detailFocusItem.current = ''; return; }
+        if (!selected || (detailRestore && selected.Id !== detailRestore.itemId)) return;
+        if (!detailRestore && (!tvClient || detailFocusItem.current === selected.Id)) return;
         const frame = window.requestAnimationFrame(() => {
-            window.scrollTo(0, detailRestore.scrollY);
-            document.querySelector<HTMLElement>('.detail-actions .button.primary')?.focus({ preventScroll: true });
-            setDetailRestore(null);
+            if (detailRestore) window.scrollTo(0, detailRestore.scrollY);
+            const target = document.querySelector<HTMLElement>(detailRestore?.trailer ? '[data-detail-trailer]' : '.detail-actions .button.primary')
+                || document.querySelector<HTMLElement>('.detail-actions [data-focusable="true"]');
+            target?.focus({ preventScroll: true });
+            detailFocusItem.current = selected.Id;
+            if (detailRestore) setDetailRestore(null);
         });
         return () => window.cancelAnimationFrame(frame);
     }, [ detailRestore, view, selected?.Id ]);
@@ -2408,9 +2415,7 @@ function App() {
                 await api.releasePlayback(result);
                 return;
             }
-            setPlayerItem(playbackItem);
-            setPlayback(result);
-            setPlayerUrl(result.url);
+            setPlayerSource({ kind: 'library', item: playbackItem, playback: result });
             playbackOrigin.current = returnOrigin;
             setView('player');
         } catch (e) {
@@ -2423,6 +2428,20 @@ function App() {
         } finally {
             if (playbackSessions.isCurrent(playbackSession)) setPlaybackLoading(false);
         }
+    };
+    const playRemoteTrailer = (item: MediaItem) => {
+        if (!api || !session) return;
+        const trailer = firstYouTubeTrailer(item.RemoteTrailers);
+        if (!trailer) return;
+        navigation.begin();
+        playbackSessions.retire();
+        detailRequest.current++;
+        musicEngine.suspend();
+        setPlaybackLoading(false);
+        setError('');
+        playbackOrigin.current = { kind: 'details', item, parent: detailOrigin.current || contentOrigin(), scrollY: window.scrollY };
+        setPlayerSource({ kind: 'remote-trailer', videoId: trailer.videoId, title: t('{0} · Trailer', item.Name), url: api.remoteTrailerUrl(trailer.videoId), parentItemId: item.Id });
+        setView('player');
     };
     /** Re-requests the current item at the player's position; a newer play/leave fences out stale results. */
     const renegotiate = async (options: PlaybackRenegotiationOptions): Promise<PlaybackChoice | null> => {
@@ -2437,8 +2456,7 @@ function App() {
                 await api.releasePlayback(result, plan.retainedLiveStreamId);
                 return null;
             }
-            setPlayback(result);
-            setPlayerUrl(result.url);
+            setPlayerSource({ kind: 'library', item: playerItem, playback: result });
             return result;
         } catch (cause) {
             playbackSessions.retire(playbackSession);
@@ -2644,7 +2662,7 @@ function App() {
         season: queryParameter('season') || undefined,
         liveTab,
         profileScreen: profileScreen || undefined,
-        playerItemId: playerItem?.Id
+        playerItemId: playerSource?.kind === 'remote-trailer' ? playerSource.parentItemId : playerItem?.Id
     }) : null;
     const currentRouteKey = currentRoute ? JSON.stringify(currentRoute) : '';
     const historyRestoring = useRef<{ until: number } | null>(null);
@@ -2803,7 +2821,7 @@ function App() {
             if (!accountGeneration.isCurrent(account)) return;
             const merge = (entry: MediaItem) => entry.Id === itemId ? { ...entry, UserData: fresh.UserData } : entry;
             setSelected(current => current ? merge(current) : current);
-            setPlayerItem(current => current ? merge(current) : current);
+            setPlayerSource(current => current?.kind === 'library' ? { ...current, item: merge(current.item) } : current);
             setItems(current => current.map(merge));
             setEpisodesBySeason(current => {
                 const next: Record<string, MediaItem[]> = {};
@@ -2822,13 +2840,11 @@ function App() {
         playbackSessions.retire();
         const origin = playbackOrigin.current;
         playbackOrigin.current = null;
-        setPlayerUrl('');
-        setPlayerItem(null);
-        setPlayback(null);
+        setPlayerSource(null);
         if (origin?.kind === 'details') {
             detailOrigin.current = origin.parent;
             setSelected(origin.item);
-            setDetailRestore({ itemId: origin.item.Id, scrollY: origin.scrollY });
+            setDetailRestore({ itemId: origin.item.Id, scrollY: origin.scrollY, trailer: playerSource?.kind === 'remote-trailer' });
             setView('details');
             return;
         }
@@ -3077,11 +3093,11 @@ function App() {
              {view === 'favorites' && <FavoritesPage api={api} onSelect={selectItem} onPlay={playItem} onBack={goHome} onBrowseChannels={() => openLive('channels')} />}
              {view === 'nowplaying' && <NowPlaying snapshot={music} api={api} tvClient={tvClient} onBack={leaveNowPlaying} />}
              {view === 'live' && api && <LiveTvPage api={api} userId={session.user.Id} tab={liveTab} onTab={next => { setLiveTab(next); rememberLiveQuery(next); }} onPlay={item => void play(item, { kind: 'live', scrollY: window.scrollY })} />}
-             {view === 'details' && selected && <DetailPage api={api} item={selected} backLabel={originLabel(detailOrigin.current, t('Back to home'))} loading={detailLoading} loadError={detailError} onRetry={() => void openItem(selected, detailOrigin.current || undefined)} onBack={returnFromDetails} onPlay={intent => void play(selected, undefined, intent)} onOpenItem={next => void openItem(next, detailOrigin.current || undefined)} onOpenSeries={() => void openEpisodeSeries(selected)} onUserData={applyUserData} user={session.user} serverId={session.serverId} onPlayItem={next => void play(next, undefined)} onDeleted={removeDeletedItem} />}
+             {view === 'details' && selected && <DetailPage api={api} item={selected} backLabel={originLabel(detailOrigin.current, t('Back to home'))} loading={detailLoading} loadError={detailError} onRetry={() => void openItem(selected, detailOrigin.current || undefined)} onBack={returnFromDetails} onPlay={intent => void play(selected, undefined, intent)} onPlayTrailer={() => playRemoteTrailer(selected)} onOpenItem={next => void openItem(next, detailOrigin.current || undefined)} onOpenSeries={() => void openEpisodeSeries(selected)} onUserData={applyUserData} user={session.user} serverId={session.serverId} onPlayItem={next => void play(next, undefined)} onDeleted={removeDeletedItem} />}
         </main>
         {view !== 'nowplaying' && view !== 'player' && <MiniPlayer snapshot={music} api={api} onExpand={openNowPlaying} />}
     </div>
-    {view === 'player' && playerUrl && <Player url={playerUrl} item={playerItem} playback={playback} playbackSession={playbackSessions.active()} sessionOwner={playbackSessions} api={api} tvClient={tvClient} onBack={leavePlayer} onPlayItem={next => void play(next, playbackOrigin.current || undefined)} onRenegotiate={renegotiate} onPlaybackReported={itemId => void applyReportedPlayback(itemId)} onError={() => setError(t('Playback could not start in this browser. Use Retry, Convert the stream or Try lower quality in the player.'))} />}
+    {view === 'player' && playerSource && <Player source={playerSource} playbackSession={playerSource.kind === 'library' ? playbackSessions.active() : null} sessionOwner={playbackSessions} api={api} tvClient={tvClient} onBack={leavePlayer} onPlayItem={next => void play(next, playbackOrigin.current || undefined)} onRenegotiate={playerSource.kind === 'library' ? renegotiate : undefined} onPlaybackReported={itemId => void applyReportedPlayback(itemId)} onError={() => { if (playerSource.kind === 'library') setError(t('Playback could not start in this browser. Use Retry, Convert the stream or Try lower quality in the player.')); }} />}
     {view !== 'player' && profileScreen === 'quickconnect' && session && api && <ProfileScreen screen="quickconnect" api={api} session={session} isAdministrator={isAdministrator} onBack={() => setProfileScreen('playback')} />}
     {view !== 'player' && seerrSheet && api && <SeerrRequestSheet key={seerrKey(seerrSheet)} api={api} item={seerrRequested[seerrKey(seerrSheet)] || seerrSheet} onClose={() => setSeerrSheet(null)} onRequested={seerrRequestedFor(accountGeneration.current())} />}
     </>;
@@ -3626,7 +3642,7 @@ function VirtualizedMediaGrid({ items, api, onSelect, hasMore = false, onNearEnd
     </div>;
 }
 
-function DetailPage({ api, item, backLabel, loading, loadError, onRetry, onBack, onPlay, onOpenItem, onOpenSeries, onUserData, user, serverId, onPlayItem, onDeleted }: {
+function DetailPage({ api, item, backLabel, loading, loadError, onRetry, onBack, onPlay, onPlayTrailer, onOpenItem, onOpenSeries, onUserData, user, serverId, onPlayItem, onDeleted }: {
     api: JellyfinApi | null;
     item: MediaItem;
     backLabel: string;
@@ -3635,6 +3651,7 @@ function DetailPage({ api, item, backLabel, loading, loadError, onRetry, onBack,
     onRetry: () => void;
     onBack: () => void;
     onPlay: (intent: PlayIntent) => void;
+    onPlayTrailer: () => void;
     onOpenItem: (item: MediaItem) => void;
     onOpenSeries: () => void;
     onUserData: (itemId: string, userData: NonNullable<MediaItem['UserData']>) => void;
@@ -3654,11 +3671,6 @@ function DetailPage({ api, item, backLabel, loading, loadError, onRetry, onBack,
     const [ userDataBusy, setUserDataBusy ] = useState(false);
     const [ userDataError, setUserDataError ] = useState('');
     const relatedRequest = useRef(0);
-    useEffect(() => {
-        if (!isTvClient()) return;
-        const frame = window.requestAnimationFrame(() => (playRef.current || document.querySelector<HTMLElement>('.detail-actions [data-focusable="true"]'))?.focus());
-        return () => window.cancelAnimationFrame(frame);
-    }, [ item.Id ]);
     const loadRelated = (startIndex: number) => {
         const query = entityQuery(item);
         if (!api || !query) return;
@@ -3726,7 +3738,8 @@ function DetailPage({ api, item, backLabel, loading, loadError, onRetry, onBack,
                 ? <><button ref={playRef} data-focusable="true" class="button primary" onClick={() => onPlay('resume')}>▶ <span>{t('Resume')}</span></button><button data-focusable="true" class="button secondary" onClick={() => onPlay('beginning')}>↺ <span>{t('From beginning')}</span></button></>
                 : <button ref={playRef} data-focusable="true" class="button primary" onClick={() => onPlay('beginning')}>▶ <span>{t('Play')}</span></button>)}
             {item.Type === 'Episode' && item.SeriesId && <button data-focusable="true" class="button secondary" type="button" onClick={onOpenSeries}>{t('Go to series')}</button>}
-            {capabilities.canFavorite && api && <button data-focusable="true" class="button secondary" type="button" aria-pressed={Boolean(item.UserData?.IsFavorite)} disabled={userDataBusy} onClick={() => void toggle('favorite')}>{item.UserData?.IsFavorite ? t('♥ Favorite') : t('♡ Favorite')}</button>}
+            {api && firstYouTubeTrailer(item.RemoteTrailers) && <TrailerAction onPlay={onPlayTrailer} />}
+            {capabilities.canFavorite && api && <FavoriteHeart favorite={Boolean(item.UserData?.IsFavorite)} busy={userDataBusy} onToggle={() => void toggle('favorite')} />}
             {capabilities.canMarkPlayed && api && <button data-focusable="true" class="button secondary" type="button" aria-pressed={Boolean(item.UserData?.Played)} disabled={userDataBusy} onClick={() => void toggle('played')}>{item.UserData?.Played ? t('✓ Watched') : t('Mark watched')}</button>}
             {item.Type === 'Photo' && api && <button data-focusable="true" class="button primary" type="button" onClick={() => setPhotoOpen(true)}>{t('View photo')}</button>}
             <ItemActionsBar api={api} item={item} user={user} serverId={serverId} onDeleted={onDeleted} onChanged={onRetry} />

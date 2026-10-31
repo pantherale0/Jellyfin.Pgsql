@@ -217,7 +217,7 @@ test('PLAY App, Player, and API share one playback-session owner', () => {
     assert.match(main, /playbackSessions\.begin\(/);
     assert.match(main, /playbackSessions\.commit\(/);
     assert.match(main, /playbackSessions\.retire\(\)/);
-    assert.match(main, /playbackSession=\{playbackSessions\.active\(\)\}/);
+    assert.match(main, /playbackSession=\{playerSource\.kind === 'library' \? playbackSessions\.active\(\) : null\}/);
     assert.match(main, /sessionOwner=\{playbackSessions\}/);
     assert.doesNotMatch(main, /playbackRequest\.current/);
 

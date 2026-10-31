@@ -98,7 +98,8 @@ test('MISS-03: queue store notifies subscribers and removal keeps the current ti
 
 test('MISS-03: the player counts down to the next title and drives the queue', () => {
     const player = source('player.tsx');
-    assert.match(player, /reporter\.stop\(false\);\s+if \(owner\.isCurrent\(session\)\) endedRef\.current\(\);/);
+    assert.match(player, /reporter\.stop\(false\);/);
+    assert.match(player, /onEnded=\{\(\) => \{ if \(remoteTrailer \|\| sessionOwner\.isCurrent\(playbackSession\)\) endedRef\.current\(\); \}\}/);
     assert.match(player, /upNext\(playQueue\.get\(\), \{ autoplay: api\?\.session\.user\.Configuration\?\.EnableNextEpisodeAutoPlay, nextEpisode: neighbours\.next, current: item \}\)/);
     assert.match(player, /remaining: AUTOPLAY_COUNTDOWN_SECONDS/);
     assert.match(player, /if \(upNextCard && upNextCard\.remaining <= 0\) playQueued\(upNextCard\);/);

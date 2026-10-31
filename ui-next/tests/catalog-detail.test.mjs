@@ -167,6 +167,17 @@ test('MISS-11/MISS-18/MISS-19: detail API calls use the documented Jellyfin endp
     assert.match(api.downloadUrl('a b'), /^https:\/\/jf\.test\/Items\/a%20b\/Download\?/);
 });
 
+test('remote trailers are requested and relay URLs preserve the server base path and token', async () => {
+    const api = new JellyfinApi({ ...session, server: 'https://jf.test/jellyfin', token: 'a+b&token' });
+    responses.push({ status: 200, body: JSON.stringify({ Id: 'm', RemoteTrailers: [ { Url: 'https://youtu.be/dQw4w9WgXcQ' } ] }) });
+    assert.equal((await api.getItem('m')).RemoteTrailers[0].Url, 'https://youtu.be/dQw4w9WgXcQ');
+    assert.ok(new URL(requests[0].url).searchParams.get('Fields').split(',').includes('RemoteTrailers'));
+    const url = new URL(api.remoteTrailerUrl('dQw4w9WgXcQ'));
+    assert.equal(url.pathname, '/jellyfin/Pgsql/Trailers/dQw4w9WgXcQ/stream');
+    assert.equal(url.searchParams.get('ApiKey'), 'a+b&token');
+    assert.throws(() => api.remoteTrailerUrl('../evil'), /Invalid YouTube trailer/);
+});
+
 test('detail page wires the new sections and library cards offer delete and collection removal', () => {
     const main = source('main.tsx');
     for (const view of [ 'DetailFactsView', 'ItemActionsBar', 'DetailChildren', 'LyricsView', 'LinkedMetadataView', 'DetailExtras', 'RelatedRows' ]) assert.match(main, new RegExp(`<${view} `), `${view} must render on the details page`);

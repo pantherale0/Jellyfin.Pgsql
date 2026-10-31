@@ -135,9 +135,11 @@ docker build -f docker/Dockerfile --build-arg JELLYFIN_VERSION=12.3 -t jellyfin.
 ## Remote YouTube trailers
 
 The plugin resolves remote YouTube trailers with the pinned yt-dlp binary and relays the
-bytes through a Jellyfin endpoint that supports seek and HTTP Range requests. This consumes
-Jellyfin server bandwidth. UI Next currently lists local trailers only; it does not expose
-the remote YouTube trailer action.
+bytes through a Jellyfin endpoint that supports seek and HTTP Range requests for progressive
+sources. This consumes Jellyfin server bandwidth. On the UI Next detail page, **Watch trailer**
+uses a clapperboard icon and starts the first supported YouTube trailer in metadata order.
+Playback stays in UI Next, including on TV clients, and Back or trailer completion returns
+to the title. Favorite is a compact heart toggle beside the playback actions.
 
 Trailer playback—both local trailer files and remote YouTube trailers—is deliberately
 excluded from resume state, played status, playback statistics, and taste/neural

@@ -1150,7 +1150,7 @@ export class JellyfinApi {
 
     async getItem(id: string, options: { signal?: AbortSignal; priority?: number } = {}): Promise<MediaItem> {
         return this.request<unknown>(
-            `/Users/${encodeURIComponent(this.session.user.Id)}/Items/${encodeURIComponent(id)}?Fields=Overview,CommunityRating,ProductionYear,RunTimeTicks,UserData,BackdropImageTags,ImageTags,ChildCount,PremiereDate,EndDate,SeriesName,SeriesId,IndexNumber,ParentIndexNumber,People,ExternalUrls,Genres,Studios,Tags,Taglines,MediaSources,MediaStreams,CanDelete,CanDownload,OfficialRating,CriticRating,LocalTrailerCount,SpecialFeatureCount,PartCount,AlbumArtists,ArtistItems`,
+            `/Users/${encodeURIComponent(this.session.user.Id)}/Items/${encodeURIComponent(id)}?Fields=Overview,CommunityRating,ProductionYear,RunTimeTicks,UserData,BackdropImageTags,ImageTags,ChildCount,PremiereDate,EndDate,SeriesName,SeriesId,IndexNumber,ParentIndexNumber,People,ExternalUrls,Genres,Studios,Tags,Taglines,MediaSources,MediaStreams,CanDelete,CanDownload,OfficialRating,CriticRating,LocalTrailerCount,RemoteTrailers,SpecialFeatureCount,PartCount,AlbumArtists,ArtistItems`,
             { signal: options.signal },
             false,
             options.priority ?? 2
@@ -1191,6 +1191,11 @@ export class JellyfinApi {
 
     getLocalTrailers(id: string): Promise<MediaItem[]> {
         return this.detailList(`/Items/${encodeURIComponent(id)}/LocalTrailers`);
+    }
+
+    remoteTrailerUrl(videoId: string): string {
+        if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) throw new Error(t('Invalid YouTube trailer.'));
+        return `${this.session.server}/Pgsql/Trailers/${videoId}/stream?${queryString({ ApiKey: this.session.token })}`;
     }
 
     getSpecialFeatures(id: string): Promise<MediaItem[]> {

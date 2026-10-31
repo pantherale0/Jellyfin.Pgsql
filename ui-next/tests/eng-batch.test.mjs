@@ -132,7 +132,7 @@ test('ENG-06/07 slow navigation commits only while its intent and account are cu
 
     const main = source('main.tsx');
     assert.match(main, /const playbackSession = playbackSessions\.begin\(playbackItem\.Id\);/, 'playback negotiation owns a session');
-    assert.match(main, /if \(!playbackSessions\.commit\(playbackSession, result\)\) \{\s+await api\.releasePlayback\(result\);\s+return;\s+\}\s+setPlayerItem/, 'slow PlaybackInfo is released instead of opening the player after another choice');
+    assert.match(main, /if \(!playbackSessions\.commit\(playbackSession, result\)\) \{\s+await api\.releasePlayback\(result\);\s+return;\s+\}\s+setPlayerSource/, 'slow PlaybackInfo is released instead of opening the player after another choice');
     assert.match(main, /if \(navigation\.isCurrent\(intent\) && series\.Type === 'Series'\) void openSeries\(series, item\.IndexNumber/, 'Season-to-Series lookup checks ownership');
     assert.match(main, /if \(!navigation\.isCurrent\(intent\) \|\| series\.Type !== 'Series'\) return;/, 'episode-to-series lookup checks ownership');
     assert.match(main, /useLayoutEffect\(\(\) => \{\n\s+if \(retiredRouteIdentity\.current === currentRouteIdentity\) return;[\s\S]{0,120}navigation\.retire\(\);/, 'every route change retires pending intents centrally');

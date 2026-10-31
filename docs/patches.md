@@ -508,7 +508,7 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Why** | Trailer watches must not create resume/play-count state or become taste/neural recommendation signals. |
 | **Where** | `Emby.Server.Implementations/Session/SessionManager.cs` |
 | **How** | Skips playback start/progress/stop persistence when the resolved library item is a `Trailer`; applies after `jellyfin_playback_statistics` so its insert path is covered too. |
-| **Related** | The plugin trailer relay remains available through its API; UI Next currently exposes local trailers only. [pantherale0#15](https://github.com/pantherale0/Jellyfin.Pgsql/issues/15). |
+| **Related** | UI Next plays local trailers through the library player and remote YouTube trailers through the plugin relay. Remote trailers skip library playback reporting. See [Remote YouTube trailers](features.md#remote-youtube-trailers) and [pantherale0#15](https://github.com/pantherale0/Jellyfin.Pgsql/issues/15). |
 
 ### `jellyfin_user_taste_profiles.patch`
 

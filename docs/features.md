@@ -25,7 +25,6 @@ The administrator workspace includes its own Metadata manager. The image does no
 This non-exhaustive list covers confirmed gaps against the removed fork-specific Jellyfin Web patches. It does not compare UI Next with every feature in stock Jellyfin Web.
 
 - **Live TV Multiview player:** UI Next can display and edit the server's Multiview permission, but it cannot play several Live TV channels at once. The server permission and APIs remain available to clients that implement Multiview.
-- **Remote YouTube trailer playback:** The trailer plugin can resolve and relay public YouTube trailers, but UI Next lists local trailers only. It has no action to start remote trailer playback. See [Remote YouTube trailers](#remote-youtube-trailers).
 
 ## PostgreSQL database provider
 
@@ -71,9 +70,9 @@ Server query patches include [`jellyfin_home_api_performance`](patches.md#jellyf
 
 ## Remote YouTube trailers
 
-**What:** The plugin resolves public YouTube trailers with a pinned `yt-dlp` binary and relays them through Jellyfin. Trailer playback does not affect resume state, played status, playback statistics, or taste recommendations.
+**What:** UI Next offers **Watch trailer** with a clapperboard icon beside Play. It starts the first supported YouTube trailer from item metadata in the existing full-screen player. The plugin resolves the trailer with a pinned `yt-dlp` binary and relays it through Jellyfin, so TV clients stay inside UI Next. Back and trailer completion return to the detail page and restore focus to the trailer action. Favorite uses a compact heart toggle. Local trailer files remain available in the extras row.
 
-**Where:** Plugin `Trailers/` and `TrailerController`; [`jellyfin_trailer_history`](patches.md#jellyfin_trailer_historypatch). UI Next currently lists local trailers only.
+**Where:** UI Next `remote-trailer.ts`, `detail-playback-actions.tsx`, and `player.tsx`; plugin `Trailers/` and `TrailerController`; [`jellyfin_trailer_history`](patches.md#jellyfin_trailer_historypatch). Remote trailers skip library playback reporting and leave the queue unchanged. Trailer playback does not affect resume state, played status, playback statistics, or taste recommendations.
 
 **Limits:** Adaptive-only streams use Jellyfin's configured ffmpeg and do not support byte-range seeking. Remote trailer playback uses server bandwidth. See [README configuration](../README.md#remote-youtube-trailers).
 

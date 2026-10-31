@@ -5,6 +5,7 @@ import type Hls from 'hls.js';
 import { itemPosition, mediaPosition, observePlaybackProgress, planHlsRecovery, type HlsRecoveryAttempts, type HlsRecoveryError, type MediaStreamInfo, type PlaybackProgressWatch, type PlaybackRenegotiationOptions } from './player-model';
 import { JellyfinApi, peekCachedImage, releaseCachedImage, retainCachedImage } from './api';
 import type { MediaItem } from './types';
+import type { PlayerSource } from './remote-trailer';
 import { PlaybackReporter } from './playback-report';
 import type { PlaybackSessionSnapshot, PlaybackSessionTracker } from './playback-session';
 import { isHlsUrl } from './live-model';
@@ -19,9 +20,7 @@ import { disableHostFullscreen, enableHostFullscreen, hasNativeShell, hideHostMe
 import { t } from './i18n';
 
 interface PlayerProps {
-    url: string;
-    item: MediaItem | null;
-    playback: PlaybackChoice | null;
+    source: PlayerSource;
     playbackSession: PlaybackSessionSnapshot | null;
     sessionOwner: Pick<PlaybackSessionTracker, 'isCurrent' | 'canRefresh' | 'claimLiveCleanup' | 'retainsLiveStream' | 'liveStreamFor' | 'markLiveReleased'>;
     api: JellyfinApi | null;
@@ -286,7 +285,11 @@ function PlayerEndRecommendationCard({ api, item, onPlay }: { api: JellyfinApi; 
     </button>;
 }
 
-export function Player({ url, item, playback, playbackSession, sessionOwner, api, tvClient, onBack, onError, onPlayItem, onPlaybackReported, onRenegotiate }: PlayerProps) {
+export function Player({ source, playbackSession, sessionOwner, api, tvClient, onBack, onError, onPlayItem, onPlaybackReported, onRenegotiate }: PlayerProps) {
+    const remoteTrailer = source.kind === 'remote-trailer';
+    const item = source.kind === 'library' ? source.item : null;
+    const playback = source.kind === 'library' ? source.playback : null;
+    const url = source.kind === 'library' ? source.playback.url : source.url;
     const rootRef = useRef<HTMLDivElement>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
     const hlsRef = useRef<Hls | null>(null);
@@ -404,7 +407,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     const [ fit, setFit ] = useState<AspectFit>(preferences.fit);
     const compactControls = useCompactControls(tvClient);
     const focusable = osdOpen ? 'true' : undefined;
-    const title = playbackTitle(item);
+    const title = source.kind === 'remote-trailer' ? source.title : playbackTitle(item);
     const isEpisode = Boolean(item?.SeriesId || item?.Type === 'Episode');
     const visibleEpisodes = seasonId ? episodesBySeason[seasonId] || [] : [];
     const audioStreams = (playback?.streams || []).filter(stream => streamKind(stream.Type) === 'audio');
@@ -415,7 +418,8 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     const subtitleUrl = api && item && playback && selectedSubtitle && subtitlePlan?.action === 'track'
         ? api.subtitleUrl(item.Id, playback.mediaSourceId, selectedSubtitle.Index)
         : '';
-    const bounds = seekBounds(duration, liveRanges);
+    const mediaBounds = seekBounds(duration, liveRanges);
+    const bounds = remoteTrailer ? { ...mediaBounds, live: false } : mediaBounds;
     const crossOrigin = api && typeof window !== 'undefined' && new URL(api.session.server).origin !== window.location.origin ? 'anonymous' : undefined;
     const pipSupported = typeof document !== 'undefined' && Boolean((document as PipDocument).pictureInPictureEnabled);
     const playMethod = sessionPlayMethod({ method: playback?.method || 'DirectPlay' }, diagnostics);
@@ -471,6 +475,10 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
         }
     };
     endedRef.current = () => {
+        if (remoteTrailer) {
+            onBackRef.current();
+            return;
+        }
         const next = upNext(playQueue.get(), { autoplay: api?.session.user.Configuration?.EnableNextEpisodeAutoPlay, nextEpisode: neighbours.next, current: item });
         if (next) {
             setUpNextCard({ ...next, remaining: AUTOPLAY_COUNTDOWN_SECONDS });
@@ -1145,7 +1153,6 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
         const onPulse = () => { if (owner.isCurrent(session)) reporter.pulse(); };
         const onEnded = () => {
             reporter.stop(false);
-            if (owner.isCurrent(session)) endedRef.current();
         };
         const onMediaError = () => {
             if (engineRef.current !== 'native') return;
@@ -1198,6 +1205,10 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
     }, [ api, item?.Id, url, playback?.direct, playback?.isLive, playback?.streams, playbackSession?.key, playbackSession?.mediaSourceId, playbackSession?.playSessionId, playbackSession?.liveStreamId ]);
 
     useEffect(() => { reporterRef.current?.pulse(); }, [ audioIndex, subtitleIndex ]);
+
+    useEffect(() => {
+        if (playbackError) rootRef.current?.querySelector<HTMLElement>('.player-error button')?.focus();
+    }, [ playbackError ]);
 
     useEffect(() => {
         const video = videoRef.current;
@@ -1298,7 +1309,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
         setMovieEndScreenItemId(null);
         setMovieEndRecommendations([]);
         setMovieEndRecommendationState('idle');
-        playQueue.set(syncQueue(playQueue.get(), item));
+        if (!remoteTrailer) playQueue.set(syncQueue(playQueue.get(), item));
     }, [ item?.Id ]);
     useEffect(() => {
         if (endScreenSessionRef.current === playbackSession?.key) return;
@@ -1817,6 +1828,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                 setDuration(itemPosition(video.duration || 0, mediaRef.current.offset));
             }}
             onPlay={() => { setPaused(false); pausedRef.current = false; reveal(); }}
+            onEnded={() => { if (remoteTrailer || sessionOwner.isCurrent(playbackSession)) endedRef.current(); }}
             onPlaying={() => {
                 const ready = !expectsVideoFrames || firstVideoFrameRef.current;
                 if (ready) clearBufferingTimer();
@@ -1854,7 +1866,7 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                     return;
                 }
                 setBufferState('ready');
-                setPlaybackError(PLAYBACK_ERROR);
+                setPlaybackError(remoteTrailer ? t('This trailer could not be played. Try again or choose another title.') : PLAYBACK_ERROR);
                 reveal();
                 onErrorRef.current();
             }}
@@ -1909,6 +1921,21 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
         </div>}
         {playbackError && <div class="player-error" role="alert">
             <p>{playbackError}</p>
+            {remoteTrailer && <div class="player-error-actions">
+                <button data-focusable="true" class="button secondary" type="button" onClick={() => {
+                    setPlaybackError('');
+                    setBufferState('buffering');
+                    withVideo(video => {
+                        video.load();
+                        void video.play().catch(() => {
+                            if (!aliveRef.current) return;
+                            setBufferState('ready');
+                            setPlaybackError(t('This trailer could not be played. Try again or choose another title.'));
+                        });
+                    });
+                }}>{t('Retry')}</button>
+                <button data-focusable="true" class="button secondary" type="button" onClick={() => onBackRef.current()}>{t('Back')}</button>
+            </div>}
             {onRenegotiate && <div class="player-error-actions">
                 <button data-focusable="true" class="button secondary" type="button" disabled={switching} onClick={() => {
                     setPlaybackError('');
@@ -2071,13 +2098,13 @@ export function Player({ url, item, playback, playbackSession, sessionOwner, api
                                 void renegotiate({ mediaSourceId: version.id, audioStreamIndex: undefined, subtitleStreamIndex: undefined }, message => setPlaybackError(message));
                             }}>{version.name}</button>)}
                         </>}
-                        <p class="player-menu-label">{t('Quality')}</p>
+                        {!remoteTrailer && <><p class="player-menu-label">{t('Quality')}</p>
                         <div class="player-speed-row">
                             {BITRATE_CHOICES.map(choice => <button data-focusable={focusable} key={choice.value} class={(playback?.maxBitrate || 0) === choice.value ? 'player-menu-item active' : 'player-menu-item'} type="button" disabled={switching || !onRenegotiate} onClick={() => { if ((playback?.maxBitrate || 0) !== choice.value) void renegotiate({ maxBitrate: choice.value || undefined }, message => setPlaybackError(message)); }}>{t(choice.label)}</button>)}
                         </div>
                         <p class="player-menu-note">{t('{0} · {1}. The default quality is set under Playback preferences.', formatBitrate(diagnostics?.Bitrate || playback?.bitrate), describePlayMethod(playMethod, diagnostics))}</p>
                         <p class="player-menu-label">{t('Transcode reasons')}</p>
-                        <p class="player-menu-note">{describeTranscode(diagnostics?.TranscodeReasons ?? playback?.transcodeReasons, playMethod === 'DirectPlay')}</p>
+                        <p class="player-menu-note">{describeTranscode(diagnostics?.TranscodeReasons ?? playback?.transcodeReasons, playMethod === 'DirectPlay')}</p></>}
                     </div>}
                 </div>
                 {pipSupported && <button data-focusable={focusable} class={pip ? 'player-control active' : 'player-control'} type="button" aria-pressed={pip} aria-label={pip ? t('Exit picture-in-picture') : t('Picture-in-picture')} onClick={togglePictureInPicture}><PlayerIcon name={pip ? 'pip-exit' : 'pip'} /></button>}

@@ -375,6 +375,9 @@ button:disabled { opacity: .6; cursor: wait; }
 .metadata { display: flex; gap: 1rem; margin: 1.2rem 0; color: var(--text); }
 .overview { max-width: 620px; color: var(--text-2); font-size: 1.05rem; line-height: 1.75; }
 .detail-actions { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 1.8rem; }
+.detail-actions .detail-favorite { width: 48px; height: 48px; flex: 0 0 48px; padding: 0; }
+.detail-actions .detail-favorite[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.detail-actions svg { flex: 0 0 auto; }
 .detail-action-notice { flex-basis: 100%; }
 .detail-loading { display: inline-flex; align-items: center; gap: .5rem; }
 .detail-series-name { margin-top: -.4rem; }
