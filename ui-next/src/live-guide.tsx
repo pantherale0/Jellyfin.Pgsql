@@ -203,12 +203,14 @@ export function LiveGuide(props: LiveGuideProps) {
     const [ scroll, setScroll ] = useState({ top: 0, left: 0, width: 960, height: 640 });
     const [ hover, setHover ] = useState<HoverState | null>(null);
     const finePointer = useRef(typeof window !== 'undefined' && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
-    const syncLegacyGuideOffsets = (scroller: HTMLElement) => {
-        if (!document.documentElement.classList.contains('tv-no-grid')) return;
-        scroller.style.setProperty('--tv-guide-scroll-top', `${scroller.scrollTop}px`);
-        scroller.style.setProperty('--tv-guide-scroll-left', `${scroller.scrollLeft}px`);
-    };
+    const gridless = document.documentElement.classList.contains('tv-no-grid');
+    const rightToLeft = document.documentElement.dir === 'rtl';
     const width = timelineWidth(props.windowStart, props.windowEnd);
+    const pinnedChannelOffset = gridless
+        ? rightToLeft
+            ? { right: `${GUIDE_CHANNEL_WIDTH + width - scroll.left - scroll.width}px` }
+            : { left: `${scroll.left}px` }
+        : undefined;
     const rows = visibleIndexRange(scroll.top, Math.max(120, scroll.height - GUIDE_HEADER_HEIGHT), props.channels.length, GUIDE_ROW_HEIGHT);
     const time = visibleTimeRange(scroll.left, scroll.width, props.windowStart, GUIDE_CHANNEL_WIDTH);
     const visibleMinutes = Math.max(30, (time.end - time.start) / 60000);
@@ -233,7 +235,6 @@ export function LiveGuide(props: LiveGuideProps) {
         if (!scroller) return;
         const measure = () => {
             const next = { top: scroller.scrollTop, left: scroller.scrollLeft, width: scroller.clientWidth, height: scroller.clientHeight };
-            syncLegacyGuideOffsets(scroller);
             setScroll(current => {
                 const currentRows = visibleIndexRange(current.top, Math.max(120, current.height - GUIDE_HEADER_HEIGHT), props.channels.length, GUIDE_ROW_HEIGHT);
                 const nextRows = visibleIndexRange(next.top, Math.max(120, next.height - GUIDE_HEADER_HEIGHT), props.channels.length, GUIDE_ROW_HEIGHT);
@@ -309,7 +310,6 @@ export function LiveGuide(props: LiveGuideProps) {
     const publishScroll = () => {
         const scroller = scrollerRef.current;
         if (!scroller) return;
-        syncLegacyGuideOffsets(scroller);
         const next = { top: scroller.scrollTop, left: scroller.scrollLeft, width: scroller.clientWidth, height: scroller.clientHeight };
         setScroll(current => {
             const currentRows = visibleIndexRange(current.top, Math.max(120, current.height - GUIDE_HEADER_HEIGHT), props.channels.length, GUIDE_ROW_HEIGHT);
@@ -463,8 +463,8 @@ export function LiveGuide(props: LiveGuideProps) {
         {props.error && <p class="notice error" role="alert">{props.error}</p>}
         <div class="live-guide-scroll" ref={scrollerRef} onScroll={publishScroll} onKeyDown={onKeyDown} role="grid" aria-label={t('Program guide')} aria-rowcount={props.channels.length + 1} aria-colcount={2}>
             <div class="live-guide-canvas" style={{ width: `${GUIDE_CHANNEL_WIDTH + width}px`, height: `${GUIDE_HEADER_HEIGHT + props.channels.length * GUIDE_ROW_HEIGHT}px` }}>
-                <div class="live-guide-head" role="row" aria-rowindex={1}>
-                    <div class="live-ruler-corner" role="columnheader" aria-colindex={1}>{t('Channel')}</div>
+                <div class="live-guide-head" role="row" aria-rowindex={1} style={gridless ? { top: `${scroll.top}px` } : undefined}>
+                    <div class="live-ruler-corner" role="columnheader" aria-colindex={1} style={pinnedChannelOffset}>{t('Channel')}</div>
                     <div class="live-ruler" role="columnheader" aria-colindex={2} aria-label={t('Programs by time')} style={{ width: `${width}px` }}>
                         {ticks.map(tick => <span class="live-tick" key={tick} style={{ left: `${((tick - props.windowStart) / 60000) * PIXELS_PER_MINUTE}px` }}>{formatClock(tick)}</span>)}
                     </div>
@@ -474,7 +474,7 @@ export function LiveGuide(props: LiveGuideProps) {
                     const index = rows.start + offset;
                     const segments = guideSegments(props.programsByChannel[channel.Id] || [], props.windowStart, props.windowEnd)
                         .filter(segment => segment.end > renderStart && segment.start < renderEnd);
-                    return <GuideRow key={channel.Id} geometry={geometry} api={props.api} channel={channel} index={index} segments={segments} windowStart={props.windowStart} now={props.now} onToggleFavorite={props.onToggleFavorite} favoriteBusyId={props.favoriteBusyId} onOpenProgram={props.onOpenProgram} onTune={props.onTune} onHover={showHover} onHide={hideHover} />;
+                    return <GuideRow key={channel.Id} geometry={geometry} channelOffset={pinnedChannelOffset} api={props.api} channel={channel} index={index} segments={segments} windowStart={props.windowStart} now={props.now} onToggleFavorite={props.onToggleFavorite} favoriteBusyId={props.favoriteBusyId} onOpenProgram={props.onOpenProgram} onTune={props.onTune} onHover={showHover} onHide={hideHover} />;
                 })}
                 {!props.loading && !props.channels.length && <p class="live-empty">{t('No channels are available for this filter.')}</p>}
                 {props.loading && !props.channels.length && <p class="live-empty">{t('Loading the guide…')}</p>}
@@ -490,8 +490,9 @@ export function LiveGuide(props: LiveGuideProps) {
     </div>;
 }
 
-function GuideRow({ geometry, api, channel, index, segments, windowStart, now, onToggleFavorite, favoriteBusyId, onOpenProgram, onTune, onHover, onHide }: {
+function GuideRow({ geometry, channelOffset, api, channel, index, segments, windowStart, now, onToggleFavorite, favoriteBusyId, onOpenProgram, onTune, onHover, onHide }: {
     geometry: GuideGeometry;
+    channelOffset: { left?: string; right?: string } | undefined;
     api: JellyfinApi;
     channel: MediaItem;
     index: number;
@@ -508,7 +509,7 @@ function GuideRow({ geometry, api, channel, index, segments, windowStart, now, o
     const favorite = Boolean(channel.UserData?.IsFavorite);
     const { rowHeight: GUIDE_ROW_HEIGHT, headerHeight: GUIDE_HEADER_HEIGHT } = geometry;
     return <div class="live-row" role="row" aria-rowindex={index + 2} style={{ top: `${GUIDE_HEADER_HEIGHT + index * GUIDE_ROW_HEIGHT}px` }}>
-        <div class="live-channel" role="rowheader" aria-colindex={1}>
+        <div class="live-channel" role="rowheader" aria-colindex={1} style={channelOffset}>
             <button type="button" class="live-channel-tune" data-focusable="true" data-rail="true" data-channel-id={channel.Id} id={`live-channel-${channel.Id}`} aria-label={t('Channel {0}: {1}', channel.ChannelNumber || '—', channel.Name)} onClick={() => onTune(channel)}>
                 <span class="live-number">{channel.ChannelNumber || '—'}</span>
                 <span class="live-logo"><LiveThumb api={api} item={channel} width={96} imageType={guideChannelLogoType(channel)} fallbackText={channel.Name} /></span>

@@ -528,11 +528,12 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
     };
     const scheduleBufferingIndicator = () => {
         if (bufferStateRef.current !== 'ready' || bufferingTimerRef.current !== undefined) return;
+        const delayMs = playback?.isLive || item?.Type === 'TvChannel' ? 3_000 : BUFFERING_INDICATOR_DELAY_MS;
         bufferingTimerRef.current = window.setTimeout(() => {
             bufferingTimerRef.current = undefined;
             if (videoRef.current?.paused || bufferStateRef.current !== 'ready') return;
             showConfirmedBuffering();
-        }, BUFFERING_INDICATOR_DELAY_MS);
+        }, delayMs);
     };
     observeProgressRef.current = video => {
         if (reopenInFlightRef.current) return;
@@ -654,6 +655,10 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
 
     const applyStartPosition = (video: HTMLVideoElement): boolean => {
         const media = mediaRef.current;
+        if (playback?.isLive || item?.Type === 'TvChannel') {
+            media.pendingStart = 0;
+            return true;
+        }
         if (media.pendingStart <= 0) return true;
         const window = seekBounds(video.duration, rangesOf(video.seekable));
         if (!window.seekable) return false;
@@ -1131,9 +1136,15 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
             progress: report => owner.isCurrent(session) ? client.reportPlaybackProgress(report) : false,
             stop: (report, keepalive) => {
                 const retained = owner.retainsLiveStream(session);
-                return client.reportPlaybackStopped(retained ? { ...report, LiveStreamId: undefined } : report, keepalive).then(async saved => {
+                if (retained) {
+                    if (session.playSessionId) {
+                        void client.releasePlayback({ playSessionId: session.playSessionId }, liveStreamId);
+                    }
+                    return Promise.resolve(true);
+                }
+                return client.reportPlaybackStopped(report, keepalive).then(async saved => {
                     if (saved && !keepalive && owner.canRefresh(session)) onReported?.(itemId);
-                    if (saved && liveStreamId && !retained) owner.markLiveReleased(session);
+                    if (saved && liveStreamId) owner.markLiveReleased(session);
                     if (!saved && liveStreamId && owner.claimLiveCleanup(session)) {
                         if (await client.closeLiveStream(liveStreamId)) owner.markLiveReleased(session);
                     }

@@ -582,3 +582,42 @@ test('LIVE-09 channel order is labelled as device-local with a reset', () => {
     assert.match(live, /saved only in this browser on this device/);
     assert.match(live, /Reset order/);
 });
+
+test('HLS player config enforces live edge start position for live streams', async () => {
+    const { createHlsPlayerConfig } = await import('../src/hls-buffer-policy.ts');
+    const liveConfig = createHlsPlayerConfig({
+        deviceMemoryGiB: 4,
+        sourceBitrate: 8_000_000,
+        maxBitrate: undefined,
+        isLive: true
+    }, 123);
+    assert.equal(liveConfig.startPosition, -1);
+});
+
+test('unconstrained playback stalls step down smoothly starting at 20 Mbps', async () => {
+    const { playbackStallFallback } = await import('../src/player-model.ts');
+    const choices = [ 60_000_000, 20_000_000, 10_000_000, 8_000_000, 4_000_000, 2_000_000, 1_000_000, 0 ];
+    let state = { confirmedAtMs: [], attempts: 0 };
+    for (const nowMs of [ 1_000, 5_000 ]) {
+        const decision = playbackStallFallback(state, nowMs, undefined, undefined, choices);
+        assert.equal(decision.maxBitrate, undefined);
+        state = decision.state;
+    }
+
+    const firstFallback = playbackStallFallback(state, 9_000, undefined, undefined, choices);
+    assert.deepEqual(firstFallback, { state: { confirmedAtMs: [], attempts: 1 }, maxBitrate: 20_000_000 });
+
+    state = firstFallback.state;
+    for (const nowMs of [ 13_000, 17_000 ]) state = playbackStallFallback(state, nowMs, 20_000_000, undefined, choices).state;
+    const secondFallback = playbackStallFallback(state, 21_000, 20_000_000, undefined, choices);
+    assert.deepEqual(secondFallback, { state: { confirmedAtMs: [], attempts: 2 }, maxBitrate: 10_000_000 });
+});
+
+test('player retains live stream on renegotiation without sending stop report', () => {
+    const player = source('player.tsx');
+    assert.match(player, /const retained = owner\.retainsLiveStream\(session\);/);
+    assert.match(player, /if \(retained\) \{/);
+    assert.match(player, /void client\.releasePlayback\(\{ playSessionId: session\.playSessionId \}, liveStreamId\);/);
+    assert.match(player, /return Promise\.resolve\(true\);/);
+});
+

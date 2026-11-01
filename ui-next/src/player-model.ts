@@ -156,6 +156,7 @@ const PLAYBACK_STALL_WINDOW_MS = 60_000;
 const PLAYBACK_STALLS_BEFORE_FALLBACK = 3;
 const MAX_PLAYBACK_QUALITY_FALLBACKS = 2;
 const DEFAULT_PLAYBACK_FALLBACK_BITRATE = 8_000_000;
+export const DEFAULT_UNCONSTRAINED_FALLBACK_CEILING = 25_000_000;
 
 export function observePlaybackProgress(watch: PlaybackProgressWatch, sample: PlaybackProgressSample): PlaybackProgressDecision {
     const nextWatch = { ...watch };
@@ -201,7 +202,7 @@ export function playbackStallFallback(
     }
 
     const limits = [ currentMaxBitrate, sourceBitrate ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0);
-    const ceiling = limits.length ? Math.min(...limits) : DEFAULT_PLAYBACK_FALLBACK_BITRATE;
+    const ceiling = limits.length ? Math.min(...limits) : DEFAULT_UNCONSTRAINED_FALLBACK_CEILING;
     const maxBitrate = bitrateChoices.reduce<number | undefined>((lowestHigher, choice) => {
         if (choice <= 0 || choice >= ceiling) return lowestHigher;
         return lowestHigher === undefined || choice > lowestHigher ? choice : lowestHigher;

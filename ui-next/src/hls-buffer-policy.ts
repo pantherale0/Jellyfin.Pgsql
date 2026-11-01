@@ -12,7 +12,7 @@ export interface HlsPlayerConfig extends HlsBufferPolicy {
 export function createHlsPlayerConfig(input: HlsBufferPolicyInput, startPosition: number): HlsPlayerConfig {
     return {
         ...hlsBufferPolicy(input),
-        startPosition,
+        startPosition: input.isLive ? -1 : startPosition,
         enableInterstitialPlayback: false
     };
 }

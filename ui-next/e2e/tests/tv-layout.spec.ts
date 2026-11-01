@@ -169,6 +169,11 @@ for (const viewport of tvViewports) {
             await tv.openLibrary('Movies');
             await expectLibraryRows(page);
             await expect(page.locator('.library-grid-window')).toHaveCSS('display', 'flex');
+            const libraryRows = await page.locator('[data-library-item-id]').evaluateAll(elements => elements.map(element => element.getBoundingClientRect().y));
+            const firstRowY = libraryRows[0] ?? 0;
+            const posterColumns = viewport.height >= 1080 ? 5 : 4;
+            expect(libraryRows.slice(0, posterColumns).every(rowY => Math.abs(rowY - firstRowY) <= 2)).toBe(true);
+            expect(libraryRows[posterColumns] ?? 0).toBeGreaterThan(firstRowY);
             await captureLayout(page, testInfo, 'tv-no-grid-library');
 
             await page.getByRole('button', { name: 'Search your library', exact: true }).click();
@@ -180,9 +185,9 @@ for (const viewport of tvViewports) {
                 return { x: rect.x, y: rect.y };
             }));
             expect(posterRows).toHaveLength(6);
-            const posterColumns = viewport.height >= 1080 ? 5 : 4;
-            expect(posterRows.slice(0, posterColumns).every(row => Math.abs(row.y - (posterRows[0]?.y ?? 0)) <= 2)).toBe(true);
-            expect((posterRows[posterColumns]?.y ?? 0)).toBeGreaterThan(posterRows[0]?.y ?? 0);
+            const resultColumns = viewport.height >= 1080 ? 5 : 4;
+            expect(posterRows.slice(0, resultColumns).every(row => Math.abs(row.y - (posterRows[0]?.y ?? 0)) <= 2)).toBe(true);
+            expect((posterRows[resultColumns]?.y ?? 0)).toBeGreaterThan(posterRows[0]?.y ?? 0);
             await captureLayout(page, testInfo, 'tv-no-grid-poster-results');
 
             await tv.openLibrary('Shows');
@@ -197,8 +202,20 @@ for (const viewport of tvViewports) {
             await page.goto('/?live=guide');
             const guide = page.locator('.live-guide-scroll');
             await expect(guide).toBeVisible();
+            await expect(guide.locator('.live-row').first()).toBeVisible();
+            const guideMetrics = await guide.evaluate(element => ({
+                scrollHeight: element.scrollHeight,
+                clientHeight: element.clientHeight,
+                canvasHeight: element.querySelector<HTMLElement>('.live-guide-canvas')?.style.height || '',
+                rowHeight: getComputedStyle(element.querySelector<HTMLElement>('.live-row')!).height
+            }));
+            expect(guideMetrics.scrollHeight - guideMetrics.clientHeight, JSON.stringify(guideMetrics)).toBeGreaterThan(180);
             await guide.evaluate(element => { element.scrollTop = 180; element.scrollLeft = 420; });
-            await expect.poll(() => guide.evaluate(element => getComputedStyle(element).getPropertyValue('--tv-guide-scroll-left'))).toBe('420px');
+            await expect.poll(() => guide.evaluate(element => element.scrollTop)).toBe(180);
+            await expect.poll(() => guide.evaluate(element => element.scrollLeft)).toBe(420);
+            await expect.poll(() => page.locator('.live-guide-head').evaluate(element => getComputedStyle(element).top)).toBe('180px');
+            await expect.poll(() => page.locator('.live-ruler-corner').evaluate(element => getComputedStyle(element).left)).toBe('420px');
+            await expect.poll(() => page.locator('.live-channel').first().evaluate(element => getComputedStyle(element).left)).toBe('420px');
             const pinned = await page.evaluate(() => {
                 const scroller = document.querySelector<HTMLElement>('.live-guide-scroll');
                 const header = scroller?.querySelector<HTMLElement>('.live-guide-head');
@@ -214,10 +231,27 @@ for (const viewport of tvViewports) {
             });
             expect(pinned).not.toBeNull();
             if (!pinned) return;
-            expect(Math.abs(pinned.headerTop)).toBeLessThanOrEqual(2);
+            expect(Math.abs(pinned.headerTop), JSON.stringify(pinned)).toBeLessThanOrEqual(2);
             expect(Math.abs(pinned.cornerLeft)).toBeLessThanOrEqual(2);
             expect(Math.abs(pinned.channelLeft)).toBeLessThanOrEqual(2);
             await captureLayout(page, testInfo, 'tv-no-grid-live-guide');
+
+            await page.evaluate(() => {
+                document.documentElement.dir = 'rtl';
+                const scroller = document.querySelector<HTMLElement>('.live-guide-scroll');
+                if (!scroller) throw new Error('The RTL guide requires a scroll container.');
+                scroller.scrollLeft = 480;
+                scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+            });
+            await expect.poll(() => page.evaluate(() => {
+                const scroller = document.querySelector<HTMLElement>('.live-guide-scroll');
+                const channel = scroller?.querySelector<HTMLElement>('.live-channel');
+                const corner = scroller?.querySelector<HTMLElement>('.live-ruler-corner');
+                if (!scroller || !channel || !corner) return false;
+                const edge = scroller.getBoundingClientRect().left + scroller.clientLeft + scroller.clientWidth;
+                return Math.abs(channel.getBoundingClientRect().right - edge) <= 2
+                    && Math.abs(corner.getBoundingClientRect().right - edge) <= 2;
+            })).toBe(true);
         });
     });
 }
