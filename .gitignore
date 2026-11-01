@@ -16,3 +16,4 @@ dev-env/
 # Local working copy (not a submodule)
 jellyfin-unopt-final/
 logs/
+docs/superpowers
