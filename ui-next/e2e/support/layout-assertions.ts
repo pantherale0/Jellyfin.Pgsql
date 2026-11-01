@@ -47,6 +47,20 @@ export async function expectLoadedImage(image: Locator): Promise<void> {
     await expect.poll(() => image.evaluate(element => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0)).toBe(true);
 }
 
+/** Exercise TV fallback CSS with the modern test browser's Grid parser disabled. */
+export async function disableCssGrid(page: Page): Promise<void> {
+    await page.addInitScript(() => {
+        const original = CSS.supports.bind(CSS);
+        Object.defineProperty(CSS, 'supports', {
+            configurable: true,
+            value: (feature: string, value?: string) => {
+                if (feature === 'display' && value === 'grid') return false;
+                return value === undefined ? original(feature) : original(feature, value);
+            }
+        });
+    });
+}
+
 export async function captureLayout(page: Page, testInfo: TestInfo, name: string): Promise<void> {
     await page.evaluate(() => document.fonts.ready.then(() => undefined));
     const viewport = page.viewportSize();

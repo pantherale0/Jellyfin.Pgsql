@@ -26,11 +26,15 @@ export async function installLogoFixture(page: Page, itemId: string, dimensions:
     }));
 }
 
-export async function installGuideFixture(page: Page): Promise<void> {
+export async function installGuideFixture(page: Page, channelCount = 1): Promise<void> {
     const now = Date.now();
     await page.route('**/LiveTv/Channels*', route => route.fulfill({ json: {
-        Items: [ { Id: 'layout-channel', Name: guideChannelName, Type: 'TvChannel', ChannelNumber: '8', UserData: { IsFavorite: false } } ],
-        TotalRecordCount: 1
+        Items: Array.from({ length: channelCount }, (_value, index) => ({
+            Id: index === 0 ? 'layout-channel' : `layout-channel-${index + 1}`,
+            Name: index === 0 ? guideChannelName : `${guideChannelName} ${index + 1}`,
+            Type: 'TvChannel', ChannelNumber: String(index + 8), UserData: { IsFavorite: false }
+        })),
+        TotalRecordCount: channelCount
     } }));
     await page.route('**/LiveTv/Programs*', route => route.fulfill({ json: {
         Items: [ {

@@ -2071,10 +2071,10 @@ html.tv-client .episode-copy > p { font-size: var(--tv-min-text); line-height: 1
 html.tv-client .episode-play { width: var(--tv-control); height: var(--tv-control); font-size: var(--tv-min-text); }
 
 /* The virtualizer reads these exact dimensions; captions are part of row pitch. */
-html.tv-client .library-grid-items { --tv-library-columns: 5; --library-caption-height: 84px; --library-list-row: 144px; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-gap: 32px 24px; padding: 24px var(--page-gutter) 48px; }
+html.tv-client .library-grid-items { --tv-library-columns: 5; --tv-library-column-gap: 24px; --tv-library-row-gap: 32px; --library-caption-height: 84px; --library-list-row: 144px; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-gap: var(--tv-library-row-gap) var(--tv-library-column-gap); padding: 24px var(--page-gutter) 48px; }
 html.tv-client .library-grid-items.library-view-thumb { --tv-library-columns: 3; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 html.tv-client .library-grid-items.library-view-banner { --tv-library-columns: 2; --library-poster-ratio: .25; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-html.tv-client .library-grid-items.library-view-list { --tv-library-columns: 1; --library-caption-height: 0px; grid-template-columns: minmax(0, 1fr); }
+html.tv-client .library-grid-items.library-view-list { --tv-library-columns: 1; --tv-library-row-gap: 12px; --tv-library-column-gap: 0px; --library-caption-height: 0px; grid-template-columns: minmax(0, 1fr); }
 html.tv-client .library-grid-cell { display: block; min-width: 0; }
 html.tv-client .library-card,
 html.tv-client .library-card-open { height: auto; }
@@ -2197,7 +2197,7 @@ html.tv-client .home-feed-card-art::after,
 html.tv-client .media-card .artwork::after,
 html.tv-client .library-card-art::after,
 html.tv-client .episode-art-button::after { top: 0; right: 0; bottom: 0; left: 0; }
-html.tv-client .poster-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); grid-gap: 32px 24px; }
+html.tv-client .poster-grid { --tv-poster-grid-columns: 5; --tv-poster-grid-row-gap: 32px; --tv-poster-grid-column-gap: 24px; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-gap: var(--tv-poster-grid-row-gap) var(--tv-poster-grid-column-gap); }
 html.tv-client .poster-grid .media-card { width: 100%; margin-inline-end: 0; }
 html.tv-client .poster-grid .media-card-art { height: 0; padding-top: 150%; }
 html.tv-client .poster-grid .media-card-art > .artwork { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }
@@ -2240,16 +2240,181 @@ html.tv-client .poster-grid .media-card-art > .artwork { position: absolute; top
     html.tv-client .episode-explorer { grid-template-columns: 230px minmax(0, 1fr); grid-gap: 20px; }
     html.tv-client .season-thumb.artwork { display: none; }
     html.tv-client .episode-card { grid-gap: 16px; }
-    html.tv-client .library-grid-items { --tv-library-columns: 4; --library-caption-height: 76px; --library-list-row: 128px; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-gap: 28px 20px; }
+    html.tv-client .library-grid-items { --tv-library-columns: 4; --tv-library-column-gap: 20px; --tv-library-row-gap: 28px; --library-caption-height: 76px; --library-list-row: 128px; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-gap: var(--tv-library-row-gap) var(--tv-library-column-gap); }
     html.tv-client .library-grid-items.library-view-thumb { --tv-library-columns: 3; }
     html.tv-client .library-grid-items.library-view-banner { --tv-library-columns: 2; }
-    html.tv-client .library-grid-items.library-view-list { --tv-library-columns: 1; --library-caption-height: 0px; }
+    html.tv-client .library-grid-items.library-view-list { --tv-library-columns: 1; --tv-library-row-gap: 12px; --tv-library-column-gap: 0px; --library-caption-height: 0px; }
     html.tv-client .library-card-list .library-card-art { width: 68px; height: 102px; }
     html.tv-client .library-title-search input { width: 220px; }
     html.tv-client .library-filter-popover { max-width: calc(100vw - 80px); }
     html.tv-client .alpha-scrubber { right: 0; width: 32px; }
-    html.tv-client .poster-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    html.tv-client .poster-grid { --tv-poster-grid-columns: 4; --tv-poster-grid-row-gap: 28px; --tv-poster-grid-column-gap: 20px; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-gap: var(--tv-poster-grid-row-gap) var(--tv-poster-grid-column-gap); }
     html.tv-client .live-channel-tune .live-logo { flex-basis: 128px; }
     html.tv-client .player-osd-top { padding-top: 20px; }
     html.tv-client .player-osd-bottom { padding-bottom: 20px; }
+}
+
+/* webOS TV 4.x uses Chromium 53, which predates CSS Grid. Keep these major
+   browsing layouts in flexbox when layout-mode marks the engine as gridless. */
+html.tv-client.tv-no-grid .app-shell { padding-top: var(--topbar-height); }
+html.tv-client.tv-no-grid .app-shell.no-topbar { padding-top: 0; }
+html.tv-client.tv-no-grid .topbar { position: fixed; top: 0; right: 0; left: 0; }
+html.tv-client.tv-no-grid .library-grid-items { display: block; }
+html.tv-client.tv-no-grid .library-grid-window { display: flex !important; flex-wrap: wrap; align-content: flex-start; }
+html.tv-client.tv-no-grid .library-grid-cell,
+html.tv-client.tv-no-grid .library-grid-gap { box-sizing: border-box; flex: 0 0 calc(20% - 19.2px); min-width: 0; margin: 0 24px 32px 0; }
+html.tv-client.tv-no-grid .library-grid-cell:nth-child(5n),
+html.tv-client.tv-no-grid .library-grid-gap:nth-child(5n) { margin-right: 0; }
+html.tv-client.tv-no-grid .library-grid-items.library-view-thumb .library-grid-cell,
+html.tv-client.tv-no-grid .library-grid-items.library-view-thumb .library-grid-gap { flex-basis: calc(33.333333% - 16px); }
+html.tv-client.tv-no-grid .library-grid-items.library-view-thumb .library-grid-cell:nth-child(3n),
+html.tv-client.tv-no-grid .library-grid-items.library-view-thumb .library-grid-gap:nth-child(3n) { margin-right: 0; }
+html.tv-client.tv-no-grid .library-grid-items.library-view-banner .library-grid-cell,
+html.tv-client.tv-no-grid .library-grid-items.library-view-banner .library-grid-gap { flex-basis: calc(50% - 12px); }
+html.tv-client.tv-no-grid .library-grid-items.library-view-banner .library-grid-cell:nth-child(2n),
+html.tv-client.tv-no-grid .library-grid-items.library-view-banner .library-grid-gap:nth-child(2n) { margin-right: 0; }
+html.tv-client.tv-no-grid .library-grid-items.library-view-list .library-grid-cell,
+html.tv-client.tv-no-grid .library-grid-items.library-view-list .library-grid-gap { flex: 0 0 100%; margin: 0 0 12px; }
+
+html.tv-client.tv-no-grid .poster-grid { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 0; margin-right: -24px; }
+html.tv-client.tv-no-grid .poster-grid .virtual-grid-cell { box-sizing: border-box; flex: 0 0 calc(20% - 24px); min-width: 0; margin: 0 24px 32px 0; }
+html.tv-client.tv-no-grid .poster-grid .virtual-grid-spacer,
+html.tv-client.tv-no-grid .poster-grid .virtual-grid-sentinel { flex: 0 0 100%; width: 100%; margin: 0; }
+
+html.tv-client.tv-no-grid .brand-mark,
+html.tv-client.tv-no-grid .search-toggle,
+html.tv-client.tv-no-grid .search-submit,
+html.tv-client.tv-no-grid .profile-button,
+html.tv-client.tv-no-grid .profile-button span,
+html.tv-client.tv-no-grid .recommendation-arrow,
+html.tv-client.tv-no-grid .home-feed-rail-controls button,
+html.tv-client.tv-no-grid .artwork,
+html.tv-client.tv-no-grid .art-placeholder,
+html.tv-client.tv-no-grid .home-feed-card-art.no-artwork,
+html.tv-client.tv-no-grid .home-feed-more-card-icon,
+html.tv-client.tv-no-grid .home-feed-fallback-icon,
+html.tv-client.tv-no-grid .library-unplayed,
+html.tv-client.tv-no-grid .library-quality,
+html.tv-client.tv-no-grid .library-watched,
+html.tv-client.tv-no-grid .library-select-check,
+html.tv-client.tv-no-grid .library-view-switch button,
+html.tv-client.tv-no-grid .filter-count-pill,
+html.tv-client.tv-no-grid .alpha-scrubber button,
+html.tv-client.tv-no-grid .alpha-bubble,
+html.tv-client.tv-no-grid .live-logo,
+html.tv-client.tv-no-grid .player-control,
+html.tv-client.tv-no-grid .drawer-close,
+html.tv-client.tv-no-grid .drawer-library-icon,
+html.tv-client.tv-no-grid .player-chapter-number,
+html.tv-client.tv-no-grid .player-end-card-art,
+html.tv-client.tv-no-grid .caption-preview,
+html.tv-client.tv-no-grid .detail-person-initial,
+html.tv-client.tv-no-grid .favorites-page .detail-card-favorite,
+html.tv-client.tv-no-grid .music-mini-controls button,
+html.tv-client.tv-no-grid .track-row-info {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+html.tv-client.tv-no-grid .home-feed-more-card-content { display: flex; flex-direction: column; align-items: center; }
+html.tv-client.tv-no-grid .empty-state { display: flex; flex-direction: column; align-items: center; }
+html.tv-client.tv-no-grid .empty-state > span { display: flex; align-items: center; justify-content: center; }
+html.tv-client.tv-no-grid .episode-list .season-empty { display: block; }
+html.tv-client.tv-no-grid .player-osd-bottom { display: flex; flex-direction: column; }
+html.tv-client.tv-no-grid .player-osd-bottom > * + * { margin-top: 16px; }
+html.tv-client.tv-no-grid .live-now-next > li { display: flex; align-items: flex-start; }
+html.tv-client.tv-no-grid .live-now-next-card { min-width: 0; flex: 1 1 0; }
+html.tv-client.tv-no-grid .live-now-next > li > .live-star { flex: 0 0 var(--tv-control); margin-inline-start: 12px; }
+html.tv-client.tv-no-grid .tv-search-page { display: flex; flex-wrap: wrap; gap: 0; }
+html.tv-client.tv-no-grid .tv-search-panel { box-sizing: border-box; width: 540px; flex: 0 0 540px; margin-right: 48px; }
+html.tv-client.tv-no-grid .tv-search-results { min-width: 0; flex: 1 1 0; }
+html.tv-client.tv-no-grid .live-cards { display: flex; flex-wrap: wrap; gap: 0; margin-right: -16px; }
+html.tv-client.tv-no-grid .live-card { box-sizing: border-box; flex: 1 1 320px; margin: 0 16px 16px 0; }
+html.tv-client.tv-no-grid .library-grid { display: flex; flex-wrap: wrap; gap: 0; margin-right: -24px; }
+html.tv-client.tv-no-grid .library-tile { box-sizing: border-box; flex: 1 1 320px; min-height: 240px; margin: 0 24px 24px 0; }
+html.tv-client.tv-no-grid .live-now-next > li > .live-star { margin-left: 12px; margin-inline-start: 0; }
+html.tv-client.tv-no-grid .profile-modal-backdrop,
+html.tv-client.tv-no-grid .library-menu-shade,
+html.tv-client.tv-no-grid .detail-menu-shade,
+html.tv-client.tv-no-grid .seerr-sheet-backdrop,
+html.tv-client.tv-no-grid .ad-plugin-sheet-backdrop,
+html.tv-client.tv-no-grid .md-backdrop { display: flex; align-items: center; justify-content: center; }
+html.tv-client.tv-no-grid .library-filter-popover { display: flex; flex-wrap: wrap; gap: 0; }
+html.tv-client.tv-no-grid .library-filter-popover > * { flex: 1 1 180px; margin: 6px; }
+html.tv-client.tv-no-grid .library-filter-popover > .button { flex: 0 0 100%; width: auto; }
+html.tv-client.tv-no-grid .live-guide-head { position: absolute; top: var(--tv-guide-scroll-top, 0px); right: 0; left: 0; }
+html.tv-client.tv-no-grid .live-ruler-corner { position: absolute; top: 0; left: var(--tv-guide-scroll-left, 0px); z-index: 5; }
+html.tv-client.tv-no-grid .live-ruler { flex: 0 0 auto; margin-left: var(--guide-channel-width); }
+html.tv-client.tv-no-grid .live-channel { position: absolute; top: 0; left: var(--tv-guide-scroll-left, 0px); z-index: 3; }
+html.tv-client.tv-no-grid .live-track { box-sizing: border-box; flex: 0 0 auto; width: calc(100% - var(--guide-channel-width)); margin-left: var(--guide-channel-width); }
+html[dir="rtl"].tv-client.tv-no-grid .library-grid-cell,
+html[dir="rtl"].tv-client.tv-no-grid .library-grid-gap { margin-right: 0; margin-left: 24px; }
+html[dir="rtl"].tv-client.tv-no-grid .library-grid-cell:nth-child(5n),
+html[dir="rtl"].tv-client.tv-no-grid .library-grid-gap:nth-child(5n) { margin-left: 0; }
+html[dir="rtl"].tv-client.tv-no-grid .library-grid-items.library-view-thumb .library-grid-cell:nth-child(3n),
+html[dir="rtl"].tv-client.tv-no-grid .library-grid-items.library-view-thumb .library-grid-gap:nth-child(3n),
+html[dir="rtl"].tv-client.tv-no-grid .library-grid-items.library-view-banner .library-grid-cell:nth-child(2n),
+html[dir="rtl"].tv-client.tv-no-grid .library-grid-items.library-view-banner .library-grid-gap:nth-child(2n) { margin-left: 0; }
+html[dir="rtl"].tv-client.tv-no-grid .poster-grid { margin-right: 0; margin-left: -24px; }
+html[dir="rtl"].tv-client.tv-no-grid .poster-grid .virtual-grid-cell { margin-right: 0; margin-left: 24px; }
+html[dir="rtl"].tv-client.tv-no-grid .season-sidebar { margin-right: 0; margin-left: 32px; }
+html[dir="rtl"].tv-client.tv-no-grid .tv-search-panel { margin-right: 0; margin-left: 48px; }
+html[dir="rtl"].tv-client.tv-no-grid .live-cards { margin-right: 0; margin-left: -16px; }
+html[dir="rtl"].tv-client.tv-no-grid .live-card { margin-right: 0; margin-left: 16px; }
+html[dir="rtl"].tv-client.tv-no-grid .live-now-next > li > .live-star { margin-right: 12px; margin-left: 0; }
+html[dir="rtl"].tv-client.tv-no-grid .library-grid { margin-right: 0; margin-left: -24px; }
+html[dir="rtl"].tv-client.tv-no-grid .library-tile { margin-right: 0; margin-left: 24px; }
+
+html.tv-client.tv-no-grid .episode-explorer { display: flex; align-items: flex-start; gap: 0; }
+html.tv-client.tv-no-grid .season-sidebar { box-sizing: border-box; width: 300px; flex: 0 0 300px; margin-right: 32px; }
+html.tv-client.tv-no-grid .episode-feed { min-width: 0; flex: 1 1 0; }
+html.tv-client.tv-no-grid .episode-list { display: block; }
+html.tv-client.tv-no-grid .episode-card { display: flex; align-items: center; gap: 0; }
+html.tv-client.tv-no-grid .episode-art-button { box-sizing: border-box; flex: 0 0 var(--tv-episode-width); }
+html.tv-client.tv-no-grid .episode-copy { min-width: 0; flex: 1 1 0; margin: 0 24px; }
+html.tv-client.tv-no-grid .episode-play { box-sizing: border-box; flex: 0 0 var(--tv-control); }
+html.tv-client.tv-no-grid .episode-card + .episode-card { margin-top: 24px; }
+
+@media (max-width: 1400px), (max-height: 800px) {
+    html.tv-client.tv-no-grid .tv-search-panel { width: 360px; flex-basis: 360px; margin-right: 32px; }
+    html.tv-client.tv-no-grid .library-grid { margin-right: -20px; }
+    html.tv-client.tv-no-grid .library-tile { flex-basis: 280px; margin-right: 20px; }
+    html.tv-client.tv-no-grid .library-grid-cell,
+    html.tv-client.tv-no-grid .library-grid-gap { flex-basis: calc(25% - 15px); margin-right: 20px; margin-bottom: 28px; }
+    html.tv-client.tv-no-grid .library-grid-cell:nth-child(4n),
+    html.tv-client.tv-no-grid .library-grid-gap:nth-child(4n) { margin-right: 0; }
+    html.tv-client.tv-no-grid .library-grid-items.library-view-thumb .library-grid-cell,
+    html.tv-client.tv-no-grid .library-grid-items.library-view-thumb .library-grid-gap { flex-basis: calc(33.333333% - 13.333333px); }
+    html.tv-client.tv-no-grid .library-grid-items.library-view-thumb .library-grid-cell:nth-child(3n),
+    html.tv-client.tv-no-grid .library-grid-items.library-view-thumb .library-grid-gap:nth-child(3n) { margin-right: 0; }
+    html.tv-client.tv-no-grid .library-grid-items.library-view-banner .library-grid-cell,
+    html.tv-client.tv-no-grid .library-grid-items.library-view-banner .library-grid-gap { flex-basis: calc(50% - 10px); }
+    html.tv-client.tv-no-grid .library-grid-items.library-view-banner .library-grid-cell:nth-child(2n),
+    html.tv-client.tv-no-grid .library-grid-items.library-view-banner .library-grid-gap:nth-child(2n) { margin-right: 0; }
+    html.tv-client.tv-no-grid .poster-grid { margin-right: -20px; }
+    html.tv-client.tv-no-grid .poster-grid .virtual-grid-cell { flex-basis: calc(25% - 20px); margin: 0 20px 28px 0; }
+    html.tv-client.tv-no-grid .season-sidebar { width: 230px; flex-basis: 230px; margin-right: 20px; }
+    html.tv-client.tv-no-grid .episode-copy { margin-right: 16px; margin-left: 16px; }
+    html.tv-client.tv-no-grid .episode-card + .episode-card { margin-top: 16px; }
+    html[dir="rtl"].tv-client.tv-no-grid .library-grid-cell,
+    html[dir="rtl"].tv-client.tv-no-grid .library-grid-gap { margin-left: 20px; }
+    html[dir="rtl"].tv-client.tv-no-grid .library-grid-cell:nth-child(4n),
+    html[dir="rtl"].tv-client.tv-no-grid .library-grid-gap:nth-child(4n) { margin-left: 0; }
+    html[dir="rtl"].tv-client.tv-no-grid .poster-grid { margin-right: 0; margin-left: -20px; }
+    html[dir="rtl"].tv-client.tv-no-grid .poster-grid .virtual-grid-cell { margin-right: 0; margin-left: 20px; }
+    html[dir="rtl"].tv-client.tv-no-grid .season-sidebar { margin-right: 0; margin-left: 20px; }
+}
+
+html[dir="rtl"].tv-client.tv-no-grid .poster-grid { margin-left: 0; margin-right: -24px; }
+html[dir="rtl"].tv-client.tv-no-grid .poster-grid .virtual-grid-cell { margin-left: 0; margin-right: 24px; }
+html[dir="rtl"].tv-client.tv-no-grid .season-sidebar { margin-left: 0; margin-right: 32px; }
+html[dir="rtl"].tv-client.tv-no-grid .live-ruler-corner { right: var(--tv-guide-scroll-left, 0px); left: auto; }
+html[dir="rtl"].tv-client.tv-no-grid .live-channel { right: var(--tv-guide-scroll-left, 0px); left: auto; }
+@media (max-width: 1400px), (max-height: 800px) {
+    html[dir="rtl"].tv-client.tv-no-grid .poster-grid { margin-right: 0; margin-left: -20px; }
+    html[dir="rtl"].tv-client.tv-no-grid .poster-grid .virtual-grid-cell { margin-right: 0; margin-left: 20px; }
+    html[dir="rtl"].tv-client.tv-no-grid .season-sidebar { margin-right: 0; margin-left: 20px; }
+    html[dir="rtl"].tv-client.tv-no-grid .tv-search-panel { margin-right: 0; margin-left: 32px; }
+    html[dir="rtl"].tv-client.tv-no-grid .library-grid { margin-right: 0; margin-left: -20px; }
+    html[dir="rtl"].tv-client.tv-no-grid .library-tile { margin-right: 0; margin-left: 20px; }
 }

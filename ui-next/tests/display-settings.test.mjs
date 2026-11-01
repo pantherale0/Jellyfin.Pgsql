@@ -44,8 +44,10 @@ test('the stylesheet defines light and system themes and keeps the player dark',
 test('right-to-left layout flips arrows and scroll direction but keeps time axes left to right', () => {
     assert.match(css, /\[dir=rtl\] \.dir-arrow \{[^}]*scaleX\(-1\)/);
     assert.match(css, /\[dir=rtl\] \.player-timeline[^{]*\.live-guide-scroll \{ direction: ltr; \}/);
-    const physical = css.split('\n').filter(line => !line.startsWith('.player') && !line.includes('safe-area-inset') && /(?<![-\w])(margin|padding)-(left|right):/.test(line));
+    const physical = css.split('\n').filter(line => !line.startsWith('.player') && !line.includes('safe-area-inset') && !line.includes('tv-no-grid') && /(?<![-\w])(margin|padding)-(left|right):/.test(line));
     assert.deepEqual(physical, [], 'spacing outside the left-to-right player uses logical properties');
+    assert.match(css, /html\[dir="rtl"\]\.tv-client\.tv-no-grid \.library-grid-cell/);
+    assert.match(css, /html\[dir="rtl"\]\.tv-client\.tv-no-grid \.live-channel/);
     loadMessages('ar', {});
     assert.equal(inlineSign(), -1);
     loadMessages('en-us', {});

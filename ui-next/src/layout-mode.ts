@@ -57,3 +57,9 @@ export function isTvLayout(): boolean {
     if (!cached) cached = classifyLayout({ userAgent: navigator.userAgent, choice: readLayoutChoice(), nativeLayout: nativeShellLayout() });
     return cached === 'tv';
 }
+
+export function supportsCssGrid(): boolean {
+    if (typeof CSS === 'undefined' || typeof CSS.supports !== 'function') return false;
+    try { return CSS.supports('display', 'grid'); }
+    catch (_error) { return false; }
+}

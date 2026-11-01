@@ -147,11 +147,17 @@ test('ENG-08 the library initial load restarts on API identity without paginatio
 });
 
 test('ENG-09 virtual row geometry reads the same values CSS uses to size rows', async () => {
-    const { libraryGeometry } = await import('../src/library-geometry.ts');
-    const style = values => ({ getPropertyValue: name => values[name] ?? '' });
+    const { libraryColumnCount, libraryGaps, libraryGeometry } = await import('../src/library-geometry.ts');
+    const style = (values, gridTemplateColumns = 'none', rowGap = 'normal', columnGap = 'normal') => ({
+        getPropertyValue: name => values[name] ?? '', gridTemplateColumns, rowGap, columnGap
+    });
     assert.deepEqual(libraryGeometry(style({ '--library-list-row': ' 104px', '--library-poster-ratio': ' 1.4' })), { listRow: 104, posterRatio: 1.4 });
     assert.deepEqual(libraryGeometry(style({})), { listRow: 92, posterRatio: 1.5 }, 'unset properties fall back to the stylesheet defaults');
     assert.deepEqual(libraryGeometry(style({ '--library-list-row': 'auto', '--library-poster-ratio': '0' })), { listRow: 92, posterRatio: 1.5 });
+    assert.equal(libraryColumnCount(style({ '--tv-library-columns': '5' }, 'repeat(5, minmax(0, 1fr))')), 5);
+    assert.equal(libraryColumnCount(style({}, 'repeat(4, minmax(0, 1fr))')), 4, 'unresolved numeric repeats still provide virtual columns');
+    assert.equal(libraryColumnCount(style({}, '120px 120px minmax(0px, 1fr)')), 3, 'resolved tracks count through nested functions');
+    assert.deepEqual(libraryGaps(style({ '--tv-library-row-gap': '28px', '--tv-library-column-gap': '20px' })), { rowGap: 28, columnGap: 20 });
     const css = source('style.css');
     assert.match(css, /\.library-grid-items \{ --library-list-row: 92px; --library-poster-ratio: 1\.5;/);
     assert.match(css, /aspect-ratio: 1 \/ var\(--library-poster-ratio, 1\.5\)/);

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { tabbableWithin, useDialogFocus, virtualTabTarget } from './dialog-focus';
 import { userMessage } from './ui-errors';
-import { libraryCaptionHeight, libraryColumnCount, libraryGeometry } from './library-geometry';
+import { libraryCaptionHeight, libraryColumnCount, libraryGeometry, libraryGaps } from './library-geometry';
+import { isTvLayout, supportsCssGrid } from './layout-mode';
 import { JellyfinApi, peekCachedImage, releaseCachedImage, retainCachedImage } from './api';
 import { activeFilterCount as countFilters, decadeYears, defaultLibraryQuery, librarySortOptions, splitValues, toggleValue } from './library-query';
 import { cardImageType, currentMode, libraryModes } from './library-modes';
@@ -858,12 +859,13 @@ function stickyHeaderHeight(): number {
 // so any drift accumulates across thousands of titles and pulls the viewport off the loaded window.
 function rowHeight(element: HTMLElement, view: LibraryView): number {
     const style = getComputedStyle(element);
-    const gapY = parseFloat(style.rowGap || '0') || 0;
+    const gaps = libraryGaps(style);
+    const gapY = gaps.rowGap;
     // Geometry must be independent of mounted cards (and their hover/focus transforms), so it reads the
     // same custom properties style.css uses to size list rows and poster art.
     if (view === 'list') return libraryGeometry(style).listRow + gapY;
     const columns = columnCount(element);
-    const gapX = parseFloat(style.columnGap || '0') || 0;
+    const gapX = gaps.columnGap;
     const contentWidth = element.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
     const width = (contentWidth - gapX * (columns - 1)) / columns;
     const geometry = libraryGeometry(style);
@@ -888,7 +890,7 @@ const VirtualizedLibraryGrid = ({ items, startIndex, total, api, view, onSelect,
         if (!element) return;
         const columns = columnCount(element);
         const height = rowHeight(element, view);
-        const gap = parseFloat(getComputedStyle(element).rowGap || '0') || 0;
+        const gap = libraryGaps(getComputedStyle(element)).rowGap;
         const top = element.getBoundingClientRect().top + window.scrollY + (parseFloat(getComputedStyle(element).paddingTop) || 0);
         const windowStartRow = Math.floor(startIndex / columns);
         const windowEndRow = Math.ceil((startIndex + items.length) / columns);
@@ -942,8 +944,9 @@ const VirtualizedLibraryGrid = ({ items, startIndex, total, api, view, onSelect,
         window.scrollTo({ top: Math.max(0, top + Math.floor(target / columns) * range.height - window.innerHeight / 3), behavior: 'auto' });
         update();
     };
+    const flexFallback = isTvLayout() && !supportsCssGrid();
     return <div ref={elementRef} class={`library-grid-items library-view-${view}${square ? ' library-art-square' : ''}`} role="list" aria-label={t('Titles')} onKeyDown={onGridKeyDown} style={{ position: 'relative', height: `${Math.max(0, canvasHeight)}px`, '--library-columns': columns } as any}>
-        <div class="library-grid-window" style={{ position: 'absolute', top: `${paddingTop + firstRow * range.height}px`, left: gridStyle?.paddingLeft || '32px', right: gridStyle?.paddingRight || '36px', display: 'grid', gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, columnGap: gridStyle?.columnGap || '16px', rowGap: `${range.gap}px` }}>
+        <div class="library-grid-window" style={{ position: 'absolute', top: `${paddingTop + firstRow * range.height}px`, left: gridStyle?.paddingLeft || '32px', right: gridStyle?.paddingRight || '36px', display: flexFallback ? 'flex' : 'grid', flexWrap: flexFallback ? 'wrap' : undefined, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, columnGap: gridStyle?.columnGap || '16px', rowGap: `${range.gap}px` }}>
             {Array.from({ length: leading }, (_value, index) => <div key={`lead-${index}`} class="library-grid-gap" aria-hidden="true" />)}
             {visible.map((item, offset) => <div key={item.Id} class="library-grid-cell" role="listitem" aria-posinset={absStart + offset + 1} aria-setsize={total} data-grid-index={absStart + offset}><LibraryCard api={api} item={item} view={view} onSelect={onSelect} onPlay={onPlay} onToggle={onToggle} onRemove={onRemove} canUncollect={canUncollect} busy={busyId === item.Id} selecting={selecting} selected={selection.has(item.Id)} onToggleSelect={onToggleSelect} onQueue={onQueue} /></div>)}
         </div>

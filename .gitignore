@@ -15,3 +15,4 @@ docker/jellyfin.PgsqlMigrator.dll
 dev-env/
 # Local working copy (not a submodule)
 jellyfin-unopt-final/
+logs/

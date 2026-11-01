@@ -14,8 +14,8 @@ export function libraryCaptionHeight(style: Pick<CSSStyleDeclaration, 'getProper
 }
 
 /** Older webOS can retain repeat()/minmax() instead of resolving tracks to pixels. */
-export function libraryColumnCount(style: Pick<CSSStyleDeclaration, 'getPropertyValue' | 'gridTemplateColumns'>): number {
-    const explicit = Number(style.getPropertyValue('--tv-library-columns'));
+export function libraryColumnCount(style: Pick<CSSStyleDeclaration, 'getPropertyValue' | 'gridTemplateColumns'>, property = '--tv-library-columns'): number {
+    const explicit = Number(style.getPropertyValue(property));
     if (Number.isInteger(explicit) && explicit > 0) return explicit;
     const template = style.gridTemplateColumns.trim();
     const repeat = /^repeat\(\s*(\d+)\s*,/.exec(template);
@@ -35,4 +35,18 @@ export function libraryColumnCount(style: Pick<CSSStyleDeclaration, 'getProperty
         if (character === ')') depth--;
     }
     return Math.max(1, tracks);
+}
+
+/** Keep virtual row pitch aligned when a TV uses flexbox instead of Grid. */
+export function libraryGaps(style: Pick<CSSStyleDeclaration, 'getPropertyValue' | 'rowGap' | 'columnGap'>, prefix = '--tv-library'): { rowGap: number; columnGap: number } {
+    const dimension = (property: string, fallback: string) => {
+        const value = parseFloat(style.getPropertyValue(property));
+        if (Number.isFinite(value) && value >= 0) return value;
+        const computed = parseFloat(fallback);
+        return Number.isFinite(computed) && computed >= 0 ? computed : 0;
+    };
+    return {
+        rowGap: dimension(`${prefix}-row-gap`, style.rowGap),
+        columnGap: dimension(`${prefix}-column-gap`, style.columnGap)
+    };
 }

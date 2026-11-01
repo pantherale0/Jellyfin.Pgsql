@@ -203,6 +203,11 @@ export function LiveGuide(props: LiveGuideProps) {
     const [ scroll, setScroll ] = useState({ top: 0, left: 0, width: 960, height: 640 });
     const [ hover, setHover ] = useState<HoverState | null>(null);
     const finePointer = useRef(typeof window !== 'undefined' && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
+    const syncLegacyGuideOffsets = (scroller: HTMLElement) => {
+        if (!document.documentElement.classList.contains('tv-no-grid')) return;
+        scroller.style.setProperty('--tv-guide-scroll-top', `${scroller.scrollTop}px`);
+        scroller.style.setProperty('--tv-guide-scroll-left', `${scroller.scrollLeft}px`);
+    };
     const width = timelineWidth(props.windowStart, props.windowEnd);
     const rows = visibleIndexRange(scroll.top, Math.max(120, scroll.height - GUIDE_HEADER_HEIGHT), props.channels.length, GUIDE_ROW_HEIGHT);
     const time = visibleTimeRange(scroll.left, scroll.width, props.windowStart, GUIDE_CHANNEL_WIDTH);
@@ -228,6 +233,7 @@ export function LiveGuide(props: LiveGuideProps) {
         if (!scroller) return;
         const measure = () => {
             const next = { top: scroller.scrollTop, left: scroller.scrollLeft, width: scroller.clientWidth, height: scroller.clientHeight };
+            syncLegacyGuideOffsets(scroller);
             setScroll(current => {
                 const currentRows = visibleIndexRange(current.top, Math.max(120, current.height - GUIDE_HEADER_HEIGHT), props.channels.length, GUIDE_ROW_HEIGHT);
                 const nextRows = visibleIndexRange(next.top, Math.max(120, next.height - GUIDE_HEADER_HEIGHT), props.channels.length, GUIDE_ROW_HEIGHT);
@@ -303,6 +309,7 @@ export function LiveGuide(props: LiveGuideProps) {
     const publishScroll = () => {
         const scroller = scrollerRef.current;
         if (!scroller) return;
+        syncLegacyGuideOffsets(scroller);
         const next = { top: scroller.scrollTop, left: scroller.scrollLeft, width: scroller.clientWidth, height: scroller.clientHeight };
         setScroll(current => {
             const currentRows = visibleIndexRange(current.top, Math.max(120, current.height - GUIDE_HEADER_HEIGHT), props.channels.length, GUIDE_ROW_HEIGHT);

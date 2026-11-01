@@ -6,7 +6,8 @@ import { JellyfinApi, JellyfinRequestError, clearImageCache, peekCachedImage, re
 import { LiveTvPage } from './live-tv';
 import { nativeControlOwnsKey, tabbableWithin, useDialogFocus, virtualTabTarget } from './dialog-focus';
 import { errorDiagnostic, signInMessage, userMessage } from './ui-errors';
-import { isTvLayout } from './layout-mode';
+import { isTvLayout, supportsCssGrid } from './layout-mode';
+import { libraryColumnCount, libraryGaps } from './library-geometry';
 import { historyAction, initialRoute, routeFor, routeFromState, routeIdentity, withRoute, type AppRoute } from './app-routes';
 import { LibraryPage } from './library';
 import { Player } from './player';
@@ -636,7 +637,9 @@ function App() {
     }, [ session, localLogin, quickConnectSelected, quickConnectEnabled, server, quickConnectAttempt ]);
 
     useEffect(() => {
-        document.documentElement.classList.toggle('tv-client', isTvClient());
+        const tvClient = isTvClient();
+        document.documentElement.classList.toggle('tv-client', tvClient);
+        document.documentElement.classList.toggle('tv-no-grid', tvClient && !supportsCssGrid());
     }, []);
 
     useEffect(() => {
@@ -2900,9 +2903,10 @@ function App() {
         return <Suspense fallback={<main class="admin-workspace"><p class="ad-page" role="status">{t('Loading admin workspace…')}</p></main>}><AdminDashboard key={session.user.Id} api={api} session={session} onBack={backToMedia} /></Suspense>;
     }
 
+    const showTopbar = !(view === 'profile' && profileScreen === 'accounts');
     return <>
-    <div class={music.current && view !== 'nowplaying' ? 'app-shell has-music' : 'app-shell'} aria-hidden={view === 'player'}>
-        {!(view === 'profile' && profileScreen === 'accounts') && <header class="topbar">
+    <div class={`app-shell${music.current && view !== 'nowplaying' ? ' has-music' : ''}${showTopbar ? '' : ' no-topbar'}`} aria-hidden={view === 'player'}>
+        {showTopbar && <header class="topbar">
             <a class="brand" href="#home" onClick={e => { e.preventDefault(); goHome(); }} aria-label={t('Jellyfin home')}><span class="brand-mark small">J</span><span>{t('Jellyfin')}</span></a>
             <button
                 ref={hamburgerRef}
@@ -3547,8 +3551,8 @@ function VirtualizedMediaGrid({ items, api, onSelect, hasMore = false, onNearEnd
         const measure = () => {
             const card = grid.querySelector<HTMLElement>('.media-card');
             const style = window.getComputedStyle(grid);
-            const columns = Math.max(1, style.gridTemplateColumns.split(' ').filter(Boolean).length);
-            const rowGap = parseFloat(style.rowGap || style.gap || '0') || 0;
+            const columns = libraryColumnCount(style, '--tv-poster-grid-columns');
+            const rowGap = libraryGaps(style, '--tv-poster-grid').rowGap;
             const cardHeight = card?.getBoundingClientRect().height || 350;
             geometryRef.current = {
                 columns,

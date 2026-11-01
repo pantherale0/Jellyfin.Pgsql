@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { resetFakeServer } from '../support/control-client';
-import { box, captureLayout, expectControl, expectInViewport, expectLibraryRows, expectLoadedImage, expectNoPageOverflow, expectTextSize, removeModernSizing, tvMinimums, tvViewports } from '../support/layout-assertions';
-import { installLogoFixture } from '../support/layout-fixtures';
+import { box, captureLayout, disableCssGrid, expectControl, expectInViewport, expectLibraryRows, expectLoadedImage, expectNoPageOverflow, expectTextSize, removeModernSizing, tvMinimums, tvViewports } from '../support/layout-assertions';
+import { installGuideFixture, installLogoFixture } from '../support/layout-fixtures';
 import { TvPage } from '../support/tv-page';
 
 async function expectEpisodeShape(page: Page): Promise<void> {
@@ -147,6 +147,77 @@ for (const viewport of tvViewports) {
             await expectEpisodeShape(page);
             await expectNoPageOverflow(page);
             await captureLayout(page, testInfo, 'tv-degraded-css-episodes');
+        });
+
+        test('Chromium 53 flex fallback keeps library, search and episode cards in usable rows', async ({ page }, testInfo) => {
+            await disableCssGrid(page);
+            const searchMovies = Array.from({ length: 6 }, (_value, index) => ({
+                Id: `gridless-search-${index + 1}`,
+                Name: `Gridless Search ${index + 1}`,
+                Type: 'Movie',
+                ProductionYear: 2024,
+                ImageTags: { Primary: `gridless-search-${index + 1}` },
+                UserData: { IsFavorite: false }
+            }));
+            await page.route(url => url.pathname === '/Items' && new URL(url).searchParams.has('SearchTerm'), route => route.fulfill({
+                json: { Items: searchMovies, TotalRecordCount: searchMovies.length }
+            }));
+            const tv = new TvPage(page);
+            await tv.open();
+            await expect(page.locator('html.tv-no-grid')).toHaveCount(1);
+            await expect(page.locator('.topbar')).toHaveCSS('position', 'fixed');
+            await tv.openLibrary('Movies');
+            await expectLibraryRows(page);
+            await expect(page.locator('.library-grid-window')).toHaveCSS('display', 'flex');
+            await captureLayout(page, testInfo, 'tv-no-grid-library');
+
+            await page.getByRole('button', { name: 'Search your library', exact: true }).click();
+            await page.getByRole('textbox', { name: 'Search query', exact: true }).fill('gridless');
+            const posterGrid = page.locator('.poster-grid.virtualized-poster-grid');
+            await expect(posterGrid).toHaveCSS('display', 'flex');
+            const posterRows = await posterGrid.locator('.virtual-grid-cell').evaluateAll(elements => elements.map(element => {
+                const rect = element.getBoundingClientRect();
+                return { x: rect.x, y: rect.y };
+            }));
+            expect(posterRows).toHaveLength(6);
+            const posterColumns = viewport.height >= 1080 ? 5 : 4;
+            expect(posterRows.slice(0, posterColumns).every(row => Math.abs(row.y - (posterRows[0]?.y ?? 0)) <= 2)).toBe(true);
+            expect((posterRows[posterColumns]?.y ?? 0)).toBeGreaterThan(posterRows[0]?.y ?? 0);
+            await captureLayout(page, testInfo, 'tv-no-grid-poster-results');
+
+            await tv.openLibrary('Shows');
+            await page.getByRole('button', { name: /^View E2E Series/ }).click();
+            await expect(page.locator('.episode-explorer')).toHaveCSS('display', 'flex');
+            await expect(page.locator('.episode-card').first()).toHaveCSS('display', 'flex');
+            await expectEpisodeShape(page);
+            await expectNoPageOverflow(page);
+            await captureLayout(page, testInfo, 'tv-no-grid-episodes');
+
+            await installGuideFixture(page, 12);
+            await page.goto('/?live=guide');
+            const guide = page.locator('.live-guide-scroll');
+            await expect(guide).toBeVisible();
+            await guide.evaluate(element => { element.scrollTop = 180; element.scrollLeft = 420; });
+            await expect.poll(() => guide.evaluate(element => getComputedStyle(element).getPropertyValue('--tv-guide-scroll-left'))).toBe('420px');
+            const pinned = await page.evaluate(() => {
+                const scroller = document.querySelector<HTMLElement>('.live-guide-scroll');
+                const header = scroller?.querySelector<HTMLElement>('.live-guide-head');
+                const corner = scroller?.querySelector<HTMLElement>('.live-ruler-corner');
+                const channel = scroller?.querySelector<HTMLElement>('.live-channel');
+                if (!scroller || !header || !corner || !channel) return null;
+                const scrollBox = scroller.getBoundingClientRect();
+                return {
+                    headerTop: header.getBoundingClientRect().top - scrollBox.top - scroller.clientTop,
+                    cornerLeft: corner.getBoundingClientRect().left - scrollBox.left - scroller.clientLeft,
+                    channelLeft: channel.getBoundingClientRect().left - scrollBox.left - scroller.clientLeft
+                };
+            });
+            expect(pinned).not.toBeNull();
+            if (!pinned) return;
+            expect(Math.abs(pinned.headerTop)).toBeLessThanOrEqual(2);
+            expect(Math.abs(pinned.cornerLeft)).toBeLessThanOrEqual(2);
+            expect(Math.abs(pinned.channelLeft)).toBeLessThanOrEqual(2);
+            await captureLayout(page, testInfo, 'tv-no-grid-live-guide');
         });
     });
 }
