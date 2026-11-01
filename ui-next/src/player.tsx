@@ -1619,11 +1619,16 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
                 reveal();
                 return;
             }
-            if (action === 'toggle' || action === 'play' || action === 'pause' || action === 'stop') {
+            if (action === 'toggle' || action === 'play' || action === 'pause' || action === 'stop' || action === 'rewind' || action === 'fast-forward') {
                 event.preventDefault();
                 if (action === 'stop') {
                     withVideo(rememberPosition);
                     onBackRef.current();
+                    return;
+                }
+                if (action === 'rewind' || action === 'fast-forward') {
+                    seekBy(action === 'rewind' ? -10 : 10);
+                    reveal();
                     return;
                 }
                 withVideo(video => {

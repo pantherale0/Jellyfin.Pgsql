@@ -714,13 +714,15 @@ export function seasonLabel(number: number | undefined): string {
     return `Season ${number}`;
 }
 
-export type PlayerKeyAction = 'toggle' | 'play' | 'pause' | 'stop' | 'select';
+export type PlayerKeyAction = 'toggle' | 'play' | 'pause' | 'stop' | 'rewind' | 'fast-forward' | 'select';
 
 export function classifyPlayerKey(key: string, keyCode?: number): PlayerKeyAction | null {
     if (key === 'MediaPlayPause' || keyCode === 10252) return 'toggle';
     if (key === 'MediaPlay' || keyCode === 415) return 'play';
-    if (key === 'MediaPause' || key === 'Pause') return 'pause';
+    if (key === 'MediaPause' || key === 'Pause' || keyCode === 19) return 'pause';
     if (key === 'MediaStop' || keyCode === 413) return 'stop';
+    if (key === 'MediaRewind' || key === 'Rewind' || keyCode === 412) return 'rewind';
+    if (key === 'MediaFastForward' || key === 'FastForward' || keyCode === 417) return 'fast-forward';
     if (key === 'Enter' || key === 'Select') return 'select';
     return null;
 }

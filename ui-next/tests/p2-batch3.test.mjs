@@ -46,3 +46,12 @@ test('PLAY-11 and PLAY-13 media and select keys classify to explicit player acti
     assert.match(player, /actions\.forEach\(\(\[ action \]\) => setHandler\(action, null\)\)/, 'video MediaSession handlers are cleared on exit');
     assert.match(player, /if \(action === 'stop'\) \{\s+withVideo\(rememberPosition\);\s+onBackRef\.current\(\);/, 'MediaStop key follows the same position-preserving leave path');
 });
+
+test('LG conventional-remote pause, rewind, and fast-forward codes classify to player actions', async () => {
+    const { classifyPlayerKey } = await import('../src/player-model.ts');
+    assert.equal(classifyPlayerKey('Unidentified', 19), 'pause');
+    assert.equal(classifyPlayerKey('Unidentified', 412), 'rewind');
+    assert.equal(classifyPlayerKey('Unidentified', 417), 'fast-forward');
+    assert.equal(classifyPlayerKey('MediaRewind', 0), 'rewind');
+    assert.equal(classifyPlayerKey('MediaFastForward', 0), 'fast-forward');
+});
