@@ -106,8 +106,13 @@ export function remoteTrailerCases() {
         const favorite = page.getByRole('button', { name: 'Add to favorites', exact: true });
         await expect(favorite).toHaveAttribute('aria-pressed', 'false');
         const rect = await favorite.boundingBox();
-        expect(rect?.width).toBe(48);
-        expect(rect?.height).toBe(48);
+        const expectedTarget = await page.evaluate(() => {
+            const root = document.documentElement;
+            if (!root.classList.contains('tv-client')) return 48;
+            return Number.parseFloat(getComputedStyle(root).getPropertyValue('--tv-control'));
+        });
+        expect(rect?.width).toBe(expectedTarget);
+        expect(rect?.height).toBe(expectedTarget);
         await expect(favorite).toHaveText('');
         await favorite.click();
         await expect(page.getByRole('button', { name: 'Remove from favorites', exact: true })).toHaveAttribute('aria-pressed', 'true');

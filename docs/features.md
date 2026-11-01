@@ -14,6 +14,8 @@ UI Next prefetches full item details for the active home recommendation. Poster 
 
 UI Next adapts its shared library, Search, Filters, Favorites, Live TV Guide, and Home hero to phone-sized screens. Favorites includes a Live TV channel group with direct per-profile removal and Undo; Guide rows include channel favorite controls, including in compact Guide rows. The Guide grid shows channel logos when available and falls back to channel names otherwise. Guide stars remain visible on pointer desktops and touch layouts, and TV remote users can focus and activate them. Poster actions move below the artwork, List actions move below row content, and the first Home feed card appears in the initial viewport.
 
+TV clients use a separate ten-foot layout with larger text and remote targets, larger media cards, a shorter Home hero, aligned shelf headings, landscape episode artwork, and roomier Live TV Guide rows. Browser layout tests cover 1280×720 and 1920×1080, but simulator results do not replace checking readability and remote focus on the target TV.
+
 Library poster cards show a corner check for watched items. Unwatched items have no watched badge. Series cards keep their unplayed episode count, and in-progress items keep the progress bar.
 
 The administrator workspace includes its own Metadata manager. The image does not include Jellyfin Web, and the custom Jellyfin Web patch stack has been removed. See the [confirmed UI Next gaps](#features-not-yet-in-ui-next) below.

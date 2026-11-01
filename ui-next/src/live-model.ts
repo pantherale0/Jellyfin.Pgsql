@@ -12,6 +12,20 @@ export const GUIDE_ROW_OVERSCAN = 2;
 export const CHANNEL_PAGE_SIZE = 30;
 export const GUIDE_HEADER_HEIGHT = 56;
 
+export interface GuideGeometry { rowHeight: number; channelWidth: number; headerHeight: number }
+
+export function guideGeometry(style: Pick<CSSStyleDeclaration, 'getPropertyValue'>): GuideGeometry {
+    const dimension = (property: string, fallback: number) => {
+        const value = parseFloat(style.getPropertyValue(property));
+        return Number.isFinite(value) && value > 0 ? value : fallback;
+    };
+    return {
+        rowHeight: dimension('--guide-row-height', GUIDE_ROW_HEIGHT),
+        channelWidth: dimension('--guide-channel-width', GUIDE_CHANNEL_WIDTH),
+        headerHeight: dimension('--guide-header-height', GUIDE_HEADER_HEIGHT)
+    };
+}
+
 export interface GuideDay {
     label: string;
     start: number;
@@ -287,10 +301,10 @@ export function chunkStarts(rangeStart: number, rangeEnd: number): number[] {
     return starts;
 }
 
-export function visibleIndexRange(scrollTop: number, viewport: number, count: number): IndexRange {
+export function visibleIndexRange(scrollTop: number, viewport: number, count: number, rowHeight = GUIDE_ROW_HEIGHT): IndexRange {
     if (count <= 0 || viewport <= 0) return { start: 0, end: 0 };
-    const start = Math.max(0, Math.floor(scrollTop / GUIDE_ROW_HEIGHT) - GUIDE_ROW_OVERSCAN);
-    const end = Math.min(count, Math.ceil((scrollTop + viewport) / GUIDE_ROW_HEIGHT) + GUIDE_ROW_OVERSCAN);
+    const start = Math.max(0, Math.floor(scrollTop / rowHeight) - GUIDE_ROW_OVERSCAN);
+    const end = Math.min(count, Math.ceil((scrollTop + viewport) / rowHeight) + GUIDE_ROW_OVERSCAN);
     return { start, end: Math.max(start, end) };
 }
 
@@ -301,10 +315,10 @@ export function timeRenderPadding(rowCount: number, visibleMinutes: number): num
     return padMinutes * 60000;
 }
 
-export function visibleTimeRange(scrollLeft: number, viewportWidth: number, windowStart: number): { start: number; end: number } {
-    const width = Math.max(viewportWidth, GUIDE_CHANNEL_WIDTH + 80);
+export function visibleTimeRange(scrollLeft: number, viewportWidth: number, windowStart: number, channelWidth = GUIDE_CHANNEL_WIDTH): { start: number; end: number } {
+    const width = Math.max(viewportWidth, channelWidth + 80);
     const trackLeft = Math.max(0, scrollLeft);
-    const trackRight = Math.max(trackLeft, scrollLeft + width - GUIDE_CHANNEL_WIDTH);
+    const trackRight = Math.max(trackLeft, scrollLeft + width - channelWidth);
     return {
         start: windowStart + (trackLeft / PIXELS_PER_MINUTE) * 60000,
         end: windowStart + (trackRight / PIXELS_PER_MINUTE) * 60000

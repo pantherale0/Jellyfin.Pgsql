@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { tabbableWithin, useDialogFocus, virtualTabTarget } from './dialog-focus';
 import { userMessage } from './ui-errors';
-import { libraryGeometry } from './library-geometry';
+import { libraryCaptionHeight, libraryColumnCount, libraryGeometry } from './library-geometry';
 import { JellyfinApi, peekCachedImage, releaseCachedImage, retainCachedImage } from './api';
 import { activeFilterCount as countFilters, decadeYears, defaultLibraryQuery, librarySortOptions, splitValues, toggleValue } from './library-query';
 import { cardImageType, currentMode, libraryModes } from './library-modes';
@@ -846,7 +846,7 @@ function ViewSwitch({ view, onChange }: { view: LibraryView; onChange: (view: Li
 
 function columnCount(element: HTMLElement): number {
     const style = getComputedStyle(element);
-    return Math.max(1, style.gridTemplateColumns.split(' ').filter(Boolean).length);
+    return libraryColumnCount(style);
 }
 
 function stickyHeaderHeight(): number {
@@ -866,7 +866,8 @@ function rowHeight(element: HTMLElement, view: LibraryView): number {
     const gapX = parseFloat(style.columnGap || '0') || 0;
     const contentWidth = element.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
     const width = (contentWidth - gapX * (columns - 1)) / columns;
-    return width * libraryGeometry(style).posterRatio + gapY;
+    const geometry = libraryGeometry(style);
+    return width * geometry.posterRatio + libraryCaptionHeight(style) + gapY;
 }
 
 interface GridProps {

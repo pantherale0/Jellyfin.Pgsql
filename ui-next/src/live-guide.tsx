@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { JellyfinApi, peekCachedImage, releaseCachedImage, retainCachedImage } from './api';
-import { GUIDE_CHANNEL_WIDTH, GUIDE_HEADER_HEIGHT, GUIDE_ROW_HEIGHT, PIXELS_PER_MINUTE, artType, directionalFocusIndex, elapsedStop, episodeCode, formatClock, formatRange, guideChannelLogoType, guideSegments, isAiring, mediaTags, moveGuideFocus, moveGuideToolbar, programBadges, rulerTicks, segmentBox, timelineWidth, timeRenderPadding, visibleIndexRange, visibleTimeRange, type GuideChannelLogoType, type GuideDay, type GuideDirection, type GuideFocusProgram, type GuideFocusTarget, type GuideNavigationContext, type GuideSegment, type GuideToolbarControl } from './live-model';
+import { PIXELS_PER_MINUTE, artType, directionalFocusIndex, elapsedStop, episodeCode, formatClock, formatRange, guideChannelLogoType, guideGeometry, guideSegments, isAiring, mediaTags, moveGuideFocus, moveGuideToolbar, programBadges, rulerTicks, segmentBox, timelineWidth, timeRenderPadding, visibleIndexRange, visibleTimeRange, type GuideGeometry, type GuideChannelLogoType, type GuideDay, type GuideDirection, type GuideFocusProgram, type GuideFocusTarget, type GuideNavigationContext, type GuideSegment, type GuideToolbarControl } from './live-model';
 import type { LiveChannelFilter, MediaItem } from './types';
 import { t } from './i18n';
 
@@ -183,6 +183,14 @@ export function GuideToolbar({ days, dayStart, digits, filter, onDay, onFilter, 
 }
 
 export function LiveGuide(props: LiveGuideProps) {
+    const [ geometry, setGeometry ] = useState(() => guideGeometry(getComputedStyle(document.documentElement)));
+    const { rowHeight: GUIDE_ROW_HEIGHT, channelWidth: GUIDE_CHANNEL_WIDTH, headerHeight: GUIDE_HEADER_HEIGHT } = geometry;
+    useLayoutEffect(() => {
+        const measureGeometry = () => setGeometry(guideGeometry(getComputedStyle(document.documentElement)));
+        window.addEventListener('resize', measureGeometry);
+        measureGeometry();
+        return () => window.removeEventListener('resize', measureGeometry);
+    }, []);
     const scrollerRef = useRef<HTMLDivElement>(null);
     const previousStart = useRef(props.windowStart);
     const extendLock = useRef(0);
@@ -196,8 +204,8 @@ export function LiveGuide(props: LiveGuideProps) {
     const [ hover, setHover ] = useState<HoverState | null>(null);
     const finePointer = useRef(typeof window !== 'undefined' && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
     const width = timelineWidth(props.windowStart, props.windowEnd);
-    const rows = visibleIndexRange(scroll.top, Math.max(120, scroll.height - GUIDE_HEADER_HEIGHT), props.channels.length);
-    const time = visibleTimeRange(scroll.left, scroll.width, props.windowStart);
+    const rows = visibleIndexRange(scroll.top, Math.max(120, scroll.height - GUIDE_HEADER_HEIGHT), props.channels.length, GUIDE_ROW_HEIGHT);
+    const time = visibleTimeRange(scroll.left, scroll.width, props.windowStart, GUIDE_CHANNEL_WIDTH);
     const visibleMinutes = Math.max(30, (time.end - time.start) / 60000);
     const pad = timeRenderPadding(Math.max(1, rows.end - rows.start), visibleMinutes);
     const renderStart = time.start - pad;
@@ -221,8 +229,8 @@ export function LiveGuide(props: LiveGuideProps) {
         const measure = () => {
             const next = { top: scroller.scrollTop, left: scroller.scrollLeft, width: scroller.clientWidth, height: scroller.clientHeight };
             setScroll(current => {
-                const currentRows = visibleIndexRange(current.top, Math.max(120, current.height - GUIDE_HEADER_HEIGHT), props.channels.length);
-                const nextRows = visibleIndexRange(next.top, Math.max(120, next.height - GUIDE_HEADER_HEIGHT), props.channels.length);
+                const currentRows = visibleIndexRange(current.top, Math.max(120, current.height - GUIDE_HEADER_HEIGHT), props.channels.length, GUIDE_ROW_HEIGHT);
+                const nextRows = visibleIndexRange(next.top, Math.max(120, next.height - GUIDE_HEADER_HEIGHT), props.channels.length, GUIDE_ROW_HEIGHT);
                 const rowChanged = currentRows.start !== nextRows.start || currentRows.end !== nextRows.end;
                 const timeChanged = Math.abs(current.left - next.left) > 24 || current.width !== next.width || current.height !== next.height;
                 if (!rowChanged && !timeChanged) return current;
@@ -237,7 +245,7 @@ export function LiveGuide(props: LiveGuideProps) {
         }
         window.addEventListener('resize', measure);
         return () => window.removeEventListener('resize', measure);
-    }, [ props.channels.length, props.windowStart, props.windowEnd ]);
+    }, [ props.channels.length, props.windowStart, props.windowEnd, GUIDE_ROW_HEIGHT, GUIDE_HEADER_HEIGHT ]);
 
     useEffect(() => {
         onVisibleRef.current(rows.start, rows.end);
@@ -297,8 +305,8 @@ export function LiveGuide(props: LiveGuideProps) {
         if (!scroller) return;
         const next = { top: scroller.scrollTop, left: scroller.scrollLeft, width: scroller.clientWidth, height: scroller.clientHeight };
         setScroll(current => {
-            const currentRows = visibleIndexRange(current.top, Math.max(120, current.height - GUIDE_HEADER_HEIGHT), props.channels.length);
-            const nextRows = visibleIndexRange(next.top, Math.max(120, next.height - GUIDE_HEADER_HEIGHT), props.channels.length);
+            const currentRows = visibleIndexRange(current.top, Math.max(120, current.height - GUIDE_HEADER_HEIGHT), props.channels.length, GUIDE_ROW_HEIGHT);
+            const nextRows = visibleIndexRange(next.top, Math.max(120, next.height - GUIDE_HEADER_HEIGHT), props.channels.length, GUIDE_ROW_HEIGHT);
             const rowChanged = currentRows.start !== nextRows.start || currentRows.end !== nextRows.end;
             const timeChanged = Math.abs(current.left - next.left) > 24 || current.width !== next.width;
             if (!rowChanged && !timeChanged && Math.abs(current.top - next.top) < 4) return current;
@@ -459,7 +467,7 @@ export function LiveGuide(props: LiveGuideProps) {
                     const index = rows.start + offset;
                     const segments = guideSegments(props.programsByChannel[channel.Id] || [], props.windowStart, props.windowEnd)
                         .filter(segment => segment.end > renderStart && segment.start < renderEnd);
-                    return <GuideRow key={channel.Id} api={props.api} channel={channel} index={index} segments={segments} windowStart={props.windowStart} now={props.now} onToggleFavorite={props.onToggleFavorite} favoriteBusyId={props.favoriteBusyId} onOpenProgram={props.onOpenProgram} onTune={props.onTune} onHover={showHover} onHide={hideHover} />;
+                    return <GuideRow key={channel.Id} geometry={geometry} api={props.api} channel={channel} index={index} segments={segments} windowStart={props.windowStart} now={props.now} onToggleFavorite={props.onToggleFavorite} favoriteBusyId={props.favoriteBusyId} onOpenProgram={props.onOpenProgram} onTune={props.onTune} onHover={showHover} onHide={hideHover} />;
                 })}
                 {!props.loading && !props.channels.length && <p class="live-empty">{t('No channels are available for this filter.')}</p>}
                 {props.loading && !props.channels.length && <p class="live-empty">{t('Loading the guide…')}</p>}
@@ -475,7 +483,8 @@ export function LiveGuide(props: LiveGuideProps) {
     </div>;
 }
 
-function GuideRow({ api, channel, index, segments, windowStart, now, onToggleFavorite, favoriteBusyId, onOpenProgram, onTune, onHover, onHide }: {
+function GuideRow({ geometry, api, channel, index, segments, windowStart, now, onToggleFavorite, favoriteBusyId, onOpenProgram, onTune, onHover, onHide }: {
+    geometry: GuideGeometry;
     api: JellyfinApi;
     channel: MediaItem;
     index: number;
@@ -490,6 +499,7 @@ function GuideRow({ api, channel, index, segments, windowStart, now, onToggleFav
     onHide: () => void;
 }) {
     const favorite = Boolean(channel.UserData?.IsFavorite);
+    const { rowHeight: GUIDE_ROW_HEIGHT, headerHeight: GUIDE_HEADER_HEIGHT } = geometry;
     return <div class="live-row" role="row" aria-rowindex={index + 2} style={{ top: `${GUIDE_HEADER_HEIGHT + index * GUIDE_ROW_HEIGHT}px` }}>
         <div class="live-channel" role="rowheader" aria-colindex={1}>
             <button type="button" class="live-channel-tune" data-focusable="true" data-rail="true" data-channel-id={channel.Id} id={`live-channel-${channel.Id}`} aria-label={t('Channel {0}: {1}', channel.ChannelNumber || '—', channel.Name)} onClick={() => onTune(channel)}>

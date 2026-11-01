@@ -1394,7 +1394,7 @@ html:not(.tv-client) .library-card-menu, html:not(.tv-client) .detail-action-men
 .ad-legacy-iframe { width: 100%; min-height: 400px; border: 1px solid var(--a-line); border-radius: 8px; background: #fff; }
 .ad-unsaved-bar { position: sticky; bottom: 0; z-index: 10; display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 12px 24px; border-top: 1px solid var(--a-am); background: rgba(245,158,11,.06); }
 
-.tv-client [data-focusable="true"]:focus { outline: 3px solid var(--accent); outline-offset: -3px; }
+.tv-client [data-focusable="true"]:focus { outline: var(--tv-focus-ring, 3px) solid var(--accent); outline-offset: -3px; }
 .tv-client .tv-search-key[data-focusable="true"]:focus,
 
 .tv-client .home-library-chip[data-focusable="true"]:focus,
@@ -1419,12 +1419,12 @@ html:not(.tv-client) .library-card-menu, html:not(.tv-client) .detail-action-men
 /* Paint the ring above artwork images and progress without framing metadata. */
 .tv-client .home-feed-card[data-focusable="true"]:focus .home-feed-card-art::after,
 .tv-client .media-card[data-focusable="true"]:focus .artwork::after,
-.tv-client .library-card-open[data-focusable="true"]:focus .library-card-art::after { content: ''; position: absolute; inset: 0; z-index: 3; border: 3px solid var(--accent); border-radius: inherit; pointer-events: none; }
+.tv-client .library-card-open[data-focusable="true"]:focus .library-card-art::after { content: ''; position: absolute; inset: 0; z-index: 3; border: var(--tv-focus-ring, 3px) solid var(--accent); border-radius: inherit; pointer-events: none; }
 
-.tv-client .recommendation-dot[data-focusable="true"]:focus { box-shadow: none; outline: 3px solid var(--accent); outline-offset: 4px; }
+.tv-client .recommendation-dot[data-focusable="true"]:focus { box-shadow: none; outline: var(--tv-focus-ring, 3px) solid var(--accent); outline-offset: 4px; }
 .tv-client .alpha-scrubber button[data-focusable="true"]:focus { box-shadow: none; outline: none; }
-.tv-client .login-card [data-focusable="true"]:focus { outline: 3px solid var(--accent); outline-offset: 4px; }
-.tv-client .remembered-user[data-focusable="true"]:focus { outline: 3px solid var(--accent); outline-offset: 6px; }
+.tv-client .login-card [data-focusable="true"]:focus { outline: var(--tv-focus-ring, 3px) solid var(--accent); outline-offset: 4px; }
+.tv-client .remembered-user[data-focusable="true"]:focus { outline: var(--tv-focus-ring, 3px) solid var(--accent); outline-offset: 6px; }
 
 .tv-client .show-detail-view { --global-header-height: var(--topbar-height); --season-rail-height: 56px; }
 .tv-client .live-channel .live-star { flex: 0 0 48px; width: 48px; min-width: 48px; height: 48px; }
@@ -1433,7 +1433,7 @@ html:not(.tv-client) .library-card-menu, html:not(.tv-client) .detail-action-men
 .tv-client .episode-copy > p { font-size: 18px; line-height: 1.6; color: var(--text-2); }
 .tv-client .episode-card:focus-within { border-color: rgba(178,239,90,.65); background: rgba(178,239,90,.1); }
 .tv-client .episode-art-button[data-focusable="true"]:focus { outline: none; }
-.tv-client .episode-art-button[data-focusable="true"]:focus::after { content: ''; position: absolute; inset: 0; z-index: 3; border: 3px solid var(--accent); border-radius: inherit; pointer-events: none; }
+.tv-client .episode-art-button[data-focusable="true"]:focus::after { content: ''; position: absolute; inset: 0; z-index: 3; border: var(--tv-focus-ring, 3px) solid var(--accent); border-radius: inherit; pointer-events: none; }
 
 @media (max-width: 760px) {
     .tv-client .season-mobile-rail { top: var(--global-header-height); height: var(--season-rail-height); }
@@ -1898,3 +1898,358 @@ html[data-motion=reduce] *, html[data-motion=reduce] *::before, html[data-motion
 [dir=rtl] .recommendation-title-logo, [dir=rtl] .content-title-logo { object-position: right center; }
 /* Time runs left to right in the guide and on the seek bar in every language. */
 [dir=rtl] .player-timeline, [dir=rtl] .player-osd-bottom, [dir=rtl] .live-guide-scroll { direction: ltr; }
+
+/* Ten-foot layout. Essential geometry deliberately avoids clamp(), aspect-ratio,
+   inset shorthand and flex gap: older webOS Chromium must render the same boxes. */
+html.tv-client {
+    --tv-min-text: 28px;
+    --tv-meta-text: 24px;
+    --tv-heading: 38px;
+    --tv-control: 64px;
+    --tv-focus-ring: 5px;
+    --tv-space: 24px;
+    --tv-poster-width: 260px;
+    --tv-poster-height: 390px;
+    --tv-landscape-width: 420px;
+    --tv-landscape-height: 236.25px;
+    --tv-hero-height: 460px;
+    --tv-title-height: 120px;
+    --tv-episode-width: 320px;
+    --tv-episode-height: 180px;
+    --topbar-height: 104px;
+    --safe-area-top: 0px;
+    --page-gutter: 64px;
+    --guide-row-height: 112px;
+    --guide-channel-width: 320px;
+    --guide-header-height: 72px;
+    font-size: 18px;
+}
+html.tv-client body { font-size: var(--tv-min-text); line-height: 1.4; overflow-x: hidden; }
+html.tv-client .app-shell { overflow-x: hidden; }
+html.tv-client .main-content { max-width: none; margin: 0; }
+html.tv-client .topbar { height: var(--topbar-height); padding: 0 var(--page-gutter); gap: 0; }
+html.tv-client .topbar > * + * { margin-inline-start: var(--tv-space); }
+html.tv-client .topbar .search-box { margin-inline-start: auto; padding-inline-start: var(--tv-space); }
+html.tv-client .brand { font-size: var(--tv-min-text); gap: 0; }
+html.tv-client .brand > span + span { margin-inline-start: 14px; }
+html.tv-client .brand-mark.small { width: 56px; height: 56px; font-size: 30px; }
+html.tv-client .primary-nav { gap: 0; padding-inline-end: 0; mask-image: none; -webkit-mask-image: none; }
+html.tv-client .nav-link { min-height: var(--tv-control); padding: 12px 18px; font-size: var(--tv-min-text); flex: 0 0 auto; }
+html.tv-client .profile-button,
+html.tv-client .search-toggle,
+html.tv-client .search-box.collapsed .search-toggle,
+html.tv-client .hamburger-button { width: var(--tv-control); height: var(--tv-control); font-size: 32px; }
+html.tv-client [data-focusable="true"] { scroll-margin-top: calc(var(--topbar-height) + 24px); }
+html.tv-client .button,
+html.tv-client .back-link,
+html.tv-client .home-library-chip,
+html.tv-client .home-spotlight-actions button,
+html.tv-client .profile-menu > button,
+html.tv-client .library-card-menu > button,
+html.tv-client .detail-menu-item,
+html.tv-client .live-tab,
+html.tv-client .live-pill,
+html.tv-client .live-filter,
+html.tv-client .season-side-link,
+html.tv-client .player-menu-item,
+html.tv-client .player-season,
+html.tv-client .player-skip { min-height: var(--tv-control); font-size: var(--tv-min-text); line-height: 1.3; }
+html.tv-client .eyebrow,
+html.tv-client .recommendation-metadata,
+html.tv-client .metadata,
+html.tv-client .show-metadata,
+html.tv-client .home-spotlight-metadata span,
+html.tv-client .home-spotlight-eyebrow,
+html.tv-client .media-year,
+html.tv-client .home-feed-card-overlay small,
+html.tv-client .library-card-overlay small,
+html.tv-client .detail-badge,
+html.tv-client .detail-chip small { font-size: var(--tv-meta-text); line-height: 1.4; }
+html.tv-client .overview,
+html.tv-client .show-overview,
+html.tv-client .recommendation-overview,
+html.tv-client .hero-copy > p:not(.eyebrow),
+html.tv-client .home-spotlight-description { max-width: 880px; font-size: var(--tv-min-text); line-height: 1.45; }
+html.tv-client .section-heading h2,
+html.tv-client .home-feed-rail .section-heading h2,
+html.tv-client .season-heading-copy h2,
+html.tv-client .detail-body h2 { font-size: var(--tv-heading); line-height: 1.2; }
+html.tv-client .home-library-chips { gap: 0; padding: 16px var(--page-gutter); }
+html.tv-client .home-library-chip { margin: 0 16px 12px 0; padding: 10px 24px; }
+html.tv-client .section-block { margin: 32px 0 48px; }
+html.tv-client .home-feed-rail { margin: 24px 0 48px; }
+html.tv-client .home-feed-rail .section-heading { margin: 0 0 12px; padding: 0 var(--page-gutter); }
+html.tv-client .home-feed-rail-items,
+html.tv-client .media-row { gap: 0; padding: 12px var(--page-gutter) 16px; overflow-y: hidden; scroll-padding-left: var(--page-gutter); }
+html.tv-client .home-feed-card,
+html.tv-client .media-card { width: var(--tv-poster-width); flex: 0 0 var(--tv-poster-width); margin-inline-end: var(--tv-space); }
+html.tv-client .home-feed-card.landscape { width: var(--tv-landscape-width); flex-basis: var(--tv-landscape-width); }
+html.tv-client .home-feed-card-art,
+html.tv-client .media-card-art { height: var(--tv-poster-height); aspect-ratio: auto; }
+html.tv-client .home-feed-card.landscape .home-feed-card-art { height: var(--tv-landscape-height); aspect-ratio: auto; }
+html.tv-client .media-name,
+html.tv-client .home-feed-card-overlay strong,
+html.tv-client .library-card-overlay strong { font-size: var(--tv-min-text); line-height: 1.3; }
+html.tv-client .media-card-overlay,
+html.tv-client .home-feed-card-overlay { padding: 70px 16px 16px; }
+html.tv-client .home-feed-rail-controls,
+html.tv-client .row-controls { gap: 0; }
+html.tv-client .home-feed-rail-controls button,
+html.tv-client .row-controls button,
+html.tv-client .recommendation-arrow { width: var(--tv-control); height: var(--tv-control); font-size: 32px; margin-inline-start: 12px; }
+html.tv-client .recommendation-hero,
+html.tv-client .welcome-hero { min-height: var(--tv-hero-height); padding: 24px var(--page-gutter) 32px; }
+html.tv-client .recommendation-copy { width: 58%; max-width: 960px; padding: 0; }
+html.tv-client .hero-copy { max-width: 880px; padding: 0; }
+html.tv-client .recommendation-title-slot,
+html.tv-client .content-title-slot { min-height: 0; height: var(--tv-title-height); margin-bottom: 16px; }
+html.tv-client .recommendation-title-logo,
+html.tv-client .content-title-logo { width: auto; height: auto; max-width: 560px; max-height: var(--tv-title-height); object-fit: contain; }
+html.tv-client .recommendation-copy h1,
+html.tv-client .hero-copy h1,
+html.tv-client .detail-content h1,
+html.tv-client .show-header-copy h1 { font-size: 56px; line-height: 1.1; letter-spacing: -.035em; }
+html.tv-client .recommendation-overview { margin: 16px 0 20px; -webkit-line-clamp: 2; }
+html.tv-client .recommendation-controls { right: var(--page-gutter); bottom: 24px; gap: 0; }
+html.tv-client .recommendation-count { font-size: var(--tv-meta-text); margin-inline-start: 16px; }
+html.tv-client .recommendation-pagination { gap: 0; max-width: 300px; }
+html.tv-client .recommendation-dot { width: 64px; height: 64px; flex-basis: 64px; margin: 0 4px; border: 20px solid transparent; background-clip: padding-box; }
+html.tv-client .recommendation-dot.active { width: 80px; flex-basis: 80px; }
+html.tv-client .home-spotlight { min-height: 380px; margin: 24px var(--page-gutter) 40px; padding: 32px; }
+html.tv-client .home-spotlight-content { width: 64%; max-width: 1000px; }
+html.tv-client .home-spotlight-content h2 { font-size: 44px; }
+html.tv-client .home-spotlight-metadata,
+html.tv-client .home-spotlight-actions,
+html.tv-client .detail-actions,
+html.tv-client .metadata,
+html.tv-client .show-metadata,
+html.tv-client .recommendation-metadata { gap: 0; flex-wrap: wrap; }
+html.tv-client .home-spotlight-metadata > *,
+html.tv-client .home-spotlight-actions > *,
+html.tv-client .detail-actions > *,
+html.tv-client .metadata > *,
+html.tv-client .show-metadata > *,
+html.tv-client .recommendation-metadata > * { margin: 0 16px 10px 0; }
+html.tv-client .detail-page { min-height: 580px; padding: 32px var(--page-gutter) 48px; overflow: visible; }
+html.tv-client .detail-content { width: 70%; max-width: 1120px; }
+html.tv-client .detail-content .eyebrow { margin-top: 24px; }
+html.tv-client .detail-actions .detail-favorite { width: var(--tv-control); height: var(--tv-control); flex-basis: var(--tv-control); }
+html.tv-client .detail-chip { min-height: var(--tv-control); align-items: center; font-size: var(--tv-min-text); }
+html.tv-client .detail-cast,
+html.tv-client .detail-row-items { gap: 0; padding: 12px 0 20px; }
+html.tv-client .detail-person { flex-basis: 200px; margin-inline-end: var(--tv-space); font-size: var(--tv-min-text); }
+html.tv-client .detail-person img,
+html.tv-client .detail-person-initial { width: 144px; height: 144px; }
+html.tv-client .detail-person small,
+html.tv-client .detail-card-open small { font-size: var(--tv-meta-text); }
+html.tv-client .detail-card { flex-basis: var(--tv-poster-width); margin-inline-end: var(--tv-space); }
+html.tv-client .detail-card-open { font-size: var(--tv-min-text); }
+html.tv-client .detail-card-art { height: var(--tv-poster-height); aspect-ratio: auto; }
+html.tv-client .entity-search-rows .detail-card-art { height: var(--tv-poster-width); }
+html.tv-client .show-backdrop { min-height: 460px; padding: 24px var(--page-gutter) 32px; }
+html.tv-client .show-header-copy { max-width: 1120px; }
+html.tv-client .show-overview { -webkit-line-clamp: 2; }
+html.tv-client .episode-explorer { grid-template-columns: 300px minmax(0, 1fr); grid-gap: 32px; max-width: none; padding: 24px var(--page-gutter) 64px; }
+html.tv-client .season-sidebar { top: calc(var(--topbar-height) + 24px); gap: 0; }
+html.tv-client .season-side-link { margin-bottom: 12px; gap: 0; }
+html.tv-client .season-thumb.artwork { width: 56px; height: 84px; margin-inline-end: 16px; }
+html.tv-client .season-side-text strong { font-size: var(--tv-min-text); }
+html.tv-client .season-side-text small,
+html.tv-client .season-heading-meta { font-size: var(--tv-meta-text); }
+html.tv-client .season-section-header { top: var(--topbar-height); padding: 16px 0; }
+html.tv-client .episode-list { grid-gap: 24px; padding-bottom: 160px; }
+html.tv-client .episode-card { grid-template-columns: var(--tv-episode-width) minmax(0, 1fr) var(--tv-control); grid-gap: 24px; min-height: calc(var(--tv-episode-height) + 26px); padding: 12px; }
+html.tv-client .episode-art-button { width: var(--tv-episode-width); height: var(--tv-episode-height); min-height: var(--tv-episode-height); align-self: center; }
+html.tv-client .episode-title { min-height: var(--tv-control); font-size: var(--tv-min-text); line-height: 1.3; gap: 0; }
+html.tv-client .episode-number { margin-inline-end: 12px; font-size: var(--tv-meta-text); }
+html.tv-client .episode-meta,
+html.tv-client .episode-runtime,
+html.tv-client .episode-watched { font-size: var(--tv-meta-text); line-height: 1.3; }
+html.tv-client .episode-meta { gap: 0; }
+html.tv-client .episode-meta > * + * { margin-inline-start: 16px; }
+html.tv-client .episode-copy > p { font-size: var(--tv-min-text); line-height: 1.4; -webkit-line-clamp: 2; }
+html.tv-client .episode-play { width: var(--tv-control); height: var(--tv-control); font-size: var(--tv-min-text); }
+
+/* The virtualizer reads these exact dimensions; captions are part of row pitch. */
+html.tv-client .library-grid-items { --tv-library-columns: 5; --library-caption-height: 84px; --library-list-row: 144px; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-gap: 32px 24px; padding: 24px var(--page-gutter) 48px; }
+html.tv-client .library-grid-items.library-view-thumb { --tv-library-columns: 3; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+html.tv-client .library-grid-items.library-view-banner { --tv-library-columns: 2; --library-poster-ratio: .25; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+html.tv-client .library-grid-items.library-view-list { --tv-library-columns: 1; --library-caption-height: 0px; grid-template-columns: minmax(0, 1fr); }
+html.tv-client .library-grid-cell { display: block; min-width: 0; }
+html.tv-client .library-card,
+html.tv-client .library-card-open { height: auto; }
+html.tv-client .library-card-art { height: 0; padding-top: calc(100% * var(--library-poster-ratio) + var(--library-caption-height)); aspect-ratio: auto; border: 0; }
+html.tv-client .library-card-art > img { position: absolute; top: 0; left: 0; width: 100%; height: calc(100% - var(--library-caption-height)); }
+html.tv-client .library-card-overlay { top: auto; right: 0; bottom: 0; left: 0; height: var(--library-caption-height); padding: 10px 4px 0; background: var(--bg); }
+html.tv-client .library-card-art > .art-placeholder { top: 0; right: 0; bottom: var(--library-caption-height); left: 0; height: auto; }
+html.tv-client .library-card-list { height: var(--library-list-row); }
+html.tv-client .library-card-list .library-card-open { height: 100%; padding: 12px 88px 12px 12px; gap: 0; }
+html.tv-client .library-card-list .library-card-art { width: 80px; height: 120px; padding-top: 0; margin-inline-end: 24px; }
+html.tv-client .library-card-list .library-card-copy strong { font-size: var(--tv-min-text); }
+html.tv-client .library-card-list .library-card-copy small { font-size: var(--tv-meta-text); }
+html.tv-client .library-list-actions button { min-width: var(--tv-control); min-height: var(--tv-control); font-size: var(--tv-min-text); }
+html.tv-client .library-sticky { height: auto; padding: 12px var(--page-gutter); }
+html.tv-client .library-controls { height: auto; min-height: 76px; flex-wrap: wrap; gap: 0; }
+html.tv-client .library-operation-controls { gap: 0; flex-wrap: wrap; }
+html.tv-client .library-operation-controls > * { margin: 4px 12px 4px 0; }
+html.tv-client .library-count { font-size: var(--tv-meta-text); }
+html.tv-client .library-select select,
+html.tv-client .library-sheet select,
+html.tv-client .library-sheet input,
+html.tv-client .library-title-search input,
+html.tv-client .library-select-toggle,
+html.tv-client .library-filter-open,
+html.tv-client .library-mode-tabs button,
+html.tv-client .library-filter-toggles button,
+html.tv-client .library-filter-chips button { min-height: var(--tv-control); height: auto; font-size: var(--tv-min-text); }
+html.tv-client .library-title-search input { width: 280px; }
+html.tv-client .library-select-toggle { min-width: 120px; padding: 8px 20px; }
+html.tv-client .library-mode-tabs { gap: 0; }
+html.tv-client .library-mode-tabs > * { margin-inline-end: 16px; }
+html.tv-client .library-view-switch { height: var(--tv-control); }
+html.tv-client .library-view-switch button { width: var(--tv-control); }
+html.tv-client .library-view-switch button::before { font-size: 32px; }
+html.tv-client .library-filter-popover,
+html.tv-client .library-page.has-modes .library-filter-popover { top: calc(var(--topbar-height) + 172px); right: var(--page-gutter); max-width: calc(100vw - 128px); max-height: calc(100vh - var(--topbar-height) - 196px); grid-template-columns: repeat(3, minmax(180px, 1fr)); }
+html.tv-client .alpha-scrubber { top: calc(var(--topbar-height) + 180px); right: 12px; bottom: 24px; width: 40px; padding: 0; }
+html.tv-client .alpha-scrubber button { font-size: var(--tv-meta-text); }
+
+html.tv-client .player-osd-top { padding: 32px var(--page-gutter) 100px; gap: 0; }
+html.tv-client .player-osd-top h1 { font-size: var(--tv-heading); margin-inline-start: 24px; }
+html.tv-client .player-osd-bottom { padding: 100px var(--page-gutter) 32px; grid-gap: 16px; }
+html.tv-client .player-back,
+html.tv-client .player-control,
+html.tv-client .player-play { min-width: var(--tv-control); height: var(--tv-control); min-height: var(--tv-control); font-size: var(--tv-min-text); }
+html.tv-client .player-icon { width: 36px; height: 36px; }
+html.tv-client .player-transport,
+html.tv-client .player-timeline { gap: 0; }
+html.tv-client .player-transport > * + *,
+html.tv-client .player-timeline > * + * { margin-inline-start: 16px; }
+html.tv-client .player-time,
+html.tv-client .player-menu-label,
+html.tv-client .player-menu-note,
+html.tv-client .player-episode-copy small { font-size: var(--tv-meta-text); }
+html.tv-client .player-seek-wrap,
+html.tv-client .player-seek { height: var(--tv-control); }
+html.tv-client .player-menu { width: 480px; max-width: 80vw; max-height: 55vh; overflow-x: hidden; }
+html.tv-client .player-menu-item { overflow-wrap: break-word; white-space: normal; }
+html.tv-client .player-offset { flex-wrap: wrap; gap: 0; }
+html.tv-client .player-offset > * { margin: 4px; }
+html.tv-client .player-offset button { min-width: var(--tv-control); min-height: var(--tv-control); font-size: var(--tv-meta-text); }
+html.tv-client .player-drawer { width: 640px; max-width: 80vw; }
+html.tv-client .player-drawer-head h2 { font-size: var(--tv-heading); }
+html.tv-client .player-episode { min-height: 130px; gap: 0; }
+html.tv-client .player-episode-art { width: 176px; height: 99px; margin-inline-end: 20px; }
+html.tv-client .player-episode-copy strong { font-size: var(--tv-min-text); }
+html.tv-client .player-up-next { max-width: 800px; right: var(--page-gutter); bottom: 220px; }
+html.tv-client .player-up-next strong,
+html.tv-client .player-end-card strong { font-size: var(--tv-min-text); }
+html.tv-client .player-up-next p,
+html.tv-client .player-up-next .player-up-next-label,
+html.tv-client .player-end-card small { font-size: var(--tv-meta-text); }
+html.tv-client .player-end-card-art { height: 150px; aspect-ratio: auto; }
+html.tv-client .player-up-next img { height: 110px; aspect-ratio: auto; }
+html.tv-client .profile-menu { width: 440px; max-width: 90vw; max-height: 75vh; }
+
+html.tv-client .live-page { padding: 24px var(--page-gutter); }
+html.tv-client .live-guide-head,
+html.tv-client .live-ruler { height: var(--guide-header-height); }
+html.tv-client .live-ruler-corner,
+html.tv-client .live-channel { width: var(--guide-channel-width); flex: 0 0 var(--guide-channel-width); left: 0; }
+html.tv-client .live-row,
+html.tv-client .live-channel,
+html.tv-client .live-track { height: var(--guide-row-height); }
+html.tv-client .live-program,
+html.tv-client .live-gap { top: 8px; height: calc(var(--guide-row-height) - 16px); padding: 8px 16px; gap: 0; }
+html.tv-client .live-program-title { font-size: var(--tv-min-text); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.tv-client .live-tick { top: 20px; font-size: var(--tv-meta-text); }
+html.tv-client .live-ruler-corner,
+html.tv-client .live-channel-name-fallback,
+html.tv-client .live-gap { font-size: var(--tv-meta-text); }
+html.tv-client .live-badge { height: auto; min-height: 28px; font-size: var(--tv-meta-text); }
+html.tv-client .live-badges { gap: 0; overflow: hidden; }
+html.tv-client .live-badge + .live-badge { margin-inline-start: 8px; }
+html.tv-client .live-channel-tune { height: var(--tv-control); font-size: var(--tv-min-text); gap: 0; }
+html.tv-client .live-channel-tune .live-logo { height: 64px; flex-basis: 156px; margin-inline-start: 12px; }
+html.tv-client .live-channel-tune .live-logo img { max-height: 64px; }
+html.tv-client .live-channel .live-star { width: var(--tv-control); height: var(--tv-control); flex-basis: var(--tv-control); font-size: 30px; }
+html.tv-client .live-guide-scroll { height: calc(100vh - var(--topbar-height) - 200px); min-height: 300px; }
+html.tv-client .live-toolbar,
+html.tv-client .live-pills,
+html.tv-client .live-tabs { gap: 0; }
+html.tv-client .live-pills > *,
+html.tv-client .live-tabs > * { margin: 0 12px 12px 0; }
+
+/* Physical-edge fallbacks keep absolutely positioned art and focus rings intact. */
+html.tv-client .artwork-image,
+html.tv-client .recommendation-art.artwork,
+html.tv-client .library-art.artwork,
+html.tv-client .detail-backdrop.artwork,
+html.tv-client .show-backdrop-art.artwork,
+html.tv-client .episode-art.artwork,
+html.tv-client .home-spotlight-background,
+html.tv-client .home-spotlight-scrim,
+html.tv-client .recommendation-shade,
+html.tv-client .detail-gradient,
+html.tv-client .show-backdrop-shade { top: 0; right: 0; bottom: 0; left: 0; }
+html.tv-client .home-feed-card-art > img { position: absolute; top: 0; left: 0; }
+html.tv-client .home-feed-card-art::after,
+html.tv-client .media-card .artwork::after,
+html.tv-client .library-card-art::after,
+html.tv-client .episode-art-button::after { top: 0; right: 0; bottom: 0; left: 0; }
+html.tv-client .poster-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); grid-gap: 32px 24px; }
+html.tv-client .poster-grid .media-card { width: 100%; margin-inline-end: 0; }
+html.tv-client .poster-grid .media-card-art { height: 0; padding-top: 150%; }
+html.tv-client .poster-grid .media-card-art > .artwork { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }
+
+@media (max-width: 1400px), (max-height: 800px) {
+    html.tv-client {
+        --tv-min-text: 24px; --tv-meta-text: 20px; --tv-heading: 32px;
+        --tv-control: 56px; --tv-focus-ring: 4px; --tv-space: 20px; --topbar-height: 88px; --page-gutter: 40px;
+        --tv-poster-width: 210px; --tv-poster-height: 315px;
+        --tv-landscape-width: 320px; --tv-landscape-height: 180px;
+        --tv-hero-height: 350px; --tv-title-height: 88px;
+        --tv-episode-width: 256px; --tv-episode-height: 144px;
+        --guide-row-height: 96px; --guide-channel-width: 260px; --guide-header-height: 64px;
+    }
+    html.tv-client .brand > span:last-child { display: none; }
+    html.tv-client .nav-link { padding: 10px 12px; }
+    html.tv-client .recommendation-copy h1,
+    html.tv-client .hero-copy h1,
+    html.tv-client .detail-content h1,
+    html.tv-client .show-header-copy h1 { font-size: 44px; }
+    html.tv-client .recommendation-title-logo,
+    html.tv-client .content-title-logo { max-width: 420px; }
+    html.tv-client .recommendation-controls { bottom: 16px; }
+    html.tv-client .recommendation-hero { min-height: 260px; padding-top: 16px; padding-bottom: 16px; }
+    html.tv-client .recommendation-copy .eyebrow { margin: 0 0 6px; }
+    html.tv-client .recommendation-title-slot { height: 56px; margin-bottom: 6px; }
+    html.tv-client .recommendation-title-logo { max-height: 56px; }
+    html.tv-client .recommendation-metadata { margin: 0; }
+    html.tv-client .recommendation-metadata > * { margin-bottom: 0; }
+    html.tv-client .recommendation-overview { margin: 8px 0 12px; -webkit-line-clamp: 1; }
+    html.tv-client .recommendation-pagination { max-width: 180px; }
+    html.tv-client .recommendation-dot { width: 56px; height: 56px; flex-basis: 56px; margin: 0 4px; border-width: 19px; }
+    html.tv-client .recommendation-dot.active { width: 72px; flex-basis: 72px; }
+    html.tv-client .detail-page { min-height: 480px; }
+    html.tv-client .show-backdrop { min-height: 360px; }
+    html.tv-client .show-header-copy .eyebrow { margin-top: 8px; margin-bottom: 8px; }
+    html.tv-client .show-header-copy .content-title-slot { height: 64px; margin-bottom: 8px; }
+    html.tv-client .show-header-copy .userdata-actions { display: inline-flex; margin: 8px 12px 0 0; gap: 0; }
+    html.tv-client .show-header-copy .userdata-actions > * { margin-inline-end: 12px; }
+    html.tv-client .episode-explorer { grid-template-columns: 230px minmax(0, 1fr); grid-gap: 20px; }
+    html.tv-client .season-thumb.artwork { display: none; }
+    html.tv-client .episode-card { grid-gap: 16px; }
+    html.tv-client .library-grid-items { --tv-library-columns: 4; --library-caption-height: 76px; --library-list-row: 128px; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-gap: 28px 20px; }
+    html.tv-client .library-grid-items.library-view-thumb { --tv-library-columns: 3; }
+    html.tv-client .library-grid-items.library-view-banner { --tv-library-columns: 2; }
+    html.tv-client .library-grid-items.library-view-list { --tv-library-columns: 1; --library-caption-height: 0px; }
+    html.tv-client .library-card-list .library-card-art { width: 68px; height: 102px; }
+    html.tv-client .library-title-search input { width: 220px; }
+    html.tv-client .library-filter-popover { max-width: calc(100vw - 80px); }
+    html.tv-client .alpha-scrubber { right: 0; width: 32px; }
+    html.tv-client .poster-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    html.tv-client .live-channel-tune .live-logo { flex-basis: 128px; }
+    html.tv-client .player-osd-top { padding-top: 20px; }
+    html.tv-client .player-osd-bottom { padding-bottom: 20px; }
+}
