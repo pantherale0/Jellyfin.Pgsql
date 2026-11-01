@@ -17,7 +17,7 @@ export function libraryCaptionHeight(style: Pick<CSSStyleDeclaration, 'getProper
 export function libraryColumnCount(style: Pick<CSSStyleDeclaration, 'getPropertyValue' | 'gridTemplateColumns'>, property = '--tv-library-columns'): number {
     const explicit = Number(style.getPropertyValue(property));
     if (Number.isInteger(explicit) && explicit > 0) return explicit;
-    const template = style.gridTemplateColumns.trim();
+    const template = (style.gridTemplateColumns || '').trim();
     const repeat = /^repeat\(\s*(\d+)\s*,/.exec(template);
     if (repeat) return Math.max(1, Number(repeat[1]));
     if (!template || template === 'none') return 1;

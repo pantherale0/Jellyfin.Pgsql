@@ -139,11 +139,9 @@ test('PART-03/MISS-22: filter facets and library-local suggestions use the docum
     assert.equal(recommendationTitle({ RecommendationType: 3, BaselineItemName: 'Pacino' }), 'Starring Pacino');
 });
 
-test('library page wires modes, scoped title search, chips and suggestions', () => {
+test('library page wires modes, filters, chips and suggestions', () => {
     const page = source('library.tsx');
     assert.match(page, /class="library-mode-tabs"/);
-    assert.match(page, /aria-label=\{`Search \$\{library\.Name\}`\}/);
-    assert.match(page, /reset\(\{ \.\.\.query, Title: titleDraft \}\), 350/);
     assert.match(page, /chips\('Genres', 'Genre'/);
     assert.match(page, /chips\('Tags', 'Tags'/);
     assert.match(page, /<LibrarySuggestions api=\{api\}/);

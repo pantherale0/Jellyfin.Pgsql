@@ -281,7 +281,7 @@ export function ProfileScreen({ screen, api, session, isAdministrator, remembere
         </div>
     </section>;
 
-    return <section class="profile-page" aria-labelledby="profile-page-title">
+    return <section class={`profile-page${screen === 'playback' ? ' profile-page-playback' : ''}`} aria-labelledby="profile-page-title">
         <div class="profile-page-heading">
             <button class="back-link" data-focusable="true" type="button" onClick={onBack}><span class="dir-arrow" aria-hidden="true">←</span> <span>{t('Back')}</span></button>
             <p class="eyebrow">{session.user.Name}</p>
@@ -290,75 +290,77 @@ export function ProfileScreen({ screen, api, session, isAdministrator, remembere
         {loading ? <p class="profile-status" role="status">{t('Loading…')}</p> : <>
             {error && <p class="notice error" role="alert">{error}</p>}
             {saved && <p class="notice success" role="status">{t('Preferences saved.')}</p>}
-            {screen === 'playback' && <form class="profile-form" onSubmit={saveConfiguration}>
-                <label>{t('Preferred audio language')}<input data-focusable="true" value={configuration.AudioLanguagePreference || ''} onInput={event => updateConfiguration('AudioLanguagePreference', (event.currentTarget as HTMLInputElement).value)} placeholder={t('Any language')} /></label>
-                <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={configuration.PlayDefaultAudioTrack === true} onChange={event => updateConfiguration('PlayDefaultAudioTrack', (event.currentTarget as HTMLInputElement).checked)} />{' '}{t('Prefer default audio track')}</label>
-                <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={configuration.RememberAudioSelections === true} onChange={event => updateConfiguration('RememberAudioSelections', (event.currentTarget as HTMLInputElement).checked)} />{' '}{t('Remember audio track selections')}</label>
-                <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={configuration.RememberSubtitleSelections === true} onChange={event => updateConfiguration('RememberSubtitleSelections', (event.currentTarget as HTMLInputElement).checked)} />{' '}{t('Remember subtitle track selections')}</label>
-                <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={configuration.EnableNextEpisodeAutoPlay !== false} onChange={event => updateConfiguration('EnableNextEpisodeAutoPlay', (event.currentTarget as HTMLInputElement).checked)} />{' '}{t('Automatically play the next episode')}</label>
-                <button class="button primary" data-focusable="true" type="submit" disabled={saving || !configLoaded}>{saving ? t('Saving…') : t('Save playback preferences')}</button>
-            </form>}
-            {screen === 'playback' && <section class="profile-form" aria-labelledby="device-playback-title">
-                <h2 id="device-playback-title">{t('Quality on this device')}</h2>
-                <p>{t('These are stored in this browser only and apply as soon as you change them. Server-wide streaming limits still apply.')}</p>
-                <label>{t('Maximum bitrate')}
-                    <select data-focusable="true" value={String(devicePreferences.maxBitrate)} onChange={event => updateDevicePreference({ maxBitrate: Number((event.currentTarget as HTMLSelectElement).value) })}>
-                        {BITRATE_CHOICES.map(choice => <option key={choice.value} value={String(choice.value)}>{t(choice.label)}</option>)}
-                    </select>
-                </label>
-                <label>{t('Maximum resolution')}
-                    <select data-focusable="true" value={String(devicePreferences.maxHeight)} onChange={event => updateDevicePreference({ maxHeight: Number((event.currentTarget as HTMLSelectElement).value) })}>
-                        {RESOLUTION_CHOICES.map(choice => <option key={choice.value} value={String(choice.value)}>{t(choice.label)}</option>)}
-                    </select>
-                </label>
-                <label>{t('Maximum audio channels')}
-                    <select data-focusable="true" value={String(devicePreferences.maxAudioChannels)} onChange={event => updateDevicePreference({ maxAudioChannels: Number((event.currentTarget as HTMLSelectElement).value) })}>
-                        {AUDIO_CHANNEL_CHOICES.map(choice => <option key={choice.value} value={String(choice.value)}>{t(choice.label)}</option>)}
-                    </select>
-                </label>
-                <label>{t('Converted stream format')}
-                    <select data-focusable="true" value={devicePreferences.hlsContainer} onChange={event => updateDevicePreference({ hlsContainer: (event.currentTarget as HTMLSelectElement).value === 'mp4' ? 'mp4' : 'ts' })}>
-                        <option value="ts">{t('HLS MPEG-TS (most compatible)')}</option>
-                        <option value="mp4">{t('HLS fMP4 (allows HEVC)')}</option>
-                    </select>
-                </label>
-                <label>{t('Layout on this device')}
-                    <select data-focusable="true" value={layoutChoice} onChange={event => { const next = normalizeLayoutChoice((event.currentTarget as HTMLSelectElement).value); saveLayoutChoice(next); setLayoutChoice(next); }}>
-                        <option value="auto">{t('Automatic')}</option>
-                        <option value="tv">{t('TV (remote navigation)')}</option>
-                        <option value="desktop">{t('Desktop and mobile')}</option>
-                    </select>
-                </label>
-                {layoutChoice !== initialLayout && <p class="notice" role="status">{t('Reload UI Next to switch layout.')}{' '}<button class="button secondary" data-focusable="true" type="button" onClick={() => window.location.reload()}>{t('Reload now')}</button></p>}
-            </section>}
-            {screen === 'playback' && <section class="profile-form" aria-labelledby="segment-actions-title">
-                <h2 id="segment-actions-title">{t('Skipping on this device')}</h2>
-                <p>{t('Applies when the server has detected media segments for a title.')}</p>
-                {SEGMENT_KINDS.map(kind => <label key={kind}>{SEGMENT_LABELS[kind]}
-                    <select data-focusable="true" value={segmentActions[kind]} onChange={event => setSegmentActions(saveSegmentAction(kind, (event.currentTarget as HTMLSelectElement).value as SegmentAction))}>
-                        <option value="ask">{t('Show a Skip button')}</option>
-                        <option value="skip">{t('Skip automatically')}</option>
-                        <option value="ignore">{t('Don\'t offer to skip')}</option>
-                    </select>
-                </label>)}
-            </section>}
-            {screen === 'playback' && <section class="profile-form" aria-labelledby="music-settings-title">
-                <h2 id="music-settings-title">{t('Music on this device')}</h2>
-                <p>{t('Volume levelling and crossfade need a browser that lets pages set the volume; iPhone and iPad Safari ignore them.')}</p>
-                <label>{t('Volume levelling')}
-                    <select data-focusable="true" value={music.normalization} onChange={event => setMusic(saveMusicSettings({ normalization: (event.currentTarget as HTMLSelectElement).value as NormalizationMode }))}>
-                        <option value="album">{t('Album (keeps album dynamics)')}</option>
-                        <option value="track">{t('Track')}</option>
-                        <option value="off">{t('Off')}</option>
-                    </select>
-                </label>
-                <label>{t('Crossfade')}
-                    <select data-focusable="true" value={String(music.crossfadeSeconds)} onChange={event => setMusic(saveMusicSettings({ crossfadeSeconds: Number((event.currentTarget as HTMLSelectElement).value) }))}>
-                        {Array.from({ length: MAX_CROSSFADE_SECONDS + 1 }, (_, seconds) => <option key={seconds} value={String(seconds)}>{seconds === 0 ? t('Off') : t('{0} s', seconds)}</option>)}
-                    </select>
-                </label>
-                <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={music.gapless} onChange={event => setMusic(saveMusicSettings({ gapless: (event.currentTarget as HTMLInputElement).checked }))} />{' '}{t('Gapless album playback (no crossfade between consecutive album tracks)')}</label>
-            </section>}
+            {screen === 'playback' && <div class="profile-settings-grid">
+                <form class="profile-form" onSubmit={saveConfiguration}>
+                    <label>{t('Preferred audio language')}<input data-focusable="true" value={configuration.AudioLanguagePreference || ''} onInput={event => updateConfiguration('AudioLanguagePreference', (event.currentTarget as HTMLInputElement).value)} placeholder={t('Any language')} /></label>
+                    <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={configuration.PlayDefaultAudioTrack === true} onChange={event => updateConfiguration('PlayDefaultAudioTrack', (event.currentTarget as HTMLInputElement).checked)} />{' '}{t('Prefer default audio track')}</label>
+                    <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={configuration.RememberAudioSelections === true} onChange={event => updateConfiguration('RememberAudioSelections', (event.currentTarget as HTMLInputElement).checked)} />{' '}{t('Remember audio track selections')}</label>
+                    <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={configuration.RememberSubtitleSelections === true} onChange={event => updateConfiguration('RememberSubtitleSelections', (event.currentTarget as HTMLInputElement).checked)} />{' '}{t('Remember subtitle track selections')}</label>
+                    <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={configuration.EnableNextEpisodeAutoPlay !== false} onChange={event => updateConfiguration('EnableNextEpisodeAutoPlay', (event.currentTarget as HTMLInputElement).checked)} />{' '}{t('Automatically play the next episode')}</label>
+                    <button class="button primary" data-focusable="true" type="submit" disabled={saving || !configLoaded}>{saving ? t('Saving…') : t('Save playback preferences')}</button>
+                </form>
+                <section class="profile-form" aria-labelledby="device-playback-title">
+                    <h2 id="device-playback-title">{t('Quality on this device')}</h2>
+                    <p>{t('These are stored in this browser only and apply as soon as you change them. Server-wide streaming limits still apply.')}</p>
+                    <label>{t('Maximum bitrate')}
+                        <select data-focusable="true" value={String(devicePreferences.maxBitrate)} onChange={event => updateDevicePreference({ maxBitrate: Number((event.currentTarget as HTMLSelectElement).value) })}>
+                            {BITRATE_CHOICES.map(choice => <option key={choice.value} value={String(choice.value)}>{t(choice.label)}</option>)}
+                        </select>
+                    </label>
+                    <label>{t('Maximum resolution')}
+                        <select data-focusable="true" value={String(devicePreferences.maxHeight)} onChange={event => updateDevicePreference({ maxHeight: Number((event.currentTarget as HTMLSelectElement).value) })}>
+                            {RESOLUTION_CHOICES.map(choice => <option key={choice.value} value={String(choice.value)}>{t(choice.label)}</option>)}
+                        </select>
+                    </label>
+                    <label>{t('Maximum audio channels')}
+                        <select data-focusable="true" value={String(devicePreferences.maxAudioChannels)} onChange={event => updateDevicePreference({ maxAudioChannels: Number((event.currentTarget as HTMLSelectElement).value) })}>
+                            {AUDIO_CHANNEL_CHOICES.map(choice => <option key={choice.value} value={String(choice.value)}>{t(choice.label)}</option>)}
+                        </select>
+                    </label>
+                    <label>{t('Converted stream format')}
+                        <select data-focusable="true" value={devicePreferences.hlsContainer} onChange={event => updateDevicePreference({ hlsContainer: (event.currentTarget as HTMLSelectElement).value === 'mp4' ? 'mp4' : 'ts' })}>
+                            <option value="ts">{t('HLS MPEG-TS (most compatible)')}</option>
+                            <option value="mp4">{t('HLS fMP4 (allows HEVC)')}</option>
+                        </select>
+                    </label>
+                    <label>{t('Layout on this device')}
+                        <select data-focusable="true" value={layoutChoice} onChange={event => { const next = normalizeLayoutChoice((event.currentTarget as HTMLSelectElement).value); saveLayoutChoice(next); setLayoutChoice(next); }}>
+                            <option value="auto">{t('Automatic')}</option>
+                            <option value="tv">{t('TV (remote navigation)')}</option>
+                            <option value="desktop">{t('Desktop and mobile')}</option>
+                        </select>
+                    </label>
+                    {layoutChoice !== initialLayout && <p class="notice" role="status">{t('Reload UI Next to switch layout.')}{' '}<button class="button secondary" data-focusable="true" type="button" onClick={() => window.location.reload()}>{t('Reload now')}</button></p>}
+                </section>
+                <section class="profile-form" aria-labelledby="segment-actions-title">
+                    <h2 id="segment-actions-title">{t('Skipping on this device')}</h2>
+                    <p>{t('Applies when the server has detected media segments for a title.')}</p>
+                    {SEGMENT_KINDS.map(kind => <label key={kind}>{SEGMENT_LABELS[kind]}
+                        <select data-focusable="true" value={segmentActions[kind]} onChange={event => setSegmentActions(saveSegmentAction(kind, (event.currentTarget as HTMLSelectElement).value as SegmentAction))}>
+                            <option value="ask">{t('Show a Skip button')}</option>
+                            <option value="skip">{t('Skip automatically')}</option>
+                            <option value="ignore">{t('Don\'t offer to skip')}</option>
+                        </select>
+                    </label>)}
+                </section>
+                <section class="profile-form" aria-labelledby="music-settings-title">
+                    <h2 id="music-settings-title">{t('Music on this device')}</h2>
+                    <p>{t('Volume levelling and crossfade need a browser that lets pages set the volume; iPhone and iPad Safari ignore them.')}</p>
+                    <label>{t('Volume levelling')}
+                        <select data-focusable="true" value={music.normalization} onChange={event => setMusic(saveMusicSettings({ normalization: (event.currentTarget as HTMLSelectElement).value as NormalizationMode }))}>
+                            <option value="album">{t('Album (keeps album dynamics)')}</option>
+                            <option value="track">{t('Track')}</option>
+                            <option value="off">{t('Off')}</option>
+                        </select>
+                    </label>
+                    <label>{t('Crossfade')}
+                        <select data-focusable="true" value={String(music.crossfadeSeconds)} onChange={event => setMusic(saveMusicSettings({ crossfadeSeconds: Number((event.currentTarget as HTMLSelectElement).value) }))}>
+                            {Array.from({ length: MAX_CROSSFADE_SECONDS + 1 }, (_, seconds) => <option key={seconds} value={String(seconds)}>{seconds === 0 ? t('Off') : t('{0} s', seconds)}</option>)}
+                        </select>
+                    </label>
+                    <label class="profile-checkbox"><input data-focusable="true" type="checkbox" checked={music.gapless} onChange={event => setMusic(saveMusicSettings({ gapless: (event.currentTarget as HTMLInputElement).checked }))} />{' '}{t('Gapless album playback (no crossfade between consecutive album tracks)')}</label>
+                </section>
+            </div>}
             {screen === 'subtitles' && <form class="profile-form" onSubmit={saveConfiguration}>
                 <label>{t('Preferred subtitle language')}
                     <select data-focusable="true" value={configuration.SubtitleLanguagePreference || ''} onChange={event => updateConfiguration('SubtitleLanguagePreference', (event.currentTarget as HTMLSelectElement).value)}>

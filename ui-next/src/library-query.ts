@@ -30,7 +30,6 @@ export interface LibraryQuery {
     WatchStatus: LibraryWatchStatus;
     SortBy: LibrarySort;
     SortOrder: 'Ascending' | 'Descending';
-    Title: string;
     Mode: string;
     Favorite: boolean;
     /** Pipe-separated tags. */
@@ -59,7 +58,7 @@ export interface LibraryItemsOptions {
 export type LibrarySource = 'items' | 'albumArtists' | 'artists' | 'upcoming';
 
 export const defaultLibraryQuery = (): LibraryQuery => ({
-    Genre: '', Decade: '', Resolution: '', WatchStatus: '', SortBy: 'SortName', SortOrder: 'Ascending', Title: '',
+    Genre: '', Decade: '', Resolution: '', WatchStatus: '', SortBy: 'SortName', SortOrder: 'Ascending',
     Mode: '', Favorite: false, Tags: '', Ratings: '', SeriesStatus: '', Features: [], Availability: ''
 });
 
@@ -100,7 +99,6 @@ export function mapLibraryQuery(query: LibraryQuery, options: LibraryItemsOption
         SortBy: query.SortBy,
         SortOrder: query.SortOrder,
         Genres: query.Genre || undefined,
-        SearchTerm: query.Title.trim() || undefined,
         IncludeItemTypes: options.IncludeItemTypes?.join(','),
         Recursive: options.Recursive === undefined ? 'true' : String(options.Recursive),
         Is4K: query.Resolution === '4k' ? 'true' : query.Resolution === '1080p' ? 'false' : undefined,

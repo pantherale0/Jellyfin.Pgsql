@@ -96,12 +96,34 @@ export async function removeModernSizing(page: Page): Promise<void> {
     const removed = await page.evaluate(() => {
         let aspectRatios = 0;
         let flexGaps = 0;
+        let logicalProperties = 0;
+        const logicalAndInset = [
+            'inset',
+            'inset-inline',
+            'inset-inline-start',
+            'inset-inline-end',
+            'inset-block',
+            'inset-block-start',
+            'inset-block-end',
+            'margin-inline',
+            'margin-inline-start',
+            'margin-inline-end',
+            'padding-inline',
+            'padding-inline-start',
+            'padding-inline-end'
+        ];
         function visit(rules: CSSRuleList): void {
             for (const rule of Array.from(rules)) {
                 if (rule instanceof CSSStyleRule) {
                     if (rule.style.getPropertyValue('aspect-ratio')) {
                         rule.style.removeProperty('aspect-ratio');
                         aspectRatios++;
+                    }
+                    for (const property of logicalAndInset) {
+                        if (rule.style.getPropertyValue(property)) {
+                            rule.style.removeProperty(property);
+                            logicalProperties++;
+                        }
                     }
                     let targetsFlex = false;
                     try {
@@ -121,8 +143,9 @@ export async function removeModernSizing(page: Page): Promise<void> {
             }
         }
         for (const sheet of Array.from(document.styleSheets)) visit(sheet.cssRules);
-        return { aspectRatios, flexGaps };
+        return { aspectRatios, flexGaps, logicalProperties };
     });
     expect(removed.aspectRatios, 'The fallback probe must actually remove aspect-ratio declarations').toBeGreaterThan(0);
     expect(removed.flexGaps, 'The fallback probe must actually remove flex gap declarations').toBeGreaterThan(0);
+    expect(removed.logicalProperties, 'The fallback probe must actually remove logical and inset declarations').toBeGreaterThan(0);
 }

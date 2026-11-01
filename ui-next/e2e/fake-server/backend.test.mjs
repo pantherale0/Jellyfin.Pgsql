@@ -108,6 +108,11 @@ test('library filters and item detail side requests return stable Jellyfin pages
     const filters = await backend.handle(new Request('http://127.0.0.1/Items/Filters?ParentId=e2e-movies-library', { headers }));
     assert.deepEqual(await filters.json(), { Tags: [], OfficialRatings: [] });
 
+    for (const path of [ '/Genres', '/Years' ]) {
+        const response = await backend.handle(new Request(`http://127.0.0.1${path}?ParentId=e2e-movies-library`, { headers }));
+        assert.deepEqual(await response.json(), { Items: [], TotalRecordCount: 0 });
+    }
+
     const detail = await backend.handle(new Request('http://127.0.0.1/Users/e2e-user-id/Items/e2e-movie-1?Fields=Overview', { headers }));
     assert.equal((await detail.json()).Overview, 'A deterministic movie for browser playback tests.');
 

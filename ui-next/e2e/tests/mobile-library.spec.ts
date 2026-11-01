@@ -8,8 +8,10 @@ test('library controls fit at 411, 360, and 320 pixels', async ({ page }) => {
     await app.openHome();
     await app.openLibrary('Movies');
 
+    await expect(page.getByRole('searchbox', { name: 'Search Movies', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Search your library', exact: true })).toBeVisible();
     const controls = [
-        page.getByRole('searchbox', { name: 'Search Movies', exact: true }),
+        page.getByRole('button', { name: 'Search your library', exact: true }),
         page.getByRole('button', { name: 'Filters', exact: true }),
         page.getByRole('button', { name: 'Select', exact: true }),
         page.getByRole('combobox', { name: 'Sort', exact: true })
@@ -135,7 +137,7 @@ test('Filters closes on Escape and Android Back without leaving Movies', async (
 
     const filtersButton = page.getByRole('button', { name: 'Filters', exact: true });
     const filtersDialog = page.getByRole('dialog', { name: 'Filters', exact: true });
-    const librarySearch = page.getByRole('searchbox', { name: 'Search Movies', exact: true });
+    const globalSearchButton = page.getByRole('button', { name: 'Search your library', exact: true });
 
     await filtersButton.click();
     await expect(filtersDialog).toBeVisible();
@@ -143,14 +145,14 @@ test('Filters closes on Escape and Android Back without leaving Movies', async (
     await page.keyboard.press('Escape');
     await expect(filtersDialog).toBeHidden();
     await expect(filtersButton).toBeFocused();
-    await expect(librarySearch).toBeVisible();
+    await expect(globalSearchButton).toBeVisible();
 
     await filtersButton.click();
     await expect(filtersDialog).toBeVisible();
     await page.locator('body').dispatchEvent('keydown', { key: 'Unidentified', keyCode: 461 });
     await expect(filtersDialog).toBeHidden();
     await expect(filtersButton).toBeFocused();
-    await expect(librarySearch).toBeVisible();
+    await expect(globalSearchButton).toBeVisible();
 });
 
 test('opening Filters closes expanded Search', async ({ page }) => {

@@ -17,5 +17,6 @@ test('mobile smoke opens Movies through the drawer', async ({ page }) => {
 
     await app.openLibrary('Movies');
 
-    await expect(page.getByRole('searchbox', { name: 'Search Movies', exact: true })).toBeVisible();
+    await expect(page.getByRole('searchbox', { name: 'Search Movies', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Search your library', exact: true })).toBeVisible();
 });

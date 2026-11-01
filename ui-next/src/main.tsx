@@ -1,4 +1,5 @@
 import './legacy-shims';
+import { isEntryIntersecting } from './legacy-shims';
 import { h, render, type ComponentChildren } from 'preact';
 import { memo, lazy, Suspense } from 'preact/compat';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
@@ -119,6 +120,8 @@ function collectFocusEntries(root: ParentNode): FocusEntry[] {
 }
 
 function focusEntries(): FocusEntry[] {
+    const modal = document.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]');
+    if (modal) return collectFocusEntries(modal);
     const now = performance.now();
     if (focusScan && now - focusScan.at < 120 && focusScan.scrollX === window.scrollX && focusScan.scrollY === window.scrollY) return focusScan.entries;
     const entries = collectFocusEntries(document);
@@ -344,6 +347,8 @@ function App() {
     const [ quickConnectAttempt, setQuickConnectAttempt ] = useState(0);
     const [ localLogin, setLocalLogin ] = useState(queryParameter('local') === 'true');
     const [ quickConnectSelected, setQuickConnectSelected ] = useState(() => queryParameter('local') !== 'true' && isTvClient());
+    const [ publicUserList, setPublicUserList ] = useState<PublicUser[]>([]);
+    const [ recovery, setRecovery ] = useState<{ stage: 'request' | 'pin' | 'done'; username: string; pin: string; message: string; busy: boolean } | null>(null);
     const mobileNavRef = useRef<HTMLElement>(null);
     const profileMenuRef = useRef<HTMLDivElement>(null);
     const profileReturnView = useRef<'home' | 'library' | 'show' | 'search' | 'details' | 'live' | 'admin' | 'favorites' | 'nowplaying'>('home');
@@ -405,6 +410,8 @@ function App() {
     }, [ view ]);
     const music = useMusicPlayer(api);
     const tvClient = isTvClient();
+    document.documentElement.classList.toggle('tv-client', tvClient);
+    document.documentElement.classList.toggle('tv-no-grid', tvClient && !supportsCssGrid());
     const switchReturnSession = useRef<Session | null>(null);
     const authAttempt = useRef(new AuthAttemptTracker()).current;
     const accountGeneration = useRef(new AccountGeneration()).current;
@@ -437,7 +444,7 @@ function App() {
             card.querySelector<HTMLElement>('[data-focusable="true"]:not(:disabled)')?.focus();
         });
         return () => window.cancelAnimationFrame(frame);
-    }, [ session, localLogin, quickConnectSelected, ssoEnabled, quickConnectEnabled ]);
+    }, [ session, localLogin, quickConnectSelected, ssoEnabled, quickConnectEnabled, quickConnectExpired, recovery?.stage ]);
 
     useEffect(() => {
         setAdminAccessChecked(false);
@@ -1256,8 +1263,6 @@ function App() {
         };
     }, [ session, ssoHandoffAttempt, ssoCode ]);
 
-    const [ publicUserList, setPublicUserList ] = useState<PublicUser[]>([]);
-    const [ recovery, setRecovery ] = useState<{ stage: 'request' | 'pin' | 'done'; username: string; pin: string; message: string; busy: boolean } | null>(null);
     useEffect(() => {
         if (session || !localLogin) return;
         let active = true;
@@ -2944,7 +2949,7 @@ function App() {
                             setView('search');
                         } else setSearchExpanded(open => !open);
                     }}
-                ><span aria-hidden="true">⌕</span></button>
+                ><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2" /><path d="m16 16 4.5 4.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" /></svg></button>
                 {!tvClient && searchExpanded && <form class="search-expand-form" onSubmit={e => { e.preventDefault(); void runSearch(); }}>
                     <input ref={searchInputRef} data-focusable="true" value={search} onInput={e => setSearch((e.target as HTMLInputElement).value)} onKeyDown={e => { if (e.key === 'Escape') setSearchExpanded(false); }} placeholder={t(mobileSearch ? 'Search…' : 'Search your library')} aria-label={t('Search your library')} />
                     <button data-focusable="true" class="search-submit" type="submit" aria-label={t('Submit search')}><span class="dir-arrow" aria-hidden="true">→</span></button>
@@ -3136,7 +3141,7 @@ function TvSearchPage({ draft, onDraft, items, loading, api, views, activeGenre,
         [ 'Z', 'X', 'C', 'V', 'B', 'N', 'M' ]
     ];
     useEffect(() => {
-        inputRef.current?.focus();
+        pageRef.current?.querySelector<HTMLElement>('.tv-search-keyboard .tv-search-key')?.focus();
     }, []);
     useEffect(() => {
         if (!api) return;
@@ -3174,12 +3179,12 @@ function TvSearchPage({ draft, onDraft, items, loading, api, views, activeGenre,
             <p class="eyebrow">{t('SEARCH')}</p>
             <h1>{t('Find movies, shows and episodes')}</h1>
             <form class="tv-search-field" onSubmit={e => e.preventDefault()}>
-                <input ref={inputRef} data-focusable="true" value={draft} onInput={e => onDraft((e.target as HTMLInputElement).value.slice(0, 60))} onKeyDown={exitFieldKeyDown} placeholder={t('Type a title…')} aria-label={t('Search query')} />
+                <input ref={inputRef} tabIndex={-1} inputMode="none" value={draft} onInput={e => onDraft((e.target as HTMLInputElement).value.slice(0, 60))} onKeyDown={exitFieldKeyDown} placeholder={t('Type a title…')} aria-label={t('Search query')} />
             </form>
             <div class="tv-search-keyboard" aria-label={t('On-screen keyboard')}>
                 {rows.map((row, rowIndex) => <div class="tv-search-row" key={rowIndex}>
                     {row.map(key => <button data-focusable="true" class="tv-search-key" type="button" key={key} aria-label={t('Type {0}', key)} onClick={() => append(key)}>{key}</button>)}
-                    {rowIndex === 3 && <button data-focusable="true" class="tv-search-key tv-search-key-wide" type="button" aria-label={t('Backspace')} onClick={backspace}>⌫</button>}
+                    {rowIndex === 3 && <button data-focusable="true" class="tv-search-key tv-search-key-wide" type="button" aria-label={t('Backspace')} onClick={backspace}><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 6H9l-6 6 6 6h12a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1Zm-3.3 9.3L15 12.6l-2.7 2.7-1.4-1.4 2.7-2.7-2.7-2.7 1.4-1.4 2.7 2.7 2.7-2.7 1.4 1.4-2.7 2.7 2.7 2.7-1.4 1.4Z" fill="currentColor" /></svg></button>}
                 </div>)}
                 <div class="tv-search-row">
                     <button data-focusable="true" class="tv-search-key tv-search-key-wide" type="button" onClick={() => onDraft(draft && !draft.endsWith(' ') ? draft + ' ' : draft)}>{t('Space')}</button>
@@ -3263,7 +3268,7 @@ function sharedArtworkObserverInstance(): IntersectionObserver | null {
     }
     sharedArtworkObserver = new IntersectionObserver(entries => {
         entries.forEach(entry => {
-            if (!entry.isIntersecting) return;
+            if (!isEntryIntersecting(entry)) return;
             const load = artworkWaiters.get(entry.target);
             if (!load) return;
             artworkWaiters.delete(entry.target);
@@ -3323,9 +3328,13 @@ function watchArtwork(element: Element, load: () => void): () => void {
     };
 }
 
+function primaryArtworkUrl(api: JellyfinApi, item: MediaItem): string {
+    return api.imageUrl(item, 'Primary', 460) || api.seriesArt(item, 460);
+}
+
 function initialArtwork(api: JellyfinApi | null, item: MediaItem, backdrop: boolean): { src: string; fallback: boolean } {
     if (!api) return { src: '', fallback: false };
-    if (!backdrop) return { src: peekCachedImage(api.imageUrl(item, 'Primary', 460)), fallback: false };
+    if (!backdrop) return { src: peekCachedImage(primaryArtworkUrl(api, item)), fallback: false };
     const backdropSrc = peekCachedImage(api.imageUrl(item, 'Backdrop', 1280));
     if (backdropSrc) return { src: backdropSrc, fallback: false };
     return { src: '', fallback: false };
@@ -3361,13 +3370,13 @@ const Artwork = memo(function Artwork({ api, item, backdrop = false, className =
         const load = () => {
             if (!active || !api) return;
             if (!backdrop) {
-                const key = api.imageUrl(item, 'Primary', 460);
+                const key = primaryArtworkUrl(api, item);
                 const cached = peekCachedImage(key);
                 if (cached) {
                     hold(key, cached, false);
                     return;
                 }
-                void api.loadImage(item, 'Primary', 460, 90, track()).then(url => hold(key, url, false));
+                void api.loadImageUrl(key, track()).then(url => hold(key, url, false));
                 return;
             }
             const backdropKey = api.imageUrl(item, 'Backdrop', 1280);
@@ -3603,7 +3612,7 @@ function VirtualizedMediaGrid({ items, api, onSelect, hasMore = false, onNearEnd
         const sentinel = sentinelRef.current;
         if (!hasMore || !sentinel || typeof IntersectionObserver === 'undefined') return;
         const observer = new IntersectionObserver(entries => {
-            if (entries.some(entry => entry.isIntersecting)) onNearEndRef.current?.();
+            if (entries.some(isEntryIntersecting)) onNearEndRef.current?.();
         }, { rootMargin: '0px 0px 100% 0px' });
         observer.observe(sentinel);
         return () => observer.disconnect();
@@ -3739,7 +3748,7 @@ function DetailPage({ api, item, backLabel, loading, loadError, onRetry, onBack,
         <p class="overview">{item.Overview || (loading ? '' : capabilities.entity ? '' : t('A story waiting to be discovered.'))}</p>
         <div class="detail-actions">
             {isMusicTarget(item) ? <MusicActions item={item} playRef={playRef} /> : capabilities.playable && (canResume(item)
-                ? <><button ref={playRef} data-focusable="true" class="button primary" onClick={() => onPlay('resume')}>▶ <span>{t('Resume')}</span></button><button data-focusable="true" class="button secondary" onClick={() => onPlay('beginning')}>↺ <span>{t('From beginning')}</span></button></>
+                ? <><button ref={playRef} data-focusable="true" class="button primary" onClick={() => onPlay('resume')}>▶ <span>{t('Resume')}</span></button><button data-focusable="true" class="button secondary" onClick={() => onPlay('beginning')}><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M12 5V2L7 6l5 4V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8Z" fill="currentColor" /></svg> <span>{t('From beginning')}</span></button></>
                 : <button ref={playRef} data-focusable="true" class="button primary" onClick={() => onPlay('beginning')}>▶ <span>{t('Play')}</span></button>)}
             {item.Type === 'Episode' && item.SeriesId && <button data-focusable="true" class="button secondary" type="button" onClick={onOpenSeries}>{t('Go to series')}</button>}
             {api && firstYouTubeTrailer(item.RemoteTrailers) && <TrailerAction onPlay={onPlayTrailer} />}

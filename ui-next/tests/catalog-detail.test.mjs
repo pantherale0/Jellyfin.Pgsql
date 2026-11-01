@@ -104,7 +104,9 @@ test('MISS-10/MISS-15: albums group tracks by disc and child views follow the it
 test('MISS-13/MISS-25/MISS-26: item actions follow server capability flags and user policy', () => {
     const movie = { Id: 'm', Type: 'Movie', CanDelete: true, CanDownload: true };
     assert.deepEqual(detail.itemActions(movie, admin), { download: true, share: true, collection: true, playlist: true, remove: true });
+    assert.deepEqual(detail.itemActions(movie, admin, 'tv'), { download: false, share: false, collection: false, playlist: false, remove: true });
     assert.deepEqual(detail.itemActions({ ...movie, CanDelete: false, CanDownload: false }, viewer), { download: false, share: true, collection: false, playlist: true, remove: false });
+    assert.deepEqual(detail.itemActions({ ...movie, CanDelete: false, CanDownload: false }, viewer, 'tv'), { download: false, share: false, collection: false, playlist: false, remove: false });
     assert.equal(detail.itemActions(movie, { Policy: { EnableCollectionManagement: true } }).collection, true);
     assert.equal(detail.itemActions({ Id: 'tag:x', Type: 'Tag', CanDelete: true }, admin).remove, false);
     assert.equal(detail.itemActions({ Id: 'b', Type: 'BoxSet' }, admin).collection, false);

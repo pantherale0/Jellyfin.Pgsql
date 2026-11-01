@@ -38,8 +38,73 @@ export class AbortControllerShim {
     }
 }
 
+export interface IntersectionEntryLike {
+    isIntersecting?: boolean;
+    intersectionRatio?: number;
+    intersectionRect?: { width?: number; height?: number } | null;
+}
+
+function hasIntersection(entry: IntersectionEntryLike): boolean {
+    if ((entry.intersectionRatio ?? 0) > 0) return true;
+    const rect = entry.intersectionRect;
+    return Boolean(rect && ((rect.width ?? 0) > 0 || (rect.height ?? 0) > 0));
+}
+
+/** Chromium 51–57 shipped IntersectionObserver without entry.isIntersecting (added in Chrome 58). */
+export function isEntryIntersecting(entry: IntersectionEntryLike | null | undefined): boolean {
+    if (!entry) return false;
+    if (typeof entry.isIntersecting === 'boolean') return entry.isIntersecting;
+    return hasIntersection(entry);
+}
+
+function wrapScrollMethod(
+    target: Record<string, unknown>,
+    method: 'scrollTo' | 'scrollBy',
+    fallback: (receiver: Record<string, unknown>, left: number, top: number) => void
+): void {
+    const original = typeof target[method] === 'function' ? target[method] as (...args: unknown[]) => unknown : null;
+    target[method] = function shimmedScroll(this: Record<string, unknown>, first?: unknown, second?: unknown): void {
+        if (first && typeof first === 'object') {
+            const options = first as { left?: number; top?: number };
+            if (original) {
+                try {
+                    original.call(this, first);
+                    return;
+                } catch (_error) {
+                    const left = Number(options.left) || 0;
+                    const top = Number(options.top) || 0;
+                    try {
+                        original.call(this, method === 'scrollTo' ? ( Number.isFinite(Number(options.left)) ? left : Number(this.scrollX ?? this.pageXOffset ?? this.scrollLeft) || 0 ) : left, method === 'scrollTo' ? ( Number.isFinite(Number(options.top)) ? top : Number(this.scrollY ?? this.pageYOffset ?? this.scrollTop) || 0 ) : top);
+                        return;
+                    } catch (_innerError) { /* Fall through to property assignment. */ }
+                }
+            }
+            fallback(this, Number(options.left) || 0, Number(options.top) || 0);
+            return;
+        }
+        if (original) {
+            original.call(this, first, second);
+            return;
+        }
+        fallback(this, Number(first) || 0, Number(second) || 0);
+    };
+}
+
 export function installLegacyShims(scope: Record<string, unknown>, elementProto?: Partial<Element> & Record<string, unknown>): void {
     if (typeof scope.AbortController !== 'function') scope.AbortController = AbortControllerShim;
+    const entryCtor = scope.IntersectionObserverEntry as { prototype?: Record<string, unknown> } | undefined;
+    if (entryCtor?.prototype && !('isIntersecting' in entryCtor.prototype)) {
+        Object.defineProperty(entryCtor.prototype, 'isIntersecting', {
+            configurable: true,
+            get(this: IntersectionEntryLike): boolean {
+                return hasIntersection(this);
+            }
+        });
+    }
+    if (typeof scope.scrollTo === 'function' || typeof scope.scrollBy === 'function') {
+        wrapScrollMethod(scope, 'scrollTo', () => undefined);
+        wrapScrollMethod(scope, 'scrollBy', () => undefined);
+    }
     if (!elementProto) return;
     if (typeof elementProto.matches !== 'function') {
         elementProto.matches = (elementProto.webkitMatchesSelector || elementProto.msMatchesSelector) as Element['matches'];
@@ -54,6 +119,14 @@ export function installLegacyShims(scope: Record<string, unknown>, elementProto?
             return null;
         } as Element['closest'];
     }
+    wrapScrollMethod(elementProto, 'scrollTo', (receiver, left, top) => {
+        receiver.scrollLeft = left;
+        receiver.scrollTop = top;
+    });
+    wrapScrollMethod(elementProto, 'scrollBy', (receiver, left, top) => {
+        receiver.scrollLeft = (Number(receiver.scrollLeft) || 0) + left;
+        receiver.scrollTop = (Number(receiver.scrollTop) || 0) + top;
+    });
 }
 
 if (typeof window !== 'undefined') {

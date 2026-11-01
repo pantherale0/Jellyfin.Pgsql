@@ -49,12 +49,31 @@ test('ENG-01 legacy bundles polyfill by usage and shim the unguarded DOM APIs', 
     assert.doesNotMatch(config, /polyfills: \[/, 'no hand-picked core-js module list');
     assert.match(source('main.tsx'), /^import '\.\/legacy-shims';/, 'shims load before any app module');
 
-    const { installLegacyShims, AbortControllerShim } = await import('../src/legacy-shims.ts');
-    const scope = {};
+    const { installLegacyShims, AbortControllerShim, isEntryIntersecting } = await import('../src/legacy-shims.ts');
+    class FakeIntersectionEntry {}
+    const scrollCalls = [];
+    const scope = {
+        IntersectionObserverEntry: FakeIntersectionEntry,
+        scrollTo(...args) {
+            if (args.length === 1 && typeof args[0] === 'object') throw new TypeError('2 arguments required');
+            scrollCalls.push(args);
+        }
+    };
     const parent = { tag: 'section', parentElement: null, matches: selector => selector === 'section' };
     const proto = { webkitMatchesSelector() { return false; } };
     installLegacyShims(scope, proto);
     assert.equal(scope.AbortController, AbortControllerShim);
+    const entry = Object.assign(new FakeIntersectionEntry(), { intersectionRatio: 0.25 });
+    assert.equal(entry.isIntersecting, true, 'Chromium 53 IntersectionObserverEntry receives an isIntersecting getter');
+    assert.equal(isEntryIntersecting({ intersectionRatio: 0, intersectionRect: { width: 10, height: 0 } }), true);
+    assert.equal(isEntryIntersecting({ intersectionRatio: 0, intersectionRect: { width: 0, height: 0 } }), false);
+    scope.scrollTo({ top: 120, behavior: 'auto' });
+    assert.deepEqual(scrollCalls, [ [ 0, 120 ] ], 'Chromium 53 scrollTo(options) falls back to positional (left, top)');
+    const scroller = Object.create(proto);
+    scroller.scrollLeft = 10;
+    scroller.scrollTop = 20;
+    scroller.scrollBy({ left: 30, behavior: 'smooth' });
+    assert.equal(scroller.scrollLeft, 40, 'Element.scrollBy(options) updates scrollLeft when native method is missing');
     const child = { parentElement: parent, matches: () => false };
     assert.equal(proto.closest.call(child, 'section'), parent, 'closest walks ancestors');
     assert.equal(proto.closest.call(child, 'nav'), null);

@@ -164,6 +164,7 @@ export function createFakeBackend() {
 
         if (pathname === '/System/Info/Public' && isGet) return { response: jsonResponse(state.serverInfo) };
         if (pathname === '/Users/Public' && isGet) return { response: jsonResponse(state.publicUsers) };
+        if (pathname === '/Branding/Configuration' && isGet) return { response: jsonResponse({}) };
         if (pathname === '/QuickConnect/Enabled' && isGet) return { response: jsonResponse(false) };
         if (pathname === '/sso/config' && isGet) return { response: jsonResponse({ Enabled: false, CodeExchange: false }) };
 
@@ -186,6 +187,7 @@ export function createFakeBackend() {
         const token = tokenFrom(request);
         if (token !== FIXTURE_CREDENTIALS.accessToken) return { response: errorResponse(401, 'Unauthorized.') };
 
+        if (pathname === '/Seerr/Status' && isGet) return { response: jsonResponse({ Enabled: false }) };
         if (pathname === '/Users/Me' && isGet) return { response: jsonResponse(state.user) };
         if (pathname === '/UserViews' && isGet) {
             return { response: jsonResponse({ Items: state.views, TotalRecordCount: state.views.length }) };
@@ -215,6 +217,7 @@ export function createFakeBackend() {
         }
         if (pathname === '/LiveTv/Programs' && isGet) return { response: jsonResponse({ Items: [], TotalRecordCount: 0 }) };
         if (pathname === '/Items/Filters' && isGet) return { response: jsonResponse({ Tags: [], OfficialRatings: [] }) };
+        if ((pathname === '/Genres' || pathname === '/Years') && isGet) return { response: jsonResponse({ Items: [], TotalRecordCount: 0 }) };
         if (pathname === '/Movies/Recommendations' && isGet) return { response: jsonResponse(state.recommendationGroups) };
         if (pathname === '/Pgsql/Taste/Users/e2e-user-id' && isGet) return { response: jsonResponse({ HasProfile: false, Genres: [], People: [] }) };
         if (pathname === '/Pgsql/Taste/Recommendations' && isGet) return { response: jsonResponse({ Items: [] }) };

@@ -82,10 +82,14 @@ for (const viewport of tvViewports) {
             await expectControl(page.getByRole('button', { name: 'Home', exact: true }), page, minimum.control);
             await tv.openLibrary('Movies');
             await expectLibraryRows(page);
+            const alphaScrubber = page.locator('.alpha-scrubber');
+            if (viewport.width <= 1400 || viewport.height <= 800) await expect(alphaScrubber).toBeHidden();
+            else await expect(alphaScrubber).toBeVisible();
             const first = page.locator('[data-library-item-id="e2e-movie-1"]');
             await expectTextSize(first.locator('.library-card-overlay strong'), minimum.primary);
             await expectTextSize(first.locator('.library-card-overlay small'), minimum.metadata);
-            await expectControl(page.getByRole('searchbox', { name: 'Search Movies', exact: true }), page, minimum.control);
+            await expect(page.getByRole('searchbox', { name: 'Search Movies', exact: true })).toHaveCount(0);
+            await expectControl(page.getByRole('button', { name: 'Search your library', exact: true }), page, minimum.control);
             await expectControl(page.getByRole('button', { name: 'Select', exact: true }), page, minimum.control);
             await expectControl(page.getByRole('combobox', { name: 'Sort', exact: true }), page, minimum.control);
             await captureLayout(page, testInfo, 'tv-library-first-row');
@@ -164,8 +168,19 @@ for (const viewport of tvViewports) {
             }));
             const tv = new TvPage(page);
             await tv.open();
+            await removeModernSizing(page);
             await expect(page.locator('html.tv-no-grid')).toHaveCount(1);
             await expect(page.locator('.topbar')).toHaveCSS('position', 'fixed');
+            const brandBox = await box(page.locator('.topbar .brand'));
+            const navBox = await box(page.locator('.topbar .primary-nav'));
+            const searchBox = await box(page.locator('.topbar .search-box'));
+            const profileBox = await box(page.locator('.topbar .profile-menu-container'));
+            const searchIconBox = await box(page.locator('.topbar .search-toggle svg'));
+            expect(navBox.x - (brandBox.x + brandBox.width)).toBeGreaterThanOrEqual(16);
+            expect(searchBox.x).toBeGreaterThanOrEqual(viewport.width * 0.65);
+            expect(profileBox.x - (searchBox.x + searchBox.width)).toBeGreaterThanOrEqual(16);
+            expect(searchIconBox.width).toBeGreaterThanOrEqual(20);
+            expect(searchIconBox.height).toBeGreaterThanOrEqual(20);
             await tv.openLibrary('Movies');
             await expectLibraryRows(page);
             await expect(page.locator('.library-grid-window')).toHaveCSS('display', 'flex');
@@ -202,6 +217,10 @@ for (const viewport of tvViewports) {
             await page.goto('/?live=guide');
             const guide = page.locator('.live-guide-scroll');
             await expect(guide).toBeVisible();
+            await expect(guide.locator('.live-row').first()).toBeVisible();
+            // A late-day Today range can be shorter than the viewport; Tomorrow guarantees a scrollable timeline.
+            await page.getByRole('button', { name: 'Tomorrow', exact: true }).click();
+            await expect.poll(() => guide.evaluate(element => element.scrollWidth - element.clientWidth)).toBeGreaterThan(420);
             await expect(guide.locator('.live-row').first()).toBeVisible();
             const guideMetrics = await guide.evaluate(element => ({
                 scrollHeight: element.scrollHeight,

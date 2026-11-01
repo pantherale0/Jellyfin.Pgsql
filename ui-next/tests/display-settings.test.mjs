@@ -13,6 +13,7 @@ registerHooks({
 
 const { applyDisplaySettings, DEFAULT_DISPLAY, normalizeDisplaySettings } = await import('../src/display-settings.ts');
 const { inlineSign, loadMessages, resolveLanguage } = await import('../src/i18n.ts');
+const { libraryColumnCount } = await import('../src/library-geometry.ts');
 
 const css = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8');
 
@@ -44,10 +45,27 @@ test('the stylesheet defines light and system themes and keeps the player dark',
 test('right-to-left layout flips arrows and scroll direction but keeps time axes left to right', () => {
     assert.match(css, /\[dir=rtl\] \.dir-arrow \{[^}]*scaleX\(-1\)/);
     assert.match(css, /\[dir=rtl\] \.player-timeline[^{]*\.live-guide-scroll \{ direction: ltr; \}/);
-    const physical = css.split('\n').filter(line => !line.startsWith('.player') && !line.includes('safe-area-inset') && !line.includes('tv-no-grid') && /(?<![-\w])(margin|padding)-(left|right):/.test(line));
-    assert.deepEqual(physical, [], 'spacing outside the left-to-right player uses logical properties');
+    const physical = css.split('\n').filter(line => !line.startsWith('.player') && !line.includes('safe-area-inset') && !line.includes('tv-client') && /(?<![-\w])(margin|padding)-(left|right):/.test(line));
+    assert.deepEqual(physical, [], 'spacing outside the left-to-right player and TV physical fallback uses logical properties');
+    const tvLogical = css.split('\n').filter(line => line.includes('tv-client') && !line.includes(':not(.tv-client)') && /(?<![-\w])(margin|padding)-inline|(?<![-\w])inset(?:-(?:inline|block))?(?:-(?:start|end))?:/.test(line));
+    assert.deepEqual(tvLogical, [], 'TV rules avoid logical spacing and inset properties unsupported on webOS 4 / Chromium 53');
+    assert.match(css, /html\.tv-client \.topbar > \* \+ \* \{ margin-left: var\(--tv-space\); \}/);
+    assert.match(css, /html\.tv-client \.topbar \.search-box \{[^}]*margin-left: auto; padding-left: var\(--tv-space\); \}/);
+    assert.match(css, /html\.tv-client \.login-page \{ display: flex; align-items: center; justify-content: center;/);
+    assert.match(css, /html\.tv-client\.tv-no-grid \.login-card\.login-layout \{ display: flex; align-items: center; justify-content: space-between; gap: 0; \}/);
+    assert.match(css, /html\.tv-client \.login-panel \.quick-connect-code \{ margin: 24px 0 16px; padding: 24px 16px; font-size: 56px;/);
+    assert.match(css, /html\.tv-client \.library-quality \{ right: \.45rem; \}/);
+    assert.match(css, /html\[dir="rtl"\]\.tv-client \.topbar > \* \+ \* \{ margin-left: 0; margin-right: var\(--tv-space\); \}/);
+    assert.match(css, /html\[dir="rtl"\]\.tv-client \.topbar \.search-box \{ margin-left: 0; margin-right: auto; padding-left: 0; padding-right: var\(--tv-space\); \}/);
+    assert.match(css, /html\[dir="rtl"\]\.tv-client \.library-quality \{ right: auto; left: \.45rem; \}/);
+    assert.match(css, /html\[dir="rtl"\]\.tv-client\.tv-no-grid \.login-intro \{ margin-right: 0; margin-left: 64px; \}/);
     assert.match(css, /html\[dir="rtl"\]\.tv-client\.tv-no-grid \.library-grid-cell/);
     assert.match(css, /html\[dir="rtl"\]\.tv-client\.tv-no-grid \.live-channel/);
+    assert.equal(libraryColumnCount({ getPropertyValue: () => '', gridTemplateColumns: undefined }), 1, 'Chromium 53 undefined gridTemplateColumns falls back safely before TV CSS variables apply');
+    const main = readSource(new URL('../src/main.tsx', import.meta.url));
+    assert.doesNotMatch(main, /\u2315|⌕/, 'search button avoids the U+2315 glyph missing on webOS TV fonts');
+    assert.match(main, /class="search-toggle"[\s\S]*?<svg viewBox="0 0 24 24"/);
+    assert.match(main, /const tvClient = isTvClient\(\);\s*document\.documentElement\.classList\.toggle\('tv-client', tvClient\);\s*document\.documentElement\.classList\.toggle\('tv-no-grid', tvClient && !supportsCssGrid\(\)\);/);
     loadMessages('ar', {});
     assert.equal(inlineSign(), -1);
     loadMessages('en-us', {});

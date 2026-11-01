@@ -42,6 +42,7 @@ export default defineConfig(({ command, mode }) => {
     const backend = env.JELLYFIN_BACKEND_URL || env.VITE_JELLYFIN_SERVER_URL || 'http://localhost:8096';
     const probeOrigins = devProbeOrigins(backend, env.UI_NEXT_PROBE_ALLOWED_ORIGINS || '');
     const allowLanProbe = env.UI_NEXT_DEV_LAN === 'true';
+    const backendProxy = () => ({ target: backend, changeOrigin: true });
 
     return ({
     plugins: [
@@ -128,30 +129,43 @@ export default defineConfig(({ command, mode }) => {
             input
         }
     },
-    server: {
-        proxy: {
-            '/sso/config': {
-                target: backend,
-                changeOrigin: true
-            },
-            '/System': backend,
-            '/Users': backend,
-            '/UserItems': backend,
-            '/Movies': backend,
-            '/Items': backend,
-            '/UserViews': backend,
-            '/Shows': backend,
-            '/LiveTv': backend,
-            '/LiveStreams': backend,
-            '/Search': backend,
-            '/Videos': backend,
-            '/MediaSegments': backend,
-            '/PlaybackInfo': backend,
-            '/Sessions': backend,
-            '/Localization': backend,
-            '/QuickConnect': backend,
-            '/Pgsql': backend
+        server: {
+            proxy: {
+                '/sso/config': backendProxy(),
+                '/System': backendProxy(),
+                '/Users': backendProxy(),
+                '/UserItems': backendProxy(),
+                '/Movies': backendProxy(),
+                '/Items': backendProxy(),
+                '/UserViews': backendProxy(),
+                '/Shows': backendProxy(),
+                '/LiveTv': backendProxy(),
+                '/LiveStreams': backendProxy(),
+                '/Search': backendProxy(),
+                '/Videos': backendProxy(),
+                '/MediaSegments': backendProxy(),
+                '/PlaybackInfo': backendProxy(),
+                '/Sessions': backendProxy(),
+                '/Localization': backendProxy(),
+                '/QuickConnect': backendProxy(),
+                '/Pgsql': backendProxy(),
+                '/': {
+                    ...backendProxy(),
+                    bypass(request) {
+                        const pathname = new URL(request.url || '/', 'http://127.0.0.1').pathname;
+                        const localRequest = pathname === '/'
+                            || pathname === '/index.html'
+                            || pathname === '/debug.html'
+                            || pathname.startsWith('/@')
+                            || pathname.startsWith('/src/')
+                            || pathname.startsWith('/node_modules/')
+                            || pathname.startsWith('/assets/')
+                            || pathname.startsWith('/__')
+                            || /\.[^/]+$/.test(pathname);
+                        if (localRequest) return request.url || '/';
+                    }
+                }
+            }
         }
-    }
     });
 });

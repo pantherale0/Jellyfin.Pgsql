@@ -377,7 +377,8 @@ export function LyricsView({ api, item }: { api: JellyfinApi | null; item: Media
 
 /** The less-frequent item actions (download, share, collection, manage, delete) behind a "More" menu. */
 export function ItemActionsBar({ api, item, user, serverId, onDeleted, onChanged }: { api: JellyfinApi | null; item: MediaItem; user: JellyfinUser; serverId: string; onDeleted: (item: MediaItem) => void; onChanged: () => void }) {
-    const actions = itemActions(item, user);
+    const layout = currentLayout();
+    const actions = itemActions(item, user, layout);
     const [ menuOpen, setMenuOpen ] = useState(false);
     const [ message, setMessage ] = useState('');
     const [ error, setError ] = useState('');
@@ -398,7 +399,7 @@ export function ItemActionsBar({ api, item, user, serverId, onDeleted, onChanged
     };
     useDialogFocus(menu, menuOpen, closeMenu, { initial: 'button', fallback: () => more.current });
     if (!api) return null;
-    const manageable = metadataActions(item, user, currentLayout()).any;
+    const manageable = metadataActions(item, user, layout).any;
     if (!actions.download && !actions.share && !actions.collection && !actions.playlist && !actions.remove && !manageable) return null;
     const run = async (work: () => Promise<string | void>) => {
         setBusy(true);
@@ -471,10 +472,10 @@ export function CollectionPicker({ api, itemIds, onDone }: { api: JellyfinApi; i
     return <section class="collection-picker" aria-label={t('Add to collection')}>
         {collections.loading && <p class="muted" role="status">{t('Loading collections…')}</p>}
         {collections.value.length > 0 && <div class="detail-chips">{collections.value.map(collection => <button key={collection.Id} data-focusable="true" class="detail-chip" type="button" disabled={busy} onClick={() => void act(async () => { await api.addToCollection(collection.Id, itemIds); return `Added ${what} to ${collection.Name}.`; })}>{collection.Name}</button>)}</div>}
-        <form class="collection-new" onSubmit={event => { event.preventDefault(); const trimmed = name.trim(); if (!trimmed) { setError(t('Enter a collection name.')); return; } void act(async () => { await api.createCollection(trimmed, itemIds); return `Created ${trimmed} with ${what}.`; }); }}>
+        {currentLayout() !== 'tv' && <form class="collection-new" onSubmit={event => { event.preventDefault(); const trimmed = name.trim(); if (!trimmed) { setError(t('Enter a collection name.')); return; } void act(async () => { await api.createCollection(trimmed, itemIds); return `Created ${trimmed} with ${what}.`; }); }}>
             <label>{t('New collection')}<input data-focusable="true" value={name} maxLength={200} onInput={event => setName((event.currentTarget as HTMLInputElement).value)} /></label>
             <button data-focusable="true" class="button secondary" type="submit" disabled={busy}>{t('Create')}</button>
-        </form>
+        </form>}
         {error && <p class="notice error" role="alert">{error}</p>}
     </section>;
 }
@@ -495,10 +496,10 @@ export function PlaylistPicker({ api, itemIds, onDone }: { api: JellyfinApi; ite
         {playlists.loading && <p class="muted" role="status">{t('Loading playlists…')}</p>}
         {playlists.error && <p class="notice error" role="alert">{t('Playlists could not load: {0}', playlists.error)}</p>}
         {playlists.value.length > 0 && <div class="detail-chips">{playlists.value.map(playlist => <button key={playlist.Id} data-focusable="true" class="detail-chip" type="button" disabled={busy} onClick={() => void act(async () => { await api.addToPlaylist(playlist.Id, itemIds); return `Added ${what} to ${playlist.Name}.`; })}>{playlist.Name}</button>)}</div>}
-        <form class="collection-new" onSubmit={event => { event.preventDefault(); const trimmed = name.trim(); if (!trimmed) { setError(t('Enter a playlist name.')); return; } void act(async () => { await api.createPlaylist(trimmed, itemIds); return `Created ${trimmed} with ${what}.`; }); }}>
+        {currentLayout() !== 'tv' && <form class="collection-new" onSubmit={event => { event.preventDefault(); const trimmed = name.trim(); if (!trimmed) { setError(t('Enter a playlist name.')); return; } void act(async () => { await api.createPlaylist(trimmed, itemIds); return `Created ${trimmed} with ${what}.`; }); }}>
             <label>{t('New playlist')}<input data-focusable="true" value={name} maxLength={200} onInput={event => setName((event.currentTarget as HTMLInputElement).value)} /></label>
             <button data-focusable="true" class="button secondary" type="submit" disabled={busy}>{t('Create')}</button>
-        </form>
+        </form>}
         {error && <p class="notice error" role="alert">{error}</p>}
     </section>;
 }

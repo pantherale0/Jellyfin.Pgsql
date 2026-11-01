@@ -5,6 +5,7 @@ import { peekCachedImage, releaseCachedImage, retainCachedImage, type JellyfinAp
 import { HOME_EXPLORE_PAGE_SIZE, type HomeFeedBlock } from './home-feed-blocks';
 import { preferredScrollBehavior } from './live-model';
 import { useItemPrefetch } from './item-prefetch';
+import { isEntryIntersecting } from './legacy-shims';
 import { describeCard, homeCardHeading, homeCardSubheading, homeRailShape, resumeMinutesLeft } from './media-labels';
 import type { SeerrItem } from './seerr';
 import { SeerrCard } from './seerr-views';
@@ -214,7 +215,7 @@ function HomeFeedCard({ item, api, onSelect, shape = 'poster' }: { item: MediaIt
     const src = api
         ? (landscape
             ? (item.Type === 'Episode' || item.SeriesName || liveProgram
-                ? api.imageUrl(item, 'Primary', 420, 80)
+                ? api.imageUrl(item, 'Primary', 420, 80) || api.seriesArt(item, 420, 80)
                 : api.imageUrl(item, 'Backdrop', 420, 80) || api.imageUrl(item, 'Primary', 420, 80))
             : api.seriesArt(item, 300, 80) || api.imageUrl(item, 'Primary', 300, 80))
         : '';
@@ -252,7 +253,7 @@ function HomeFeedCard({ item, api, onSelect, shape = 'poster' }: { item: MediaIt
             load();
         } else {
             const observer = new IntersectionObserver(entries => {
-                if (!entries.some(entry => entry.isIntersecting)) return;
+                if (!entries.some(isEntryIntersecting)) return;
                 observer.disconnect();
                 load();
             }, { rootMargin: '300px' });

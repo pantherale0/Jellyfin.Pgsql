@@ -131,13 +131,14 @@ export function canAddToPlaylist(item: Pick<MediaItem, 'Type' | 'Id'>): boolean 
 }
 
 /** Actions offered for an item, from the server's per-item capability flags and the user's policy. */
-export function itemActions(item: Pick<MediaItem, 'Type' | 'CanDelete' | 'CanDownload' | 'Id'>, user: Pick<JellyfinUser, 'Policy'>): ItemActionSet {
+export function itemActions(item: Pick<MediaItem, 'Type' | 'CanDelete' | 'CanDownload' | 'Id'>, user: Pick<JellyfinUser, 'Policy'>, layout = 'desktop'): ItemActionSet {
     const real = !item.Id.startsWith('tag:');
+    const tv = layout === 'tv';
     return {
-        download: real && item.CanDownload === true,
-        share: real,
-        collection: real && canManageCollections(user) && [ 'Movie', 'Series', 'Episode', 'Video', 'MusicVideo', 'MusicAlbum', 'Audio', 'Book', 'Photo', 'Trailer' ].includes(item.Type || ''),
-        playlist: canAddToPlaylist(item),
+        download: !tv && real && item.CanDownload === true,
+        share: !tv && real,
+        collection: !tv && real && canManageCollections(user) && [ 'Movie', 'Series', 'Episode', 'Video', 'MusicVideo', 'MusicAlbum', 'Audio', 'Book', 'Photo', 'Trailer' ].includes(item.Type || ''),
+        playlist: !tv && canAddToPlaylist(item),
         remove: real && item.CanDelete === true,
     };
 }

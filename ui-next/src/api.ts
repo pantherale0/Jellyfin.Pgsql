@@ -992,7 +992,10 @@ export class JellyfinApi {
             ...(libraryOptions ? mapLibraryQuery(query!, { ...libraryOptions, StartIndex: startIndex, Limit: libraryOptions.Limit ?? pageSize, IncludeItemTypes: includeItemTypes, Recursive: recursive }) : {
                 Limit: pageSize,
                 StartIndex: startIndex,
-                Fields: 'Overview,PrimaryImageAspectRatio,UserData,CommunityRating,ProductionYear,RunTimeTicks,IndexNumber,ParentIndexNumber,SeriesId,SeasonId,ChannelName',
+                Fields: 'Overview,PrimaryImageAspectRatio,UserData,CommunityRating,ProductionYear,RunTimeTicks,IndexNumber,ParentIndexNumber,SeriesId,SeasonId,ChannelName,SeriesName,ImageTags,BackdropImageTags',
+                EnableImages: 'true',
+                ImageTypeLimit: 1,
+                EnableImageTypes: 'Primary,Backdrop,Thumb',
                 SortBy: 'SortName',
                 SortOrder: 'Ascending'
             })
