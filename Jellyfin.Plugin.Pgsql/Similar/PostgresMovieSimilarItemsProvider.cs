@@ -167,21 +167,15 @@ public sealed class PostgresMovieSimilarItemsProvider :
             var missingIds = sourceIds
                 .Where(id => !storedBySource.TryGetValue(id, out var rows) || rows.Count == 0)
                 .ToList();
-            Dictionary<Guid, Dictionary<Guid, int>> perSourceScores;
-            if (missingIds.Count == 0)
-            {
-                perSourceScores = [];
-            }
-            else
-            {
-                perSourceScores = await ComputeBatchScoresAsync(
+            Dictionary<Guid, Dictionary<Guid, int>> perSourceScores = missingIds.Count == 0
+                ? []
+                : await ComputeBatchScoresAsync(
                         missingIds,
                         context,
                         query.User?.Id,
                         useNeural: false,
                         cancellationToken)
                     .ConfigureAwait(false);
-            }
 
             var allCandidateIds = new HashSet<Guid>();
             foreach (var rows in storedBySource.Values)

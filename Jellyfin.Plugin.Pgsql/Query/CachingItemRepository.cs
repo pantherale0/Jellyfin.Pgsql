@@ -235,6 +235,7 @@ internal sealed class CachingItemRepository : IItemRepository
 
     private static bool TryDeserializeBrowsePage(byte[] payload, out BrowsePageCacheEntry page)
     {
+        page = null!;
         try
         {
             var parsed = System.Text.Json.JsonSerializer.Deserialize<BrowsePageCacheEntry>(payload, BrowseJsonOptions);
@@ -246,9 +247,9 @@ internal sealed class CachingItemRepository : IItemRepository
         }
         catch (System.Text.Json.JsonException)
         {
+            return false;
         }
 
-        page = null!;
         return false;
     }
 

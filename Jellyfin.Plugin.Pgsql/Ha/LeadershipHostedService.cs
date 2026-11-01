@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller;
@@ -73,7 +74,12 @@ internal sealed class LeadershipHostedService : IHostedService, IDisposable
         }
 
         _leadership.LeadershipChanged -= OnLeadershipChanged;
-        await ApplyDemotionAsync().ConfigureAwait(false);
+        await ApplyDemotionAsync(
+            _libraryMonitor,
+            _taskManager,
+            _transcodeManager,
+            _mediaSourceManager,
+            _logger).ConfigureAwait(false);
         await _leadership.ResignAsync().ConfigureAwait(false);
     }
 
@@ -132,44 +138,93 @@ internal sealed class LeadershipHostedService : IHostedService, IDisposable
             _logger.LogWarning("HA demote: stopping writer-only work (epoch {Epoch})", epoch);
         }
 
-        _ = ApplyDemotionAsync();
+        _ = ApplyDemotionAsync(
+            _libraryMonitor,
+            _taskManager,
+            _transcodeManager,
+            _mediaSourceManager,
+            _logger);
     }
 
-    private async Task ApplyDemotionAsync()
+    internal static async Task ApplyDemotionAsync(
+        ILibraryMonitor libraryMonitor,
+        ITaskManager taskManager,
+        ITranscodeManager transcodeManager,
+        IMediaSourceManager mediaSourceManager,
+        ILogger<LeadershipHostedService> logger)
     {
         try
         {
-            _libraryMonitor.Stop();
+            libraryMonitor.Stop();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error while stopping HA library monitor during demotion");
+        }
 
-            foreach (var task in _taskManager.ScheduledTasks)
+        try
+        {
+            foreach (var task in taskManager.ScheduledTasks.Where(task => task.State == TaskState.Running))
             {
-                if (task.State == TaskState.Running)
+                try
                 {
-                    _taskManager.Cancel(task);
+                    taskManager.Cancel(task);
                 }
-            }
-
-            await _transcodeManager.KillAllTranscodingJobs().ConfigureAwait(false);
-
-            foreach (var stream in _mediaSourceManager.GetOpenLiveStreams())
-            {
-                var liveStreamId = stream.MediaSource?.LiveStreamId;
-                if (string.IsNullOrEmpty(liveStreamId))
+                catch (Exception ex)
                 {
-                    continue;
-                }
-
-                // CloseLiveStream decrements ConsumerCount; drain every consumer so the tuner is released.
-                var remaining = Math.Max(1, stream.ConsumerCount);
-                for (var i = 0; i < remaining; i++)
-                {
-                    await _mediaSourceManager.CloseLiveStream(liveStreamId).ConfigureAwait(false);
+                    logger.LogError(ex, "Error while cancelling scheduled task during HA demotion");
                 }
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error while demoting HA leader");
+            logger.LogError(ex, "Error while enumerating scheduled tasks during HA demotion");
+        }
+
+        try
+        {
+            await transcodeManager.KillAllTranscodingJobs().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error while stopping transcoding jobs during HA demotion");
+        }
+
+        try
+        {
+            foreach (var stream in mediaSourceManager.GetOpenLiveStreams())
+            {
+                try
+                {
+                    var liveStreamId = stream.MediaSource?.LiveStreamId;
+                    if (string.IsNullOrEmpty(liveStreamId))
+                    {
+                        continue;
+                    }
+
+                    // CloseLiveStream decrements ConsumerCount; drain every consumer so the tuner is released.
+                    var remaining = Math.Max(1, stream.ConsumerCount);
+                    for (var i = 0; i < remaining; i++)
+                    {
+                        try
+                        {
+                            await mediaSourceManager.CloseLiveStream(liveStreamId).ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogError(ex, "Error while closing live stream consumer during HA demotion");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error while draining live stream during HA demotion");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error while enumerating live streams during HA demotion");
         }
     }
 }

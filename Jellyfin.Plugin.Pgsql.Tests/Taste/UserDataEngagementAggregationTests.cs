@@ -16,8 +16,8 @@ public sealed class UserDataEngagementAggregationTests
         var newer = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
         var rows = new List<UserDataEngagementRow>
         {
-            new(ItemId, IsFavorite: false, Likes: null, Played: true, PlayCount: 1, Rating: null, PlaybackPositionTicks: 100, LastPlayedDate: older, RunTimeTicks: 1000),
-            new(ItemId, IsFavorite: true, Likes: true, Played: false, PlayCount: 3, Rating: 8.0, PlaybackPositionTicks: 50, LastPlayedDate: newer, RunTimeTicks: 1000),
+            new(ItemId, IsFavorite: false, Likes: null, Played: true, PlayCount: 1, Rating: 6.0, PlaybackPositionTicks: 100, LastPlayedDate: older, RunTimeTicks: 1000),
+            new(ItemId, IsFavorite: true, Likes: true, Played: false, PlayCount: 3, Rating: 8.0, PlaybackPositionTicks: 50, LastPlayedDate: newer, RunTimeTicks: 2000),
         };
 
         var byItem = UserDataEngagementAggregation.ToDictionaryByItemId(rows);
@@ -28,8 +28,9 @@ public sealed class UserDataEngagementAggregationTests
         Assert.True(merged.Likes);
         Assert.True(merged.Played);
         Assert.Equal(3, merged.PlayCount);
-        Assert.Equal(8.0, merged.Rating);
+        Assert.Equal(6.0, merged.Rating);
         Assert.Equal(100, merged.PlaybackPositionTicks);
         Assert.Equal(newer, merged.LastPlayedDate);
+        Assert.Equal(1000, merged.RunTimeTicks);
     }
 }

@@ -73,14 +73,9 @@ internal static class UserDataEngagementAggregation
         var result = new Dictionary<Guid, UserDataEngagementRow>();
         foreach (var row in rows)
         {
-            if (result.TryGetValue(row.ItemId, out var existing))
-            {
-                result[row.ItemId] = Merge(existing, row);
-            }
-            else
-            {
-                result[row.ItemId] = row;
-            }
+            result[row.ItemId] = result.TryGetValue(row.ItemId, out var existing)
+                ? Merge(existing, row)
+                : row;
         }
 
         return result;

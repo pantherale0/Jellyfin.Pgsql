@@ -733,6 +733,155 @@ public sealed class UserTasteProfileIntegrationTests
     }
 
     [PostgresTestFact]
+    public async Task Rebuild_ZeroWeightInputs_DoNotIncreaseSampleCount()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+
+        var zeroWeightUserId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000f101");
+        var smallWeightUserId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000f102");
+        var zeroWeightItemId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000f111");
+        var smallWeightItemId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000f112");
+        Guid[] users = [zeroWeightUserId, smallWeightUserId];
+        Guid[] items = [zeroWeightItemId, smallWeightItemId];
+
+        await dbContext.UserData.Where(u => users.Contains(u.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.UserTasteProfiles.Where(p => users.Contains(p.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.ItemValuesMap.Where(m => items.Contains(m.ItemId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.BaseItems.Where(i => items.Contains(i.Id)).ExecuteDeleteAsync().ConfigureAwait(false);
+
+        var userSeeds = new[]
+        {
+            (zeroWeightUserId, "taste-zero-weight"),
+            (smallWeightUserId, "taste-small-weight")
+        };
+        foreach (var (id, name) in userSeeds)
+        {
+            if (!await dbContext.Users.AnyAsync(u => u.Id == id).ConfigureAwait(false))
+            {
+                dbContext.Users.Add(new User(name, name, "1") { Id = id });
+            }
+        }
+
+        dbContext.BaseItems.AddRange(
+            MovieWithRuntime(zeroWeightItemId, "Recent Short Watch", "recent short watch", 2020, "Drama", TimeSpan.FromHours(2).Ticks),
+            Movie(smallWeightItemId, "Small Rating", "small rating", 2021, "Drama"));
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        dbContext.UserData.AddRange(
+            new UserData
+            {
+                ItemId = zeroWeightItemId,
+                UserId = zeroWeightUserId,
+                CustomDataKey = zeroWeightItemId.ToString("N"),
+                PlaybackPositionTicks = TimeSpan.FromSeconds(90).Ticks,
+                LastPlayedDate = DateTime.UtcNow.AddDays(-3),
+                Item = null!,
+                User = null!,
+            },
+            new UserData
+            {
+                ItemId = smallWeightItemId,
+                UserId = smallWeightUserId,
+                CustomDataKey = smallWeightItemId.ToString("N"),
+                Rating = 0.00001,
+                LastPlayedDate = DateTime.UtcNow,
+                Item = null!,
+                User = null!,
+            });
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        var builder = new UserTasteProfileBuilder(NullLogger<UserTasteProfileBuilder>.Instance);
+        var zeroWeightOutcome = await builder.RebuildUserAsync(
+                dbContext,
+                zeroWeightUserId,
+                MovieType,
+                SeriesType,
+                EpisodeType,
+                DateTime.UtcNow.AddDays(-730),
+                minSamples: 1,
+                default)
+            .ConfigureAwait(false);
+        Assert.False(zeroWeightOutcome.Upserted);
+        Assert.Equal(0, zeroWeightOutcome.MovieSignalCount);
+        Assert.Equal(0, zeroWeightOutcome.MediaSignalCount);
+
+        var smallWeightOutcome = await builder.RebuildUserAsync(
+                dbContext,
+                smallWeightUserId,
+                MovieType,
+                SeriesType,
+                EpisodeType,
+                DateTime.UtcNow.AddDays(-730),
+                minSamples: 1,
+                default)
+            .ConfigureAwait(false);
+        Assert.True(smallWeightOutcome.Upserted);
+        Assert.Equal(1, smallWeightOutcome.MovieSignalCount);
+        Assert.Equal(1, smallWeightOutcome.MediaSignalCount);
+    }
+
+    [PostgresTestFact]
+    public async Task Rebuild_UnderflowedSeriesAbandon_DoesNotIncreaseSampleCount()
+    {
+        Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");
+
+        var factory = new TestDbContextFactory(_fixture.ConnectionString);
+        await using var dbContext = await factory.CreateDbContextAsync().ConfigureAwait(false);
+
+        var userId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000f201");
+        var seriesId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000f211");
+        var episodeId = Guid.Parse("eeeeeeee-aaaa-bbbb-cccc-00000000f212");
+        Guid[] users = [userId];
+        Guid[] items = [seriesId, episodeId];
+
+        await dbContext.UserData.Where(u => users.Contains(u.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.UserTasteProfiles.Where(p => users.Contains(p.UserId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.ItemValuesMap.Where(m => items.Contains(m.ItemId)).ExecuteDeleteAsync().ConfigureAwait(false);
+        await dbContext.BaseItems.Where(i => items.Contains(i.Id)).ExecuteDeleteAsync().ConfigureAwait(false);
+
+        if (!await dbContext.Users.AnyAsync(u => u.Id == userId).ConfigureAwait(false))
+        {
+            dbContext.Users.Add(new User("taste-underflow", "TasteUnderflow", "1") { Id = userId });
+        }
+
+        dbContext.BaseItems.Add(Series(seriesId, "Underflow Series", "underflow series", 2020));
+        var episode = Episode(episodeId, seriesId, "Short Episode", "short episode", 2020);
+        episode.RunTimeTicks = TimeSpan.FromHours(2).Ticks;
+        dbContext.BaseItems.Add(episode);
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        dbContext.UserData.Add(new UserData
+        {
+            ItemId = episodeId,
+            UserId = userId,
+            CustomDataKey = episodeId.ToString("N"),
+            PlaybackPositionTicks = TimeSpan.FromSeconds(90).Ticks,
+            LastPlayedDate = DateTime.UtcNow.AddYears(-1000),
+            Item = null!,
+            User = null!,
+        });
+        await dbContext.SaveChangesAsync().ConfigureAwait(false);
+
+        var builder = new UserTasteProfileBuilder(NullLogger<UserTasteProfileBuilder>.Instance);
+        var outcome = await builder.RebuildUserAsync(
+                dbContext,
+                userId,
+                MovieType,
+                SeriesType,
+                EpisodeType,
+                DateTime.UtcNow.AddDays(-730),
+                minSamples: 1,
+                default)
+            .ConfigureAwait(false);
+
+        Assert.False(outcome.Upserted);
+        Assert.Equal(0, outcome.MediaSignalCount);
+    }
+
+    [PostgresTestFact]
     public async Task Rebuild_EpisodePlays_RollUpToSeries_WithBingeCap()
     {
         Assert.True(_fixture.IsAvailable, $"PostgreSQL fixture failed to initialize: {_fixture.InitializationError}");

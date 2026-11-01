@@ -128,6 +128,8 @@ UI Next prefers HLS.js for HLS playback and falls back to native HLS when HLS.js
 
 **How to configure it:** Set `Pgsql_HA_ENABLED=true`. See [README HA settings](../README.md#active-standby-ha-optional) and [known issues](known-issues.md).
 
+**Failure handling:** If a demotion cleanup step fails, the service logs the failure and still attempts later independent cleanup steps. When the hosted service stops, it awaits demotion cleanup and then attempts to resign from leadership.
+
 ## UI Next TV and accessibility behavior
 
 **What:** UI Next supports keyboard and remote navigation, responsive TV layouts, Quick Connect, a D-pad guide, focus management for dialogs, and TV-specific playback controls.

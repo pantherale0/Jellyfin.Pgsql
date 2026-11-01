@@ -144,12 +144,9 @@ public sealed class YtDlpTrailerService
         }
 
         var now = DateTimeOffset.UtcNow;
-        foreach (var entry in _cache)
+        foreach (var entry in _cache.Where(entry => entry.Value.ExpiresAt <= now))
         {
-            if (entry.Value.ExpiresAt <= now)
-            {
-                _cache.TryRemove(entry.Key, out _);
-            }
+            _cache.TryRemove(entry.Key, out _);
         }
 
         foreach (var entry in _cache.OrderBy(pair => pair.Value.ExpiresAt).Take(Math.Max(0, _cache.Count - MaxCacheEntries)))

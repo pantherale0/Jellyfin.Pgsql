@@ -140,20 +140,17 @@ public static class TasteEvalMetrics
             return 0;
         }
 
-        var scores = new List<double>();
-        foreach (var group in rows.GroupBy(r => r.UserId))
-        {
-            var ranked = group
-                .OrderByDescending(x => x.Score)
-                .Select(x => (x.Score, x.Label))
-                .ToList();
-            if (ranked.Count == 0)
+        var scores = rows
+            .GroupBy(r => r.UserId)
+            .Select(group =>
             {
-                continue;
-            }
-
-            scores.Add(PrecisionAtK(ranked, k));
-        }
+                var ranked = group
+                    .OrderByDescending(x => x.Score)
+                    .Select(x => (x.Score, x.Label))
+                    .ToList();
+                return PrecisionAtK(ranked, k);
+            })
+            .ToList();
 
         return scores.Count == 0 ? 0 : scores.Average();
     }
