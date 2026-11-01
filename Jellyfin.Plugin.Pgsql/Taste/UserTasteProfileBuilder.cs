@@ -822,38 +822,31 @@ public sealed class UserTasteProfileBuilder
         foreach (var row in episodePlayback)
         {
             var pbUtc = row.DatePlayed.ToUniversalTime();
-            if (episodeState.TryGetValue(row.EpisodeId, out var existing))
-            {
-                episodeState[row.EpisodeId] = (
+            episodeState[row.EpisodeId] = episodeState.TryGetValue(row.EpisodeId, out var existing)
+                ? (
                     existing.SeriesId,
                     Math.Max(existing.MaxTicks, row.PlayedTicks),
                     existing.RunTime ?? row.RunTimeTicks,
                     existing.LastPlayed is DateTime lp && lp > pbUtc ? lp : pbUtc,
                     existing.Played,
-                    existing.PlayCount);
-            }
-            else
-            {
-                episodeState[row.EpisodeId] = (
+                    existing.PlayCount)
+                : (
                     row.SeriesId,
                     row.PlayedTicks,
                     row.RunTimeTicks,
                     pbUtc,
                     false,
                     0);
-            }
         }
 
         foreach (var (episodeId, state) in episodeState)
         {
             EnsureSeries(state.SeriesId);
             episodesBySeries[state.SeriesId].Add(episodeId);
-            if (state.LastPlayed is DateTime at)
+            if (state.LastPlayed is DateTime at
+                && (!latestPlayBySeries.TryGetValue(state.SeriesId, out var existing) || at > existing))
             {
-                if (!latestPlayBySeries.TryGetValue(state.SeriesId, out var existing) || at > existing)
-                {
-                    latestPlayBySeries[state.SeriesId] = at;
-                }
+                latestPlayBySeries[state.SeriesId] = at;
             }
 
             var input = new TasteEngagementInput(

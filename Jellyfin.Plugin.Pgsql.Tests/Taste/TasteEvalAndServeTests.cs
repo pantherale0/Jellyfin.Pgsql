@@ -48,6 +48,16 @@ public sealed class TasteEvalAndServeTests
     }
 
     [Fact]
+    public void MeanPrecisionAtK_EmptyInputOrNonpositiveK_ReturnsZero()
+    {
+        var rows = new[] { (Guid.Empty, 0.9f, true) };
+
+        Assert.Equal(0, TasteEvalMetrics.MeanPrecisionAtK([], 1));
+        Assert.Equal(0, TasteEvalMetrics.MeanPrecisionAtK(rows, 0));
+        Assert.Equal(0, TasteEvalMetrics.MeanPrecisionAtK(rows, -1));
+    }
+
+    [Fact]
     public void HasBothBinaryClasses_RequiresPositiveAndNegative()
     {
         Assert.False(TasteEvalMetrics.HasBothBinaryClasses([]));

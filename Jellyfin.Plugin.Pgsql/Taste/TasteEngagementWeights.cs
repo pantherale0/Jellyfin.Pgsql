@@ -105,7 +105,7 @@ public static class TasteEngagementWeights
         if (input.PlayCount > 0 || input.MaxPlayedTicks > 0)
         {
             // Short open below abandon threshold, or unknown runtime with plays → treat as weak mid.
-            return ratio is null && (input.PlayCount > 0 || input.Played)
+            return ratio is null && input.PlayCount > 0
                 ? TasteEngagementKind.DeepPlay
                 : TasteEngagementKind.None;
         }

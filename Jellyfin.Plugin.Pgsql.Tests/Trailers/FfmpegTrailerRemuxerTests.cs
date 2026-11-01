@@ -27,9 +27,9 @@ public sealed class FfmpegTrailerRemuxerTests
             return;
         }
 
-        var directory = Path.Combine(Path.GetTempPath(), $"streaming-trailer-{Guid.NewGuid():N}");
+        var directory = Path.Join(Path.GetTempPath(), $"streaming-trailer-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
-        var executable = Path.Combine(directory, "fake-ffmpeg");
+        var executable = Path.Join(directory, "fake-ffmpeg");
         var finished = executable + ".finished";
         var initialization = Convert.ToBase64String(CreateInitializationSegment());
         try
@@ -41,7 +41,7 @@ public sealed class FfmpegTrailerRemuxerTests
             encoder.SetupGet(value => value.EncoderPath).Returns(executable);
             var remuxer = new FfmpegTrailerRemuxer(encoder.Object);
             var context = CreateContext();
-            var body = new WriteSignalStream();
+            using var body = new WriteSignalStream();
             context.Response.Body = body;
             var relay = remuxer.RelayAsync(AdaptiveResolution(4.2), context, CancellationToken.None);
 
@@ -72,9 +72,9 @@ public sealed class FfmpegTrailerRemuxerTests
             return;
         }
 
-        var directory = Path.Combine(Path.GetTempPath(), $"cancelled-trailer-{Guid.NewGuid():N}");
+        var directory = Path.Join(Path.GetTempPath(), $"cancelled-trailer-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
-        var executable = Path.Combine(directory, "fake-ffmpeg");
+        var executable = Path.Join(directory, "fake-ffmpeg");
         var initialization = Convert.ToBase64String(CreateInitializationSegment());
         try
         {
@@ -84,7 +84,7 @@ public sealed class FfmpegTrailerRemuxerTests
             encoder.SetupGet(value => value.EncoderPath).Returns(executable);
             var remuxer = new FfmpegTrailerRemuxer(encoder.Object);
             var context = CreateContext();
-            var body = new WriteSignalStream();
+            using var body = new WriteSignalStream();
             context.Response.Body = body;
             using var cancellation = new CancellationTokenSource();
             var relay = remuxer.RelayAsync(AdaptiveResolution(4.2), context, cancellation.Token);
@@ -116,22 +116,24 @@ public sealed class FfmpegTrailerRemuxerTests
     [RealFfmpegFact]
     public async Task RelayAsync_RealAdaptiveTracksStreamFiniteDurationAndFragments()
     {
-        var directory = Path.Combine(Path.GetTempPath(), $"real-trailer-{Guid.NewGuid():N}");
+        var directory = Path.Join(Path.GetTempPath(), $"real-trailer-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
         try
         {
-            var video = Path.Combine(directory, "video.mp4");
-            var audio = Path.Combine(directory, "audio.m4a");
+            var video = Path.Join(directory, "video.mp4");
+            var audio = Path.Join(directory, "audio.m4a");
             await RunFfmpegAsync("-f", "lavfi", "-i", "testsrc2=size=160x90:rate=10", "-t", "4", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", video);
             await RunFfmpegAsync("-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100", "-t", "4", "-c:a", "aac", "-vn", audio);
             var encoder = new Mock<IMediaEncoder>();
             encoder.SetupGet(value => value.EncoderPath).Returns(FfmpegPath);
             var remuxer = new FfmpegTrailerRemuxer(encoder.Object);
             var context = CreateContext();
+            using var body = new MemoryStream();
+            context.Response.Body = body;
 
             await remuxer.RelayAsync(new YtDlpResolution(video, new Dictionary<string, string>(), audio, new Dictionary<string, string>(), 4.2), context, CancellationToken.None);
 
-            var bytes = ((MemoryStream)context.Response.Body).ToArray();
+            var bytes = body.ToArray();
             var topLevel = ReadAtoms(bytes, 0, bytes.Length);
             Assert.Contains(topLevel, atom => atom.Type == "moov");
             Assert.Contains(topLevel, atom => atom.Type == "moof");
@@ -153,7 +155,6 @@ public sealed class FfmpegTrailerRemuxerTests
     {
         var context = new DefaultHttpContext();
         context.Request.Method = HttpMethods.Get;
-        context.Response.Body = new MemoryStream();
         return context;
     }
 

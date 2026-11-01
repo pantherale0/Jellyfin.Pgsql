@@ -30,14 +30,22 @@ public sealed class YtDlpTrailerServiceTests
         {
             var context = new DefaultHttpContext();
             context.Request.Headers.Range = "bytes=10-20";
-            context.Response.Body = new MemoryStream();
-            await service.RelayAsync("dQw4w9WgXcQ", context, CancellationToken.None);
-            Assert.Equal(StatusCodes.Status206PartialContent, context.Response.StatusCode);
-            Assert.Equal("video/mp4", context.Response.ContentType);
+            var responseBody = new MemoryStream();
+            using (responseBody)
+            {
+                context.Response.Body = responseBody;
+                await service.RelayAsync("dQw4w9WgXcQ", context, CancellationToken.None);
+                Assert.Equal(StatusCodes.Status206PartialContent, context.Response.StatusCode);
+                Assert.Equal("video/mp4", context.Response.ContentType);
+            }
+
+            Assert.False(responseBody.CanWrite);
         }
 
         Assert.Equal(1, runner.CallCount);
         Assert.Equal("bytes=10-20", handler.LastRange);
+        Assert.Equal(2, handler.Contents.Count);
+        Assert.All(handler.Contents, content => Assert.True(content.IsDisposed));
     }
 
     [Fact]
@@ -76,18 +84,33 @@ public sealed class YtDlpTrailerServiceTests
 
     private sealed class RecordingHandler : HttpMessageHandler
     {
+        public List<TrackingContent> Contents { get; } = [];
+
         public string? LastRange { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             LastRange = request.Headers.Range?.ToString();
+            var content = new TrackingContent([1, 2, 3]);
+            Contents.Add(content);
             var response = new HttpResponseMessage(HttpStatusCode.PartialContent)
             {
-                Content = new ByteArrayContent([1, 2, 3])
+                Content = content
             };
             response.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("video/mp4");
             response.Headers.AcceptRanges.Add("bytes");
             return Task.FromResult(response);
+        }
+    }
+
+    private sealed class TrackingContent(byte[] content) : ByteArrayContent(content)
+    {
+        public bool IsDisposed { get; private set; }
+
+        protected override void Dispose(bool disposing)
+        {
+            IsDisposed = true;
+            base.Dispose(disposing);
         }
     }
 }

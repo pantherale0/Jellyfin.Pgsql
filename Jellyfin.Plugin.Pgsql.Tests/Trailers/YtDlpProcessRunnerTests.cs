@@ -27,7 +27,7 @@ public sealed class YtDlpProcessRunnerTests
             return;
         }
 
-        var path = Path.Combine(Path.GetTempPath(), $"fake-yt-dlp-{Guid.NewGuid():N}");
+        var path = Path.Join(Path.GetTempPath(), $"fake-yt-dlp-{Guid.NewGuid():N}");
         try
         {
             await File.WriteAllTextAsync(
@@ -59,7 +59,7 @@ public sealed class YtDlpProcessRunnerTests
             return;
         }
 
-        var path = Path.Combine(Path.GetTempPath(), $"fake-yt-dlp-error-{Guid.NewGuid():N}");
+        var path = Path.Join(Path.GetTempPath(), $"fake-yt-dlp-error-{Guid.NewGuid():N}");
         try
         {
             await File.WriteAllTextAsync(path, $"#!/bin/sh\nprintf '%s\\n' '{stderr}' >&2\nexit 1\n");
@@ -85,7 +85,7 @@ public sealed class YtDlpProcessRunnerTests
             return;
         }
 
-        var path = Path.Combine(Path.GetTempPath(), $"fake-yt-dlp-{Guid.NewGuid():N}");
+        var path = Path.Join(Path.GetTempPath(), $"fake-yt-dlp-{Guid.NewGuid():N}");
         try
         {
             await File.WriteAllTextAsync(

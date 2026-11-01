@@ -66,6 +66,13 @@ public sealed class TasteEngagementWeightsTests
     }
 
     [Fact]
+    public void Classify_MissingRuntimeWithPlayCount_FallsBackToDeep()
+    {
+        var input = Base(playCount: 1, runTime: null, lastPlayedDaysAgo: 2);
+        Assert.Equal(TasteEngagementKind.DeepPlay, TasteEngagementWeights.Classify(input, Now));
+    }
+
+    [Fact]
     public void ComputeLinearWeight_AbandonIsNegative_RecAbandonStronger()
     {
         var plain = Base(maxTicks: NinetySeconds, runTime: TwoHourRuntime, lastPlayedDaysAgo: 20);
