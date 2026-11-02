@@ -1127,14 +1127,15 @@ function App() {
     }, [ api, homeLoad, homeLoadGeneration, loadingHomeExplore, homeExploreStart, homeExploreTotal, homeExploreError, view ]);
 
     useEffect(() => {
-        const activeDot = recommendationPaginationRef.current?.querySelector<HTMLElement>('.recommendation-dot.active');
-        if (activeDot) {
-            try {
-                activeDot.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: preferredScrollBehavior() });
-            } catch (_error) {
-                activeDot.scrollIntoView();
-            }
-        }
+        const pagination = recommendationPaginationRef.current;
+        const activeDot = pagination?.querySelector<HTMLElement>('.recommendation-dot.active');
+        if (!pagination || !activeDot) return;
+        const dot = activeDot.getBoundingClientRect();
+        const viewport = pagination.getBoundingClientRect();
+        const left = viewport.left + pagination.clientLeft;
+        const right = left + pagination.clientWidth;
+        const delta = dot.left < left ? dot.left - left : dot.right > right ? dot.right - right : 0;
+        if (delta) pagination.scrollLeft += delta;
     }, [ activeRecommendation ]);
 
     const activeRecommendationId = recommendations[activeRecommendation]?.Id || '';
