@@ -88,6 +88,17 @@ for (const viewport of tvViewports) {
             const first = page.locator('[data-library-item-id="e2e-movie-1"]');
             await expectTextSize(first.locator('.library-card-overlay strong'), minimum.primary);
             await expectTextSize(first.locator('.library-card-overlay small'), minimum.metadata);
+            const quality = first.locator('.library-quality');
+            await expect(quality).toHaveText('4K HDR');
+            await expect.poll(() => quality.evaluate(element => parseFloat(getComputedStyle(element).fontSize)))
+                .toBeGreaterThanOrEqual(minimum.metadata);
+            const artBounds = await box(first.locator('.library-card-art'));
+            const qualityBounds = await box(quality);
+            expect(qualityBounds.x).toBeGreaterThanOrEqual(artBounds.x);
+            expect(qualityBounds.y).toBeGreaterThanOrEqual(artBounds.y);
+            expect(qualityBounds.x + qualityBounds.width).toBeLessThanOrEqual(artBounds.x + artBounds.width + 1);
+            expect(qualityBounds.y + qualityBounds.height).toBeLessThanOrEqual(artBounds.y + artBounds.height + 1);
+            expect(qualityBounds.width).toBeLessThanOrEqual(artBounds.width * .6 + 1);
             await expect(page.getByRole('searchbox', { name: 'Search Movies', exact: true })).toHaveCount(0);
             await expectControl(page.getByRole('button', { name: 'Search your library', exact: true }), page, minimum.control);
             await expectControl(page.getByRole('button', { name: 'Select', exact: true }), page, minimum.control);

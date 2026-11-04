@@ -180,7 +180,8 @@ test('CAT-08 episode loading pages beyond the old 1,000/800 caps and the player 
 test('CAT-10 detail hydration tracks summary items without relabeling fully loaded items', () => {
     const main = source('main.tsx');
     assert.match(main, /setSelected\(lease\?\.item \|\| item\)/, 'ready prefetched data opens without refetching');
-    assert.match(main, /setDetailLoading\(!lease\?\.item && details\.kind === 'summary'\);\s*setView\('details'\)/, 'summary navigation opens while a prefetch is pending');
+    assert.match(main, /const syntheticTag = item\.Type === 'Tag' && item\.Id\.startsWith\('tag:'\);/);
+    assert.match(main, /setDetailLoading\(!syntheticTag && !lease\?\.item && details\.kind === 'summary'\);\s*setView\('details'\)/, 'summary navigation opens while a prefetch is pending, but synthetic tags skip item hydration');
     assert.match(main, /if \(result\.kind === 'ready'\) setSelected\(result\.item\);/);
     assert.match(main, /if \(result\.kind === 'failed'\) setDetailError\(messageOf\(result\.error\)\);/);
     assert.match(main, /if \(result\.kind !== 'cancelled'\) setDetailLoading\(false\);/);

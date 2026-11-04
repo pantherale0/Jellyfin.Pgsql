@@ -83,7 +83,10 @@ const defaultState = {
     // Six movies fill a 5-column TV grid across two rows; two seasons give the
     // show detail a season sidebar and an episode feed to navigate.
     items: [
-        movie(1, 'E2E Movie One', 2024, { Overview: 'A deterministic movie for browser playback tests.' }),
+        movie(1, 'E2E Movie One', 2024, {
+            Overview: 'A deterministic movie for browser playback tests.',
+            MediaStreams: [ { Type: 'Video', Codec: 'h264', Width: 3840, Height: 2160, VideoRange: 'HDR' } ]
+        }),
         movie(2, 'E2E Movie Two', 2023, { Overview: 'A second movie for the generated catalog.', UserData: { Played: false, IsFavorite: true, PlaybackPositionTicks: 0 } }),
         movie(3, 'E2E Movie Three', 2022),
         movie(4, 'E2E Movie Four', 2021),

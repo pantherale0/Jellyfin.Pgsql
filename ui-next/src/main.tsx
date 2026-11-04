@@ -37,6 +37,7 @@ import { buildRevision, fetchServedBuild, isStaleBundle } from './build';
 import { brandingAssets, NO_BRANDING, type Branding } from './branding';
 import { loadControlPreferences, startGamepadBridge } from './controls';
 import { DetailChildren, DetailExtras, DetailFactsView, ItemActionsBar, LinkedMetadataView, LyricsView, PhotoViewer, RelatedRows, UserDataActions } from './detail-sections';
+import { tagEntity } from './detail-model';
 import { forgotPasswordOutcome, pinRedeemMessage, userImageUrl, type PublicUser } from './account';
 import { queryParameter as parseQueryParameter } from './query-params';
 import { canCommitSsoRestore, parseSsoCodeAttempt, parseSsoCodeFragment, parseSsoHandoff, SSO_HANDOFF_KEY, UI_NEXT_SIGNED_OUT_KEY, type SsoHandoff } from './sso-session';
@@ -775,6 +776,15 @@ function App() {
                 else headerBottoms.push(headerRect.bottom);
             }
             const top = Math.max(viewportTop, ...headerBottoms.filter(bottom => targetHeaderTop === null || bottom <= targetHeaderTop + 1));
+            let scrollTop = top + (targetHeaderTop === null ? 16 : 0);
+            if (targetHeaderTop === null) {
+                const rail = element.closest<HTMLElement>('.home-feed-rail-items')?.closest<HTMLElement>('.home-feed-rail');
+                const overline = rail?.querySelector<HTMLElement>('.home-feed-rail-heading .eyebrow');
+                if (overline) {
+                    const overlineTop = overline.getBoundingClientRect().top;
+                    if (overlineTop < scrollTop) scrollTop += rect.top - overlineTop;
+                }
+            }
             let clipped = rect.left < left - 1 || rect.right > right + 1;
             for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
                 const style = window.getComputedStyle(parent);
@@ -795,7 +805,7 @@ function App() {
                 }
             }
             // Pinned toolbar controls cannot move away from their own header or clear headers below it.
-            return { rect, top: top + (targetHeaderTop === null ? 16 : 0), bottom: viewportBottom - 16, clipped };
+            return { rect, top: scrollTop, bottom: viewportBottom - 16, clipped };
         };
         const keep = () => {
             frame = 0;
@@ -1605,6 +1615,7 @@ function App() {
         cancelSearch();
         forgetShow();
         clearLiveQuery();
+        if (tvClient) window.scrollTo(0, 0);
         setView('home');
     };
 
@@ -2138,10 +2149,11 @@ function App() {
         }
         const request = ++detailRequest.current;
         detailOrigin.current = parent;
-        const lease = details.kind === 'full' ? null : api.acquireItemDetails(item.Id, 'interactive');
+        const syntheticTag = item.Type === 'Tag' && item.Id.startsWith('tag:');
+        const lease = details.kind === 'full' || syntheticTag ? null : api.acquireItemDetails(item.Id, 'interactive');
         setSelected(lease?.item || item);
         setDetailError('');
-        setDetailLoading(!lease?.item && details.kind === 'summary');
+        setDetailLoading(!syntheticTag && !lease?.item && details.kind === 'summary');
         setView('details');
         if (!lease) return;
         detailPrefetchLease.current = lease;
@@ -2626,7 +2638,7 @@ function App() {
                 event.preventDefault();
                 return;
             }
-            const scopes = [ '.episode-list', '.virtualized-poster-grid', '.library-toolbar', '.alpha-scrubber', '.library-grid-items', '.media-row', '.season-sidebar', '.season-mobile-rail', '.primary-nav', '.mobile-library-drawer', '.recommendation-controls', '.episode-feed', '.live-tabs', '.topbar', '.tv-search-keyboard', '.tv-search-panel', '.tv-search-results' ];
+            const scopes = [ '.episode-list', '.virtualized-poster-grid', '.library-toolbar', '.alpha-scrubber', '.library-grid-items', '.media-row', '.detail-chips', '.detail-row-items', '.season-sidebar', '.season-mobile-rail', '.primary-nav', '.mobile-library-drawer', '.recommendation-controls', '.episode-feed', '.live-tabs', '.topbar', '.tv-search-keyboard', '.tv-search-panel', '.tv-search-results' ];
             for (let index = 0; index < scopes.length; index++) {
                 const scope = current.closest<HTMLElement>(scopes[index]);
                 if (!scope) continue;
@@ -2678,6 +2690,13 @@ function App() {
     // A reload keeps this tab's history entry; reopen its page once the signed-in API is ready.
     const pendingRestore = useRef<AppRoute | null | undefined>(undefined);
     if (pendingRestore.current === undefined) pendingRestore.current = session ? initialRoute(window.history.state, window.location.hash, window.location.search) : null;
+    const homeEntryScrollReset = useRef(false);
+    useLayoutEffect(() => {
+        if (!session || !tvClient || homeEntryScrollReset.current) return;
+        homeEntryScrollReset.current = true;
+        if (pendingRestore.current && pendingRestore.current.view !== 'home') return;
+        window.scrollTo(0, 0);
+    }, [ session?.user.Id, tvClient ]);
     const [ staleBuild, setStaleBuild ] = useState(false);
     useEffect(() => {
         if (!session || buildRevision === 'dev') return;
@@ -2898,6 +2917,10 @@ function App() {
         case 'details':
         case 'player':
             if (selected?.Id === route.itemId) { setView('details'); return; }
+            if (route.itemId.startsWith('tag:')) {
+                open(() => Promise.resolve(tagEntity(route.itemId.slice(4))), item => void openItem(item, undefined, { kind: 'full' }));
+                return;
+            }
             open(() => api.getItem(route.itemId), item => void openItem(item, undefined, { kind: 'full' }));
             return;
         }
@@ -2912,7 +2935,7 @@ function App() {
     const showTopbar = !(view === 'profile' && profileScreen === 'accounts');
     return <>
     <div class={`app-shell${music.current && view !== 'nowplaying' ? ' has-music' : ''}${showTopbar ? '' : ' no-topbar'}`} aria-hidden={view === 'player'}>
-        {showTopbar && <header class="topbar">
+        {showTopbar && <header class={view === 'details' ? 'topbar detail-view' : 'topbar'}>
             <a class="brand" href="#home" onClick={e => { e.preventDefault(); goHome(); }} aria-label={t('Jellyfin home')}><span class="brand-mark small">J</span><span>{t('Jellyfin')}</span></a>
             <button
                 ref={hamburgerRef}

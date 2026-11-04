@@ -25,7 +25,7 @@ export function libraryModes(library: Pick<MediaItem, 'Type' | 'CollectionType'>
     if (library.Type !== 'CollectionFolder' && library.Type !== 'UserView') return [ { id: 'all', label: t('All'), noun: 'titles' } ];
     switch ((library.CollectionType || '').toLowerCase()) {
     case 'movies': return [
-        { id: 'movies', label: t('Movies'), noun: 'titles' },
+        { id: 'movies', label: t('Movies'), itemTypes: [ 'Movie' ], noun: 'titles' },
         { id: 'suggestions', label: t('Suggestions'), suggestions: true, noun: 'titles' },
     ];
     case 'tvshows': return [

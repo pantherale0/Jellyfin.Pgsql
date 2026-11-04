@@ -93,6 +93,8 @@ npm run build
 npm run preview
 ```
 
+To connect the installed webOS wrapper to a LAN preview, set `VITE_JELLYFIN_SERVER_URL` to the preview origin before `npm run build`. The build embeds this value, so rebuild after the host address changes. Set `JELLYFIN_BACKEND_URL` to a reachable Jellyfin server when you start `npm run preview -- --host 0.0.0.0 --port 5173`. In the wrapper, set Server address to the same preview origin and enable Automatically connect on app launch. `public/web/manifest.json` maps the wrapper's `/web/manifest.json` request to the UI Next root entry. Keep this HTTP preview on a trusted development network.
+
 The build is static and is emitted to `dist/`. The Dockerfile's `ui-next` target is also its default target. The workflow serves this build at `/web` under the standard Jellyfin-version and `latest` tags. UI Next includes its own Metadata manager in the administrator workspace. Production output includes a classic Android WebView marker before the Vite module entry. The updated image still needs an on-device startup check; wrapper playback, older TV engines, and performance on physical devices also need testing.
 
 ### End-to-end tests

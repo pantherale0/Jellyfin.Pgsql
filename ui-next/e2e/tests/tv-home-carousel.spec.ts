@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { resetFakeServer } from '../support/control-client';
+import { box, disableCssGrid, expectLoadedImage } from '../support/layout-assertions';
 import { TvPage } from '../support/tv-page';
 
 async function emulateWebOS4DotScroll(page: Page): Promise<void> {
@@ -25,6 +26,7 @@ async function emulateWebOS4DotScroll(page: Page): Promise<void> {
 async function openTvHome(page: Page): Promise<void> {
     await resetFakeServer();
     await emulateWebOS4DotScroll(page);
+    await disableCssGrid(page);
 
     await new TvPage(page).open();
     await page.addStyleTag({ content: '.recommendation-pagination { width: 96px !important; max-width: 96px !important; flex: 0 0 96px !important; }' });
@@ -90,4 +92,28 @@ test('RTL carousel pagination keeps the selected dot visible', async ({ page }) 
     expect(Math.abs(after.top - before.top)).toBeLessThanOrEqual(2);
     expect(Math.abs(after.scrollY - before.scrollY)).toBeLessThanOrEqual(2);
     await expectActiveDotVisible(hero);
+});
+
+test('TV home card artwork fills the clickable card', async ({ page }) => {
+    await openTvHome(page);
+    const card = page.locator('.home-feed-card').first();
+    const artwork = card.locator('.home-feed-card-art');
+    await expect(card).toBeVisible();
+    await expectLoadedImage(artwork.locator('img'));
+
+    const cardBounds = await box(card);
+    const artworkBounds = await box(artwork);
+    expect(artworkBounds.width).toBeGreaterThanOrEqual(cardBounds.width * .95);
+});
+
+test('TV home artwork retains its card width without percentage sizing', async ({ page }) => {
+    await openTvHome(page);
+    await page.addStyleTag({ content: '.tv-client .home-feed-card { align-items: flex-start; } .tv-client .home-feed-card-art { width: auto; }' });
+    const card = page.locator('.home-feed-card').first();
+    const artwork = card.locator('.home-feed-card-art');
+    await expect(card).toBeVisible();
+
+    const cardBounds = await box(card);
+    const artworkBounds = await box(artwork);
+    expect(artworkBounds.width).toBeGreaterThanOrEqual(cardBounds.width * .95);
 });

@@ -117,6 +117,21 @@ test('MISS-21/PART-02: list endpoints follow the library mode', async () => {
     assert.equal(params(requests[3]).get('IsUnaired'), 'true');
 });
 
+test('Movies mode requests only Movie items for newest-first sorting', async () => {
+    const api = new JellyfinApi(session);
+    responses.push(ok({ Items: [], TotalRecordCount: 0 }));
+    const mode = modes.currentMode(modes.libraryModes(library('movies')), '');
+    const q = { ...query.defaultLibraryQuery(), SortBy: 'PremiereDate', SortOrder: 'Descending' };
+
+    await api.getItems('lib', 0, undefined, mode.itemTypes, true, 80, { Query: q });
+
+    const request = params(requests[0]);
+    assert.equal(request.get('IncludeItemTypes'), 'Movie');
+    assert.equal(request.get('Recursive'), 'true');
+    assert.equal(request.get('SortBy'), 'PremiereDate');
+    assert.equal(request.get('SortOrder'), 'Descending');
+});
+
 test('PART-03/MISS-22: filter facets and library-local suggestions use the documented endpoints', async () => {
     const api = new JellyfinApi(session);
     responses.push(ok({ Tags: [ 'cult', '', 'cult', 'anime' ], OfficialRatings: [ 'PG-13', 'G' ] }));

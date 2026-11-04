@@ -47,13 +47,20 @@ export function HomeFeed({ blocks, api, onSelect, onPlay, onNeedMore, hasMore, l
         setActiveBlock(renderedActiveBlock);
     }, [ blocks, renderedActiveBlock ]);
 
-    const measure = useCallback((entry: ResizeObserverEntry) => {
-        const node = entry.target as HTMLElement;
-        const id = node.dataset.blockId;
-        if (!id || node.dataset.placeholder) return;
-        const height = Math.ceil(node.getBoundingClientRect().height + (parseFloat(getComputedStyle(node).marginTop) || 0) + (parseFloat(getComputedStyle(node).marginBottom) || 0));
+    const measure = useCallback((node: Element) => {
+        const id = node.getAttribute('data-block-id');
+        if (!id || node.getAttribute('data-placeholder') === 'true') return;
+        const style = getComputedStyle(node);
+        const height = Math.ceil(node.getBoundingClientRect().height + (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0));
         setHeights(current => current[id] === height ? current : { ...current, [id]: height });
     }, []);
+
+    useLayoutEffect(() => {
+        if (typeof ResizeObserver !== 'undefined') return;
+        const root = container.current;
+        if (!root) return;
+        root.querySelectorAll('.home-feed-block[data-block-id]').forEach(measure);
+    }, [ blocks, measure, windowRange.start, windowRange.end ]);
 
     useEffect(() => {
         const root = container.current;
@@ -108,7 +115,7 @@ export function HomeFeed({ blocks, api, onSelect, onPlay, onNeedMore, hasMore, l
         const root = container.current;
         if (!root || !blocks.length) return;
         let frame = 0;
-        const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(entries => entries.forEach(measure)) : undefined;
+        const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(entries => entries.forEach(entry => measure(entry.target))) : undefined;
         const updateActiveBlock = () => {
             frame = 0;
             const viewportCenter = window.innerHeight / 2;
