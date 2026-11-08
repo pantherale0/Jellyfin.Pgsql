@@ -102,7 +102,7 @@ Server query patches include [`jellyfin_home_api_performance`](patches.md#jellyf
 
 ## Live TV hardening
 
-**What:** Server patches improve guide queries, published URLs, tuner lifecycle, HLS stream opening, and recovery from stalled sources. UI Next includes On Now, Guide, Channels, and DVR views.
+**What:** Server patches improve guide queries, published URLs, tuner lifecycle, HLS stream opening, and recovery from stalled sources. Live TV readers keep a bitrate-aware two-second reserve and resume in chunk order after short stalls. UI Next includes On Now, Guide, Channels, and DVR views.
 
 **Where:** See the [Live TV patch group](patches.md#4-live-tv). The UI Next guide documents the client behavior and its browser playback path.
 

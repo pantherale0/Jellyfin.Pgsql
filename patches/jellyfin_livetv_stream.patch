@@ -1215,7 +1215,7 @@ index 6c8cde62c9..c42577bd5c 100644
      }
  }
 diff --git a/src/Jellyfin.LiveTv/TunerHosts/LiveStream.cs b/src/Jellyfin.LiveTv/TunerHosts/LiveStream.cs
-index 70d8afc5d0..3dd7bfb97d 100644
+index 70d8afc5d0..f6079cae84 100644
 --- a/src/Jellyfin.LiveTv/TunerHosts/LiveStream.cs
 +++ b/src/Jellyfin.LiveTv/TunerHosts/LiveStream.cs
 @@ -4,12 +4,14 @@
@@ -1317,7 +1317,7 @@ index 70d8afc5d0..3dd7bfb97d 100644
 -            bool seekFile = (DateTime.UtcNow - DateOpened).TotalSeconds > 10;
 -            if (seekFile)
 +            bool seekToLiveEdge = (DateTime.UtcNow - DateOpened).TotalSeconds > 10;
-+            return new RollingChunkStream(_chunkPaths, _chunkLock, Logger, seekToLiveEdge);
++            return new RollingChunkStream(_chunkPaths, _chunkLock, Logger, seekToLiveEdge, OriginalMediaSource?.Bitrate);
 +        }
 +
 +        /// <summary>
@@ -1580,10 +1580,10 @@ index 902ca76af8..39e314e902 100644
  
 diff --git a/src/Jellyfin.LiveTv/TunerHosts/RollingChunkStream.cs b/src/Jellyfin.LiveTv/TunerHosts/RollingChunkStream.cs
 new file mode 100644
-index 0000000000..73ef9fc8d3
+index 0000000000..ddf7e574fb
 --- /dev/null
 +++ b/src/Jellyfin.LiveTv/TunerHosts/RollingChunkStream.cs
-@@ -0,0 +1,232 @@
+@@ -0,0 +1,326 @@
 +#pragma warning disable CS1591
 +
 +using System;
@@ -1604,18 +1604,27 @@ index 0000000000..73ef9fc8d3
 +/// </summary>
 +internal sealed class RollingChunkStream : Stream
 +{
++    private const int ReadAheadSeconds = 2;
++    // ffprobe does not always report a bitrate for live sources.
++    private const int DefaultLiveStreamBitrate = 8_000_000;
++
 +    private readonly List<string> _chunkPaths;
 +    private readonly object _lock;
 +    private readonly ILogger _logger;
++    private readonly long _readAheadHighWaterBytes;
++    private readonly long _readAheadLowWaterBytes;
 +    private string? _currentPath;
 +    private FileStream? _currentStream;
++    private bool _isBuffering = true;
 +    private bool _disposed;
 +
-+    public RollingChunkStream(List<string> chunkPaths, object chunkLock, ILogger logger, bool seekToLiveEdge)
++    public RollingChunkStream(List<string> chunkPaths, object chunkLock, ILogger logger, bool seekToLiveEdge, int? sourceBitrate = null)
 +    {
 +        _chunkPaths = chunkPaths;
 +        _lock = chunkLock;
 +        _logger = logger;
++        _readAheadHighWaterBytes = GetReadAheadBufferBytes(sourceBitrate);
++        _readAheadLowWaterBytes = _readAheadHighWaterBytes / 2;
 +
 +        string? initialPath = null;
 +        lock (_lock)
@@ -1633,7 +1642,7 @@ index 0000000000..73ef9fc8d3
 +
 +            if (_currentStream is not null && seekToLiveEdge)
 +            {
-+                TrySeekToLiveEdge(_currentStream);
++                TrySeekToLiveEdge(_currentStream, _readAheadHighWaterBytes);
 +            }
 +        }
 +    }
@@ -1661,6 +1670,11 @@ index 0000000000..73ef9fc8d3
 +
 +    public override int Read(Span<byte> buffer)
 +    {
++        if (buffer.IsEmpty || !HasReadAhead())
++        {
++            return 0;
++        }
++
 +        if (_currentStream is not null)
 +        {
 +            int read = _currentStream.Read(buffer);
@@ -1683,6 +1697,11 @@ index 0000000000..73ef9fc8d3
 +
 +    public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
 +    {
++        if (buffer.IsEmpty || !HasReadAhead())
++        {
++            return 0;
++        }
++
 +        if (_currentStream is not null)
 +        {
 +            int read = await _currentStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
@@ -1736,7 +1755,7 @@ index 0000000000..73ef9fc8d3
 +            {
 +                if (_chunkPaths.Count > 0)
 +                {
-+                    _logger.LogWarning("Live stream reader fell behind the rewind window; skipping to oldest available chunk");
++                    _logger.LogWarning("Live stream reader fell behind the rewind window; advancing to the next retained chunk");
 +                    return _chunkPaths[0];
 +                }
 +
@@ -1746,6 +1765,75 @@ index 0000000000..73ef9fc8d3
 +            // idx == Count - 1: at the live edge — no sealed chunk to advance to yet.
 +            return idx < _chunkPaths.Count - 1 ? _chunkPaths[idx + 1] : null;
 +        }
++    }
++
++    private bool HasReadAhead()
++    {
++        long requiredBytes = _isBuffering ? _readAheadHighWaterBytes : _readAheadLowWaterBytes;
++        if (GetBufferedBytes(requiredBytes) < requiredBytes)
++        {
++            _isBuffering = true;
++            return false;
++        }
++
++        _isBuffering = false;
++        return true;
++    }
++
++    private long GetBufferedBytes(long stopAtBytes)
++    {
++        long bufferedBytes = 0;
++        if (_currentStream is not null)
++        {
++            try
++            {
++                bufferedBytes = Math.Max(0, _currentStream.Length - _currentStream.Position);
++            }
++            catch (IOException)
++            {
++                // A chunk can be removed while the writer rotates the rolling window.
++            }
++        }
++
++        if (bufferedBytes >= stopAtBytes)
++        {
++            return bufferedBytes;
++        }
++
++        string[] followingChunks;
++        lock (_lock)
++        {
++            int currentIndex = _currentPath is null ? -1 : _chunkPaths.IndexOf(_currentPath);
++            int firstFollowingIndex = currentIndex < 0 ? 0 : currentIndex + 1;
++            int followingCount = _chunkPaths.Count - firstFollowingIndex;
++            followingChunks = new string[followingCount];
++            _chunkPaths.CopyTo(firstFollowingIndex, followingChunks, 0, followingCount);
++        }
++
++        foreach (string path in followingChunks)
++        {
++            try
++            {
++                if (File.Exists(path))
++                {
++                    bufferedBytes += new FileInfo(path).Length;
++                    if (bufferedBytes >= stopAtBytes)
++                    {
++                        return bufferedBytes;
++                    }
++                }
++            }
++            catch (IOException)
++            {
++                // A chunk can be removed after the reader snapshots the path list.
++            }
++            catch (UnauthorizedAccessException)
++            {
++                // The stream can continue with later chunks if this path is unavailable.
++            }
++        }
++
++        return bufferedBytes;
 +    }
 +
 +    /// <summary>
@@ -1804,15 +1892,21 @@ index 0000000000..73ef9fc8d3
 +        return null;
 +    }
 +
-+    private static void TrySeekToLiveEdge(FileStream stream)
++    private static long GetReadAheadBufferBytes(int? sourceBitrate)
++    {
++        long bitrate = sourceBitrate is > 0 ? sourceBitrate.Value : DefaultLiveStreamBitrate;
++        return Math.Max(1, bitrate * ReadAheadSeconds / 8);
++    }
++
++    private static void TrySeekToLiveEdge(FileStream stream, long bytesBehindLiveEdge)
 +    {
 +        try
 +        {
-+            stream.Seek(-20000, SeekOrigin.End);
++            stream.Seek(-bytesBehindLiveEdge, SeekOrigin.End);
 +        }
 +        catch (IOException)
 +        {
-+            // File is shorter than 20 KB — start from the beginning.
++            // The chunk is shorter than the read-ahead buffer, so start from its beginning.
 +        }
 +    }
 +}
@@ -2053,10 +2147,10 @@ index 5ef04ad9e9..d81443b8a7 100644
  }
 diff --git a/tests/Jellyfin.LiveTv.Tests/TunerHosts/RollingChunkStreamTests.cs b/tests/Jellyfin.LiveTv.Tests/TunerHosts/RollingChunkStreamTests.cs
 new file mode 100644
-index 0000000000..ff81fe799e
+index 0000000000..81044755f0
 --- /dev/null
 +++ b/tests/Jellyfin.LiveTv.Tests/TunerHosts/RollingChunkStreamTests.cs
-@@ -0,0 +1,171 @@
+@@ -0,0 +1,220 @@
 +using System;
 +using System.Collections.Generic;
 +using System.IO;
@@ -2102,7 +2196,7 @@ index 0000000000..ff81fe799e
 +        var path = WriteChunk("chunk_0.ts", data);
 +        var chunkPaths = new List<string> { path };
 +
-+        using var stream = new RollingChunkStream(chunkPaths, new object(), _logger, seekToLiveEdge: false);
++        using var stream = new RollingChunkStream(chunkPaths, new object(), _logger, seekToLiveEdge: false, sourceBitrate: 1);
 +
 +        var buffer = new byte[data.Length];
 +        int read = await stream.ReadAsync(buffer, TestContext.Current.CancellationToken);
@@ -2118,7 +2212,7 @@ index 0000000000..ff81fe799e
 +        var path = WriteChunk("chunk_0.ts", data);
 +        var chunkPaths = new List<string> { path };
 +
-+        using var stream = new RollingChunkStream(chunkPaths, new object(), _logger, seekToLiveEdge: false);
++        using var stream = new RollingChunkStream(chunkPaths, new object(), _logger, seekToLiveEdge: false, sourceBitrate: 1);
 +
 +        // Drain the only (live-edge) chunk.
 +        var buf = new byte[data.Length];
@@ -2141,7 +2235,7 @@ index 0000000000..ff81fe799e
 +        // Start with only chunk_0 so the stream anchors there.
 +        var chunkPaths = new List<string> { path0 };
 +
-+        using var stream = new RollingChunkStream(chunkPaths, chunkLock, _logger, seekToLiveEdge: false);
++        using var stream = new RollingChunkStream(chunkPaths, chunkLock, _logger, seekToLiveEdge: false, sourceBitrate: 1);
 +
 +        // Drain chunk_0.
 +        var buf0 = new byte[data0.Length];
@@ -2161,7 +2255,7 @@ index 0000000000..ff81fe799e
 +    }
 +
 +    [Fact]
-+    public async Task ReadAsync_SkipsToOldestAvailableChunk_WhenCurrentChunkEvicted()
++    public async Task ReadAsync_AdvancesToNextRetainedChunk_WhenCurrentChunkEvicted()
 +    {
 +        var dataEvicted = Encoding.UTF8.GetBytes("evicted");
 +        var data1 = Encoding.UTF8.GetBytes("oldest kept chunk");
@@ -2173,7 +2267,7 @@ index 0000000000..ff81fe799e
 +        var chunkLock = new object();
 +        var chunkPaths = new List<string> { path0 };
 +
-+        using var stream = new RollingChunkStream(chunkPaths, chunkLock, _logger, seekToLiveEdge: false);
++        using var stream = new RollingChunkStream(chunkPaths, chunkLock, _logger, seekToLiveEdge: false, sourceBitrate: 1);
 +
 +        // Drain chunk_0 (file still on disk, but will be evicted from the list).
 +        var evictedBuf = new byte[dataEvicted.Length];
@@ -2188,19 +2282,18 @@ index 0000000000..ff81fe799e
 +            chunkPaths.RemoveAt(0); // list is now [path1, path2]
 +        }
 +
-+        // Next read: EOF on chunk_0, not in list → skip to oldest available (path1).
++        // Next read: EOF on chunk_0, not in list → advance to the next retained chunk (path1).
 +        var buf1 = new byte[data1.Length];
 +        int r1 = await stream.ReadAsync(buf1, TestContext.Current.CancellationToken);
 +        Assert.Equal(data1, buf1[..r1]);
 +    }
 +
 +    [Fact]
-+    public async Task ReadAsync_SeeksNearEnd_WhenSeekToLiveEdgeRequested()
++    public async Task ReadAsync_SeeksTwoSecondsBehindLiveEdge_WhenRequested()
 +    {
-+        // Build a file larger than the 20 KB seek-back window so we can verify
++        // Build a file larger than the 40 KB read-ahead window at 160 kbps so we can verify
 +        // the stream starts from near the end rather than the beginning.
-+        const int seekBackBytes = 20000;
-+        const int sentinelLength = 8;
++        const int seekBackBytes = 40_000;
 +        var prefix = new byte[seekBackBytes]; // zeros
 +        var sentinel = Encoding.UTF8.GetBytes("SENTINEL");
 +        var fileBytes = new byte[prefix.Length + sentinel.Length];
@@ -2210,9 +2303,9 @@ index 0000000000..ff81fe799e
 +        var path = WriteChunk("chunk_0.ts", fileBytes);
 +        var chunkPaths = new List<string> { path };
 +
-+        using var stream = new RollingChunkStream(chunkPaths, new object(), _logger, seekToLiveEdge: true);
++        using var stream = new RollingChunkStream(chunkPaths, new object(), _logger, seekToLiveEdge: true, sourceBitrate: 160_000);
 +
-+        // The stream should be positioned at end - 20000, so the sentinel is reachable.
++        // The stream should be positioned two seconds behind the 160 kbps live edge.
 +        var buffer = new byte[fileBytes.Length];
 +        int totalRead = 0;
 +        int read;
@@ -2221,10 +2314,60 @@ index 0000000000..ff81fe799e
 +            totalRead += read;
 +        }
 +
-+        // The prefix bytes before the seek point should NOT be in the buffer;
-+        // only the sentinel (and possibly a few bytes of the prefix straddling the
-+        // seek point) should appear.
 +        Assert.Contains(sentinel, buffer[..totalRead]);
-+        Assert.True(totalRead <= seekBackBytes + sentinelLength);
++        Assert.Equal(seekBackBytes, totalRead);
++    }
++
++    [Fact]
++    public async Task ReadAsync_WaitsForTwoSecondReadAheadBeforeStarting()
++    {
++        var initialData = new byte[1_999_999];
++        Array.Fill(initialData, (byte)0x31);
++        var path = WriteChunk("chunk_0.ts", initialData);
++        var chunkPaths = new List<string> { path };
++        using var writer = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
++        using var stream = new RollingChunkStream(chunkPaths, new object(), _logger, seekToLiveEdge: false);
++
++        var buffer = new byte[1_000_000];
++        int beforeBufferFilled = await stream.ReadAsync(buffer, TestContext.Current.CancellationToken);
++
++        Assert.Equal(0, beforeBufferFilled);
++
++        await writer.WriteAsync(new byte[] { 0x32 }, TestContext.Current.CancellationToken);
++        await writer.FlushAsync(TestContext.Current.CancellationToken);
++
++        int afterBufferFilled = await stream.ReadAsync(buffer, TestContext.Current.CancellationToken);
++
++        Assert.Equal(buffer.Length, afterBufferFilled);
++        Assert.All(buffer, value => Assert.Equal((byte)0x31, value));
++    }
++
++    [Fact]
++    public async Task ReadAsync_RefillsReadAheadBeforeResumingAfterUnderrun()
++    {
++        var initialData = new byte[2_500_000];
++        Array.Fill(initialData, (byte)0x31);
++        var path = WriteChunk("chunk_0.ts", initialData);
++        var chunkPaths = new List<string> { path };
++        using var writer = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
++        using var stream = new RollingChunkStream(chunkPaths, new object(), _logger, seekToLiveEdge: false);
++
++        var firstBuffer = new byte[1_600_000];
++        int firstRead = await stream.ReadAsync(firstBuffer, TestContext.Current.CancellationToken);
++        Assert.Equal(firstBuffer.Length, firstRead);
++
++        var nextByte = new byte[1];
++        int beforeRefill = await stream.ReadAsync(nextByte, TestContext.Current.CancellationToken);
++        Assert.Equal(0, beforeRefill);
++
++        var refill = new byte[1_100_000];
++        Array.Fill(refill, (byte)0x32);
++        await writer.WriteAsync(refill, TestContext.Current.CancellationToken);
++        await writer.FlushAsync(TestContext.Current.CancellationToken);
++
++        int afterRefill = await stream.ReadAsync(nextByte, TestContext.Current.CancellationToken);
++
++        Assert.Equal(1, afterRefill);
++        Assert.Equal((byte)0x31, nextByte[0]);
 +    }
 +}
