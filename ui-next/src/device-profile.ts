@@ -114,13 +114,16 @@ export function browserCapabilities(): BrowserCapabilities {
     };
 }
 
-export function browserFamily(userAgent: string): { chrome: boolean; opera: boolean; firefox: boolean; safari: boolean; tv: boolean } {
+export interface BrowserFamily { chrome: boolean; opera: boolean; firefox: boolean; safari: boolean; tv: boolean; webos: boolean; tizen: boolean }
+
+export function browserFamily(userAgent: string): BrowserFamily {
     const opera = /\bOPR\/|\bOpera\b/.test(userAgent);
-    const tv = /web0s|webos|tizen/i.test(userAgent);
+    const webos = /web0s|webos/i.test(userAgent);
+    const tizen = /tizen/i.test(userAgent);
     const firefox = /Firefox\//.test(userAgent);
     const chrome = !firefox && /Chrome\/|CriOS\//.test(userAgent);
     const safari = !chrome && !firefox && /Safari\//.test(userAgent);
-    return { chrome, opera, firefox, safari, tv };
+    return { chrome, opera, firefox, safari, tv: webos || tizen, webos, tizen };
 }
 
 function supportedVideoCodecs(caps: BrowserCapabilities): string[] {
@@ -159,11 +162,91 @@ export function canDirectPlayMkv(caps: BrowserCapabilities): boolean {
     return caps.canPlay('video/x-matroska') || caps.canPlay('video/mkv');
 }
 
-export function rangeTypes(codec: 'h264' | 'hevc' | 'vp9' | 'av1', caps: BrowserCapabilities): string {
-    return codec === 'h264' || !caps.hdrDisplay ? 'SDR' : 'SDR|HDR10|HDR10Plus|HLG';
+/** Options the native wrapper passes to the device profile builder (Jellyfin Web's AppHost contract). */
+export interface HostProfileOptions {
+    /** The wrapper's reported HDR10 panel capability; null means "decide from the browser". */
+    supportsHdr10: boolean | null;
 }
 
-export function buildDeviceProfile(caps: BrowserCapabilities, preferences: PlaybackPreferences = DEFAULT_PLAYBACK_PREFERENCES) {
+const DEFAULT_HOST_PROFILE_OPTIONS: HostProfileOptions = { supportsHdr10: null };
+
+/** Reads the wrapper's builder options; every field is optional and unknown-typed by contract. */
+export function hostProfileOptions(raw: unknown): HostProfileOptions {
+    const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+    return { supportsHdr10: typeof value.supportsHdr10 === 'boolean' ? value.supportsHdr10 : null };
+}
+
+/**
+ * TV engine generation, mirroring Jellyfin Web's `web0sVersion()` Chrome-token map and its
+ * `Tizen x.y` parse. LG renumbered webOS from 6 to 22, so the mapping stays monotonic and
+ * `>= 3` style comparisons keep working across both schemes. Null means "not recognised".
+ */
+export function tvVersion(userAgent: string, family: BrowserFamily = browserFamily(userAgent)): number | null {
+    if (family.webos) {
+        const engine = /Chrome\/(\d+)/.exec(userAgent);
+        const major = engine ? Number(engine[1]) : 0;
+        if (major >= 120) return 25;
+        if (major >= 108) return 24;
+        if (major >= 94) return 23;
+        if (major >= 87) return 22;
+        if (major >= 79) return 6;
+        if (major >= 68) return 5;
+        if (major >= 53) return 4;
+        if (major >= 38) return 3;
+        if (major >= 34) return 2;
+        return major >= 26 ? 1 : null;
+    }
+    if (family.tizen) {
+        const version = /Tizen (\d+)\.(\d+)/i.exec(userAgent);
+        return version ? Number(version[1]) + Number(version[2]) / 10 : null;
+    }
+    return null;
+}
+
+/** webOS 3 (2017) is the oldest generation whose UHD and OLED panels are all HDR-capable. */
+const MIN_WEBOS_HDR_VERSION = 3;
+/** Jellyfin Web claims Dolby Vision fallback layers from webOS 4 and Tizen 3 onwards. */
+const MIN_WEBOS_DOVI_VERSION = 4;
+const MIN_TIZEN_DOVI_VERSION = 3;
+
+function hdr10Capable(caps: BrowserCapabilities, host: HostProfileOptions | undefined, family: BrowserFamily = browserFamily(caps.userAgent)): boolean {
+    if (host && host.supportsHdr10 !== null) return host.supportsHdr10;
+    // TV engines before Chromium 98 (webOS 4.x runs Chromium 53) cannot report HDR through media
+    // queries, so HDR-era engines get Jellyfin Web's assumption: the panel shows HDR10. Older or
+    // unrecognised engines keep the media-query answer, and the wrapper's panel report always wins.
+    if (family.webos) {
+        const version = tvVersion(caps.userAgent, family);
+        return caps.hdrDisplay || (version !== null && version >= MIN_WEBOS_HDR_VERSION);
+    }
+    return caps.hdrDisplay || family.tizen;
+}
+
+/**
+ * Jellyfin Web advertises the Dolby Vision *fallback* layers on TV engines so the server does not
+ * have to remux or transcode: the base layer plays even on panels without Dolby Vision. Pure
+ * `DOVI` (profile 5) is deliberately left out — claiming it needs per-profile probing ui-next does
+ * not do, and a wrong claim sends IPTPQc2 video to a panel that cannot map it. Unlike Jellyfin Web,
+ * an SDR panel does not get `DOVIWithSDR` either; that content stays on the decodable transcode path.
+ */
+function doviFallbackCapable(caps: BrowserCapabilities, family: BrowserFamily): boolean {
+    const version = tvVersion(caps.userAgent, family);
+    if (version === null) return false;
+    return family.tizen ? version >= MIN_TIZEN_DOVI_VERSION : version >= MIN_WEBOS_DOVI_VERSION;
+}
+
+const HDR_RANGE_TYPES = 'SDR|HDR10|HDR10Plus|HLG';
+const DOVI_FALLBACK_RANGE_TYPES = 'DOVIWithSDR|DOVIWithHDR10|DOVIWithHDR10Plus|DOVIWithHLG|DOVIWithEL|DOVIWithELHDR10Plus|DOVIInvalid';
+/** Jellyfin Web omits the SDR and HLG Dolby Vision bases for AV1 unless it detects DV profile 10. */
+const DOVI_FALLBACK_AV1_RANGE_TYPES = 'DOVIWithHDR10|DOVIWithHDR10Plus|DOVIWithEL|DOVIWithELHDR10Plus|DOVIInvalid';
+
+export function rangeTypes(codec: 'h264' | 'hevc' | 'vp9' | 'av1', caps: BrowserCapabilities, host: HostProfileOptions | undefined = DEFAULT_HOST_PROFILE_OPTIONS, family: BrowserFamily = browserFamily(caps.userAgent)): string {
+    if (codec === 'h264' || !hdr10Capable(caps, host, family)) return 'SDR';
+    // Jellyfin Web leaves VP9 without Dolby Vision fallbacks.
+    if (codec === 'vp9' || !doviFallbackCapable(caps, family)) return HDR_RANGE_TYPES;
+    return `${HDR_RANGE_TYPES}|${codec === 'av1' ? DOVI_FALLBACK_AV1_RANGE_TYPES : DOVI_FALLBACK_RANGE_TYPES}`;
+}
+
+export function buildDeviceProfile(caps: BrowserCapabilities, preferences: PlaybackPreferences = DEFAULT_PLAYBACK_PREFERENCES, host: HostProfileOptions = DEFAULT_HOST_PROFILE_OPTIONS) {
     const textMethod = preferences.subtitleBurnIn === 'all' ? 'Encode' : 'External';
     const styledMethod = preferences.subtitleBurnIn === 'auto' ? 'External' : 'Encode';
     const family = browserFamily(caps.userAgent);
@@ -192,7 +275,7 @@ export function buildDeviceProfile(caps: BrowserCapabilities, preferences: Playb
                 { Condition: 'EqualsAny', Property: 'VideoProfile', Value: 'high|main|baseline|constrained baseline', IsRequired: false },
                 { Condition: 'LessThanEqual', Property: 'VideoLevel', Value: family.tv ? '51' : '52', IsRequired: false },
                 { Condition: 'LessThanEqual', Property: 'VideoBitDepth', Value: '8', IsRequired: false },
-                { Condition: 'EqualsAny', Property: 'VideoRangeType', Value: rangeTypes('h264', caps), IsRequired: false },
+                { Condition: 'EqualsAny', Property: 'VideoRangeType', Value: rangeTypes('h264', caps, host, family), IsRequired: false },
                 { Condition: 'NotEquals', Property: 'IsAnamorphic', Value: 'true', IsRequired: false }
             ]
         }
@@ -203,11 +286,11 @@ export function buildDeviceProfile(caps: BrowserCapabilities, preferences: Playb
         Conditions: [
             { Condition: 'EqualsAny', Property: 'VideoProfile', Value: 'main|main 10', IsRequired: false },
             { Condition: 'LessThanEqual', Property: 'VideoLevel', Value: '183', IsRequired: false },
-            { Condition: 'EqualsAny', Property: 'VideoRangeType', Value: rangeTypes('hevc', caps), IsRequired: false }
+            { Condition: 'EqualsAny', Property: 'VideoRangeType', Value: rangeTypes('hevc', caps, host, family), IsRequired: false }
         ]
     });
-    if (video.includes('vp9')) codecProfiles.push({ Type: 'Video', Codec: 'vp9', Conditions: [ { Condition: 'EqualsAny', Property: 'VideoRangeType', Value: rangeTypes('vp9', caps), IsRequired: false } ] });
-    if (video.includes('av1')) codecProfiles.push({ Type: 'Video', Codec: 'av1', Conditions: [ { Condition: 'EqualsAny', Property: 'VideoRangeType', Value: rangeTypes('av1', caps), IsRequired: false } ] });
+    if (video.includes('vp9')) codecProfiles.push({ Type: 'Video', Codec: 'vp9', Conditions: [ { Condition: 'EqualsAny', Property: 'VideoRangeType', Value: rangeTypes('vp9', caps, host, family), IsRequired: false } ] });
+    if (video.includes('av1')) codecProfiles.push({ Type: 'Video', Codec: 'av1', Conditions: [ { Condition: 'EqualsAny', Property: 'VideoRangeType', Value: rangeTypes('av1', caps, host, family), IsRequired: false } ] });
     if (preferences.maxHeight) codecProfiles.push({ Type: 'Video', Conditions: [ { Condition: 'LessThanEqual', Property: 'Height', Value: String(preferences.maxHeight), IsRequired: false } ] });
     const audioConditions: Array<Record<string, unknown>> = [ { Condition: 'LessThanEqual', Property: 'AudioChannels', Value: String(maxAudioChannels), IsRequired: false } ];
     if (!caps.audioTrackSwitching) audioConditions.push({ Condition: 'Equals', Property: 'IsSecondaryAudio', Value: 'false', IsRequired: false });

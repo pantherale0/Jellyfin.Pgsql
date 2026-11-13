@@ -67,6 +67,70 @@ test('PLAY-09 codec profiles constrain H.264 level, bit depth and SDR/HDR ranges
     assert.equal(nothing.DirectPlayProfiles.filter(entry => entry.Type === 'Video').length, 0, 'unsupported codecs must not be advertised');
 });
 
+test('PLAY-09 webOS TVs claim HDR10/HDR10Plus for HEVC and honor the wrapper override', async () => {
+    const { buildDeviceProfile, hostProfileOptions } = await import('../src/device-profile.ts');
+    // webOS TV 4.x runs Chromium 53, so no media query can report HDR; the UA decides instead.
+    const webos = 'Mozilla/5.0 (Web0S; Linux/SmartTV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/53.0.2785.143 Safari/537.36 WebAppManager';
+    const caps = { canPlay: () => true, hdrDisplay: false, audioTrackSwitching: false, userAgent: webos };
+    const tv = buildDeviceProfile(caps);
+    const hevcRanges = conditions(tv, 'hevc').find(entry => entry.Property === 'VideoRangeType');
+    assert.match(hevcRanges.Value, /HDR10Plus/, 'an HDR10+ HEVC source must satisfy the profile so 4K HDR direct plays instead of transcoding to 4K H.264');
+    assert.equal(conditions(tv, 'h264').find(entry => entry.Property === 'VideoRangeType').Value, 'SDR');
+    const mkv = tv.DirectPlayProfiles.find(entry => entry.Container === 'mkv');
+    assert.ok(mkv && /\bhevc\b/.test(mkv.VideoCodec) && /\beac3\b/.test(mkv.AudioCodec), 'the TV keeps the MKV/HEVC/EAC3 direct play path');
+    const sdrPanel = buildDeviceProfile(caps, undefined, hostProfileOptions({ supportsHdr10: false }));
+    assert.equal(conditions(sdrPanel, 'hevc').find(entry => entry.Property === 'VideoRangeType').Value, 'SDR', 'a wrapper-reported SDR panel must fall back to tone mapping');
+    const wrapperReportedHdr = buildDeviceProfile({ ...everything, userAgent: CHROME }, undefined, hostProfileOptions({ supportsHdr10: true }));
+    assert.match(conditions(wrapperReportedHdr, 'hevc').find(entry => entry.Property === 'VideoRangeType').Value, /HDR10Plus/, 'a wrapper-reported HDR panel overrides the browser media query');
+    const tizen = buildDeviceProfile({ canPlay: () => true, hdrDisplay: false, audioTrackSwitching: false, userAgent: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 4.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/53.0.2785.143/1.0 Safari/537.36' });
+    assert.match(conditions(tizen, 'hevc').find(entry => entry.Property === 'VideoRangeType').Value, /HDR10Plus/, 'Tizen TVs follow the same HDR10 assumption as Jellyfin Web');
+    // jellyfin-webos always sends every option, with nulls when it could not read the panel.
+    const noDeviceInfo = buildDeviceProfile(caps, undefined, hostProfileOptions({
+        enableMkvProgressive: false, enableSsaRender: true,
+        supportsDolbyAtmos: null, supportsDolbyVision: null, supportsHdr10: null
+    }));
+    assert.match(conditions(noDeviceInfo, 'hevc').find(entry => entry.Property === 'VideoRangeType').Value, /HDR10Plus/, 'a missing DeviceInfo leaves the webOS engine to decide');
+    const coerced = buildDeviceProfile(caps, undefined, hostProfileOptions({ supportsHdr10: 'false' }));
+    assert.match(conditions(coerced, 'hevc').find(entry => entry.Property === 'VideoRangeType').Value, /HDR10Plus/, 'only a real boolean overrides; a non-boolean is ignored');
+});
+
+test('PLAY-09 TV Dolby Vision fallbacks and engine generations follow Jellyfin Web', async () => {
+    const { buildDeviceProfile, hostProfileOptions, tvVersion } = await import('../src/device-profile.ts');
+    const webos = chrome => `Mozilla/5.0 (Web0S; Linux/SmartTV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36 WebAppManager`;
+    const tizen = version => `Mozilla/5.0 (SMART-TV; Linux; Tizen ${version}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.106/2.0 Safari/537.36`;
+    const ranges = (profile, codec) => conditions(profile, codec).find(entry => entry.Property === 'VideoRangeType').Value.split('|');
+    // Jellyfin Web's Chrome-token map, including LG's later renumbering to 22/23/24/25.
+    assert.deepEqual([ 38, 53, 68, 87, 120 ].map(chrome => tvVersion(webos(chrome))), [ 3, 4, 5, 22, 25 ]);
+    assert.equal(tvVersion(tizen('4.0')), 4);
+    assert.equal(tvVersion(CHROME), null, 'desktop browsers have no TV generation');
+
+    const webos4 = buildDeviceProfile({ ...everything, userAgent: webos(53) });
+    const hevc = ranges(webos4, 'hevc');
+    assert.deepEqual(hevc,
+        [ 'SDR', 'HDR10', 'HDR10Plus', 'HLG', 'DOVIWithSDR', 'DOVIWithHDR10', 'DOVIWithHDR10Plus', 'DOVIWithHLG', 'DOVIWithEL', 'DOVIWithELHDR10Plus', 'DOVIInvalid' ],
+        'a webOS 4 panel claims the Dolby Vision fallback layers so the server does not remux DV titles');
+    assert.ok(!hevc.includes('DOVI'), 'pure profile 5 Dolby Vision needs per-profile probing ui-next cannot do');
+    assert.equal(ranges(webos4, 'vp9').some(token => token.startsWith('DOVI')), false, 'Jellyfin Web leaves VP9 without Dolby Vision fallbacks');
+    const av1 = ranges(webos4, 'av1');
+    assert.ok(av1.includes('DOVIWithHDR10'), 'AV1 keeps the Dolby Vision HDR bases');
+    assert.ok(!av1.includes('DOVIWithSDR') && !av1.includes('DOVIWithHLG'), 'Jellyfin Web omits the SDR and HLG Dolby Vision bases for AV1');
+    assert.ok(ranges(buildDeviceProfile({ ...everything, userAgent: tizen('4.0') }), 'hevc').includes('DOVIWithHDR10'), 'Tizen 3+ claims the same fallbacks');
+
+    const webos3 = buildDeviceProfile({ ...everything, userAgent: webos(38) });
+    assert.ok(ranges(webos3, 'hevc').includes('HDR10Plus'), 'webOS 3 (2017) panels are HDR-capable');
+    assert.equal(ranges(webos3, 'hevc').some(token => token.startsWith('DOVI')), false, 'Dolby Vision fallbacks start at webOS 4');
+
+    const webos2 = buildDeviceProfile({ ...everything, userAgent: webos(34) });
+    assert.equal(conditions(webos2, 'hevc').find(entry => entry.Property === 'VideoRangeType').Value, 'SDR', 'pre-2017 webOS panels stay on the transcode path unless the wrapper reports HDR');
+    const webos2HdrPanel = buildDeviceProfile({ ...everything, userAgent: webos(34) }, undefined, hostProfileOptions({ supportsHdr10: true }));
+    assert.ok(ranges(webos2HdrPanel, 'hevc').includes('HDR10'), 'the wrapper panel report overrides the engine generation gate');
+    assert.equal(ranges(webos2HdrPanel, 'hevc').some(token => token.startsWith('DOVI')), false, 'an overridden older engine still does not claim Dolby Vision fallbacks');
+
+    const tizen2 = buildDeviceProfile({ ...everything, userAgent: tizen('2.4') });
+    assert.ok(ranges(tizen2, 'hevc').includes('HDR10'), 'Tizen keeps the blanket HDR10 claim Jellyfin Web makes');
+    assert.equal(ranges(tizen2, 'hevc').some(token => token.startsWith('DOVI')), false, 'Tizen Dolby Vision fallbacks start at version 3');
+});
+
 test('HLS buffer policy applies device memory tiers and bitrate-aware VOD limits', async () => {
     const model = await import('../src/player-model.ts');
     assert.equal(typeof model.hlsBufferPolicy, 'function', 'the HLS buffer policy must be a reusable model function');

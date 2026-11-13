@@ -1,7 +1,7 @@
 import type { GuideInfo, ItemResponse, JellyfinUser, LiveChannelFilter, LiveTimer, MediaItem, RecommendationGroup, Session, TasteProfile, UserConfiguration } from './types';
 import type { PlaybackReport } from './playback-report';
 import { mediaVersions, preferredVersionId, startPlan, transcodeReasonsFromUrl, type MediaStreamInfo, type PlaybackChoice, type PlaybackOptions, type SessionTranscodingInfo, type TrickplayLevel } from './player-model';
-import { browserCapabilities, buildDeviceProfile, loadPlaybackPreferences } from './device-profile';
+import { browserCapabilities, buildDeviceProfile, hostProfileOptions, loadPlaybackPreferences } from './device-profile';
 import { isHlsUrl } from './live-model';
 import { mapLibraryQuery } from './library-query';
 import type { LibraryItemsOptions } from './library-query';
@@ -1602,7 +1602,7 @@ export class JellyfinApi {
 
     async play(item: MediaItem, options: PlaybackOptions = {}, media: 'Video' | 'Audio' = 'Video'): Promise<PlaybackChoice> {
         const preferences = loadPlaybackPreferences();
-        const profile = await hostDeviceProfile(() => buildDeviceProfile(browserCapabilities(), preferences), CLIENT_VERSION);
+        const profile = await hostDeviceProfile(hostOptions => buildDeviceProfile(browserCapabilities(), preferences, hostProfileOptions(hostOptions)), CLIENT_VERSION);
         const maxBitrate = options.maxBitrate ?? (preferences.maxBitrate || undefined);
         const startTicks = Math.max(0, Math.round(options.startTicks || 0));
         const request = {

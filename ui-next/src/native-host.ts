@@ -459,15 +459,16 @@ function isDeviceProfile(value: unknown): boolean {
 /**
  * Lets the wrapper adjust the device profile (its native decoders, resolution caps) the way
  * Jellyfin Web's `AppHost.getDeviceProfile(profileBuilder)` does. The builder handed to the host
- * ignores Jellyfin Web's builder options and returns UI Next's own profile.
+ * receives the wrapper's profile options — jellyfin-webos passes its reported HDR and Dolby
+ * capabilities there — and ignores Jellyfin Web's builder shape, returning UI Next's own profile.
  */
-export async function hostDeviceProfile<T extends object>(build: () => T, appVersion: string, timeoutMs = DEVICE_PROFILE_TIMEOUT_MS): Promise<T> {
+export async function hostDeviceProfile<T extends object>(build: (options?: unknown) => T, appVersion: string, timeoutMs = DEVICE_PROFILE_TIMEOUT_MS): Promise<T> {
     const host = nativeShell()?.AppHost;
     if (!host || typeof host.getDeviceProfile !== 'function') return build();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
         const profile = await Promise.race([
-            host.getDeviceProfile(() => build(), appVersion),
+            host.getDeviceProfile(options => build(options), appVersion),
             new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), Math.max(1, timeoutMs)); })
         ]);
         return isDeviceProfile(profile) ? profile as T : build();

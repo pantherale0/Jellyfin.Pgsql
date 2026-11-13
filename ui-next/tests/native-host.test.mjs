@@ -189,6 +189,22 @@ test('hostDeviceProfile falls back when the wrapper never resolves its profile',
     assert.deepEqual(result, built);
 });
 
+test('hostDeviceProfile forwards the wrapper options to the profile builder', async () => {
+    const built = { DirectPlayProfiles: [ { Type: 'Video' } ], TranscodingProfiles: [], Name: 'ui-next' };
+    globalThis.NativeShell = { AppHost: { getDeviceProfile: builder => builder({ supportsHdr10: true }) } };
+    assert.deepEqual(
+        await host.hostDeviceProfile(options => ({ ...built, Options: options }), '1.0'),
+        { ...built, Options: { supportsHdr10: true } },
+        'the wrapper must reach the builder with its reported capabilities'
+    );
+    globalThis.NativeShell = { AppHost: { getDeviceProfile: builder => builder() } };
+    assert.deepEqual(
+        await host.hostDeviceProfile(options => ({ ...built, Options: options ?? null }), '1.0'),
+        { ...built, Options: null },
+        'a builder call without options stays optional'
+    );
+});
+
 test('hooks forward to the host and swallow host failures', () => {
     const calls = [];
     globalThis.NativeShell = {
@@ -283,7 +299,7 @@ test('UI wiring: identity before render, menu entries, sign-in/out, gated featur
     assert.match(main, /hostSupports\('exitmenu'\) && <button[^\n]*exitHostApp\(\)/);
 
     const api = source('api.ts');
-    assert.match(api, /hostDeviceProfile\(\(\) => buildDeviceProfile\(/);
+    assert.match(api, /hostDeviceProfile\(hostOptions => buildDeviceProfile\(/);
     assert.match(api, /host\?\.appName \|\| CLIENT_NAME/);
 
     const details = source('detail-sections.tsx');
