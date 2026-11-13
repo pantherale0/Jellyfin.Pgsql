@@ -2444,10 +2444,11 @@ function App() {
             playbackSessions.retire(playbackSession);
             if (current) {
                 setError(messageOf(e));
-                setPlaybackLoading(false);
             }
         } finally {
-            if (playbackSessions.isCurrent(playbackSession)) setPlaybackLoading(false);
+            // Leaving or starting another play during negotiation retires this session; only
+            // clear the loading bar when no newer play owns it, otherwise it would stay stuck.
+            if (playbackSessions.isCurrent(playbackSession) || !playbackSessions.pending()) setPlaybackLoading(false);
         }
     };
     const playRemoteTrailer = (item: MediaItem) => {

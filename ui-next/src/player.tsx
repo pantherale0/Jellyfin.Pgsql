@@ -97,6 +97,15 @@ function canPlayNativeHls(): boolean {
 }
 const cueBases = new WeakMap<TextTrackCue, { start: number; end: number }>();
 
+/** hls.js destroy() is not guaranteed idempotent; live reopen and the HLS effect cleanup share instances. */
+const destroyedHls = new WeakSet<Hls>();
+function destroyHls(hls: Hls | null): void {
+    if (hls && !destroyedHls.has(hls)) {
+        destroyedHls.add(hls);
+        hls.destroy();
+    }
+}
+
 type InlineVideo = HTMLVideoElement & {
     webkitEnterFullscreen?: () => void;
     webkitSupportsFullscreen?: boolean;
@@ -319,6 +328,7 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
         const video = videoRef.current;
         if (video) {
             video.pause();
+            video.autoplay = !userPausedRef.current;
             video.removeAttribute('src');
             video.load();
         }
@@ -334,6 +344,8 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
     const draggingRef = useRef(false);
     const holdingRef = useRef(false);
     const pausedRef = useRef(false);
+    /** The user's latest play/pause intent; element pauses (recovery, source swaps) do not change it. */
+    const userPausedRef = useRef(false);
     const osdRef = useRef(true);
     const menuRef = useRef<PlayerMenu>(null);
     const captionsButtonRef = useRef<HTMLButtonElement>(null);
@@ -523,7 +535,12 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
         );
         playbackStallFallbackRef.current = fallback.state;
         if (fallback.maxBitrate !== undefined) {
-            void renegotiateRef.current({ forceTranscode: true, maxBitrate: fallback.maxBitrate }, message => setPlaybackError(message));
+            // TV browsers cannot decode a forced 4K H.264 transcode, so on TV engines the
+            // automatic fallback only lowers the bitrate and lets the server pick a decodable stream.
+            void renegotiateRef.current(
+                tvRef.current ? { maxBitrate: fallback.maxBitrate } : { forceTranscode: true, maxBitrate: fallback.maxBitrate },
+                message => setPlaybackError(message)
+            );
         }
     };
     const scheduleBufferingIndicator = () => {
@@ -639,8 +656,14 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
     const togglePlay = () => {
         if (reopenInFlightRef.current) return;
         withVideo(video => {
-            if (video.paused) void video.play();
-            else { setBufferState('ready'); video.pause(); }
+            if (video.paused) {
+                userPausedRef.current = false;
+                void video.play().catch(() => undefined);
+            } else {
+                userPausedRef.current = true;
+                setBufferState('ready');
+                video.pause();
+            }
         });
         reveal();
     };
@@ -734,7 +757,7 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
         };
         clearBufferingTimer();
         setBufferState('reconnecting');
-        hlsRef.current?.destroy();
+        destroyHls(hlsRef.current);
         hlsRef.current = null;
         videoRef.current?.pause();
         try {
@@ -907,7 +930,7 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
             if (video) {
                 rememberPosition(video);
                 reporterRef.current?.stop();
-                hlsRef.current?.destroy();
+                destroyHls(hlsRef.current);
                 hlsRef.current = null;
                 video.pause();
                 video.removeAttribute('src');
@@ -922,6 +945,14 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
         mediaRef.current = mediaProgress(playback, item);
         const itemChanged = progressWatchItemRef.current !== (item?.Id || '');
         progressWatchItemRef.current = item?.Id || '';
+        // A new title is an explicit play choice; a same-item swap (track/quality change,
+        // stall fallback) keeps the user's pause, and the next source autoplays accordingly.
+        if (itemChanged) userPausedRef.current = false;
+        const video = videoRef.current;
+        if (video) {
+            video.autoplay = !userPausedRef.current;
+            if (userPausedRef.current) video.pause();
+        }
         clearBufferingTimer();
         if (itemChanged) {
             playbackStallFallbackRef.current = { confirmedAtMs: [], attempts: 0 };
@@ -954,7 +985,7 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
             engineRef.current = 'failed';
             clearBufferingTimer();
             reporterRef.current?.stop(true);
-            hls?.destroy();
+            destroyHls(hls);
             if (hlsRef.current === hls) hlsRef.current = null;
             hls = null;
             video.pause();
@@ -1031,6 +1062,9 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
             }, bufferPolicyInput);
             instance.on(Hls.Events.MANIFEST_PARSED, () => {
                 if (cancelled) return;
+                // Respect the user's pause: a paused renegotiation must not auto-resume, and
+                // pausing during the initial load cancels the auto start.
+                if (userPausedRef.current) return;
                 void video.play().catch(error => {
                     if (cancelled || !aliveRef.current) return;
                     setBufferState('ready');
@@ -1043,7 +1077,7 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
         }).catch(() => fail());
         return () => {
             cancelled = true;
-            hls?.destroy();
+            destroyHls(hls);
             if (hlsRef.current === hls) hlsRef.current = null;
         };
     }, [ url, hlsPlayback, playbackSession?.key, playback?.isLive, playback?.bitrate, playback?.maxBitrate, item?.Type, refreshBufferedRanges, setBufferState ]);
@@ -1337,7 +1371,12 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
         return () => window.clearInterval(timer);
     }, [ upNextOpen ]);
     useEffect(() => {
-        if (upNextCard && upNextCard.remaining <= 0) playQueued(upNextCard);
+        if (!upNextCard || upNextCard.remaining > 0) return;
+        // The queue may have changed while the countdown ran (shuffle/repeat toggles), so
+        // what plays next comes from the live store, not the ended-time snapshot.
+        const next = upNext(playQueue.get(), { autoplay: api?.session.user.Configuration?.EnableNextEpisodeAutoPlay, nextEpisode: neighbours.next, current: item });
+        if (next) playQueued({ queue: next.queue, item: next.item });
+        else setUpNextCard(null);
     }, [ upNextCard?.remaining ]);
     useEffect(() => {
         if (!movieEndScreenOpen || !item) return;
@@ -1499,8 +1538,8 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
             try { session.playbackState = video.paused ? 'paused' : 'playing'; } catch (_error) { /* Cosmetic. */ }
         };
         const actions: Array<[string, VideoMediaSessionHandler | null]> = [
-            [ 'play', () => { void video.play(); } ],
-            [ 'pause', () => { setBufferState('ready'); video.pause(); } ],
+            [ 'play', () => { userPausedRef.current = false; void video.play(); } ],
+            [ 'pause', () => { userPausedRef.current = true; setBufferState('ready'); video.pause(); } ],
             [ 'stop', () => { rememberPosition(video); onBackRef.current(); } ],
             [ 'seekto', details => { if (typeof details.seekTime === 'number') mediaSeekToRef.current(details.seekTime); } ],
             [ 'seekbackward', details => mediaSeekByRef.current(-(details.seekOffset || 10)) ],
@@ -1643,10 +1682,10 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
                     return;
                 }
                 withVideo(video => {
-                    if (action === 'play') void video.play();
-                    else if (action === 'pause') { setBufferState('ready'); video.pause(); }
-                    else if (video.paused) void video.play();
-                    else { setBufferState('ready'); video.pause(); }
+                    if (action === 'play') { userPausedRef.current = false; void video.play(); }
+                    else if (action === 'pause') { userPausedRef.current = true; setBufferState('ready'); video.pause(); }
+                    else if (video.paused) { userPausedRef.current = false; void video.play(); }
+                    else { userPausedRef.current = true; setBufferState('ready'); video.pause(); }
                 });
                 reveal();
                 return;
@@ -1846,6 +1885,7 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
             onPlay={() => { setPaused(false); pausedRef.current = false; reveal(); }}
             onEnded={() => { if (remoteTrailer || sessionOwner.isCurrent(playbackSession)) endedRef.current(); }}
             onPlaying={() => {
+                userPausedRef.current = false;
                 const ready = !expectsVideoFrames || firstVideoFrameRef.current;
                 if (ready) clearBufferingTimer();
                 setPaused(false);
@@ -1941,6 +1981,7 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
                 <button data-focusable="true" class="button secondary" type="button" onClick={() => {
                     setPlaybackError('');
                     setBufferState('buffering');
+                    userPausedRef.current = false;
                     withVideo(video => {
                         video.load();
                         void video.play().catch(() => {
@@ -1955,11 +1996,12 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
             {onRenegotiate && <div class="player-error-actions">
                 <button data-focusable="true" class="button secondary" type="button" disabled={switching} onClick={() => {
                     setPlaybackError('');
+                    userPausedRef.current = false;
                     if (playback?.isLive) void reopenLiveStreamRef.current();
                     else void renegotiate({}, message => setPlaybackError(message));
                 }}>{t('Retry from {0}', formatTime(mediaRef.current.position))}</button>
-                {playback?.method !== 'Transcode' || !diagnostics || diagnostics.IsVideoDirect ? <button data-focusable="true" class="button secondary" type="button" disabled={switching} onClick={() => { setPlaybackError(''); void renegotiate({ forceTranscode: true }, message => setPlaybackError(message)); }}>{t('Convert the stream')}</button> : null}
-                <button data-focusable="true" class="button secondary" type="button" disabled={switching} onClick={() => { setPlaybackError(''); void renegotiate({ forceTranscode: true, maxBitrate: 4_000_000 }, message => setPlaybackError(message)); }}>{t('Try lower quality')}</button>
+                {playback?.method !== 'Transcode' || !diagnostics || diagnostics.IsVideoDirect ? <button data-focusable="true" class="button secondary" type="button" disabled={switching} onClick={() => { setPlaybackError(''); userPausedRef.current = false; void renegotiate({ forceTranscode: true }, message => setPlaybackError(message)); }}>{t('Convert the stream')}</button> : null}
+                <button data-focusable="true" class="button secondary" type="button" disabled={switching} onClick={() => { setPlaybackError(''); userPausedRef.current = false; void renegotiate({ forceTranscode: true, maxBitrate: 4_000_000 }, message => setPlaybackError(message)); }}>{t('Try lower quality')}</button>
             </div>}
         </div>}
         <header class="player-osd player-osd-top">

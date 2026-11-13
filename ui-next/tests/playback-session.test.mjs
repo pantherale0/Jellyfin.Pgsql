@@ -115,6 +115,19 @@ test('PLAY ownership retires sessions on leave, account, and route changes', asy
     assert.equal(sessions.isCurrent(stale), false);
 });
 
+test('PLAY ownership exposes the in-flight negotiation for loading-state cleanup', async () => {
+    const sessions = await tracker();
+    assert.equal(sessions.pending(), null, 'nothing negotiates before the first play');
+    const pending = sessions.begin('movie');
+    assert.equal(sessions.pending(), pending);
+    sessions.commit(pending, { mediaSourceId: 'source' });
+    assert.equal(sessions.pending(), null, 'committing clears the in-flight request');
+    const replacement = sessions.begin('movie');
+    assert.equal(sessions.pending(), replacement);
+    sessions.retire();
+    assert.equal(sessions.pending(), null, 'leaving clears the in-flight request so a stale play can reset its loading state');
+});
+
 test('live cleanup is per acquired session and cannot close a retained stream', async () => {
     const sessions = await tracker();
     const first = sessions.commit(sessions.begin('channel'), { liveStreamId: 'live-1' });
@@ -217,6 +230,7 @@ test('PLAY App, Player, and API share one playback-session owner', () => {
     assert.match(main, /playbackSessions\.begin\(/);
     assert.match(main, /playbackSessions\.commit\(/);
     assert.match(main, /playbackSessions\.retire\(\)/);
+    assert.match(main, /playbackSessions\.isCurrent\(playbackSession\) \|\| !playbackSessions\.pending\(\)/, 'a play retired by leave or a newer play must clear the loading bar');
     assert.match(main, /playbackSession=\{playerSource\.kind === 'library' \? playbackSessions\.active\(\) : null\}/);
     assert.match(main, /sessionOwner=\{playbackSessions\}/);
     assert.doesNotMatch(main, /playbackRequest\.current/);

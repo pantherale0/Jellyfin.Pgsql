@@ -132,3 +132,19 @@ test('PART-07: every segment type is recognized with per-type ask/skip/ignore an
     assert.match(player, /!osdRef\.current && !onSkipPrompt/);
     assert.match(source('profile.tsx'), /Skip automatically/);
 });
+
+test('PLAY renegotiation keeps the user pause, TV fallbacks avoid forced transcodes, and hls.js is destroyed once', () => {
+    const player = source('player.tsx');
+    // A paused renegotiation must not auto-resume: the swap mirrors the pause intent into the
+    // autoplay flag, and the HLS auto start respects it.
+    assert.match(player, /if \(itemChanged\) userPausedRef\.current = false;/);
+    assert.match(player, /video\.autoplay = !userPausedRef\.current;/);
+    assert.match(player, /if \(userPausedRef\.current\) return;\n\s+void video\.play\(\)\.catch/);
+    // TV engines cannot decode a forced 4K H.264 transcode, so the automatic stall fallback
+    // only lowers the bitrate on TV clients.
+    assert.match(player, /tvRef\.current \? \{ maxBitrate: fallback\.maxBitrate \} : \{ forceTranscode: true, maxBitrate: fallback\.maxBitrate \}/);
+    // Live reopen and the HLS effect cleanup share instances; every destroy is idempotent.
+    assert.match(player, /destroyedHls\.has\(hls\)/);
+    assert.match(player, /destroyHls\(hlsRef\.current\);/);
+    assert.match(player, /destroyHls\(hls\);/);
+});

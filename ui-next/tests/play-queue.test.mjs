@@ -102,7 +102,10 @@ test('MISS-03: the player counts down to the next title and drives the queue', (
     assert.match(player, /onEnded=\{\(\) => \{ if \(remoteTrailer \|\| sessionOwner\.isCurrent\(playbackSession\)\) endedRef\.current\(\); \}\}/);
     assert.match(player, /upNext\(playQueue\.get\(\), \{ autoplay: api\?\.session\.user\.Configuration\?\.EnableNextEpisodeAutoPlay, nextEpisode: neighbours\.next, current: item \}\)/);
     assert.match(player, /remaining: AUTOPLAY_COUNTDOWN_SECONDS/);
-    assert.match(player, /if \(upNextCard && upNextCard\.remaining <= 0\) playQueued\(upNextCard\);/);
+    assert.match(player, /if \(!upNextCard \|\| upNextCard\.remaining > 0\) return;/);
+    assert.match(player, /const next = upNext\(playQueue\.get\(\), \{ autoplay: api\?\.session\.user\.Configuration\?\.EnableNextEpisodeAutoPlay, nextEpisode: neighbours\.next, current: item \}\);/);
+    assert.match(player, /if \(next\) playQueued\(\{ queue: next\.queue, item: next\.item \}\);/);
+    assert.match(player, /else setUpNextCard\(null\);/);
     assert.match(player, /class="player-up-next" role="dialog" aria-label="Up next"/);
     assert.match(player, />Play now<\/button>/);
     assert.match(player, /onClick=\{\(\) => setUpNextCard\(null\)\}>Cancel<\/button>/);

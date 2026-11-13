@@ -28,7 +28,7 @@ interface LiveLease { id: string; released: boolean; cleanupClaimed: boolean }
 export class PlaybackSessionTracker {
     private sequence = 0;
     private current: PlaybackSessionSnapshot | null = null;
-    private pending: PlaybackSessionSnapshot | null = null;
+    private inFlight: PlaybackSessionSnapshot | null = null;
     private leases = new WeakMap<PlaybackSessionSnapshot, LiveLease>();
 
     private readonly account: AccountGeneration;
@@ -42,17 +42,17 @@ export class PlaybackSessionTracker {
     begin(itemId: string): PlaybackSessionSnapshot {
         this.sequence += 1;
         const intent = this.navigation.begin();
-        this.pending = {
+        this.inFlight = {
             key: this.sequence,
             itemId,
             account: this.account.current(),
             navigation: intent.id
         };
-        return this.pending;
+        return this.inFlight;
     }
 
     commit(snapshot: PlaybackSessionSnapshot, media: PlaybackSessionMedia, retainedLiveStreamId?: string): PlaybackSessionSnapshot | null {
-        if (this.pending !== snapshot || !this.isCurrent(snapshot)) return null;
+        if (this.inFlight !== snapshot || !this.isCurrent(snapshot)) return null;
         const previousLease = this.current ? this.leases.get(this.current) : undefined;
         this.current = Object.freeze({
             ...snapshot,
@@ -65,23 +65,28 @@ export class PlaybackSessionTracker {
                 ? previousLease : { id: media.liveStreamId, released: false, cleanupClaimed: false };
             this.leases.set(this.current, lease);
         }
-        this.pending = null;
+        this.inFlight = null;
         return this.current;
     }
 
     retire(snapshot?: PlaybackSessionSnapshot | null): void {
         if (!snapshot || this.current === snapshot) this.current = null;
-        if (!snapshot || this.pending === snapshot) this.pending = null;
+        if (!snapshot || this.inFlight === snapshot) this.inFlight = null;
     }
 
     active(): PlaybackSessionSnapshot | null {
         return this.current;
     }
 
+    /** The in-flight negotiation awaiting a commit; null when nothing is loading. */
+    pending(): PlaybackSessionSnapshot | null {
+        return this.inFlight;
+    }
+
     isCurrent(snapshot: PlaybackSessionSnapshot | null | undefined): boolean {
         if (!snapshot || !this.account.isCurrent(snapshot.account)) return false;
         if (this.current?.key === snapshot.key) return true;
-        return this.pending === snapshot && this.navigation.isCurrent({ id: snapshot.navigation, account: snapshot.account });
+        return this.inFlight === snapshot && this.navigation.isCurrent({ id: snapshot.navigation, account: snapshot.account });
     }
 
     canRefresh(snapshot: PlaybackSessionSnapshot): boolean {
