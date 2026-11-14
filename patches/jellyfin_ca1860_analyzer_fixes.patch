@@ -1,0 +1,52 @@
+diff --git a/Jellyfin.Server.Implementations/Item/MediaAttachmentRepository.cs b/Jellyfin.Server.Implementations/Item/MediaAttachmentRepository.cs
+index e75dda4392..4dfae541f5 100644
+--- a/Jellyfin.Server.Implementations/Item/MediaAttachmentRepository.cs
++++ b/Jellyfin.Server.Implementations/Item/MediaAttachmentRepository.cs
+@@ -30,7 +30,7 @@ public class MediaAttachmentRepository(IDbContextFactory<JellyfinDbContext> dbPr
+         // So when saving attachments is triggered by a library scan, we always unconditionally
+         // clear the old ones, and then add the new ones if given.
+         context.AttachmentStreamInfos.Where(e => e.ItemId.Equals(id)).ExecuteDelete();
+-        if (attachments.Any())
++        if (attachments.Count > 0)
+         {
+             context.AttachmentStreamInfos.AddRange(attachments.Select(e => Map(e, id)));
+         }
+diff --git a/MediaBrowser.Providers/MediaInfo/MediaInfoResolver.cs b/MediaBrowser.Providers/MediaInfo/MediaInfoResolver.cs
+index ecb6e5d990..d842f6c7e4 100644
+--- a/MediaBrowser.Providers/MediaInfo/MediaInfoResolver.cs
++++ b/MediaBrowser.Providers/MediaInfo/MediaInfoResolver.cs
+@@ -96,7 +96,7 @@ namespace MediaBrowser.Providers.MediaInfo
+ 
+             var pathInfos = GetExternalFiles(video, directoryService, clearCache);
+ 
+-            if (!pathInfos.Any())
++            if (pathInfos.Count == 0)
+             {
+                 return Array.Empty<MediaStream>();
+             }
+diff --git a/MediaBrowser.Providers/Music/AlbumMetadataService.cs b/MediaBrowser.Providers/Music/AlbumMetadataService.cs
+index 13511b5944..55eb53b785 100644
+--- a/MediaBrowser.Providers/Music/AlbumMetadataService.cs
++++ b/MediaBrowser.Providers/Music/AlbumMetadataService.cs
+@@ -194,7 +194,7 @@ public class AlbumMetadataService : MetadataService<MusicAlbum, AlbumInfo>
+ 
+     private void SetPeople(MusicAlbum item)
+     {
+-        if (item.AlbumArtists.Any() || item.Artists.Any())
++        if (item.AlbumArtists.Count > 0 || item.Artists.Count > 0)
+         {
+             var people = new List<PersonInfo>();
+ 
+diff --git a/src/Jellyfin.Networking/Manager/NetworkManager.cs b/src/Jellyfin.Networking/Manager/NetworkManager.cs
+index 496c108cfd..6fe969c985 100644
+--- a/src/Jellyfin.Networking/Manager/NetworkManager.cs
++++ b/src/Jellyfin.Networking/Manager/NetworkManager.cs
+@@ -742,7 +742,7 @@ public class NetworkManager : INetworkManager, IDisposable
+             return RemoteAccessPolicyResult.RejectDueToRemoteAccessDisabled;
+         }
+ 
+-        if (!_remoteAddressFilter.Any())
++        if (_remoteAddressFilter.Count == 0)
+         {
+             // No filter on remote addresses, allow any of them.
+             return RemoteAccessPolicyResult.Allow;

@@ -577,3 +577,18 @@ For each patch: **What** (behaviour), **Why** (motivation), **Where** (key paths
 | **Related** | UI Next's Beyond Your Library rows. No public issue. |
 
 ---
+
+## 7. Build / analyzer compliance
+
+### `jellyfin_ca1860_analyzer_fixes.patch`
+
+| | |
+|---|---|
+| **Target** | `jellyfin` |
+| **What** | Replaces `Any()` with `Count` comparisons at the five sites CA1860 flags. |
+| **Why** | A Debug build of the server enables `AnalysisMode=AllEnabledByDefault` plus `TreatWarningsAsErrors` (upstream `Directory.Build.props`), and current .NET 10 SDK analyzers flag `Any()` on `IReadOnlyList` collections that expose `Count`, failing the build as errors. |
+| **Where** | `MediaAttachmentRepository`, `MediaInfoResolver`, `AlbumMetadataService`, `NetworkManager` |
+| **How** | `attachments.Any()` and `item.AlbumArtists.Any() \|\| item.Artists.Any()` become `Count > 0`; `!pathInfos.Any()` and `!_remoteAddressFilter.Any()` become `Count == 0`. Semantics unchanged. |
+| **Related** | No public issue. Standalone; may need refreshing if a newer SDK widens CA1860 coverage to more upstream sites. |
+
+---
