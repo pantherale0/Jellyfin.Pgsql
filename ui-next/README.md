@@ -157,7 +157,7 @@ Sign-in screens focus the first available control automatically. Up/Down moves b
 
 Known gaps against the removed fork-specific Jellyfin Web patches are listed in [Features not yet in UI Next](../docs/features.md#features-not-yet-in-ui-next).
 
-Vite emits a modern bundle plus a syntax-transpiled legacy bundle (currently targeting Chrome 38+, Safari 10+, and Firefox 45+), with the legacy bundle selected by `@vitejs/plugin-legacy`. That is a best-effort web-engine target, not a guarantee for every TV browser. The TV layout supports directional arrows, common Back key codes, and basic media keys. Older webOS/Tizen models must be tested in their actual browser/wrapper.
+Vite emits a modern bundle plus a syntax-transpiled legacy bundle (currently targeting Chrome 38+, Safari 10+, and Firefox 45+), with the legacy bundle selected by `@vitejs/plugin-legacy`. That is a best-effort web-engine target, not a guarantee for every TV browser. The TV layout supports directional arrows, common Back key codes, and basic media keys. In the player, the first arrow press with the controls hidden only shows them (a second press seeks or changes volume), the Magic Remote pointer moves and clicks through mouse-event fallbacks for engines without PointerEvent, and the remote scroll wheel adjusts volume; the pointer cursor stays visible while the controls are hidden. Older webOS/Tizen models must be tested in their actual browser/wrapper.
 
 Native wrappers that load the server's web client and inject `window.NativeShell` (Jellyfin Android, Jellyfin Media Player, and similar) get the app-host contract implemented in `src/native-host.ts`:
 

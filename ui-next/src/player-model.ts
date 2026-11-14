@@ -724,6 +724,6 @@ export function classifyPlayerKey(key: string, keyCode?: number): PlayerKeyActio
     if (key === 'MediaStop' || keyCode === 413) return 'stop';
     if (key === 'MediaRewind' || key === 'Rewind' || keyCode === 412) return 'rewind';
     if (key === 'MediaFastForward' || key === 'FastForward' || keyCode === 417) return 'fast-forward';
-    if (key === 'Enter' || key === 'Select') return 'select';
+    if (key === 'Enter' || key === 'Select' || keyCode === 13) return 'select';
     return null;
 }

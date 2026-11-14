@@ -857,6 +857,14 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
         setSeekHover({ time, x: clientX - rect.left, width: rect.width });
     };
 
+    const placeSeekHoverAt = (clientX: number) => {
+        const rect = seekWrapRef.current?.getBoundingClientRect();
+        if (!rect || !rect.width) return;
+        const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+        if (!bounds.seekable) return;
+        placeSeekHover(clientX, bounds.start + ratio * (bounds.end - bounds.start));
+    };
+
     const selectAudio = (index: number) => {
         const video = videoRef.current;
         if (!video || !playback || switching) return;
@@ -921,6 +929,7 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
             if (releaseRef.current) {
                 window.removeEventListener('pointerup', releaseRef.current);
                 window.removeEventListener('pointercancel', releaseRef.current);
+                window.removeEventListener('mouseup', releaseRef.current);
             }
             if (bufferingTimerRef.current !== undefined) {
                 window.clearTimeout(bufferingTimerRef.current);
@@ -1697,6 +1706,14 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
             }
             const arrow = key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown';
             if (tvRef.current && osdRef.current && arrow) return;
+            // TV pattern: with the bar hidden, the first arrow press only summons it.
+            // Left/Right would otherwise seek and Up/Down would change the volume as a
+            // side effect of peeking — the Magic Remote pointer already reveals cleanly.
+            if (tvRef.current && !osdRef.current && arrow) {
+                event.preventDefault();
+                reveal();
+                return;
+            }
             if (event.target instanceof HTMLInputElement && (key === 'ArrowLeft' || key === 'ArrowRight')) {
                 reveal();
                 return;
@@ -1762,6 +1779,18 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
         reveal();
     };
 
+    /**
+     * webOS TV 4 runs Chromium 53, which predates PointerEvent (Chrome 55): the stage's
+     * pointer handlers never fire there, and the Magic Remote only produces legacy mouse
+     * events. The mouse fallbacks below run only where PointerEvent is missing, so modern
+     * browsers never see a doubled event.
+     */
+    const pointerEventsSupported = typeof window !== 'undefined' && typeof (window as Window & { PointerEvent?: unknown }).PointerEvent !== 'undefined';
+    const onMouseMove = (event: MouseEvent) => {
+        if (pointerEventsSupported) return;
+        onPointerMove(event as unknown as PointerEvent);
+    };
+
     const onPointerDown = (event: PointerEvent) => {
         const target = event.target instanceof Element ? event.target : null;
         if (target?.closest('.player-osd, .player-drawer, .player-menu-scrim, .player-error, .player-end-screen')) {
@@ -1790,6 +1819,22 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
         }, 250);
     };
 
+    const onMouseDown = (event: MouseEvent) => {
+        if (pointerEventsSupported) return;
+        if (event.button !== 0) return;
+        onPointerDown(event as unknown as PointerEvent);
+    };
+
+    /** Magic Remote scroll wheel: volume without opening a menu, TV clients only. Desktop keeps wheel untouched. */
+    const onStageWheel = (event: WheelEvent) => {
+        if (!tvRef.current) return;
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest('.player-menu, .player-drawer, .player-error, .player-end-screen')) return;
+        const delta = event.deltaY || event.deltaX;
+        if (!Number.isFinite(delta) || delta === 0) return;
+        withVideo(video => setPlayerVolume(video.volume + (delta < 0 ? 0.05 : -0.05), false));
+    };
+
     const onDoubleClick = (event: MouseEvent) => {
         const target = event.target instanceof Element ? event.target : null;
         if (target?.closest('.player-osd, .player-drawer, .player-error, .player-end-screen')) return;
@@ -1806,10 +1851,14 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
         clearHideTimer();
         if (releaseRef.current) return;
         const release = () => {
+            // The mouse fallback below can reach an already-run release (pointerup then
+            // compat mouseup); only the registered release may run.
+            if (releaseRef.current !== release) return;
             draggingRef.current = false;
             holdingRef.current = false;
             window.removeEventListener('pointerup', release);
             window.removeEventListener('pointercancel', release);
+            window.removeEventListener('mouseup', release);
             releaseRef.current = null;
             if (!draggingRef.current) setSeekHover(null);
             if (aliveRef.current) reveal();
@@ -1817,6 +1866,9 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
         releaseRef.current = release;
         window.addEventListener('pointerup', release);
         window.addEventListener('pointercancel', release);
+        // Legacy mouse fallback for engines without PointerEvent (webOS TV 4); harmless
+        // elsewhere because the guard above makes the second invocation a no-op.
+        window.addEventListener('mouseup', release);
     };
 
     const hoverStyle = seekHover ? { left: `${Math.min(Math.max(seekHover.x, 90), Math.max(90, seekHover.width - 90))}px` } : undefined;
@@ -1831,6 +1883,9 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
         data-menu-open={menu ? 'true' : 'false'}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
+        onMouseDown={onMouseDown}
+        onMouseMove={onMouseMove}
+        onWheel={onStageWheel}
         onDblClick={onDoubleClick}
     >
         <video
@@ -2014,7 +2069,7 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
                 <PlayerIcon name="episodes" />
             </button>}
         </header>
-        {menu && <div class="player-menu-scrim" aria-hidden="true" onPointerDown={closeMenu} />}
+        {menu && <div class="player-menu-scrim" aria-hidden="true" onPointerDown={closeMenu} onMouseDown={closeMenu} />}
         <footer class="player-osd player-osd-bottom">
             {skip && <div class="player-skip-row"><button data-focusable={focusable} class="player-skip" type="button" onClick={() => seekTo(skip.end)}>{t(skip.label)}</button></div>}
             <div class="player-timeline">
@@ -2024,11 +2079,11 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
                     ref={seekWrapRef}
                     onPointerMove={event => {
                         if (event.pointerType === 'touch' && !draggingRef.current) return;
-                        const rect = seekWrapRef.current?.getBoundingClientRect();
-                        if (!rect || !rect.width) return;
-                        const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-                        if (!bounds.seekable) return;
-                        placeSeekHover(event.clientX, bounds.start + ratio * (bounds.end - bounds.start));
+                        placeSeekHoverAt(event.clientX);
+                    }}
+                    onMouseMove={event => {
+                        if (pointerEventsSupported) return;
+                        placeSeekHoverAt(event.clientX);
                     }}
                     onPointerLeave={() => { if (!draggingRef.current) setSeekHover(null); }}
                 >
@@ -2061,6 +2116,7 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
                         aria-label={bounds.live ? t('Seek within the live buffer') : t('Seek')}
                         disabled={!bounds.seekable}
                         onPointerDown={() => holdUntilRelease(true)}
+                        onMouseDown={() => { if (!pointerEventsSupported) holdUntilRelease(true); }}
                         onInput={event => {
                             const next = clampSeek(Number((event.target as HTMLInputElement).value), bounds);
                             setCurrentTime(next);
@@ -2134,6 +2190,7 @@ export function Player({ source, playbackSession, sessionOwner, api, tvClient, o
                             value={Math.round((muted ? 0 : volume) * 100)}
                             aria-label={t('Volume')}
                             onPointerDown={() => holdUntilRelease(false)}
+                            onMouseDown={() => { if (!pointerEventsSupported) holdUntilRelease(false); }}
                             onInput={event => setPlayerVolume(Number((event.target as HTMLInputElement).value) / 100, false)}
                         />
                     </div>}

@@ -39,6 +39,7 @@ test('PLAY-11 and PLAY-13 media and select keys classify to explicit player acti
     assert.equal(classifyPlayerKey('MediaPlay', 415), 'play');
     assert.equal(classifyPlayerKey('MediaPause', 0), 'pause');
     assert.equal(classifyPlayerKey('Enter', 13), 'select');
+    assert.equal(classifyPlayerKey('Unidentified', 13), 'select', 'old TV engines report OK by keyCode only');
     assert.equal(classifyPlayerKey('ArrowLeft', 37), null);
 
     const player = readFileSync(new URL('../src/player.tsx', import.meta.url), 'utf8');
